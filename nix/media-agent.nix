@@ -31,7 +31,7 @@ in {
 
     diskMounts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = ["/mnt" "/var"];
+      default = ["/mnt/decypharr" "/var/cache/decypharr" "/data"];
       description = "Mount points to report in GET /disk responses.";
     };
   };
@@ -44,7 +44,7 @@ in {
       wants = ["network-online.target"];
 
       serviceConfig = {
-        ExecStart = "${lib.getExe cfg.package} -addr ${cfg.addr}";
+        ExecStart = "${lib.getExe cfg.package} -addr ${cfg.addr} ${lib.concatMapStringsSep " " (m: "-disk-mount ${lib.escapeShellArg m}") cfg.diskMounts}";
         Restart = "on-failure";
         RestartSec = "5s";
 

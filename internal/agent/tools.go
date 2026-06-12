@@ -120,6 +120,14 @@ func toolDefs() []openai.Tool {
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
+				Name:        "get_disk_info",
+				Description: "Get disk usage for the media host mount points: /mnt/decypharr (FUSE media files), /var/cache/decypharr (decypharr cache), and /data. Use to check if a mount is present (non-zero total) and whether disk space is a factor.",
+				Parameters:  jsonSchema(map[string]any{}, []string{}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        "complete_diagnosis",
 				Description: "Record the agent's diagnostic conclusion and ranked action recommendations, then end the diagnostic phase.",
 				Parameters: jsonSchema(map[string]any{
@@ -281,6 +289,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, name string, args map[string]
 			Status:      db.ActionApplied,
 		})
 		return map[string]any{"movie_id": movie.ID, "status": "rescan_queued"}, nil
+
+	case "get_disk_info":
+		if d.MediaAgent == nil {
+			return nil, fmt.Errorf("media-agent not configured")
+		}
+		return d.MediaAgent.DiskUsage(ctx)
 
 	case "clear_jellyfin_cache":
 		itemID, _ := args["item_id"].(string)

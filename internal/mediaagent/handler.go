@@ -136,7 +136,7 @@ func (o *RealOps) Restart(service string) error {
 }
 
 // DiskMounts are the paths checked for disk usage.
-var DiskMounts = []string{"/mnt", "/var"}
+var DiskMounts = []string{"/mnt/decypharr", "/var/cache/decypharr", "/data"}
 
 func (o *RealOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 	var mounts []mediaagentapi.DiskMount
