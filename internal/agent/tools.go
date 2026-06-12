@@ -17,6 +17,16 @@ func toolDefs() []openai.Tool {
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
+				Name:        "jellyfin_search",
+				Description: "Search Jellyfin for a media item by title. Returns the item ID, type (Movie/Series/Episode), and file path. Use this first when the incident has no Jellyfin item ID.",
+				Parameters: jsonSchema(map[string]any{
+					"title": param("string", "Title to search for"),
+				}, []string{"title"}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        "jellyfin_playback_info",
 				Description: "Call Jellyfin PlaybackInfo for an item. Returns media sources, whether transcoding is needed, and any error codes. Empty sources mean Jellyfin cannot open the file.",
 				Parameters: jsonSchema(map[string]any{
@@ -180,6 +190,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, name string, argsJSON string)
 
 func (d *Dispatcher) dispatch(ctx context.Context, name string, args map[string]any) (any, error) {
 	switch name {
+	case "jellyfin_search":
+		title, _ := args["title"].(string)
+		return d.Jellyfin.SearchItem(ctx, title)
+
 	case "jellyfin_playback_info":
 		itemID, _ := args["item_id"].(string)
 		return d.Jellyfin.PlaybackInfo(ctx, itemID)

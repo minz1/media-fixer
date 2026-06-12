@@ -17,8 +17,10 @@ in a self-hosted Jellyfin + decypharr (debrid FUSE mount) setup.
 Media files live under /mnt/decypharr. Cache is at /var/cache/decypharr. Other data is at /data.
 
 Diagnostic procedure — run in order, stop when you find the root cause:
-1. Call jellyfin_playback_info. The response includes MediaSources[].Path — the actual file path
-   on disk. Use that exact path for dd_readability_test. Never construct or guess a path.
+1. You MUST call jellyfin_playback_info every time. If the incident has no Jellyfin item ID,
+   call jellyfin_search first to find it — never skip this step. The response includes
+   MediaSources[].Path — the actual file path on disk. Use that exact path for dd_readability_test.
+   Never construct or guess a path.
 2. If MediaSources is empty (Jellyfin can't open the file):
    a. Call get_disk_info to confirm the /mnt/decypharr mount is present.
    b. Call get_torrent_state to get the torrent folder name.
