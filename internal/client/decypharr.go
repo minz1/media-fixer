@@ -190,6 +190,6 @@ func (c *DecypharrClient) post(ctx context.Context, path string, body, out any) 
 
 func (c *DecypharrClient) setAuth(req *http.Request) {
 	if c.apiToken != "" {
-		req.Header.Set("X-Api-Token", c.apiToken)
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	}
 }
