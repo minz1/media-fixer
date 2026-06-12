@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
 	openai "github.com/sashabaranov/go-openai"
-	"github.com/rs/zerolog"
 )
 
 const systemPrompt = `You are a media stack diagnostic agent. You help troubleshoot playback problems
@@ -37,21 +37,15 @@ Max 3 autonomous actions before you must complete_diagnosis regardless.`
 
 // Agent orchestrates the LLM diagnostic loop for one incident.
 type Agent struct {
-	llm    *openai.Client
-	model  string
-	disp   *Dispatcher
-	db     *db.DB
-	log    zerolog.Logger
+	llm   *openai.Client
+	model string
+	disp  *Dispatcher
+	db    *db.DB
+	log   *slog.Logger
 }
 
-func New(llm *openai.Client, model string, disp *Dispatcher, database *db.DB, log zerolog.Logger) *Agent {
-	return &Agent{
-		llm:   llm,
-		model: model,
-		disp:  disp,
-		db:    database,
-		log:   log,
-	}
+func New(llm *openai.Client, model string, disp *Dispatcher, database *db.DB, log *slog.Logger) *Agent {
+	return &Agent{llm: llm, model: model, disp: disp, db: database, log: log}
 }
 
 // DiagnosticResult is the structured output from complete_diagnosis.
@@ -66,17 +60,26 @@ type DiagnosticResult struct {
 }
 
 // Run executes the diagnostic loop for the given incident.
-// It updates the incident status and finding as it goes.
-func (a *Agent) Run(ctx context.Context, inc *db.Incident) (*DiagnosticResult, error) {
-	a.log.Info().Str("incident", inc.ID).Str("title", inc.Title).Msg("starting diagnostic")
+// Pass seed=nil for a fresh run; pass the previous conversation (with control
+// reviewer feedback appended) to continue from where the last run left off.
+// Returns the full conversation so the control reviewer can inspect it.
+func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) (*DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	a.log.Info("starting diagnostic", "incident", inc.ID, "title", inc.Title)
+
+	a.disp.IncidentID = inc.ID
 
 	if err := a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusInvestigating); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	messages := []openai.ChatCompletionMessage{
-		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-		{Role: openai.ChatMessageRoleUser, Content: a.buildUserMessage(inc)},
+	var messages []openai.ChatCompletionMessage
+	if len(seed) > 0 {
+		messages = seed
+	} else {
+		messages = []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+			{Role: openai.ChatMessageRoleUser, Content: a.buildUserMessage(inc)},
+		}
 	}
 
 	tools := toolDefs()
@@ -91,17 +94,15 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident) (*DiagnosticResult, e
 			Tools:    tools,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("llm round %d: %w", round, err)
+			return nil, messages, fmt.Errorf("llm round %d: %w", round, err)
 		}
 
 		choice := resp.Choices[0]
 		msg := choice.Message
 		messages = append(messages, msg)
 
-		// Log raw LLM turn for audit.
 		a.logTurn(inc.ID, round, msg)
 
-		// No tool calls → LLM finished with a text response.
 		if len(msg.ToolCalls) == 0 {
 			break
 		}
@@ -109,23 +110,31 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident) (*DiagnosticResult, e
 		for _, call := range msg.ToolCalls {
 			fn := call.Function.Name
 
-			// complete_diagnosis ends the loop.
 			if fn == "complete_diagnosis" {
 				var result DiagnosticResult
 				if err := json.Unmarshal([]byte(call.Function.Arguments), &result); err != nil {
-					return nil, fmt.Errorf("parse complete_diagnosis: %w", err)
+					return nil, messages, fmt.Errorf("parse complete_diagnosis: %w", err)
 				}
 				if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
-					a.log.Error().Err(err).Msg("set finding")
+					a.log.Error("set finding", "error", err)
 				}
-				return &result, nil
+
+				if !result.RequiresApproval && inc.JellyfinItemID != "" {
+					if !a.verifyFix(ctx, inc.JellyfinItemID) {
+						a.log.Warn("post-fix verification failed, escalating", "incident", inc.ID)
+						result.RequiresApproval = true
+						result.EscalateAction = "autonomous fix applied but playback verification failed"
+					}
+				}
+
+				return &result, messages, nil
 			}
 
-			// Count autonomous action calls.
 			if isAutonomousAction(fn) {
 				autonomousActions++
+				_, _ = a.db.IncrementActionCount(ctx, inc.ID)
+
 				if autonomousActions > maxAutonomousActions {
-					// Lock autonomous actions and surface for escalation.
 					_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
 					_ = a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
 					return &DiagnosticResult{
@@ -134,12 +143,12 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident) (*DiagnosticResult, e
 						PrimaryAction:    "manual_investigation",
 						PrimaryReason:    "agent applied 3 actions without confirming fix",
 						RequiresApproval: true,
-					}, nil
+					}, messages, nil
 				}
 			}
 
 			resultJSON := a.disp.Dispatch(ctx, fn, call.Function.Arguments)
-			a.log.Debug().Str("tool", fn).RawJSON("result", []byte(resultJSON)).Msg("tool call")
+			a.log.Debug("tool call", "tool", fn, "result", resultJSON)
 
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
@@ -149,14 +158,18 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident) (*DiagnosticResult, e
 		}
 	}
 
-	// Fell through without complete_diagnosis — synthesize a result.
 	return &DiagnosticResult{
 		RootCause:        "diagnostic loop exhausted without conclusion",
 		Confidence:       "low",
 		PrimaryAction:    "manual_investigation",
 		PrimaryReason:    "agent did not reach a conclusion within iteration limit",
 		RequiresApproval: true,
-	}, nil
+	}, messages, nil
+}
+
+func (a *Agent) verifyFix(ctx context.Context, itemID string) bool {
+	info, err := a.disp.Jellyfin.PlaybackInfo(ctx, itemID)
+	return err == nil && len(info.MediaSources) > 0
 }
 
 func (a *Agent) buildUserMessage(inc *db.Incident) string {
@@ -183,11 +196,11 @@ Call complete_diagnosis when done.`,
 
 func (a *Agent) logTurn(incidentID string, round int, msg openai.ChatCompletionMessage) {
 	b, _ := json.Marshal(msg)
-	a.log.Info().
-		Str("incident_id", incidentID).
-		Int("round", round).
-		RawJSON("message", b).
-		Msg("agent_turn")
+	a.log.Info("agent_turn",
+		"incident_id", incidentID,
+		"round", round,
+		"message", json.RawMessage(b),
+	)
 }
 
 func isAutonomousAction(toolName string) bool {

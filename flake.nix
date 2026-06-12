@@ -15,27 +15,35 @@
         system,
         ...
       }: let
-        media-fixer = pkgs.buildGoModule {
-          pname = "media-fixer";
+        commonArgs = {
           version = "0.1.0";
-
           src = ./.;
-
-          vendorHash = "sha256-P2R0XeaOj+lUovqx2e3Ay+ztcvrEdNx/8mQvtWnjryA=";
-
+          vendorHash = "sha256-4OnOEq97YkZCkXgQYFaQIAq/WjwMT/JQBboc0tbuP5M=";
           CGO_ENABLED = 0;
-
           ldflags = ["-s" "-w"];
+        };
 
+        media-fixer = pkgs.buildGoModule (commonArgs // {
+          pname = "media-fixer";
+          subPackages = ["."];
           meta = {
             description = "Self-healing media stack manager";
             mainProgram = "mediafixer";
           };
-        };
+        });
+
+        media-agent = pkgs.buildGoModule (commonArgs // {
+          pname = "media-agent";
+          subPackages = ["cmd/media-agent"];
+          meta = {
+            description = "media-agent sidecar for minz-media-0";
+            mainProgram = "media-agent";
+          };
+        });
       in {
         packages = {
           default = media-fixer;
-          inherit media-fixer;
+          inherit media-fixer media-agent;
         };
 
         devShells.default = pkgs.mkShell {
@@ -49,8 +57,9 @@
       };
 
       flake = {
-        nixosModules.default = import ./nix/module.nix;
-        nixosModules.media-fixer = import ./nix/module.nix;
+        nixosModules.default = import ./nix/media-fixer.nix;
+        nixosModules.media-fixer = import ./nix/media-fixer.nix;
+        nixosModules.media-agent = import ./nix/media-agent.nix;
       };
     };
 }

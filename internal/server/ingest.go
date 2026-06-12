@@ -52,12 +52,12 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 
 	inc, err := s.svc.Handle(r.Context(), rep)
 	if err != nil {
-		s.log.Error().Err(err).Msg("seerr webhook: handle")
+		s.log.Error("seerr webhook: handle", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	s.log.Info().Str("incident", inc.ID).Str("title", title).Msg("seerr issue ingested")
+	s.log.Info("seerr issue ingested", "incident", inc.ID, "title", title)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"incident_id": inc.ID})

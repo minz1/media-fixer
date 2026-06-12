@@ -12,12 +12,13 @@ type Config struct {
 	DB         DBConfig         `toml:"db"`
 	Discord    DiscordConfig    `toml:"discord"`
 	LLM        LLMConfig        `toml:"llm"`
+	ControlLLM *LLMConfig       `toml:"control_llm"`
 	Decypharr  DecypharrConfig  `toml:"decypharr"`
 	Jellyfin   JellyfinConfig   `toml:"jellyfin"`
 	Sonarr     ArrConfig        `toml:"sonarr"`
 	Radarr     ArrConfig        `toml:"radarr"`
-	Loki       LokiConfig       `toml:"loki"`
-	Media      MediaHostConfig  `toml:"media"`
+	Loki       LokiConfig        `toml:"loki"`
+	MediaAgent MediaAgentConfig  `toml:"media_agent"`
 }
 
 type ServerConfig struct {
@@ -61,13 +62,10 @@ type LokiConfig struct {
 	URL string `toml:"url"`
 }
 
-// MediaHostConfig holds SSH details for the media server (minz-media-0),
-// used for dd readability tests and service restarts over WireGuard.
-type MediaHostConfig struct {
-	Host       string `toml:"host"`
-	Port       int    `toml:"port"`
-	User       string `toml:"user"`
-	SSHKeyPath string `toml:"ssh_key_path"`
+// MediaAgentConfig holds connection details for the media-agent sidecar on minz-media-0.
+type MediaAgentConfig struct {
+	URL    string `toml:"url"`
+	APIKey string `toml:"api_key"`
 }
 
 func Load(path string) (*Config, error) {
@@ -78,10 +76,6 @@ func Load(path string) (*Config, error) {
 		},
 		DB: DBConfig{
 			Path: "/var/lib/media-fixer/media-fixer.db",
-		},
-		Media: MediaHostConfig{
-			Port: 22,
-			User: "root",
 		},
 	}
 
@@ -109,6 +103,28 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MEDIA_FIXER_RADARR_API_KEY"); v != "" {
 		cfg.Radarr.APIKey = v
+	}
+	if v := os.Getenv("MEDIA_FIXER_MEDIA_AGENT_API_KEY"); v != "" {
+		cfg.MediaAgent.APIKey = v
+	}
+	if v := os.Getenv("MEDIA_FIXER_CONTROL_LLM_API_KEY"); v != "" {
+		if cfg.ControlLLM == nil {
+			cfg.ControlLLM = &LLMConfig{}
+		}
+		cfg.ControlLLM.APIKey = v
+	}
+
+	// Fill control_llm defaults from [llm] when the block is present but partial.
+	if cfg.ControlLLM != nil {
+		if cfg.ControlLLM.BaseURL == "" {
+			cfg.ControlLLM.BaseURL = cfg.LLM.BaseURL
+		}
+		if cfg.ControlLLM.APIKey == "" {
+			cfg.ControlLLM.APIKey = cfg.LLM.APIKey
+		}
+		if cfg.ControlLLM.Model == "" {
+			cfg.ControlLLM.Model = cfg.LLM.Model
+		}
 	}
 
 	return cfg, nil

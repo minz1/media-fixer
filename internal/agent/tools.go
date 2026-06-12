@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/client"
@@ -139,13 +138,13 @@ func toolDefs() []openai.Tool {
 
 // Dispatcher holds the clients needed to execute tool calls.
 type Dispatcher struct {
-	Decypharr *client.DecypharrClient
-	Jellyfin  *client.JellyfinClient
-	Sonarr    *client.ArrClient
-	Radarr    *client.ArrClient
-	Loki      *client.LokiClient
-	Media     *client.MediaHostClient
-	DB        *db.DB
+	Decypharr  *client.DecypharrClient
+	Jellyfin   *client.JellyfinClient
+	Sonarr     *client.ArrClient
+	Radarr     *client.ArrClient
+	Loki       *client.LokiClient
+	MediaAgent *client.MediaAgentClient
+	DB         *db.DB
 	IncidentID string
 }
 
@@ -169,10 +168,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, name string, args map[string]
 
 	case "dd_readability_test":
 		filePath, _ := args["file_path"].(string)
-		if d.Media == nil {
-			return nil, fmt.Errorf("media host client not configured")
+		if d.MediaAgent == nil {
+			return nil, fmt.Errorf("media-agent not configured")
 		}
-		return d.Media.DDReadabilityTest(ctx, filePath)
+		return d.MediaAgent.DDReadabilityTest(ctx, filePath)
 
 	case "get_torrent_state":
 		search, _ := args["search"].(string)
@@ -227,10 +226,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, name string, args map[string]
 		return map[string]string{"status": "restarted"}, nil
 
 	case "restart_jellyfin":
-		if d.Media == nil {
-			return nil, fmt.Errorf("media host client not configured")
+		if d.MediaAgent == nil {
+			return nil, fmt.Errorf("media-agent not configured")
 		}
-		if err := d.Media.RestartService(ctx, "jellyfin"); err != nil {
+		if err := d.MediaAgent.RestartService(ctx, "jellyfin"); err != nil {
 			return nil, err
 		}
 		_ = d.DB.LogAction(ctx, &db.ActionLog{
@@ -326,7 +325,3 @@ func param(typ, desc string) map[string]any {
 	return map[string]any{"type": typ, "description": desc}
 }
 
-func strArg(args map[string]any, key string) string {
-	v, _ := args[key].(string)
-	return strings.TrimSpace(v)
-}

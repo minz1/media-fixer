@@ -7,7 +7,7 @@
   cfg = config.services.media-fixer;
   settingsFormat = pkgs.formats.toml {};
 
-  configFile = settingsFormat.generate "media-fixer.toml" {
+  configFile = settingsFormat.generate "media-fixer.toml" ({
     server = {
       addr = cfg.addr;
       base_url = cfg.baseURL;
@@ -39,13 +39,15 @@
     loki = {
       url = cfg.loki.url;
     };
-    media = {
-      host = cfg.media.host;
-      port = cfg.media.port;
-      user = cfg.media.user;
-      ssh_key_path = cfg.media.sshKeyPath;
+    media_agent = {
+      url = cfg.mediaAgent.url;
     };
-  };
+  } // lib.optionalAttrs (cfg.controlLlm.model != "") {
+    control_llm = {
+      base_url = cfg.controlLlm.baseURL;
+      model = cfg.controlLlm.model;
+    };
+  });
 in {
   options.services.media-fixer = {
     enable = lib.mkEnableOption "media-fixer self-healing media stack manager";
@@ -69,13 +71,15 @@ in {
       default = null;
       description = ''
         Path to a file containing secret environment variables loaded by systemd.
-        Expected variables (at minimum):
+        Expected variables:
           MEDIA_FIXER_DISCORD_TOKEN
           MEDIA_FIXER_LLM_API_KEY
           MEDIA_FIXER_DECYPHARR_API_TOKEN
           MEDIA_FIXER_JELLYFIN_API_KEY
           MEDIA_FIXER_SONARR_API_KEY
           MEDIA_FIXER_RADARR_API_KEY
+          MEDIA_FIXER_MEDIA_AGENT_API_KEY
+          MEDIA_FIXER_CONTROL_LLM_API_KEY  # optional
 
         With sops-nix, set this to config.sops.secrets."media-fixer-env".path.
       '';
@@ -101,12 +105,25 @@ in {
       baseURL = lib.mkOption {
         type = lib.types.str;
         default = "https://openrouter.ai/api/v1";
-        description = "OpenAI-compatible API base URL (OpenRouter, ecoGPT, etc.).";
+        description = "OpenAI-compatible API base URL.";
       };
       model = lib.mkOption {
         type = lib.types.str;
         default = "anthropic/claude-sonnet-4-6";
         description = "Model name to pass to the LLM API.";
+      };
+    };
+
+    controlLlm = {
+      baseURL = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Base URL for the control reviewer LLM. Defaults to llm.baseURL if empty.";
+      };
+      model = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Model for the control reviewer. Empty string disables the control pass.";
       };
     };
 
@@ -150,31 +167,11 @@ in {
       };
     };
 
-    media = {
-      host = lib.mkOption {
+    mediaAgent = {
+      url = lib.mkOption {
         type = lib.types.str;
-        default = "";
-        description = "WireGuard IP of minz-media-0 for SSH-based diagnostics and restarts.";
-        example = "10.100.0.2";
-      };
-      port = lib.mkOption {
-        type = lib.types.port;
-        default = 22;
-        description = "SSH port on the media host.";
-      };
-      user = lib.mkOption {
-        type = lib.types.str;
-        default = "root";
-        description = "SSH user on the media host.";
-      };
-      sshKeyPath = lib.mkOption {
-        type = lib.types.str;
-        default = "/var/lib/media-fixer/media-host-key";
-        description = ''
-          Path to the SSH private key for connecting to the media host.
-          With DynamicUser the service state dir is /var/lib/media-fixer.
-          Generate with: ssh-keygen -t ed25519 -f /var/lib/media-fixer/media-host-key
-        '';
+        description = "Base URL of the media-agent sidecar on minz-media-0.";
+        example = "http://10.100.0.2:9191";
       };
     };
   };
@@ -191,7 +188,6 @@ in {
         Restart = "on-failure";
         RestartSec = "5s";
 
-        # Security hardening.
         DynamicUser = true;
         StateDirectory = "media-fixer";
         StateDirectoryMode = "0750";

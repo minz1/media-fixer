@@ -3,20 +3,23 @@ package incident
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
-	"github.com/rs/zerolog"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 const systematicIncidentThreshold = 5
 
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
-	db    *db.DB
-	agent *agent.Agent
-	notif Notifier
-	log   zerolog.Logger
+	db      *db.DB
+	agent   *agent.Agent
+	control *agent.ControlReviewer
+	notif   Notifier
+	log     *slog.Logger
 }
 
 // Notifier is implemented by the Discord bot to send DMs.
@@ -24,8 +27,8 @@ type Notifier interface {
 	NotifyOwner(ctx context.Context, msg string) error
 }
 
-func NewService(database *db.DB, ag *agent.Agent, notif Notifier, log zerolog.Logger) *Service {
-	return &Service{db: database, agent: ag, notif: notif, log: log}
+func NewService(database *db.DB, ag *agent.Agent, control *agent.ControlReviewer, notif Notifier, log *slog.Logger) *Service {
+	return &Service{db: database, agent: ag, control: control, notif: notif, log: log}
 }
 
 // Report is the normalised form of an incoming issue report from any source.
@@ -41,19 +44,16 @@ type Report struct {
 // Handle processes a new report: deduplicates, creates/updates the incident,
 // and starts the agent in the background if this is a new incident.
 func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
-	// Duplicate detection: collapse into existing open incident by title.
 	existing, err := s.db.FindOpenByTitle(ctx, r.Title)
 	if err != nil {
 		return nil, fmt.Errorf("find open incident: %w", err)
 	}
 	if existing != nil {
-		s.log.Info().Str("incident", existing.ID).Str("reporter", r.ReportedBy).Msg("duplicate report collapsed")
+		s.log.Info("duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
 		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source)
 		return existing, nil
 	}
 
-	// Systemic incident guard: if too many open incidents, lock autonomous
-	// actions and page the owner immediately instead of running the agent.
 	openCount, err := s.db.CountOpenIncidents(ctx)
 	if err != nil {
 		return nil, err
@@ -78,18 +78,20 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		msg := fmt.Sprintf("⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
 			openCount+1, r.Title, inc.ID[:8])
 		if err := s.notif.NotifyOwner(ctx, msg); err != nil {
-			s.log.Error().Err(err).Msg("notify owner")
+			s.log.Error("notify owner", "error", err)
 		}
 		return inc, nil
 	}
 
-	// Run the agent asynchronously so the ingest endpoint can return quickly.
-	go s.runAgent(inc)
+	go s.runAgent(inc, nil)
 
 	return inc, nil
 }
 
-func (s *Service) runAgent(inc *db.Incident) {
+// retryDelays are the backoff waits for suggest_alternative retries (0, 2min, 6min).
+var retryDelays = []time.Duration{0, 2 * time.Minute, 6 * time.Minute}
+
+func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage) {
 	if s.agent == nil {
 		return
 	}
@@ -97,29 +99,87 @@ func (s *Service) runAgent(inc *db.Incident) {
 
 	paused, err := s.db.IsAutonomousPaused(ctx)
 	if err != nil || paused {
-		s.log.Warn().Str("incident", inc.ID).Msg("autonomous actions paused, skipping agent")
+		s.log.Warn("autonomous actions paused, skipping agent", "incident", inc.ID)
 		return
 	}
 
-	result, err := s.agent.Run(ctx, inc)
-	if err != nil {
-		s.log.Error().Err(err).Str("incident", inc.ID).Msg("agent error")
-		_ = s.notif.NotifyOwner(ctx,
-			fmt.Sprintf("❌ Agent error for incident **%s** (#%s): %v", inc.Title, inc.ID[:8], err))
-		return
-	}
+	var (
+		result       *agent.DiagnosticResult
+		conversation []openai.ChatCompletionMessage
+	)
 
-	if result.RequiresApproval {
-		_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-		_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-			"🔍 Incident **%s** (#%s) needs your attention.\nRoot cause: %s\nAction needed: %s",
-			inc.Title, inc.ID[:8], result.RootCause, result.EscalateAction,
-		))
-		return
-	}
+	for attempt := 0; attempt < len(retryDelays); attempt++ {
+		if retryDelays[attempt] > 0 {
+			time.Sleep(retryDelays[attempt])
+		}
 
-	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
-	s.log.Info().Str("incident", inc.ID).Str("action", result.PrimaryAction).Msg("agent fixed")
+		result, conversation, err = s.agent.Run(ctx, inc, seed)
+		if err != nil {
+			s.log.Error("agent error", "incident", inc.ID, "error", err)
+			_ = s.notif.NotifyOwner(ctx,
+				fmt.Sprintf("❌ Agent error for incident **%s** (#%s): %v", inc.Title, inc.ID[:8], err))
+			return
+		}
+
+		if !result.RequiresApproval {
+			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
+			s.log.Info("agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
+			return
+		}
+
+		if s.control == nil {
+			s.surfaceToOwner(ctx, inc, result, "")
+			return
+		}
+
+		verdict, err := s.control.Review(ctx, conversation, result.EscalateAction)
+		if err != nil {
+			s.log.Error("control review error", "incident", inc.ID, "error", err)
+			s.surfaceToOwner(ctx, inc, result, " (control review failed)")
+			return
+		}
+
+		switch verdict.Verdict {
+		case agent.VerdictApprove:
+			s.surfaceToOwner(ctx, inc, result, "")
+			return
+
+		case agent.VerdictEscalateToOwner:
+			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
+			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+				"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).\nRoot cause: %s\nConcern: %s",
+				inc.Title, inc.ID[:8], result.RootCause, verdict.Reason,
+			))
+			return
+
+		case agent.VerdictSuggestAlternative:
+			if attempt == len(retryDelays)-1 {
+				_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
+				_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+					"⚠️ **%s** (#%s): agent still needs approval after %d retries.\nRoot cause: %s\nAction needed: %s",
+					inc.Title, inc.ID[:8], attempt+1, result.RootCause, result.EscalateAction,
+				))
+				return
+			}
+			seed = append(conversation, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf("Control review suggests an alternative approach: %s\n\nPlease re-evaluate and try this approach before escalating.", verdict.AlternativeAction),
+			})
+			s.log.Info("control reviewer suggested alternative, retrying",
+				"incident", inc.ID,
+				"attempt", attempt+1,
+				"alternative", verdict.AlternativeAction,
+			)
+		}
+	}
+}
+
+func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
+	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
+	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+		"🔍 Incident **%s** (#%s) needs your attention%s.\nRoot cause: %s\nAction needed: %s",
+		inc.Title, inc.ID[:8], note, result.RootCause, result.EscalateAction,
+	))
 }
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
@@ -136,7 +196,7 @@ func (s *Service) Reopen(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	go s.runAgent(inc)
+	go s.runAgent(inc, nil)
 	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
 		"🔁 Incident **%s** (#%s) was reopened — re-running diagnostics.",
 		inc.Title, inc.ID[:8],

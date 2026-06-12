@@ -5,8 +5,10 @@ import (
 	"os"
 	"testing"
 
+	"io"
+	"log/slog"
+
 	"github.com/minz1/mediafixer/internal/db"
-	"github.com/rs/zerolog"
 )
 
 type captureNotifier struct{ msgs []string }
@@ -33,7 +35,7 @@ func newTestService(t *testing.T) (*Service, *db.DB, *captureNotifier) {
 	notif := &captureNotifier{}
 	// agent is nil — tests must not trigger the agent goroutine, so all
 	// incidents are created with a nil agent and the goroutine exits early.
-	svc := NewService(database, nil, notif, zerolog.Nop())
+	svc := NewService(database, nil, nil, notif, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return svc, database, notif
 }
 

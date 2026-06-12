@@ -9,9 +9,11 @@ import (
 	"os"
 	"testing"
 
+	"io"
+	"log/slog"
+
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
-	"github.com/rs/zerolog"
 )
 
 // stubNotifier satisfies incident.Notifier without a real Discord connection.
@@ -36,10 +38,10 @@ func newTestServer(t *testing.T) (*Server, *db.DB) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	log := zerolog.Nop()
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	notif := &stubNotifier{}
-	svc := incident.NewService(database, nil, notif, log)
-	srv := New(":0", "/media", database, svc, log)
+	svc := incident.NewService(database, nil, nil, notif, discard)
+	srv := New(":0", "/media", database, svc, discard)
 	return srv, database
 }
 

@@ -3,10 +3,10 @@ package discord
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/minz1/mediafixer/internal/incident"
-	"github.com/rs/zerolog"
 )
 
 // Bot wraps discordgo and registers the /report slash command.
@@ -15,10 +15,10 @@ type Bot struct {
 	guildID string
 	ownerID string
 	svc     *incident.Service
-	log     zerolog.Logger
+	log     *slog.Logger
 }
 
-func New(token, guildID, ownerID string, log zerolog.Logger) (*Bot, error) {
+func New(token, guildID, ownerID string, log *slog.Logger) (*Bot, error) {
 	sess, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, fmt.Errorf("discordgo: %w", err)
@@ -80,7 +80,7 @@ func (b *Bot) Start() error {
 		return fmt.Errorf("register /report command: %w", err)
 	}
 
-	b.log.Info().Msg("discord bot started")
+	b.log.Info("discord bot started")
 	return nil
 }
 
@@ -111,7 +111,6 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	title := optStr(opts, "title")
 	details := optStr(opts, "details")
 
-	// Acknowledge immediately so Discord doesn't time out.
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	})
@@ -131,7 +130,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 
 	var content string
 	if err != nil {
-		b.log.Error().Err(err).Msg("handle report")
+		b.log.Error("handle report", "error", err)
 		content = "❌ Failed to create incident. Please try again."
 	} else {
 		content = fmt.Sprintf("✅ Incident **#%s** created for **%s**. The agent is investigating — you'll get a DM when it's done.",

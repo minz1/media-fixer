@@ -5,11 +5,20 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
+
+var yearSuffixRE = regexp.MustCompile(`\s*\(\d{4}\)\s*$`)
+
+// normalizeTitle strips trailing " (YYYY)" year suffixes for fuzzy deduplication.
+func normalizeTitle(title string) string {
+	return strings.TrimSpace(yearSuffixRE.ReplaceAllString(title, ""))
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS incidents (
@@ -137,16 +146,19 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 }
 
 // FindOpenByTitle returns the first open/investigating/agent_fixed incident for
-// this title so duplicate reports collapse into it.
+// this title so duplicate reports collapse into it. Comparison is
+// case-insensitive and ignores trailing year suffixes like " (2024)".
 func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, error) {
+	norm := normalizeTitle(title)
 	row := d.sql.QueryRowContext(ctx, `
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
 		       action_count, autonomous_locked
 		FROM incidents
-		WHERE title = ? AND status NOT IN ('resolved','reopened')
-		ORDER BY created_at DESC LIMIT 1`, title)
+		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)')
+		  AND status NOT IN ('resolved','reopened')
+		ORDER BY created_at DESC LIMIT 1`, norm, norm)
 	inc, err := scanIncident(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
