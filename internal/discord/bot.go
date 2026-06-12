@@ -90,7 +90,12 @@ func (b *Bot) Close() error {
 
 // NotifyOwner sends a DM to the configured owner user ID.
 func (b *Bot) NotifyOwner(ctx context.Context, msg string) error {
-	ch, err := b.session.UserChannelCreate(b.ownerID)
+	return b.NotifyUser(ctx, b.ownerID, msg)
+}
+
+// NotifyUser sends a DM to an arbitrary Discord user ID.
+func (b *Bot) NotifyUser(ctx context.Context, userID, msg string) error {
+	ch, err := b.session.UserChannelCreate(userID)
 	if err != nil {
 		return fmt.Errorf("create DM channel: %w", err)
 	}
@@ -121,11 +126,12 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 
 	inc, err := b.svc.Handle(context.Background(), &incident.Report{
-		Source:     "discord",
-		ReportedBy: reporter,
-		What:       what,
-		Title:      title,
-		Details:    details,
+		Source:            "discord",
+		ReportedBy:        reporter,
+		ReporterDiscordID: i.Member.User.ID,
+		What:              what,
+		Title:             title,
+		Details:           details,
 	})
 
 	var content string
@@ -133,7 +139,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.log.Error("handle report", "error", err)
 		content = "❌ Failed to create incident. Please try again."
 	} else {
-		content = fmt.Sprintf("✅ Incident **#%s** created for **%s**. The agent is investigating — you'll get a DM when it's done.",
+		content = fmt.Sprintf("✅ Incident **#%s** created for **%s**. The agent is investigating. You'll get a DM when it's resolved.",
 			inc.ID[:8], title)
 	}
 

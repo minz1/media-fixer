@@ -109,8 +109,7 @@ in {
       };
       model = lib.mkOption {
         type = lib.types.str;
-        default = "anthropic/claude-sonnet-4-6";
-        description = "Model name to pass to the LLM API.";
+        description = "Model name to pass to the LLM API (e.g. \"anthropic/claude-opus-4-8\" on OpenRouter).";
       };
     };
 

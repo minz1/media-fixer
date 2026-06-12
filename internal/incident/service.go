@@ -25,6 +25,7 @@ type Service struct {
 // Notifier is implemented by the Discord bot to send DMs.
 type Notifier interface {
 	NotifyOwner(ctx context.Context, msg string) error
+	NotifyUser(ctx context.Context, userID, msg string) error
 }
 
 func NewService(database *db.DB, ag *agent.Agent, control *agent.ControlReviewer, notif Notifier, log *slog.Logger) *Service {
@@ -33,12 +34,13 @@ func NewService(database *db.DB, ag *agent.Agent, control *agent.ControlReviewer
 
 // Report is the normalised form of an incoming issue report from any source.
 type Report struct {
-	Source         string // "discord" | "seerr"
-	ReportedBy     string
-	What           string // "cant_play" | "login_failed" | "missing_media" | "other"
-	Title          string
-	JellyfinItemID string
-	Details        string
+	Source            string // "discord" | "seerr"
+	ReportedBy        string
+	ReporterDiscordID string // empty for non-Discord sources
+	What              string // "cant_play" | "login_failed" | "missing_media" | "other"
+	Title             string
+	JellyfinItemID    string
+	Details           string
 }
 
 // Handle processes a new report: deduplicates, creates/updates the incident,
@@ -50,7 +52,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	}
 	if existing != nil {
 		s.log.Info("duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
-		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source)
+		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 		return existing, nil
 	}
 
@@ -71,7 +73,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	if err := s.db.CreateIncident(ctx, inc); err != nil {
 		return nil, fmt.Errorf("create incident: %w", err)
 	}
-	_ = s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source)
+	_ = s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
@@ -124,6 +126,7 @@ func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage
 		if !result.RequiresApproval {
 			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
 			s.log.Info("agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
+			s.notifyReporters(ctx, inc, fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title))
 			return
 		}
 
@@ -184,7 +187,28 @@ func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
 func (s *Service) Resolve(ctx context.Context, id string) error {
-	return s.db.UpdateIncidentStatus(ctx, id, db.StatusResolved)
+	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusResolved); err != nil {
+		return err
+	}
+	inc, err := s.db.GetIncident(ctx, id)
+	if err != nil {
+		return err
+	}
+	s.notifyReporters(ctx, inc, fmt.Sprintf("✅ Your report for **%s** has been resolved. Give it a try!", inc.Title))
+	return nil
+}
+
+func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg string) {
+	ids, err := s.db.ListDiscordReporterIDs(ctx, inc.ID)
+	if err != nil {
+		s.log.Error("list discord reporter IDs", "incident", inc.ID, "error", err)
+		return
+	}
+	for _, id := range ids {
+		if err := s.notif.NotifyUser(ctx, id, msg); err != nil {
+			s.log.Error("notify reporter", "user", id, "incident", inc.ID, "error", err)
+		}
+	}
 }
 
 // Reopen marks an incident as reopened (when human testing shows it's still broken).

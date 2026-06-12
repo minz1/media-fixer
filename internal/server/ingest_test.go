@@ -24,6 +24,11 @@ func (s *stubNotifier) NotifyOwner(_ context.Context, msg string) error {
 	return nil
 }
 
+func (s *stubNotifier) NotifyUser(_ context.Context, _, msg string) error {
+	s.msgs = append(s.msgs, msg)
+	return nil
+}
+
 func newTestServer(t *testing.T) (*Server, *db.DB) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "test-*.db")

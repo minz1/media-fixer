@@ -39,10 +39,11 @@ CREATE TABLE IF NOT EXISTS incidents (
 );
 
 CREATE TABLE IF NOT EXISTS incident_reporters (
-	incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
-	reporter    TEXT NOT NULL,
-	source      TEXT NOT NULL,
-	reported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	incident_id     TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+	reporter        TEXT NOT NULL,
+	source          TEXT NOT NULL,
+	discord_user_id TEXT,
+	reported_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (incident_id, reporter)
 );
 
@@ -82,6 +83,11 @@ func Open(path string) (*DB, error) {
 	conn.SetMaxOpenConns(1) // SQLite WAL handles readers, but serialise writes
 	if _, err := conn.Exec(schema); err != nil {
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	if _, err := conn.Exec(`ALTER TABLE incident_reporters ADD COLUMN discord_user_id TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("migrate incident_reporters.discord_user_id: %w", err)
+		}
 	}
 	return &DB{sql: conn}, nil
 }
@@ -243,11 +249,11 @@ func (d *DB) SetAutonomousLocked(ctx context.Context, id string, locked bool) er
 
 // --- Reporters ---
 
-func (d *DB) AddReporter(ctx context.Context, incidentID, reporter, source string) error {
+func (d *DB) AddReporter(ctx context.Context, incidentID, reporter, source, discordUserID string) error {
 	_, err := d.sql.ExecContext(ctx,
-		`INSERT OR IGNORE INTO incident_reporters (incident_id, reporter, source, reported_at)
-		 VALUES (?, ?, ?, ?)`,
-		incidentID, reporter, source, time.Now())
+		`INSERT OR IGNORE INTO incident_reporters (incident_id, reporter, source, discord_user_id, reported_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		incidentID, reporter, source, nullStr(discordUserID), time.Now())
 	return err
 }
 
@@ -266,6 +272,27 @@ func (d *DB) ListReporters(ctx context.Context, incidentID string) ([]string, er
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) ListDiscordReporterIDs(ctx context.Context, incidentID string) ([]string, error) {
+	rows, err := d.sql.QueryContext(ctx,
+		`SELECT discord_user_id FROM incident_reporters
+		 WHERE incident_id = ? AND discord_user_id IS NOT NULL AND discord_user_id != ''
+		 ORDER BY reported_at`,
+		incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

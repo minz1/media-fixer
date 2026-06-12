@@ -18,6 +18,11 @@ func (c *captureNotifier) NotifyOwner(_ context.Context, msg string) error {
 	return nil
 }
 
+func (c *captureNotifier) NotifyUser(_ context.Context, _, msg string) error {
+	c.msgs = append(c.msgs, msg)
+	return nil
+}
+
 func newTestService(t *testing.T) (*Service, *db.DB, *captureNotifier) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")

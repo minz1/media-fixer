@@ -200,7 +200,7 @@ func TestReporters(t *testing.T) {
 	}
 
 	for _, r := range []string{"alice", "bob", "alice"} { // alice twice → dedup
-		if err := db.AddReporter(ctx, inc.ID, r, "discord"); err != nil {
+		if err := db.AddReporter(ctx, inc.ID, r, "discord", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
