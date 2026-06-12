@@ -164,11 +164,14 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 			callKey := fn + ":" + call.Function.Arguments
 			seenCalls[callKey]++
 			var resultJSON string
-			if seenCalls[callKey] > 1 {
+			// Only block duplicate calls for state-changing actions. Read-only diagnostic
+			// tools (playback info, dd, loki, etc.) may legitimately be re-called to
+			// verify that an autonomous action actually fixed the problem.
+			if isAutonomousAction(fn) && seenCalls[callKey] > 1 {
 				resultJSON = jsonResult(map[string]any{
-					"error": fmt.Sprintf("you already called %s with these exact arguments and it did not resolve the issue — try a different approach", fn),
+					"error": fmt.Sprintf("you already called %s — it has been applied, do not repeat it. Call complete_diagnosis with your current findings.", fn),
 				})
-				a.log.Warn("duplicate tool call blocked", "tool", fn, "round", round)
+				a.log.Warn("duplicate action blocked", "tool", fn, "round", round)
 			} else {
 				resultJSON = a.disp.Dispatch(ctx, fn, call.Function.Arguments)
 				a.log.Debug("tool call", "tool", fn, "result", resultJSON)
