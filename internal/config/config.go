@@ -59,7 +59,9 @@ type ArrConfig struct {
 }
 
 type LokiConfig struct {
-	URL string `toml:"url"`
+	URL     string `toml:"url"`
+	TLSCert string `toml:"tls_cert"` // path to PEM client cert
+	TLSKey  string `toml:"tls_key"`  // path to PEM client key
 }
 
 // MediaAgentConfig holds connection details for the media-agent sidecar on minz-media-0.
@@ -106,6 +108,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MEDIA_FIXER_MEDIA_AGENT_API_KEY"); v != "" {
 		cfg.MediaAgent.APIKey = v
+	}
+	if v := os.Getenv("MEDIA_FIXER_LOKI_TLS_CERT"); v != "" {
+		cfg.Loki.TLSCert = v
+	}
+	if v := os.Getenv("MEDIA_FIXER_LOKI_TLS_KEY"); v != "" {
+		cfg.Loki.TLSKey = v
 	}
 	if v := os.Getenv("MEDIA_FIXER_CONTROL_LLM_API_KEY"); v != "" {
 		if cfg.ControlLLM == nil {

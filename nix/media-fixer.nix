@@ -162,7 +162,17 @@ in {
       url = lib.mkOption {
         type = lib.types.str;
         description = "Base URL of the Loki server.";
-        example = "http://obs-0:3100";
+        example = "https://10.10.0.2:3101";
+      };
+      tlsCert = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Path to PEM client certificate for mTLS against Loki. Set to a sops secret path.";
+      };
+      tlsKey = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Path to PEM client key for mTLS against Loki. Set to a sops secret path.";
       };
     };
 
@@ -202,6 +212,11 @@ in {
         SystemCallFilter = ["@system-service" "~@privileged"];
       } // lib.optionalAttrs (cfg.environmentFile != null) {
         EnvironmentFile = cfg.environmentFile;
+      } // lib.optionalAttrs (cfg.loki.tlsCert != "") {
+        Environment = [
+          "MEDIA_FIXER_LOKI_TLS_CERT=${cfg.loki.tlsCert}"
+          "MEDIA_FIXER_LOKI_TLS_KEY=${cfg.loki.tlsKey}"
+        ];
       };
     };
   };

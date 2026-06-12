@@ -41,7 +41,11 @@ func main() {
 	jellyfinClient := client.NewJellyfin(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey)
 	sonarrClient := client.NewArr(cfg.Sonarr.URL, cfg.Sonarr.APIKey)
 	radarrClient := client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey)
-	lokiClient := client.NewLoki(cfg.Loki.URL)
+	lokiClient, err := client.NewLoki(cfg.Loki.URL, cfg.Loki.TLSCert, cfg.Loki.TLSKey)
+	if err != nil {
+		log.Error("loki client", "error", err)
+		os.Exit(1)
+	}
 
 	var mediaAgentClient *client.MediaAgentClient
 	if cfg.MediaAgent.URL != "" {

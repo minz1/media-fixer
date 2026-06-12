@@ -42,7 +42,7 @@ func TestLoki_QueryRange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLoki(srv.URL)
+	c, _ := NewLoki(srv.URL, "", "")
 	from := ts.Add(-time.Minute)
 	to := ts.Add(time.Minute)
 
@@ -66,7 +66,7 @@ func TestLoki_EmptyResult(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLoki(srv.URL)
+	c, _ := NewLoki(srv.URL, "", "")
 	result, err := c.QueryRange(context.Background(), `{unit="jellyfin"}`, time.Now().Add(-time.Minute), time.Now(), 10)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestLoki_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewLoki(srv.URL)
+	c, _ := NewLoki(srv.URL, "", "")
 	_, err := c.QueryRange(context.Background(), `{unit="x"}`, time.Now().Add(-time.Minute), time.Now(), 10)
 	if err == nil {
 		t.Fatal("expected error on 400")

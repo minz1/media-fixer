@@ -14,7 +14,7 @@ func TestDecypharr_ListTorrents(t *testing.T) {
 		if r.URL.Path != "/api/torrents" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		if r.Header.Get("X-Api-Token") != "secret" {
+		if r.Header.Get("Authorization") != "Bearer secret" {
 			t.Errorf("missing/wrong auth header")
 		}
 		json.NewEncoder(w).Encode(TorrentListResponse{

@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,11 +16,27 @@ type LokiClient struct {
 	http *http.Client
 }
 
-func NewLoki(base string) *LokiClient {
-	return &LokiClient{
-		base: base,
-		http: &http.Client{Timeout: 30 * time.Second},
+func NewLoki(base, tlsCert, tlsKey string) (*LokiClient, error) {
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+
+	if tlsCert != "" && tlsKey != "" {
+		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+		if err != nil {
+			return nil, fmt.Errorf("loki mTLS: load keypair: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("loki mTLS: system cert pool: %w", err)
+		}
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				RootCAs:      pool,
+			},
+		}
 	}
+
+	return &LokiClient{base: base, http: httpClient}, nil
 }
 
 type LokiQueryResult struct {
