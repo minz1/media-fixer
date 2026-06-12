@@ -32,6 +32,19 @@ type DiskResult struct {
 	Mounts []DiskMount `json:"mounts"`
 }
 
+// ListDirEntry is one item returned by GET /ls.
+type ListDirEntry struct {
+	Name  string `json:"name"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size,omitempty"` // bytes; 0 for directories
+}
+
+// ListDirResult is the response from GET /ls.
+type ListDirResult struct {
+	Path    string         `json:"path"`
+	Entries []ListDirEntry `json:"entries"`
+}
+
 // ErrorResponse is the standard error body for non-2xx responses.
 type ErrorResponse struct {
 	Error string `json:"error"`

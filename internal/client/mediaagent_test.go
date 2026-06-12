@@ -37,6 +37,10 @@ func (s *stubOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 	return &mediaagentapi.DiskResult{}, nil
 }
 
+func (s *stubOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
+	return &mediaagentapi.ListDirResult{Path: path}, nil
+}
+
 func newTestPair(t *testing.T, ops mediaagent.Ops) *client.MediaAgentClient {
 	t.Helper()
 	h := mediaagent.NewHandler(ops, testAPIKey, slog.New(slog.NewTextHandler(io.Discard, nil)))

@@ -22,6 +22,7 @@ type Ops interface {
 	DDTest(path string) (*mediaagentapi.DDTestResult, error)
 	Restart(service string) error
 	DiskUsage() (*mediaagentapi.DiskResult, error)
+	ListDir(path string) (*mediaagentapi.ListDirResult, error)
 }
 
 // NewHandler builds the media-agent HTTP router.
@@ -49,6 +50,21 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 		result, err := ops.DDTest(body.Path)
 		if err != nil {
 			log.Error("dd-test failed", "path", body.Path, "error", err)
+			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
+	r.Get("/ls", func(w http.ResponseWriter, req *http.Request) {
+		path := req.URL.Query().Get("path")
+		if path == "" {
+			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: "path required"})
+			return
+		}
+		result, err := ops.ListDir(path)
+		if err != nil {
+			log.Error("ls failed", "path", path, "error", err)
 			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -98,6 +114,14 @@ const (
 )
 
 func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return &mediaagentapi.DDTestResult{Error: err.Error()}, nil
+	}
+	if info.IsDir() {
+		return &mediaagentapi.DDTestResult{Error: "path is a directory, not a file — use list_directory to find the specific video file inside it"}, nil
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return &mediaagentapi.DDTestResult{Error: err.Error()}, nil
@@ -135,8 +159,39 @@ func (o *RealOps) Restart(service string) error {
 	return nil
 }
 
-// DiskMounts are the paths checked for disk usage.
+// DiskMounts are the paths checked for disk usage and the allowed roots for ListDir.
 var DiskMounts = []string{"/mnt/decypharr", "/var/cache/decypharr", "/data"}
+
+func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
+	// Restrict to known media roots to avoid exposing arbitrary filesystem paths.
+	allowed := false
+	for _, root := range DiskMounts {
+		if path == root || strings.HasPrefix(path, root+"/") {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, fmt.Errorf("path %q is outside allowed mount roots", path)
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &mediaagentapi.ListDirResult{Path: path}
+	for _, e := range entries {
+		entry := mediaagentapi.ListDirEntry{Name: e.Name(), IsDir: e.IsDir()}
+		if !e.IsDir() {
+			if info, err := e.Info(); err == nil {
+				entry.Size = info.Size()
+			}
+		}
+		result.Entries = append(result.Entries, entry)
+	}
+	return result, nil
+}
 
 func (o *RealOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 	var mounts []mediaagentapi.DiskMount

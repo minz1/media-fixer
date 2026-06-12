@@ -120,6 +120,16 @@ func toolDefs() []openai.Tool {
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
+				Name:        "list_directory",
+				Description: "List the contents of a directory on the media host. Use this to find the actual video file inside a torrent folder before calling dd_readability_test. Only paths under /mnt/decypharr, /var/cache/decypharr, or /data are allowed.",
+				Parameters: jsonSchema(map[string]any{
+					"path": param("string", "Absolute directory path to list"),
+				}, []string{"path"}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        "get_disk_info",
 				Description: "Get disk usage for the media host mount points: /mnt/decypharr (FUSE media files), /var/cache/decypharr (decypharr cache), and /data. Use to check if a mount is present (non-zero total) and whether disk space is a factor.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
@@ -289,6 +299,13 @@ func (d *Dispatcher) dispatch(ctx context.Context, name string, args map[string]
 			Status:      db.ActionApplied,
 		})
 		return map[string]any{"movie_id": movie.ID, "status": "rescan_queued"}, nil
+
+	case "list_directory":
+		path, _ := args["path"].(string)
+		if d.MediaAgent == nil {
+			return nil, fmt.Errorf("media-agent not configured")
+		}
+		return d.MediaAgent.ListDirectory(ctx, path)
 
 	case "get_disk_info":
 		if d.MediaAgent == nil {

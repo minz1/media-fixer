@@ -18,11 +18,14 @@ Media files live under /mnt/decypharr. Cache is at /var/cache/decypharr. Other d
 
 Diagnostic procedure — run in order, stop when you find the root cause:
 1. Call jellyfin_playback_info. The response includes MediaSources[].Path — the actual file path
-   on disk. Use that path (and only that path) for dd_readability_test. Never construct or guess paths.
-2. If MediaSources is empty (Jellyfin can't open the file), call get_disk_info first to confirm
-   the /mnt/decypharr mount is present and healthy before drawing conclusions.
-3. Call dd_readability_test using the exact path from step 1. EIO errors or very low bytes-read
-   confirm a FUSE/debrid link problem.
+   on disk. Use that exact path for dd_readability_test. Never construct or guess a path.
+2. If MediaSources is empty (Jellyfin can't open the file):
+   a. Call get_disk_info to confirm the /mnt/decypharr mount is present.
+   b. Call get_torrent_state to get the torrent folder name.
+   c. Call list_directory on /mnt/decypharr/<folder> to find the actual video file(s).
+   d. Use the specific file path (not the folder) for dd_readability_test.
+3. Call dd_readability_test on the specific file path from step 1 or 2d. Never pass a directory —
+   dd on a directory is meaningless. EIO errors or very low bytes-read confirm a FUSE/debrid link problem.
 4. Call get_torrent_state to check decypharr's view of the torrent.
 5. Call loki_query for jellyfin and decypharr logs around the report time.
 
@@ -91,6 +94,7 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 	autonomousActions := 0
 	const maxAutonomousActions = 3
 	const maxRounds = 20
+	seenCalls := make(map[string]int) // "tool:args" → times seen
 
 	for round := 0; round < maxRounds; round++ {
 		resp, err := a.llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
@@ -152,8 +156,18 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 				}
 			}
 
-			resultJSON := a.disp.Dispatch(ctx, fn, call.Function.Arguments)
-			a.log.Debug("tool call", "tool", fn, "result", resultJSON)
+			callKey := fn + ":" + call.Function.Arguments
+			seenCalls[callKey]++
+			var resultJSON string
+			if seenCalls[callKey] > 1 {
+				resultJSON = jsonResult(map[string]any{
+					"error": fmt.Sprintf("you already called %s with these exact arguments and it did not resolve the issue — try a different approach", fn),
+				})
+				a.log.Warn("duplicate tool call blocked", "tool", fn, "round", round)
+			} else {
+				resultJSON = a.disp.Dispatch(ctx, fn, call.Function.Arguments)
+				a.log.Debug("tool call", "tool", fn, "result", resultJSON)
+			}
 
 			messages = append(messages, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,

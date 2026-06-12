@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
@@ -93,6 +94,34 @@ func (c *MediaAgentClient) DiskUsage(ctx context.Context) (*mediaagentapi.DiskRe
 	var result mediaagentapi.DiskResult
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("media-agent disk decode: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *MediaAgentClient) ListDirectory(ctx context.Context, path string) (*mediaagentapi.ListDirResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/ls?path="+url.QueryEscape(path), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.auth(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var e mediaagentapi.ErrorResponse
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error != "" {
+			return nil, fmt.Errorf("media-agent ls: %s", e.Error)
+		}
+		return nil, fmt.Errorf("media-agent ls: status %d", resp.StatusCode)
+	}
+	var result mediaagentapi.ListDirResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("media-agent ls decode: %w", err)
 	}
 	return &result, nil
 }
