@@ -32,6 +32,9 @@ Diagnostic procedure — run in order, stop when you find the root cause:
 5. Call loki_query for jellyfin and decypharr logs around the report time.
 
 After diagnosis, call complete_diagnosis with your conclusion. Be concise and specific.
+Once you have applied an autonomous action, call complete_diagnosis immediately — do not
+keep querying logs or torrent state hoping to observe the effect. If verification is
+needed, set requires_approval=false and include it in primary_reason.
 
 Action priority (least destructive first):
 1. refresh_decypharr_links  — for EIO / stale CDN URLs
@@ -95,7 +98,7 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 	tools := toolDefs()
 	autonomousActions := 0
 	const maxAutonomousActions = 3
-	const maxRounds = 20
+	const maxRounds = 30
 	seenCalls := make(map[string]int) // "tool:args" → times seen
 
 	for round := 0; round < maxRounds; round++ {
