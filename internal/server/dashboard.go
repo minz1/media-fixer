@@ -112,8 +112,7 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	w.Header().Set("Location", target)
-	w.WriteHeader(http.StatusSeeOther)
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) actionReinvestigate(w http.ResponseWriter, r *http.Request) {
@@ -126,8 +125,7 @@ func (s *Server) actionReinvestigate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	w.Header().Set("Location", target)
-	w.WriteHeader(http.StatusSeeOther)
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) actionReopen(w http.ResponseWriter, r *http.Request) {
@@ -140,8 +138,7 @@ func (s *Server) actionReopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	w.Header().Set("Location", target)
-	w.WriteHeader(http.StatusSeeOther)
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
@@ -155,8 +152,6 @@ func (s *Server) actionResume(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseUUIDParam extracts the "id" URL param and validates it as a UUID.
-// Returns the canonical uuid.UUID.String() representation rather than the raw
-// input, so callers can safely embed it in redirect URLs without G710 findings.
 func parseUUIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 	raw := chi.URLParam(r, "id")
 	parsed, err := uuid.Parse(raw)

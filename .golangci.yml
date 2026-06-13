@@ -456,6 +456,14 @@ linters:
       - text: 'comment on exported \S+ \S+ should be of the form ".+"'
         source: "// ?(nolint|TODO)"
         linters: [revive, staticcheck]
+      # RealOps.Restart passes only hardcoded string literals to exec; the tainted value (ctx from req.Context) controls cancellation, not the command.
+      - path: 'internal/mediaagent/handler\.go'
+        text: 'G702'
+        linters: [gosec]
+      # id is validated as a UUID by parseUUIDParam; redirect target is always baseURL/incidents/{uuid}, not user-controlled.
+      - path: 'internal/server/dashboard\.go'
+        text: 'G710'
+        linters: [gosec]
       - path: '_test\.go'
         linters:
           - bodyclose

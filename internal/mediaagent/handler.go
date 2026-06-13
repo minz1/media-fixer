@@ -172,16 +172,16 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 	return &mediaagentapi.DDTestResult{BytesRead: total, SpeedMBs: speed}, nil
 }
 
-func (o *RealOps) Restart(_ context.Context, service string) error {
+func (o *RealOps) Restart(ctx context.Context, service string) error {
 	switch service {
 	case "jellyfin":
-		out, err := exec.CommandContext(context.Background(), "systemctl", "restart", "jellyfin").CombinedOutput()
+		out, err := exec.CommandContext(ctx, "systemctl", "restart", "jellyfin").CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("systemctl restart jellyfin: %w — %s", err, strings.TrimSpace(string(out)))
 		}
 		return nil
 	case "decypharr":
-		out, err := exec.CommandContext(context.Background(), "systemctl", "restart", "decypharr").CombinedOutput()
+		out, err := exec.CommandContext(ctx, "systemctl", "restart", "decypharr").CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("systemctl restart decypharr: %w — %s", err, strings.TrimSpace(string(out)))
 		}
