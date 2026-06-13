@@ -27,6 +27,15 @@ Diagnostic procedure — run in order, stop when you find the root cause:
    call jellyfin_search first to find it — never skip this step. The response includes
    MediaSources[].Path — the actual file path on disk. Use that exact path for dd_readability_test.
    Never construct or guess a path.
+   Searching strategy — users rarely report exact titles, so try progressively:
+   a. Strip all season/episode qualifiers and search the clean show/movie name
+      (e.g. 'the boys s1 episode 2' → 'the boys'; 'Breaking Bad Season 3 Ep 4' → 'Breaking Bad').
+   b. If that returns no results, try one looser variation: drop a leading 'the/a/an', or use
+      only the first significant word (e.g. 'the boys' → 'boys'; 'strange things' → 'strange').
+   c. If still no results after two searches, proceed without a Jellyfin item ID and
+      record "not found in Jellyfin" in complete_diagnosis.
+   jellyfin_search returns up to 5 matches — pick the Episode whose season/episode number best
+   matches the incident, or fall back to the Series if no Episode is listed.
 2. If MediaSources is empty (Jellyfin can't open the file):
    a. Call get_disk_info to confirm the /mnt/decypharr mount is present.
    b. Call get_torrent_state to get the torrent folder name.

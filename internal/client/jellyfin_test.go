@@ -84,12 +84,15 @@ func TestJellyfin_SearchItem_Found(t *testing.T) {
 	defer srv.Close()
 
 	c := client.NewJellyfin(srv.URL, "key")
-	item, err := c.SearchItem(context.Background(), "Breaking Bad")
+	items, err := c.SearchItem(context.Background(), "Breaking Bad")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.ID != "item-1" {
-		t.Errorf("id: %q", item.ID)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].ID != "item-1" {
+		t.Errorf("id: %q", items[0].ID)
 	}
 }
 

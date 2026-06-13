@@ -71,10 +71,13 @@ func diagnosticToolDefs() []openai.Tool {
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
-				Name:        toolJellyfinSearch,
-				Description: "Search Jellyfin for a media item by title. Returns the item ID, type (Movie/Series/Episode), and file path. Use this first when the incident has no Jellyfin item ID.",
+				Name: toolJellyfinSearch,
+				Description: "Search Jellyfin for a media item by title. Returns up to 5 matches with item ID, type (Movie/Series/Episode), and file path. " +
+					"For TV episodes, search by series name only — strip season/episode qualifiers before calling " +
+					"(e.g. for 'The Boys S01E02' or 'the boys s1 episode 2', search 'The Boys'). " +
+					"Use this first when the incident has no Jellyfin item ID.",
 				Parameters: jsonSchema(map[string]any{
-					paramTitle: param("string", "Title to search for"),
+					paramTitle: param("string", "Show or movie name (TV: series name only, no S/E numbers)"),
 				}, []string{paramTitle}),
 			},
 		},

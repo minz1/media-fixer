@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -99,16 +100,19 @@ type ItemsResponse struct {
 	TotalRecordCount int            `json:"TotalRecordCount"`
 }
 
-// SearchItem searches Jellyfin for a media item by name, returning the first match.
-// Returns ErrNotFound if the item does not exist.
-func (c *JellyfinClient) SearchItem(ctx context.Context, name string) (*JellyfinItem, error) {
+// jellyfinSearchLimit is the maximum number of results returned by SearchItem.
+const jellyfinSearchLimit = 5
+
+// SearchItem searches Jellyfin for media items by name, returning up to 5 matches.
+// Returns ErrNotFound if no items match.
+func (c *JellyfinClient) SearchItem(ctx context.Context, name string) ([]JellyfinItem, error) {
 	u, _ := url.Parse(c.base + "/Items")
 	q := u.Query()
 	q.Set("searchTerm", name)
 	q.Set("Recursive", "true")
 	q.Set("IncludeItemTypes", "Movie,Episode,Series")
 	q.Set("Fields", "Path")
-	q.Set("Limit", "1")
+	q.Set("Limit", strconv.Itoa(jellyfinSearchLimit))
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -132,8 +136,7 @@ func (c *JellyfinClient) SearchItem(ctx context.Context, name string) (*Jellyfin
 	if len(result.Items) == 0 {
 		return nil, ErrNotFound
 	}
-	item := result.Items[0]
-	return &item, nil
+	return result.Items, nil
 }
 
 // DeleteCache removes the metadata and image cache for an item.
