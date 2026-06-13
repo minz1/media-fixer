@@ -2,16 +2,23 @@ package incident
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	openai "github.com/sashabaranov/go-openai"
+
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
-	openai "github.com/sashabaranov/go-openai"
 )
 
 const systematicIncidentThreshold = 5
+
+const (
+	retryDelay1 = 2 * time.Minute
+	retryDelay2 = 6 * time.Minute
+)
 
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
@@ -29,7 +36,15 @@ type Notifier interface {
 	NotifyUser(ctx context.Context, userID, msg string) error
 }
 
-func NewService(database *db.DB, ag *agent.Agent, control *agent.ControlReviewer, summarizer *agent.Summarizer, notif Notifier, log *slog.Logger) *Service {
+// NewService wires up the incident service.
+func NewService(
+	database *db.DB,
+	ag *agent.Agent,
+	control *agent.ControlReviewer,
+	summarizer *agent.Summarizer,
+	notif Notifier,
+	log *slog.Logger,
+) *Service {
 	return &Service{db: database, agent: ag, control: control, summarizer: summarizer, notif: notif, log: log}
 }
 
@@ -48,13 +63,13 @@ type Report struct {
 // and starts the agent in the background if this is a new incident.
 func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	existing, err := s.db.FindOpenByTitle(ctx, r.Title)
-	if err != nil {
-		return nil, fmt.Errorf("find open incident: %w", err)
-	}
-	if existing != nil {
-		s.log.Info("duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
+	switch {
+	case err == nil:
+		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
 		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 		return existing, nil
+	case !errors.Is(err, db.ErrNotFound):
+		return nil, fmt.Errorf("find open incident: %w", err)
 	}
 
 	openCount, err := s.db.CountOpenIncidents(ctx)
@@ -71,64 +86,67 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		JellyfinItemID: r.JellyfinItemID,
 		Details:        r.Details,
 	}
-	if err := s.db.CreateIncident(ctx, inc); err != nil {
+	if err = s.db.CreateIncident(ctx, inc); err != nil {
 		return nil, fmt.Errorf("create incident: %w", err)
 	}
 	_ = s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
-		msg := fmt.Sprintf("⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
-			openCount+1, r.Title, inc.ID[:8])
-		if err := s.notif.NotifyOwner(ctx, msg); err != nil {
-			s.log.Error("notify owner", "error", err)
+		msg := fmt.Sprintf(
+			"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
+			openCount+1,
+			r.Title,
+			inc.ID[:8],
+		)
+		if notifyErr := s.notif.NotifyOwner(ctx, msg); notifyErr != nil {
+			s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
 		}
 		return inc, nil
 	}
 
-	go s.runAgent(inc, nil)
+	go s.runAgent(context.WithoutCancel(ctx), inc, nil)
 
 	return inc, nil
 }
 
-// retryDelays are the backoff waits for suggest_alternative retries (0, 2min, 6min).
-var retryDelays = []time.Duration{0, 2 * time.Minute, 6 * time.Minute}
-
-func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage) {
+func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) {
 	if s.agent == nil {
 		return
 	}
-	ctx := context.Background()
 
 	paused, err := s.db.IsAutonomousPaused(ctx)
 	if err != nil || paused {
-		s.log.Warn("autonomous actions paused, skipping agent", "incident", inc.ID)
+		s.log.WarnContext(ctx, "autonomous actions paused, skipping agent", "incident", inc.ID)
 		return
 	}
+
+	retryDelays := []time.Duration{0, retryDelay1, retryDelay2}
 
 	var (
 		result       *agent.DiagnosticResult
 		conversation []openai.ChatCompletionMessage
 	)
 
-	for attempt := 0; attempt < len(retryDelays); attempt++ {
-		if retryDelays[attempt] > 0 {
-			time.Sleep(retryDelays[attempt])
+	for attempt, delay := range retryDelays {
+		if delay > 0 {
+			time.Sleep(delay)
 		}
 
 		result, conversation, err = s.agent.Run(ctx, inc, seed)
 		if err != nil {
-			s.log.Error("agent error", "incident", inc.ID, "error", err)
-			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-			_ = s.notif.NotifyOwner(ctx,
-				fmt.Sprintf("❌ Agent error for incident **%s** (#%s): %v\nIncident marked for manual review.", inc.Title, inc.ID[:8], err))
+			s.handleAgentError(ctx, inc, err)
 			return
 		}
 
 		if !result.RequiresApproval {
 			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
-			s.log.Info("agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
-			s.notifyReporters(ctx, inc, fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title))
+			s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
+			s.notifyReporters(
+				ctx,
+				inc,
+				fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
+			)
 			return
 		}
 
@@ -137,9 +155,9 @@ func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage
 			return
 		}
 
-		verdict, err := s.control.Review(ctx, conversation, result.EscalateAction)
-		if err != nil {
-			s.log.Error("control review error", "incident", inc.ID, "error", err)
+		verdict, verdictErr := s.control.Review(ctx, conversation, result.EscalateAction)
+		if verdictErr != nil {
+			s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
 			s.surfaceToOwner(ctx, inc, result, " (control review failed)")
 			return
 		}
@@ -153,7 +171,10 @@ func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage
 			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
 			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
 				"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).\nRoot cause: %s\nConcern: %s",
-				inc.Title, inc.ID[:8], result.RootCause, verdict.Reason,
+				inc.Title,
+				inc.ID[:8],
+				result.RootCause,
+				verdict.Reason,
 			))
 			return
 
@@ -166,17 +187,36 @@ func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage
 				))
 				return
 			}
-			seed = append(conversation, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("Control review suggests an alternative approach: %s\n\nPlease re-evaluate and try this approach before escalating.", verdict.AlternativeAction),
-			})
-			s.log.Info("control reviewer suggested alternative, retrying",
+			feedback := openai.ChatCompletionMessage{
+				Role: openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf(
+					"Control review suggests an alternative approach: %s\n\nPlease re-evaluate and try this approach before escalating.",
+					verdict.AlternativeAction,
+				),
+			}
+			conversation = append(conversation, feedback)
+			seed = conversation
+			s.log.InfoContext(ctx, "control reviewer suggested alternative, retrying",
 				"incident", inc.ID,
 				"attempt", attempt+1,
 				"alternative", verdict.AlternativeAction,
 			)
 		}
 	}
+}
+
+func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err error) {
+	s.log.ErrorContext(ctx, "agent error", "incident", inc.ID, "error", err)
+	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
+	_ = s.notif.NotifyOwner(
+		ctx,
+		fmt.Sprintf(
+			"❌ Agent error for incident **%s** (#%s): %v\nIncident marked for manual review.",
+			inc.Title,
+			inc.ID[:8],
+			err,
+		),
+	)
 }
 
 func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
@@ -203,12 +243,12 @@ func (s *Service) Resolve(ctx context.Context, id string) error {
 func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg string) {
 	ids, err := s.db.ListDiscordReporterIDs(ctx, inc.ID)
 	if err != nil {
-		s.log.Error("list discord reporter IDs", "incident", inc.ID, "error", err)
+		s.log.ErrorContext(ctx, "list discord reporter IDs", "incident", inc.ID, "error", err)
 		return
 	}
 	for _, id := range ids {
-		if err := s.notif.NotifyUser(ctx, id, msg); err != nil {
-			s.log.Error("notify reporter", "user", id, "incident", inc.ID, "error", err)
+		if notifyErr := s.notif.NotifyUser(ctx, id, msg); notifyErr != nil {
+			s.log.ErrorContext(ctx, "notify reporter", "user", id, "incident", inc.ID, "error", notifyErr)
 		}
 	}
 }
@@ -222,7 +262,7 @@ func (s *Service) Reopen(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	go s.runAgent(inc, nil)
+	go s.runAgent(context.WithoutCancel(ctx), inc, nil)
 	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
 		"🔁 Incident **%s** (#%s) was reopened — re-running diagnostics.",
 		inc.Title, inc.ID[:8],
@@ -238,20 +278,44 @@ func (s *Service) Reinvestigate(ctx context.Context, id string) error {
 		return err
 	}
 
-	var seed []openai.ChatCompletionMessage
-	if s.agent != nil && s.summarizer != nil {
-		if rawConv, err := s.db.LoadConversation(ctx, id); err == nil && len(rawConv) > 0 {
-			if summary, err := s.summarizer.Summarize(ctx, rawConv); err == nil && summary != "" {
-				seed = s.agent.BuildSummarySeed(inc, summary)
-				s.log.Info("reinvestigate with summary seed", "incident", id, "summary_len", len(summary))
-			} else if err != nil {
-				s.log.Warn("summarize failed, reinvestigating from scratch", "incident", id, "error", err)
-			}
-		}
-	}
-
-	go s.runAgent(inc, seed)
+	seed := s.buildReinvestigateSeed(ctx, id, inc)
+	go s.runAgent(context.WithoutCancel(ctx), inc, seed)
 	return nil
+}
+
+func (s *Service) buildReinvestigateSeed(
+	ctx context.Context,
+	id string,
+	inc *db.Incident,
+) []openai.ChatCompletionMessage {
+	if s.agent == nil || s.summarizer == nil {
+		return nil
+	}
+	rawConv, loadErr := s.db.LoadConversation(ctx, id)
+	if errors.Is(loadErr, db.ErrNotFound) || len(rawConv) == 0 {
+		return nil
+	}
+	if loadErr != nil {
+		s.log.WarnContext(
+			ctx,
+			"load conversation failed, reinvestigating from scratch",
+			"incident",
+			id,
+			"error",
+			loadErr,
+		)
+		return nil
+	}
+	summary, sumErr := s.summarizer.Summarize(ctx, rawConv)
+	if sumErr != nil {
+		s.log.WarnContext(ctx, "summarize failed, reinvestigating from scratch", "incident", id, "error", sumErr)
+		return nil
+	}
+	if summary == "" {
+		return nil
+	}
+	s.log.InfoContext(ctx, "reinvestigate with summary seed", "incident", id, "summary_len", len(summary))
+	return s.agent.BuildSummarySeed(inc, summary)
 }
 
 // RecoverZombies is called on startup to resume any incidents left in
@@ -259,13 +323,13 @@ func (s *Service) Reinvestigate(ctx context.Context, id string) error {
 func (s *Service) RecoverZombies(ctx context.Context) {
 	incidents, err := s.db.FindByStatus(ctx, db.StatusInvestigating)
 	if err != nil {
-		s.log.Error("zombie recovery query", "error", err)
+		s.log.ErrorContext(ctx, "zombie recovery query", "error", err)
 		return
 	}
 	for _, inc := range incidents {
-		s.log.Warn("recovering zombie incident", "incident", inc.ID, "title", inc.Title)
-		if err := s.Reinvestigate(ctx, inc.ID); err != nil {
-			s.log.Error("zombie reinvestigate failed", "incident", inc.ID, "error", err)
+		s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "title", inc.Title)
+		if reinvestErr := s.Reinvestigate(ctx, inc.ID); reinvestErr != nil {
+			s.log.ErrorContext(ctx, "zombie reinvestigate failed", "incident", inc.ID, "error", reinvestErr)
 		}
 	}
 }

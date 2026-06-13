@@ -1,16 +1,22 @@
-package client
+package client_test
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/client"
 )
 
+const lokiTestLimit = 100
+const lokiSmallLimit = 10
+
 func TestLoki_QueryRange(t *testing.T) {
+	t.Parallel()
 	ts := time.Now().Add(-5 * time.Minute)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +27,7 @@ func TestLoki_QueryRange(t *testing.T) {
 		if q.Get("query") == "" {
 			t.Error("expected query param")
 		}
-		if q.Get("limit") != "100" {
+		if q.Get("limit") != strconv.Itoa(lokiTestLimit) {
 			t.Errorf("limit: %q", q.Get("limit"))
 		}
 
@@ -31,22 +37,22 @@ func TestLoki_QueryRange(t *testing.T) {
 				"result": []any{
 					map[string]any{
 						"values": []any{
-							[]string{fmt.Sprintf("%d", ts.UnixNano()), "error: EIO on /mnt/fuse/movie.mkv"},
-							[]string{fmt.Sprintf("%d", ts.Add(time.Second).UnixNano()), "retry attempt 1"},
+							[]string{strconv.FormatInt(ts.UnixNano(), 10), "error: EIO on /mnt/fuse/movie.mkv"},
+							[]string{strconv.FormatInt(ts.Add(time.Second).UnixNano(), 10), "retry attempt 1"},
 						},
 					},
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
-	c, _ := NewLoki(srv.URL, "", "")
+	c, _ := client.NewLoki(srv.URL, "", "")
 	from := ts.Add(-time.Minute)
 	to := ts.Add(time.Minute)
 
-	result, err := c.QueryRange(context.Background(), `{unit=~"jellyfin|decypharr"}`, from, to, 100)
+	result, err := c.QueryRange(context.Background(), `{unit=~"jellyfin|decypharr"}`, from, to, lokiTestLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,15 +65,22 @@ func TestLoki_QueryRange(t *testing.T) {
 }
 
 func TestLoki_EmptyResult(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{"result": []any{}},
 		})
 	}))
 	defer srv.Close()
 
-	c, _ := NewLoki(srv.URL, "", "")
-	result, err := c.QueryRange(context.Background(), `{unit="jellyfin"}`, time.Now().Add(-time.Minute), time.Now(), 10)
+	c, _ := client.NewLoki(srv.URL, "", "")
+	result, err := c.QueryRange(
+		context.Background(),
+		`{unit="jellyfin"}`,
+		time.Now().Add(-time.Minute),
+		time.Now(),
+		lokiSmallLimit,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +90,14 @@ func TestLoki_EmptyResult(t *testing.T) {
 }
 
 func TestLoki_HTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
-	c, _ := NewLoki(srv.URL, "", "")
-	_, err := c.QueryRange(context.Background(), `{unit="x"}`, time.Now().Add(-time.Minute), time.Now(), 10)
+	c, _ := client.NewLoki(srv.URL, "", "")
+	_, err := c.QueryRange(context.Background(), `{unit="x"}`, time.Now().Add(-time.Minute), time.Now(), lokiSmallLimit)
 	if err == nil {
 		t.Fatal("expected error on 400")
 	}

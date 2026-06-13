@@ -1,45 +1,64 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/mediaagent"
 )
 
+const agentReadHeaderTimeout = 10 * time.Second
+
 type mountsFlag []string
 
-func (f *mountsFlag) String() string  { return "" }
+func (f *mountsFlag) String() string     { return "" }
 func (f *mountsFlag) Set(v string) error { *f = append(*f, v); return nil }
 
 func main() {
-	addr   := flag.String("addr", ":9191", "listen address")
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	addr := flag.String("addr", ":9191", "listen address")
 	apiKey := flag.String("api-key", "", "bearer token clients must present")
 	var mounts mountsFlag
-	flag.Var(&mounts, "disk-mount", "mount point to include in GET /disk (repeatable; defaults to built-in list if omitted)")
+	flag.Var(
+		&mounts,
+		"disk-mount",
+		"mount point to include in GET /disk (repeatable; defaults to built-in list if omitted)",
+	)
 	flag.Parse()
+
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	if *apiKey == "" {
 		if v := os.Getenv("MEDIA_AGENT_API_KEY"); v != "" {
 			*apiKey = v
 		} else {
-			slog.Error("--api-key or MEDIA_AGENT_API_KEY is required")
-			os.Exit(1)
+			log.Error("--api-key or MEDIA_AGENT_API_KEY is required")
+			return errors.New("api key required")
 		}
 	}
 
-	if len(mounts) > 0 {
-		mediaagent.DiskMounts = []string(mounts)
-	}
+	ops := mediaagent.NewRealOps([]string(mounts))
+	h := mediaagent.NewHandler(ops, *apiKey, log)
 
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	h := mediaagent.NewHandler(&mediaagent.RealOps{}, *apiKey, log)
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           h,
+		ReadHeaderTimeout: agentReadHeaderTimeout,
+	}
 
 	log.Info("media-agent listening", "addr", *addr)
-	if err := http.ListenAndServe(*addr, h); err != nil {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("server stopped", "error", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }

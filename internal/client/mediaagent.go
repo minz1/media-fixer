@@ -45,8 +45,8 @@ func (c *MediaAgentClient) DDReadabilityTest(ctx context.Context, path string) (
 		return nil, fmt.Errorf("media-agent dd-test: status %d", resp.StatusCode)
 	}
 	var result mediaagentapi.DDTestResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("media-agent dd-test decode: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("media-agent dd-test decode: %w", decodeErr)
 	}
 	return &result, nil
 }
@@ -92,8 +92,8 @@ func (c *MediaAgentClient) DiskUsage(ctx context.Context) (*mediaagentapi.DiskRe
 		return nil, fmt.Errorf("media-agent disk: status %d", resp.StatusCode)
 	}
 	var result mediaagentapi.DiskResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("media-agent disk decode: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("media-agent disk decode: %w", decodeErr)
 	}
 	return &result, nil
 }
@@ -120,8 +120,8 @@ func (c *MediaAgentClient) ListDirectory(ctx context.Context, path string) (*med
 		return nil, fmt.Errorf("media-agent ls: status %d", resp.StatusCode)
 	}
 	var result mediaagentapi.ListDirResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("media-agent ls decode: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("media-agent ls decode: %w", decodeErr)
 	}
 	return &result, nil
 }

@@ -2,11 +2,9 @@ package client_test
 
 import (
 	"context"
+	"log/slog"
 	"net/http/httptest"
 	"testing"
-
-	"io"
-	"log/slog"
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/mediaagent"
@@ -14,6 +12,15 @@ import (
 )
 
 const testAPIKey = "test-secret"
+
+const (
+	ddTestBytesRead100MB = 100 * 1024 * 1024
+	ddTestBytesRead4KB   = 4 * 1024
+	ddTestSpeedMBs       = 45.2
+	diskTotalBytes       = 10 << 30
+	diskAvailBytes       = 4 << 30
+	diskUsedBytes        = 6 << 30
+)
 
 // stubOps implements mediaagent.Ops without touching the OS.
 type stubOps struct {
@@ -26,7 +33,7 @@ func (s *stubOps) DDTest(_ string) (*mediaagentapi.DDTestResult, error) {
 	return s.ddResult, nil
 }
 
-func (s *stubOps) Restart(_ string) error {
+func (s *stubOps) Restart(_ context.Context, _ string) error {
 	return s.restartErr
 }
 
@@ -43,16 +50,17 @@ func (s *stubOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 
 func newTestPair(t *testing.T, ops mediaagent.Ops) *client.MediaAgentClient {
 	t.Helper()
-	h := mediaagent.NewHandler(ops, testAPIKey, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := mediaagent.NewHandler(ops, testAPIKey, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return client.NewMediaAgent(srv.URL, testAPIKey)
 }
 
 func TestMediaAgent_DDTest_OK(t *testing.T) {
+	t.Parallel()
 	ops := &stubOps{ddResult: &mediaagentapi.DDTestResult{
-		BytesRead: 104857600,
-		SpeedMBs:  45.2,
+		BytesRead: ddTestBytesRead100MB,
+		SpeedMBs:  ddTestSpeedMBs,
 	}}
 	c := newTestPair(t, ops)
 
@@ -60,8 +68,8 @@ func TestMediaAgent_DDTest_OK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.BytesRead != 104857600 {
-		t.Errorf("bytes_read: got %d want 104857600", result.BytesRead)
+	if result.BytesRead != ddTestBytesRead100MB {
+		t.Errorf("bytes_read: got %d want %d", result.BytesRead, ddTestBytesRead100MB)
 	}
 	if result.Error != "" {
 		t.Errorf("unexpected error field: %s", result.Error)
@@ -69,8 +77,9 @@ func TestMediaAgent_DDTest_OK(t *testing.T) {
 }
 
 func TestMediaAgent_DDTest_IOError(t *testing.T) {
+	t.Parallel()
 	ops := &stubOps{ddResult: &mediaagentapi.DDTestResult{
-		BytesRead: 4096,
+		BytesRead: ddTestBytesRead4KB,
 		Error:     "read /mnt/fuse/movie.mkv: input/output error",
 	}}
 	c := newTestPair(t, ops)
@@ -85,6 +94,7 @@ func TestMediaAgent_DDTest_IOError(t *testing.T) {
 }
 
 func TestMediaAgent_Restart_OK(t *testing.T) {
+	t.Parallel()
 	c := newTestPair(t, &stubOps{})
 	if err := c.RestartService(context.Background(), "jellyfin"); err != nil {
 		t.Fatal(err)
@@ -92,6 +102,7 @@ func TestMediaAgent_Restart_OK(t *testing.T) {
 }
 
 func TestMediaAgent_Restart_Failure(t *testing.T) {
+	t.Parallel()
 	ops := &stubOps{restartErr: context.DeadlineExceeded}
 	c := newTestPair(t, ops)
 
@@ -101,9 +112,10 @@ func TestMediaAgent_Restart_Failure(t *testing.T) {
 }
 
 func TestMediaAgent_Disk(t *testing.T) {
+	t.Parallel()
 	ops := &stubOps{diskResult: &mediaagentapi.DiskResult{
 		Mounts: []mediaagentapi.DiskMount{
-			{Path: "/mnt", TotalBytes: 10 << 30, AvailableBytes: 4 << 30, UsedBytes: 6 << 30},
+			{Path: "/mnt", TotalBytes: diskTotalBytes, AvailableBytes: diskAvailBytes, UsedBytes: diskUsedBytes},
 		},
 	}}
 	c := newTestPair(t, ops)
@@ -121,7 +133,8 @@ func TestMediaAgent_Disk(t *testing.T) {
 }
 
 func TestMediaAgent_AuthRequired(t *testing.T) {
-	h := mediaagent.NewHandler(&stubOps{}, testAPIKey, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Parallel()
+	h := mediaagent.NewHandler(&stubOps{}, testAPIKey, slog.New(slog.DiscardHandler))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 

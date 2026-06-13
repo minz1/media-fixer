@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
+
 	"github.com/minz1/mediafixer/internal/incident"
 )
 
@@ -18,6 +19,7 @@ type Bot struct {
 	log     *slog.Logger
 }
 
+// New creates a Bot from a Discord bot token.
 func New(token, guildID, ownerID string, log *slog.Logger) (*Bot, error) {
 	sess, err := discordgo.New("Bot " + token)
 	if err != nil {
@@ -39,43 +41,44 @@ func (b *Bot) SetService(svc *incident.Service) {
 	b.svc = svc
 }
 
-var reportCommand = &discordgo.ApplicationCommand{
-	Name:        "report",
-	Description: "Report a media playback problem",
-	Options: []*discordgo.ApplicationCommandOption{
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "what",
-			Description: "What is the problem?",
-			Required:    true,
-			Choices: []*discordgo.ApplicationCommandOptionChoice{
-				{Name: "Can't play", Value: "cant_play"},
-				{Name: "Login failed", Value: "login_failed"},
-				{Name: "Missing media", Value: "missing_media"},
-				{Name: "Other", Value: "other"},
+// Start opens the Discord gateway connection and registers the /report command.
+func (b *Bot) Start() error {
+	cmd := &discordgo.ApplicationCommand{
+		Name:        "report",
+		Description: "Report a media playback problem",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "what",
+				Description: "What is the problem?",
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "Can't play", Value: "cant_play"},
+					{Name: "Login failed", Value: "login_failed"},
+					{Name: "Missing media", Value: "missing_media"},
+					{Name: "Other", Value: "other"},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "title",
+				Description: "Show or movie title",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "details",
+				Description: "Describe what you're seeing",
+				Required:    true,
 			},
 		},
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "title",
-			Description: "Show or movie title",
-			Required:    true,
-		},
-		{
-			Type:        discordgo.ApplicationCommandOptionString,
-			Name:        "details",
-			Description: "Describe what you're seeing",
-			Required:    true,
-		},
-	},
-}
+	}
 
-func (b *Bot) Start() error {
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("discord open: %w", err)
 	}
 
-	_, err := b.session.ApplicationCommandCreate(b.session.State.User.ID, b.guildID, reportCommand)
+	_, err := b.session.ApplicationCommandCreate(b.session.State.User.ID, b.guildID, cmd)
 	if err != nil {
 		return fmt.Errorf("register /report command: %w", err)
 	}
@@ -84,6 +87,7 @@ func (b *Bot) Start() error {
 	return nil
 }
 
+// Close closes the Discord gateway connection.
 func (b *Bot) Close() error {
 	return b.session.Close()
 }
@@ -94,7 +98,7 @@ func (b *Bot) NotifyOwner(ctx context.Context, msg string) error {
 }
 
 // NotifyUser sends a DM to an arbitrary Discord user ID.
-func (b *Bot) NotifyUser(ctx context.Context, userID, msg string) error {
+func (b *Bot) NotifyUser(_ context.Context, userID, msg string) error {
 	ch, err := b.session.UserChannelCreate(userID)
 	if err != nil {
 		return fmt.Errorf("create DM channel: %w", err)
@@ -139,8 +143,11 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.log.Error("handle report", "error", err)
 		content = "❌ Failed to create incident. Please try again."
 	} else {
-		content = fmt.Sprintf("✅ Incident **#%s** created for **%s**. The agent is investigating. You'll get a DM when it's resolved.",
-			inc.ID[:8], title)
+		content = fmt.Sprintf(
+			"✅ Incident **#%s** created for **%s**. The agent is investigating. You'll get a DM when it's resolved.",
+			inc.ID[:8],
+			title,
+		)
 	}
 
 	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
@@ -148,7 +155,9 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	})
 }
 
-func optionMap(opts []*discordgo.ApplicationCommandInteractionDataOption) map[string]*discordgo.ApplicationCommandInteractionDataOption {
+func optionMap(
+	opts []*discordgo.ApplicationCommandInteractionDataOption,
+) map[string]*discordgo.ApplicationCommandInteractionDataOption {
 	m := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(opts))
 	for _, o := range opts {
 		m[o.Name] = o

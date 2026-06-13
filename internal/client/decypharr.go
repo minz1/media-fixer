@@ -20,19 +20,19 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 	return &DecypharrClient{
 		base:     base,
 		apiToken: apiToken,
-		http:     &http.Client{Timeout: 30 * time.Second},
+		http:     &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
 type TorrentEntry struct {
-	Name     string `json:"name"`
-	InfoHash string `json:"info_hash"`
-	Category string `json:"category"`
-	State    string `json:"state"`
-	Size     int64  `json:"size"`
-	Progress float64 `json:"progress"`
+	Name     string    `json:"name"`
+	InfoHash string    `json:"info_hash"`
+	Category string    `json:"category"`
+	State    string    `json:"state"`
+	Size     int64     `json:"size"`
+	Progress float64   `json:"progress"`
 	AddedOn  time.Time `json:"added_on"`
-	Debrid   string `json:"debrid"`
+	Debrid   string    `json:"debrid"`
 }
 
 type TorrentListResponse struct {
@@ -125,7 +125,7 @@ func (c *DecypharrClient) DeleteTorrent(ctx context.Context, category, hash stri
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("decypharr DELETE %s: status %d", u, resp.StatusCode)
 	}
 	return nil
@@ -151,7 +151,7 @@ func (c *DecypharrClient) get(ctx context.Context, rawURL string, out any) error
 		return fmt.Errorf("decypharr GET %s: %w", u, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("decypharr GET %s: status %d", u, resp.StatusCode)
 	}
 	if out != nil {
@@ -179,7 +179,7 @@ func (c *DecypharrClient) post(ctx context.Context, path string, body, out any) 
 		return fmt.Errorf("decypharr POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("decypharr POST %s: status %d", path, resp.StatusCode)
 	}
 	if out != nil {

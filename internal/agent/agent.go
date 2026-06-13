@@ -7,8 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/minz1/mediafixer/internal/db"
 	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 const systemPrompt = `You are a media stack diagnostic agent. You help troubleshoot problems
@@ -60,6 +61,16 @@ You may call autonomous actions directly. Approval-required actions
 
 Max 3 autonomous actions before you must complete_diagnosis regardless.`
 
+const (
+	maxRounds            = 30
+	maxAutonomousActions = 3
+)
+
+const (
+	llmRetryDelay2 = 2 * time.Second
+	llmRetryDelay3 = 4 * time.Second
+)
+
 // Agent orchestrates the LLM diagnostic loop for one incident.
 type Agent struct {
 	llm   *openai.Client
@@ -69,6 +80,7 @@ type Agent struct {
 	log   *slog.Logger
 }
 
+// New creates an Agent.
 func New(llm *openai.Client, model string, disp *Dispatcher, database *db.DB, log *slog.Logger) *Agent {
 	return &Agent{llm: llm, model: model, disp: disp, db: database, log: log}
 }
@@ -88,8 +100,12 @@ type DiagnosticResult struct {
 // Pass seed=nil for a fresh run; pass the previous conversation (with control
 // reviewer feedback appended) to continue from where the last run left off.
 // Returns the full conversation so the control reviewer can inspect it.
-func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) (*DiagnosticResult, []openai.ChatCompletionMessage, error) {
-	a.log.Info("starting diagnostic", "incident", inc.ID, "title", inc.Title)
+func (a *Agent) Run(
+	ctx context.Context,
+	inc *db.Incident,
+	seed []openai.ChatCompletionMessage,
+) (*DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	a.log.InfoContext(ctx, "starting diagnostic", "incident", inc.ID, "title", inc.Title)
 
 	a.disp.IncidentID = inc.ID
 
@@ -97,23 +113,12 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 		return nil, nil, err
 	}
 
-	var messages []openai.ChatCompletionMessage
-	if len(seed) > 0 {
-		messages = seed
-	} else {
-		messages = []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
-			{Role: openai.ChatMessageRoleUser, Content: a.buildUserMessage(inc)},
-		}
-	}
-
+	messages := a.initMessages(inc, seed)
 	tools := toolDefs()
 	autonomousActions := 0
-	const maxAutonomousActions = 3
-	const maxRounds = 30
-	seenCalls := make(map[string]int) // "tool:args" → times seen
+	seenCalls := make(map[string]int)
 
-	for round := 0; round < maxRounds; round++ {
+	for round := range maxRounds {
 		resp, err := a.llmCall(ctx, openai.ChatCompletionRequest{
 			Model:    a.model,
 			Messages: messages,
@@ -123,81 +128,25 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 			return nil, messages, fmt.Errorf("llm round %d: %w", round, err)
 		}
 
-		choice := resp.Choices[0]
-		msg := choice.Message
+		msg := resp.Choices[0].Message
 		messages = append(messages, msg)
 
-		if data, err := json.Marshal(messages); err == nil {
+		if data, marshalErr := json.Marshal(messages); marshalErr == nil {
 			_ = a.db.SaveConversation(ctx, inc.ID, json.RawMessage(data))
 		}
 
-		a.logTurn(inc.ID, round, msg)
+		a.logTurn(ctx, inc.ID, round, msg)
 
 		if len(msg.ToolCalls) == 0 {
 			break
 		}
 
-		for _, call := range msg.ToolCalls {
-			fn := call.Function.Name
-
-			if fn == "complete_diagnosis" {
-				var result DiagnosticResult
-				if err := json.Unmarshal([]byte(call.Function.Arguments), &result); err != nil {
-					return nil, messages, fmt.Errorf("parse complete_diagnosis: %w", err)
-				}
-				if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
-					a.log.Error("set finding", "error", err)
-				}
-
-				if !result.RequiresApproval && inc.JellyfinItemID != "" {
-					if !a.verifyFix(ctx, inc.JellyfinItemID) {
-						a.log.Warn("post-fix verification failed, escalating", "incident", inc.ID)
-						result.RequiresApproval = true
-						result.EscalateAction = "autonomous fix applied but playback verification failed"
-					}
-				}
-
-				return &result, messages, nil
-			}
-
-			if isAutonomousAction(fn) {
-				autonomousActions++
-				_, _ = a.db.IncrementActionCount(ctx, inc.ID)
-
-				if autonomousActions > maxAutonomousActions {
-					_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
-					_ = a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-					return &DiagnosticResult{
-						RootCause:        "max autonomous actions reached without resolution",
-						Confidence:       "low",
-						PrimaryAction:    "manual_investigation",
-						PrimaryReason:    "agent applied 3 actions without confirming fix",
-						RequiresApproval: true,
-					}, messages, nil
-				}
-			}
-
-			callKey := fn + ":" + call.Function.Arguments
-			seenCalls[callKey]++
-			var resultJSON string
-			// Only block duplicate calls for state-changing actions. Read-only diagnostic
-			// tools (playback info, dd, loki, etc.) may legitimately be re-called to
-			// verify that an autonomous action actually fixed the problem.
-			if isAutonomousAction(fn) && seenCalls[callKey] > 1 {
-				resultJSON = jsonResult(map[string]any{
-					"error": fmt.Sprintf("you already called %s — it has been applied, do not repeat it. Call complete_diagnosis with your current findings.", fn),
-				})
-				a.log.Warn("duplicate action blocked", "tool", fn, "round", round)
-			} else {
-				resultJSON = a.disp.Dispatch(ctx, fn, call.Function.Arguments)
-				a.log.Debug("tool call", "tool", fn, "result", resultJSON)
-			}
-
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				Content:    resultJSON,
-				ToolCallID: call.ID,
-			})
+		result, done, err := a.processToolCalls(ctx, inc, msg.ToolCalls, seenCalls, &autonomousActions, &messages)
+		if err != nil {
+			return nil, messages, err
+		}
+		if done {
+			return result, messages, nil
 		}
 	}
 
@@ -208,6 +157,115 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 		PrimaryReason:    "agent did not reach a conclusion within iteration limit",
 		RequiresApproval: true,
 	}, messages, nil
+}
+
+// initMessages returns the starting message list for a run.
+func (a *Agent) initMessages(inc *db.Incident, seed []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	if len(seed) > 0 {
+		return seed
+	}
+	return []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+		{Role: openai.ChatMessageRoleUser, Content: a.buildUserMessage(inc)},
+	}
+}
+
+// processToolCalls handles one batch of tool calls from the LLM.
+// It appends tool result messages to *messages in place.
+// Returns (result, true, nil) when complete_diagnosis is called or the action limit is hit.
+func (a *Agent) processToolCalls(
+	ctx context.Context,
+	inc *db.Incident,
+	calls []openai.ToolCall,
+	seenCalls map[string]int,
+	autonomousActions *int,
+	messages *[]openai.ChatCompletionMessage,
+) (*DiagnosticResult, bool, error) {
+	for _, call := range calls {
+		fn := call.Function.Name
+
+		if fn == toolCompleteDiagnosis {
+			result, err := a.handleCompleteDiagnosis(ctx, inc, call.Function.Arguments)
+			if err != nil {
+				return nil, false, err
+			}
+			return result, true, nil
+		}
+
+		if isAutonomousAction(fn) {
+			*autonomousActions++
+			_, _ = a.db.IncrementActionCount(ctx, inc.ID)
+
+			if *autonomousActions > maxAutonomousActions {
+				_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
+				_ = a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
+				return &DiagnosticResult{
+					RootCause:        "max autonomous actions reached without resolution",
+					Confidence:       "low",
+					PrimaryAction:    "manual_investigation",
+					PrimaryReason:    "agent applied 3 actions without confirming fix",
+					RequiresApproval: true,
+				}, true, nil
+			}
+		}
+
+		resultJSON := a.executeCall(ctx, fn, call.Function.Arguments, seenCalls)
+		*messages = append(*messages, openai.ChatCompletionMessage{
+			Role:       openai.ChatMessageRoleTool,
+			Content:    resultJSON,
+			ToolCallID: call.ID,
+		})
+	}
+	return nil, false, nil
+}
+
+// handleCompleteDiagnosis parses the complete_diagnosis tool call arguments and
+// runs post-fix verification when appropriate.
+func (a *Agent) handleCompleteDiagnosis(
+	ctx context.Context,
+	inc *db.Incident,
+	argsJSON string,
+) (*DiagnosticResult, error) {
+	var result DiagnosticResult
+	if err := json.Unmarshal([]byte(argsJSON), &result); err != nil {
+		return nil, fmt.Errorf("parse complete_diagnosis: %w", err)
+	}
+	if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
+		a.log.ErrorContext(ctx, "set finding", "error", err)
+	}
+
+	if !result.RequiresApproval && inc.JellyfinItemID != "" {
+		if !a.verifyFix(ctx, inc.JellyfinItemID) {
+			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
+			result.RequiresApproval = true
+			result.EscalateAction = "autonomous fix applied but playback verification failed"
+		}
+	}
+
+	return &result, nil
+}
+
+// executeCall dispatches a single tool call with dedup protection for action tools.
+func (a *Agent) executeCall(ctx context.Context, fn, argsJSON string, seenCalls map[string]int) string {
+	callKey := fn + ":" + argsJSON
+	seenCalls[callKey]++
+
+	// Only block duplicate calls for state-changing actions. Read-only diagnostic
+	// tools (playback info, dd, loki, etc.) may legitimately be re-called to
+	// verify that an autonomous action actually fixed the problem.
+	if isAutonomousAction(fn) && seenCalls[callKey] > 1 {
+		a.log.WarnContext(ctx, "duplicate action blocked", "tool", fn)
+		return jsonResult(map[string]any{
+			keyError: fmt.Sprintf(
+				"you already called %s — it has been applied, do not repeat it. Call complete_diagnosis with your current findings.",
+				fn,
+			),
+		})
+	}
+
+	resultJSON := a.disp.Dispatch(ctx, fn, argsJSON)
+	a.log.DebugContext(ctx, "tool call", "tool", fn, "result", resultJSON)
+	return resultJSON
 }
 
 func (a *Agent) verifyFix(ctx context.Context, itemID string) bool {
@@ -237,9 +295,9 @@ Call complete_diagnosis when done.`,
 	)
 }
 
-func (a *Agent) logTurn(incidentID string, round int, msg openai.ChatCompletionMessage) {
+func (a *Agent) logTurn(ctx context.Context, incidentID string, round int, msg openai.ChatCompletionMessage) {
 	b, _ := json.Marshal(msg)
-	a.log.Info("agent_turn",
+	a.log.InfoContext(ctx, "agent_turn",
 		"incident_id", incidentID,
 		"round", round,
 		"message", json.RawMessage(b),
@@ -248,11 +306,11 @@ func (a *Agent) logTurn(incidentID string, round int, msg openai.ChatCompletionM
 
 // llmCall wraps CreateChatCompletion with exponential backoff for transient errors.
 func (a *Agent) llmCall(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
-	delays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+	delays := []time.Duration{time.Second, llmRetryDelay2, llmRetryDelay3}
 	var lastErr error
 	for i, delay := range delays {
 		if i > 0 {
-			a.log.Warn("llm transient error, retrying", "attempt", i, "error", lastErr)
+			a.log.WarnContext(ctx, "llm transient error, retrying", "attempt", i, "error", lastErr)
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -273,7 +331,9 @@ func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.Chat
 	return []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 		{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf(
-			"This is a resumed investigation. Here is what was found in the previous run:\n\n%s\n\nContinue the diagnosis. Call complete_diagnosis when you have enough information.",
+			"This is a resumed investigation of incident %q (type: %s).\n\nPrevious findings:\n%s\n\nContinue the diagnosis. Call complete_diagnosis when you have enough information.",
+			inc.Title,
+			inc.What,
 			summary,
 		)},
 	}
@@ -281,13 +341,9 @@ func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.Chat
 
 func isAutonomousAction(toolName string) bool {
 	switch toolName {
-	case "refresh_decypharr_links",
-		"decypharr_repair_sweep",
-		"restart_decypharr",
-		"restart_jellyfin",
-		"sonarr_rescan",
-		"radarr_rescan",
-		"clear_jellyfin_cache":
+	case toolRefreshLinks, toolRepairSweep, toolRestartDecypharr,
+		toolRestartJellyfin, toolSonarrRescan, toolRadarrRescan,
+		toolClearJellyfinCache:
 		return true
 	}
 	return false

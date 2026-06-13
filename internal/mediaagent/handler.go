@@ -1,6 +1,7 @@
 package mediaagent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,13 +15,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
 // Ops is the interface for OS-level operations; swapped for stubs in tests.
 type Ops interface {
 	DDTest(path string) (*mediaagentapi.DDTestResult, error)
-	Restart(service string) error
+	Restart(ctx context.Context, service string) error
 	DiskUsage() (*mediaagentapi.DiskResult, error)
 	ListDir(path string) (*mediaagentapi.ListDirResult, error)
 }
@@ -33,8 +35,8 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 
 	r.Post("/restart/{service}", func(w http.ResponseWriter, req *http.Request) {
 		svc := chi.URLParam(req, "service")
-		if err := ops.Restart(svc); err != nil {
-			log.Error("restart failed", "service", svc, "error", err)
+		if err := ops.Restart(req.Context(), svc); err != nil {
+			log.ErrorContext(req.Context(), "restart failed", "service", svc, "error", err)
 			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -49,7 +51,7 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 		}
 		result, err := ops.DDTest(body.Path)
 		if err != nil {
-			log.Error("dd-test failed", "path", body.Path, "error", err)
+			log.ErrorContext(req.Context(), "dd-test failed", "path", body.Path, "error", err)
 			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -64,7 +66,7 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 		}
 		result, err := ops.ListDir(path)
 		if err != nil {
-			log.Error("ls failed", "path", path, "error", err)
+			log.ErrorContext(req.Context(), "ls failed", "path", path, "error", err)
 			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -74,7 +76,7 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 	r.Get("/disk", func(w http.ResponseWriter, req *http.Request) {
 		result, err := ops.DiskUsage()
 		if err != nil {
-			log.Error("disk usage failed", "error", err)
+			log.ErrorContext(req.Context(), "disk usage failed", "error", err)
 			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -105,12 +107,29 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // RealOps executes actual OS operations.
-type RealOps struct{}
+type RealOps struct {
+	mounts []string
+}
 
-// ddBlockSize × ddCount = ~100 MB read.
+// defaultMounts are the paths checked when no explicit mounts are provided.
+func defaultMounts() []string {
+	return []string{"/mnt/decypharr", "/var/cache/decypharr", "/data"}
+}
+
+// NewRealOps creates a RealOps with the given mount paths.
+// If mounts is empty, sensible defaults are used.
+func NewRealOps(mounts []string) *RealOps {
+	if len(mounts) == 0 {
+		mounts = defaultMounts()
+	}
+	return &RealOps{mounts: mounts}
+}
+
+// ddBlockSize × ddCount = ~100 MiB read.
 const (
 	ddBlockSize = 4096
 	ddCount     = 25600
+	bytesPerMiB = 1024 * 1024
 )
 
 func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
@@ -119,7 +138,9 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 		return &mediaagentapi.DDTestResult{Error: err.Error()}, nil
 	}
 	if info.IsDir() {
-		return &mediaagentapi.DDTestResult{Error: "path is a directory, not a file — use list_directory to find the specific video file inside it"}, nil
+		return &mediaagentapi.DDTestResult{
+			Error: "path is a directory, not a file — use list_directory to find the specific video file inside it",
+		}, nil
 	}
 
 	f, err := os.Open(path)
@@ -132,7 +153,7 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 	var total int64
 	start := time.Now()
 
-	for i := 0; i < ddCount; i++ {
+	for range ddCount {
 		n, readErr := f.Read(buf)
 		total += int64(n)
 		if readErr != nil {
@@ -146,26 +167,34 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 	elapsed := time.Since(start).Seconds()
 	var speed float64
 	if elapsed > 0 {
-		speed = float64(total) / elapsed / (1024 * 1024)
+		speed = float64(total) / elapsed / bytesPerMiB
 	}
 	return &mediaagentapi.DDTestResult{BytesRead: total, SpeedMBs: speed}, nil
 }
 
-func (o *RealOps) Restart(service string) error {
-	out, err := exec.Command("systemctl", "restart", service).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("systemctl restart %s: %w — %s", service, err, strings.TrimSpace(string(out)))
+func (o *RealOps) Restart(_ context.Context, service string) error {
+	switch service {
+	case "jellyfin":
+		out, err := exec.CommandContext(context.Background(), "systemctl", "restart", "jellyfin").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("systemctl restart jellyfin: %w — %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	case "decypharr":
+		out, err := exec.CommandContext(context.Background(), "systemctl", "restart", "decypharr").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("systemctl restart decypharr: %w — %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown service %q", service)
 	}
-	return nil
 }
-
-// DiskMounts are the paths checked for disk usage and the allowed roots for ListDir.
-var DiskMounts = []string{"/mnt/decypharr", "/var/cache/decypharr", "/data"}
 
 func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 	// Restrict to known media roots to avoid exposing arbitrary filesystem paths.
 	allowed := false
-	for _, root := range DiskMounts {
+	for _, root := range o.mounts {
 		if path == root || strings.HasPrefix(path, root+"/") {
 			allowed = true
 			break
@@ -184,7 +213,7 @@ func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 	for _, e := range entries {
 		entry := mediaagentapi.ListDirEntry{Name: e.Name(), IsDir: e.IsDir()}
 		if !e.IsDir() {
-			if info, err := e.Info(); err == nil {
+			if info, infoErr := e.Info(); infoErr == nil {
 				entry.Size = info.Size()
 			}
 		}
@@ -195,13 +224,17 @@ func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 
 func (o *RealOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 	var mounts []mediaagentapi.DiskMount
-	for _, path := range DiskMounts {
+	for _, path := range o.mounts {
 		var stat syscall.Statfs_t
 		if err := syscall.Statfs(path, &stat); err != nil {
 			continue
 		}
-		total := stat.Blocks * uint64(stat.Bsize)
-		avail := stat.Bavail * uint64(stat.Bsize)
+		if stat.Bsize <= 0 {
+			continue
+		}
+		bsize := uint64(stat.Bsize)
+		total := stat.Blocks * bsize
+		avail := stat.Bavail * bsize
 		mounts = append(mounts, mediaagentapi.DiskMount{
 			Path:           path,
 			TotalBytes:     total,

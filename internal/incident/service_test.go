@@ -1,14 +1,13 @@
-package incident
+package incident_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 
-	"io"
-	"log/slog"
-
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident"
 )
 
 type captureNotifier struct{ msgs []string }
@@ -23,7 +22,7 @@ func (c *captureNotifier) NotifyUser(_ context.Context, _, msg string) error {
 	return nil
 }
 
-func newTestService(t *testing.T) (*Service, *db.DB, *captureNotifier) {
+func newTestService(t *testing.T) (*incident.Service, *db.DB, *captureNotifier) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
 	if err != nil {
@@ -40,15 +39,16 @@ func newTestService(t *testing.T) (*Service, *db.DB, *captureNotifier) {
 	notif := &captureNotifier{}
 	// agent is nil — tests must not trigger the agent goroutine, so all
 	// incidents are created with a nil agent and the goroutine exits early.
-	svc := NewService(database, nil, nil, nil, notif, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := incident.NewService(database, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
 	return svc, database, notif
 }
 
 func TestHandle_CreatesIncident(t *testing.T) {
+	t.Parallel()
 	svc, database, _ := newTestService(t)
 	ctx := context.Background()
 
-	rep := &Report{
+	rep := &incident.Report{
 		Source: "seerr", ReportedBy: "alice",
 		What: "cant_play", Title: "Breaking Bad",
 	}
@@ -73,10 +73,11 @@ func TestHandle_CreatesIncident(t *testing.T) {
 }
 
 func TestHandle_DeduplicatesByTitle(t *testing.T) {
+	t.Parallel()
 	svc, database, _ := newTestService(t)
 	ctx := context.Background()
 
-	rep := &Report{Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Sopranos"}
+	rep := &incident.Report{Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Sopranos"}
 
 	inc1, err := svc.Handle(ctx, rep)
 	if err != nil {
@@ -102,14 +103,20 @@ func TestHandle_DeduplicatesByTitle(t *testing.T) {
 	}
 }
 
+const systemicThresholdTitles = 5
+
 func TestHandle_SystemicLock(t *testing.T) {
+	t.Parallel()
 	svc, database, notif := newTestService(t)
 	ctx := context.Background()
 
 	// Create 5 open incidents to hit the threshold.
 	titles := []string{"A", "B", "C", "D", "E"}
+	if len(titles) != systemicThresholdTitles {
+		t.Fatalf("test setup: expected %d titles", systemicThresholdTitles)
+	}
 	for _, title := range titles {
-		if _, err := svc.Handle(ctx, &Report{
+		if _, err := svc.Handle(ctx, &incident.Report{
 			Source: "seerr", ReportedBy: "x",
 			What: "cant_play", Title: title,
 		}); err != nil {
@@ -118,7 +125,7 @@ func TestHandle_SystemicLock(t *testing.T) {
 	}
 
 	// The 6th should be locked.
-	inc, err := svc.Handle(ctx, &Report{
+	inc, err := svc.Handle(ctx, &incident.Report{
 		Source: "seerr", ReportedBy: "x",
 		What: "cant_play", Title: "F",
 	})
@@ -139,10 +146,11 @@ func TestHandle_SystemicLock(t *testing.T) {
 }
 
 func TestResolveAndReopen(t *testing.T) {
+	t.Parallel()
 	svc, database, _ := newTestService(t)
 	ctx := context.Background()
 
-	inc, err := svc.Handle(ctx, &Report{
+	inc, err := svc.Handle(ctx, &incident.Report{
 		Source: "discord", ReportedBy: "alice",
 		What: "cant_play", Title: "Deadwood",
 	})
@@ -150,8 +158,8 @@ func TestResolveAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.Resolve(ctx, inc.ID); err != nil {
-		t.Fatal(err)
+	if resolveErr := svc.Resolve(ctx, inc.ID); resolveErr != nil {
+		t.Fatal(resolveErr)
 	}
 
 	got, err := database.GetIncident(ctx, inc.ID)
@@ -163,8 +171,8 @@ func TestResolveAndReopen(t *testing.T) {
 	}
 
 	// Reopen with nil agent just marks it reopened (agent goroutine exits immediately).
-	if err := svc.Reopen(ctx, inc.ID); err != nil {
-		t.Fatal(err)
+	if reopenErr := svc.Reopen(ctx, inc.ID); reopenErr != nil {
+		t.Fatal(reopenErr)
 	}
 	got, err = database.GetIncident(ctx, inc.ID)
 	if err != nil {
@@ -176,6 +184,7 @@ func TestResolveAndReopen(t *testing.T) {
 }
 
 func TestSetAutonomousPaused(t *testing.T) {
+	t.Parallel()
 	svc, database, _ := newTestService(t)
 	ctx := context.Background()
 

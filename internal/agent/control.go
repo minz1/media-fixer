@@ -56,16 +56,24 @@ Respond with ONLY valid JSON matching this schema — no prose, no markdown:
 // Review runs a single LLM completion reviewing the diagnostic conversation.
 // conversation is the full message history from Agent.Run(); escalation is
 // the proposed escalate_action from the DiagnosticResult.
-func (r *ControlReviewer) Review(ctx context.Context, conversation []openai.ChatCompletionMessage, escalation string) (*ControlVerdict, error) {
-	messages := make([]openai.ChatCompletionMessage, 0, len(conversation)+2)
+func (r *ControlReviewer) Review(
+	ctx context.Context,
+	conversation []openai.ChatCompletionMessage,
+	escalation string,
+) (*ControlVerdict, error) {
+	const controlSeedExtra = 2
+	messages := make([]openai.ChatCompletionMessage, 0, len(conversation)+controlSeedExtra)
 	messages = append(messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleSystem,
 		Content: controlSystemPrompt,
 	})
 	messages = append(messages, conversation...)
 	messages = append(messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("The agent wants to escalate the following action for owner approval:\n\n%s\n\nPlease review and return your verdict as JSON.", escalation),
+		Role: openai.ChatMessageRoleUser,
+		Content: fmt.Sprintf(
+			"The agent wants to escalate the following action for owner approval:\n\n%s\n\nPlease review and return your verdict as JSON.",
+			escalation,
+		),
 	})
 
 	resp, err := r.llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
@@ -78,9 +86,9 @@ func (r *ControlReviewer) Review(ctx context.Context, conversation []openai.Chat
 
 	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
 	var verdict ControlVerdict
-	if err := json.Unmarshal([]byte(raw), &verdict); err != nil {
-		r.log.Warn("control reviewer returned non-JSON", "raw", raw, "error", err)
-		return nil, fmt.Errorf("control review parse: %w", err)
+	if decodeErr := json.Unmarshal([]byte(raw), &verdict); decodeErr != nil {
+		r.log.WarnContext(ctx, "control reviewer returned non-JSON", "raw", raw, "error", decodeErr)
+		return nil, fmt.Errorf("control review parse: %w", decodeErr)
 	}
 
 	switch verdict.Verdict {
@@ -89,7 +97,7 @@ func (r *ControlReviewer) Review(ctx context.Context, conversation []openai.Chat
 		return nil, fmt.Errorf("control review: unexpected verdict %q", verdict.Verdict)
 	}
 
-	r.log.Info("control review complete", "verdict", verdict.Verdict, "reason", verdict.Reason)
+	r.log.InfoContext(ctx, "control review complete", "verdict", verdict.Verdict, "reason", verdict.Reason)
 
 	return &verdict, nil
 }

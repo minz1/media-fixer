@@ -1,19 +1,18 @@
-package server
+package server_test
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
-	"io"
-	"log/slog"
-
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/server"
 )
 
 // stubNotifier satisfies incident.Notifier without a real Discord connection.
@@ -29,7 +28,7 @@ func (s *stubNotifier) NotifyUser(_ context.Context, _, msg string) error {
 	return nil
 }
 
-func newTestServer(t *testing.T) (*Server, *db.DB) {
+func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "test-*.db")
 	if err != nil {
@@ -43,41 +42,61 @@ func newTestServer(t *testing.T) (*Server, *db.DB) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	discard := slog.New(slog.DiscardHandler)
 	notif := &stubNotifier{}
 	svc := incident.NewService(database, nil, nil, nil, notif, discard)
-	srv := New(":0", "/media", database, svc, discard)
+	srv, err := server.New(":0", "/media", database, svc, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return srv, database
 }
 
-func TestSeerrWebhook_CreatesIncident(t *testing.T) {
-	srv, database := newTestServer(t)
-
-	payload := seerrPayload{
-		NotificationType: "ISSUE_CREATED",
-		Subject:          "Breaking Bad",
-		Message:          "can't play episode",
-		IssueType:        "VIDEO",
-		ReportedBy:       "alice",
-		MediaJellyfinID:  "abc123",
-	}
+func postSeerr(t *testing.T, ts *httptest.Server, payload map[string]any) *http.Response {
+	t.Helper()
 	body, _ := json.Marshal(payload)
-
-	req := httptest.NewRequest(http.MethodPost, "/ingest/seerr", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	srv.handleSeerrWebhook(rr, req)
-
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("status: got %d want 201", rr.Code)
-	}
-
-	var resp map[string]string
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		ts.URL+"/ingest/seerr",
+		bytes.NewReader(body),
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	incID, ok := resp["incident_id"]
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestSeerrWebhook_CreatesIncident(t *testing.T) {
+	t.Parallel()
+	srv, database := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp := postSeerr(t, ts, map[string]any{
+		"notification_type":     "ISSUE_CREATED",
+		"subject":               "Breaking Bad",
+		"message":               "can't play episode",
+		"issue_type":            "VIDEO",
+		"reported_by":           "alice",
+		"media_jellyfinMediaId": "abc123",
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status: got %d want 201", resp.StatusCode)
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	incID, ok := result["incident_id"]
 	if !ok || incID == "" {
 		t.Fatal("expected incident_id in response")
 	}
@@ -98,20 +117,20 @@ func TestSeerrWebhook_CreatesIncident(t *testing.T) {
 }
 
 func TestSeerrWebhook_IgnoresNonCreate(t *testing.T) {
+	t.Parallel()
 	srv, database := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
 
 	for _, notifType := range []string{"ISSUE_RESOLVED", "ISSUE_COMMENT", "MEDIA_AVAILABLE"} {
-		payload := seerrPayload{NotificationType: notifType, Subject: "Some Title"}
-		body, _ := json.Marshal(payload)
+		resp := postSeerr(t, ts, map[string]any{
+			"notification_type": notifType,
+			"subject":           "Some Title",
+		})
+		resp.Body.Close()
 
-		req := httptest.NewRequest(http.MethodPost, "/ingest/seerr", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		rr := httptest.NewRecorder()
-
-		srv.handleSeerrWebhook(rr, req)
-
-		if rr.Code != http.StatusNoContent {
-			t.Errorf("%s: got %d want 204", notifType, rr.Code)
+		if resp.StatusCode != http.StatusNoContent {
+			t.Errorf("%s: got %d want 204", notifType, resp.StatusCode)
 		}
 	}
 
@@ -126,28 +145,28 @@ func TestSeerrWebhook_IgnoresNonCreate(t *testing.T) {
 }
 
 func TestSeerrWebhook_Deduplicates(t *testing.T) {
+	t.Parallel()
 	srv, _ := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
 
-	send := func() string {
-		payload := seerrPayload{
-			NotificationType: "ISSUE_CREATED",
-			Subject:          "The Wire",
-			IssueType:        "VIDEO",
-			ReportedBy:       "bob",
-		}
-		body, _ := json.Marshal(payload)
-		req := httptest.NewRequest(http.MethodPost, "/ingest/seerr", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		rr := httptest.NewRecorder()
-		srv.handleSeerrWebhook(rr, req)
-
-		var resp map[string]string
-		json.NewDecoder(rr.Body).Decode(&resp)
-		return resp["incident_id"]
+	payload := map[string]any{
+		"notification_type": "ISSUE_CREATED",
+		"subject":           "The Wire",
+		"issue_type":        "VIDEO",
+		"reported_by":       "bob",
 	}
 
-	id1 := send()
-	id2 := send()
+	sendAndGetID := func() string {
+		resp := postSeerr(t, ts, payload)
+		defer resp.Body.Close()
+		var result map[string]string
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		return result["incident_id"]
+	}
+
+	id1 := sendAndGetID()
+	id2 := sendAndGetID()
 
 	if id1 == "" || id2 == "" {
 		t.Fatal("expected non-empty incident IDs")
@@ -158,18 +177,30 @@ func TestSeerrWebhook_Deduplicates(t *testing.T) {
 }
 
 func TestSeerrWebhook_BadJSON(t *testing.T) {
+	t.Parallel()
 	srv, _ := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/ingest/seerr", bytes.NewReader([]byte("not json{")))
-	rr := httptest.NewRecorder()
-	srv.handleSeerrWebhook(rr, req)
+	req, _ := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		ts.URL+"/ingest/seerr",
+		bytes.NewReader([]byte("not json{")),
+	)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("got %d want 400", rr.Code)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("got %d want 400", resp.StatusCode)
 	}
 }
 
 func TestSeerrIssueTypeMapping(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want string
@@ -181,9 +212,9 @@ func TestSeerrIssueTypeMapping(t *testing.T) {
 		{"UNKNOWN", "other"},
 	}
 	for _, c := range cases {
-		got := seerrIssueTypeToWhat(c.in)
+		got := server.SeerrIssueTypeToWhat(c.in)
 		if got != c.want {
-			t.Errorf("seerrIssueTypeToWhat(%q) = %q want %q", c.in, got, c.want)
+			t.Errorf("SeerrIssueTypeToWhat(%q) = %q want %q", c.in, got, c.want)
 		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 type JellyfinClient struct {
@@ -20,13 +19,13 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 	return &JellyfinClient{
 		base:   base,
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: 30 * time.Second},
+		http:   &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
 type PlaybackInfoResult struct {
-	MediaSources     []MediaSource `json:"MediaSources"`
-	ErrorCode        string        `json:"ErrorCode"`
+	MediaSources []MediaSource `json:"MediaSources"`
+	ErrorCode    string        `json:"ErrorCode"`
 }
 
 type MediaSource struct {
@@ -39,7 +38,7 @@ type MediaSource struct {
 	TranscodingURL       string        `json:"TranscodingUrl"`
 	Container            string        `json:"Container"`
 	Size                 int64         `json:"Size"`
-	MediaStreams          []MediaStream `json:"MediaStreams"`
+	MediaStreams         []MediaStream `json:"MediaStreams"`
 }
 
 type MediaStream struct {
@@ -78,12 +77,12 @@ func (c *JellyfinClient) PlaybackInfo(ctx context.Context, itemID string) (*Play
 		return nil, fmt.Errorf("jellyfin PlaybackInfo: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("jellyfin PlaybackInfo: status %d", resp.StatusCode)
 	}
 	var result PlaybackInfoResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("jellyfin PlaybackInfo decode: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("jellyfin PlaybackInfo decode: %w", decodeErr)
 	}
 	return &result, nil
 }
@@ -101,6 +100,7 @@ type ItemsResponse struct {
 }
 
 // SearchItem searches Jellyfin for a media item by name, returning the first match.
+// Returns ErrNotFound if the item does not exist.
 func (c *JellyfinClient) SearchItem(ctx context.Context, name string) (*JellyfinItem, error) {
 	u, _ := url.Parse(c.base + "/Items")
 	q := u.Query()
@@ -122,15 +122,15 @@ func (c *JellyfinClient) SearchItem(ctx context.Context, name string) (*Jellyfin
 		return nil, fmt.Errorf("jellyfin search: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("jellyfin search: status %d", resp.StatusCode)
 	}
 	var result ItemsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, decodeErr
 	}
 	if len(result.Items) == 0 {
-		return nil, nil
+		return nil, ErrNotFound
 	}
 	item := result.Items[0]
 	return &item, nil
@@ -142,17 +142,31 @@ func (c *JellyfinClient) DeleteCache(ctx context.Context, itemID string) error {
 		fmt.Sprintf("/Items/%s/Refresh", url.PathEscape(itemID)),
 	}
 	for _, p := range paths {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+p, strings.NewReader(`{"Recursive":true,"ImageRefreshMode":"FullRefresh","MetadataRefreshMode":"FullRefresh","ReplaceAllImages":true,"ReplaceAllMetadata":true}`))
+		req, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			c.base+p,
+			strings.NewReader(
+				`{"Recursive":true,"ImageRefreshMode":"FullRefresh","MetadataRefreshMode":"FullRefresh","ReplaceAllImages":true,"ReplaceAllMetadata":true}`,
+			),
+		)
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Emby-Token", c.apiKey)
+
 		resp, err := c.http.Do(req)
 		if err != nil {
 			return err
 		}
-		resp.Body.Close()
+		closeErr := resp.Body.Close()
+		if resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("jellyfin refresh %s: status %d", p, resp.StatusCode)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close response body: %w", closeErr)
+		}
 	}
 	return nil
 }

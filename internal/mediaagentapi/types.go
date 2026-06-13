@@ -7,13 +7,12 @@ type DDTestRequest struct {
 
 // DDTestResult is the response from POST /dd-test.
 type DDTestResult struct {
-	BytesRead  int64   `json:"bytes_read"`
-	SpeedMBs   float64 `json:"speed_mb_s"`
-	Error      string  `json:"error,omitempty"`
+	BytesRead int64   `json:"bytes_read"`
+	SpeedMBs  float64 `json:"speed_mb_s"`
+	Error     string  `json:"error,omitempty"`
 }
 
-// RestartRequest is the body for POST /restart/:service.
-// (Service name is in the URL path; no body needed — struct kept for future use.)
+// RestartResult is the response from POST /restart/:service.
 type RestartResult struct {
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`

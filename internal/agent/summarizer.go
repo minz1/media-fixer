@@ -46,13 +46,12 @@ func (s *Summarizer) Summarize(ctx context.Context, rawConversation json.RawMess
 		if m.Role == openai.ChatMessageRoleSystem {
 			continue
 		}
-		sb.WriteString(m.Role)
-		sb.WriteString(": ")
+		fmt.Fprintf(&sb, "%s: ", m.Role)
 		if m.Content != "" {
 			sb.WriteString(m.Content)
 		}
 		for _, tc := range m.ToolCalls {
-			sb.WriteString(fmt.Sprintf(" [tool_call %s(%s)]", tc.Function.Name, tc.Function.Arguments))
+			fmt.Fprintf(&sb, " [tool_call %s(%s)]", tc.Function.Name, tc.Function.Arguments)
 		}
 		sb.WriteString("\n")
 	}

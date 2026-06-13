@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	openai "github.com/sashabaranov/go-openai"
+
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/config"
@@ -15,41 +17,34 @@ import (
 	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/server"
-	openai "github.com/sashabaranov/go-openai"
 )
 
 func main() {
-	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
-	flag.Parse()
-
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
-	cfg, err := config.Load(*cfgPath)
-	if err != nil {
-		log.Error("load config", "error", err)
+	if err := run(); err != nil {
 		os.Exit(1)
 	}
+}
 
-	database, err := db.Open(cfg.DB.Path)
+type agentBundle struct {
+	ag      *agent.Agent
+	summary *agent.Summarizer
+	ctrl    *agent.ControlReviewer
+}
+
+func buildAgentComponents(cfg *config.Config, database *db.DB, log *slog.Logger) (*agentBundle, error) {
+	decypharr := client.NewDecypharr(cfg.Decypharr.URL, cfg.Decypharr.APIToken)
+	jellyfin := client.NewJellyfin(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey)
+	sonarr := client.NewArr(cfg.Sonarr.URL, cfg.Sonarr.APIKey)
+	radarr := client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey)
+
+	loki, err := client.NewLoki(cfg.Loki.URL, cfg.Loki.TLSCert, cfg.Loki.TLSKey)
 	if err != nil {
-		log.Error("open database", "error", err)
-		os.Exit(1)
-	}
-	defer database.Close()
-
-	decypharrClient := client.NewDecypharr(cfg.Decypharr.URL, cfg.Decypharr.APIToken)
-	jellyfinClient := client.NewJellyfin(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey)
-	sonarrClient := client.NewArr(cfg.Sonarr.URL, cfg.Sonarr.APIKey)
-	radarrClient := client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey)
-	lokiClient, err := client.NewLoki(cfg.Loki.URL, cfg.Loki.TLSCert, cfg.Loki.TLSKey)
-	if err != nil {
-		log.Error("loki client", "error", err)
-		os.Exit(1)
+		return nil, err
 	}
 
-	var mediaAgentClient *client.MediaAgentClient
+	var mediaAgent *client.MediaAgentClient
 	if cfg.MediaAgent.URL != "" {
-		mediaAgentClient = client.NewMediaAgent(cfg.MediaAgent.URL, cfg.MediaAgent.APIKey)
+		mediaAgent = client.NewMediaAgent(cfg.MediaAgent.URL, cfg.MediaAgent.APIKey)
 	} else {
 		log.Warn("media-agent not configured — dd tests and remote restarts unavailable")
 	}
@@ -61,25 +56,54 @@ func main() {
 	llmClient := openai.NewClientWithConfig(llmCfg)
 
 	disp := &agent.Dispatcher{
-		Decypharr:  decypharrClient,
-		Jellyfin:   jellyfinClient,
-		Sonarr:     sonarrClient,
-		Radarr:     radarrClient,
-		Loki:       lokiClient,
-		MediaAgent: mediaAgentClient,
+		Decypharr:  decypharr,
+		Jellyfin:   jellyfin,
+		Sonarr:     sonarr,
+		Radarr:     radarr,
+		Loki:       loki,
+		MediaAgent: mediaAgent,
 		DB:         database,
 	}
 
-	ag := agent.New(llmClient, cfg.LLM.Model, disp, database, log)
-	summarizer := agent.NewSummarizer(llmClient, cfg.LLM.Model)
+	b := &agentBundle{
+		ag:      agent.New(llmClient, cfg.LLM.Model, disp, database, log),
+		summary: agent.NewSummarizer(llmClient, cfg.LLM.Model),
+	}
 
-	var controlReviewer *agent.ControlReviewer
 	if cfg.ControlLLM != nil {
 		controlCfg := openai.DefaultConfig(cfg.ControlLLM.APIKey)
 		if cfg.ControlLLM.BaseURL != "" {
 			controlCfg.BaseURL = cfg.ControlLLM.BaseURL
 		}
-		controlReviewer = agent.NewControlReviewer(openai.NewClientWithConfig(controlCfg), cfg.ControlLLM.Model, log)
+		b.ctrl = agent.NewControlReviewer(openai.NewClientWithConfig(controlCfg), cfg.ControlLLM.Model, log)
+	}
+
+	return b, nil
+}
+
+func run() error {
+	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
+	flag.Parse()
+
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Error("load config", "error", err)
+		return err
+	}
+
+	database, err := db.Open(cfg.DB.Path)
+	if err != nil {
+		log.Error("open database", "error", err)
+		return err
+	}
+	defer database.Close()
+
+	bundle, err := buildAgentComponents(cfg, database, log)
+	if err != nil {
+		log.Error("build agent components", "error", err)
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -88,24 +112,30 @@ func main() {
 	bot, err := discord.New(cfg.Discord.Token, cfg.Discord.GuildID, cfg.Discord.OwnerID, log)
 	if err != nil {
 		log.Error("init discord bot", "error", err)
-		os.Exit(1)
+		return err
 	}
 
-	svc := incident.NewService(database, ag, controlReviewer, summarizer, bot, log)
+	svc := incident.NewService(database, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
 	bot.SetService(svc)
 
-	if err := bot.Start(); err != nil {
+	if err = bot.Start(); err != nil {
 		log.Error("start discord bot", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer bot.Close()
 
-	srv := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, svc, log)
+	srv, err := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, svc, log)
+	if err != nil {
+		log.Error("init server", "error", err)
+		return err
+	}
 
-	go svc.RecoverZombies(context.Background())
+	go svc.RecoverZombies(context.WithoutCancel(ctx))
 
 	log.Info("media-fixer started")
-	if err := srv.Start(ctx); err != nil {
+	if err = srv.Start(ctx); err != nil {
 		log.Error("server stopped", "error", err)
+		return err
 	}
+	return nil
 }

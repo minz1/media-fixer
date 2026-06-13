@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"time"
+	"strconv"
 )
 
 // ArrClient talks to either Sonarr or Radarr via their shared v3 API surface.
@@ -21,7 +21,7 @@ func NewArr(base, apiKey string) *ArrClient {
 	return &ArrClient{
 		base:   base,
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: 30 * time.Second},
+		http:   &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
@@ -38,78 +38,80 @@ type Movie struct {
 }
 
 type Episode struct {
-	ID           int    `json:"id"`
-	SeriesID     int    `json:"seriesId"`
-	Title        string `json:"title"`
-	SeasonNumber int    `json:"seasonNumber"`
-	EpisodeNumber int   `json:"episodeNumber"`
+	ID            int    `json:"id"`
+	SeriesID      int    `json:"seriesId"`
+	Title         string `json:"title"`
+	SeasonNumber  int    `json:"seasonNumber"`
+	EpisodeNumber int    `json:"episodeNumber"`
 }
 
-// SearchSeries finds a series by title.
+// SearchSeries finds a series by title. Returns ErrNotFound if no match exists.
 func (c *ArrClient) SearchSeries(ctx context.Context, title string) (*Series, error) {
 	var series []Series
 	if err := c.get(ctx, "/api/v3/series", &series); err != nil {
 		return nil, err
 	}
-	for _, s := range series {
-		if s.Title == title {
-			return &s, nil
+	for i := range series {
+		if series[i].Title == title {
+			return &series[i], nil
 		}
 	}
-	return nil, nil
+	return nil, ErrNotFound
 }
 
-// SearchMovie finds a movie by title.
+// SearchMovie finds a movie by title. Returns ErrNotFound if no match exists.
 func (c *ArrClient) SearchMovie(ctx context.Context, title string) (*Movie, error) {
 	var movies []Movie
 	if err := c.get(ctx, "/api/v3/movie", &movies); err != nil {
 		return nil, err
 	}
-	for _, m := range movies {
-		if m.Title == title {
-			return &m, nil
+	for i := range movies {
+		if movies[i].Title == title {
+			return &movies[i], nil
 		}
 	}
-	return nil, nil
+	return nil, ErrNotFound
 }
 
 // RescanSeries triggers Sonarr to rescan the disk for a series.
+const paramCommandName = "name"
+
 func (c *ArrClient) RescanSeries(ctx context.Context, seriesID int) error {
 	return c.postCommand(ctx, map[string]any{
-		"name":     "RescanSeries",
-		"seriesId": seriesID,
+		paramCommandName: "RescanSeries",
+		"seriesId":       seriesID,
 	})
 }
 
 // RescanMovie triggers Radarr to rescan the disk for a movie.
 func (c *ArrClient) RescanMovie(ctx context.Context, movieID int) error {
 	return c.postCommand(ctx, map[string]any{
-		"name":    "RescanMovie",
-		"movieId": movieID,
+		paramCommandName: "RescanMovie",
+		"movieId":        movieID,
 	})
 }
 
 // SearchEpisode triggers Sonarr to search for a specific episode.
 func (c *ArrClient) SearchEpisode(ctx context.Context, episodeID int) error {
 	return c.postCommand(ctx, map[string]any{
-		"name":       "EpisodeSearch",
-		"episodeIds": []int{episodeID},
+		paramCommandName: "EpisodeSearch",
+		"episodeIds":     []int{episodeID},
 	})
 }
 
 // SearchMovieNow triggers Radarr to search for a movie.
 func (c *ArrClient) SearchMovieNow(ctx context.Context, movieID int) error {
 	return c.postCommand(ctx, map[string]any{
-		"name":    "MoviesSearch",
-		"movieIds": []int{movieID},
+		paramCommandName: "MoviesSearch",
+		"movieIds":       []int{movieID},
 	})
 }
 
 // BlocklistEpisode blocklists the current release for an episode and searches again.
 func (c *ArrClient) BlocklistEpisode(ctx context.Context, episodeID int) error {
 	return c.postCommand(ctx, map[string]any{
-		"name":       "EpisodeSearch",
-		"episodeIds": []int{episodeID},
+		paramCommandName: "EpisodeSearch",
+		"episodeIds":     []int{episodeID},
 	})
 }
 
@@ -117,9 +119,9 @@ func (c *ArrClient) BlocklistEpisode(ctx context.Context, episodeID int) error {
 func (c *ArrClient) GetEpisodes(ctx context.Context, seriesID, season int) ([]Episode, error) {
 	u, _ := url.Parse(c.base + "/api/v3/episode")
 	q := u.Query()
-	q.Set("seriesId", fmt.Sprintf("%d", seriesID))
+	q.Set("seriesId", strconv.Itoa(seriesID))
 	if season >= 0 {
-		q.Set("seasonNumber", fmt.Sprintf("%d", season))
+		q.Set("seasonNumber", strconv.Itoa(season))
 	}
 	u.RawQuery = q.Encode()
 
@@ -147,7 +149,7 @@ func (c *ArrClient) postCommand(ctx context.Context, body any) error {
 		return fmt.Errorf("arr command: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("arr command: status %d", resp.StatusCode)
 	}
 	return nil
@@ -165,7 +167,7 @@ func (c *ArrClient) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("arr GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("arr GET %s: status %d", path, resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)

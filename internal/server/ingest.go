@@ -52,15 +52,17 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 
 	inc, err := s.svc.Handle(r.Context(), rep)
 	if err != nil {
-		s.log.Error("seerr webhook: handle", "error", err)
+		s.log.ErrorContext(r.Context(), "seerr webhook: handle", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	s.log.Info("seerr issue ingested", "incident", inc.ID, "title", title)
+	s.log.InfoContext(r.Context(), "seerr issue ingested", "incident", inc.ID, "title", title)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"incident_id": inc.ID})
+	if encErr := json.NewEncoder(w).Encode(map[string]string{"incident_id": inc.ID}); encErr != nil {
+		s.log.ErrorContext(r.Context(), "encode response", "error", encErr)
+	}
 }
 
 func seerrIssueTypeToWhat(issueType string) string {

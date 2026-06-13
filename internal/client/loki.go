@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -17,7 +18,7 @@ type LokiClient struct {
 }
 
 func NewLoki(base, tlsCert, tlsKey string) (*LokiClient, error) {
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: defaultHTTPTimeout}
 
 	if tlsCert != "" && tlsKey != "" {
 		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
@@ -50,13 +51,18 @@ type LokiLine struct {
 
 // QueryRange queries Loki for log lines matching logQL in the given time window.
 // units is a LogQL stream selector, e.g. `{unit=~"jellyfin|decypharr"}`.
-func (c *LokiClient) QueryRange(ctx context.Context, logQL string, from, to time.Time, limit int) (*LokiQueryResult, error) {
+func (c *LokiClient) QueryRange(
+	ctx context.Context,
+	logQL string,
+	from, to time.Time,
+	limit int,
+) (*LokiQueryResult, error) {
 	u, _ := url.Parse(c.base + "/loki/api/v1/query_range")
 	q := u.Query()
 	q.Set("query", logQL)
-	q.Set("start", fmt.Sprintf("%d", from.UnixNano()))
-	q.Set("end", fmt.Sprintf("%d", to.UnixNano()))
-	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("start", strconv.FormatInt(from.UnixNano(), 10))
+	q.Set("end", strconv.FormatInt(to.UnixNano(), 10))
+	q.Set("limit", strconv.Itoa(limit))
 	q.Set("direction", "backward")
 	u.RawQuery = q.Encode()
 
@@ -69,7 +75,7 @@ func (c *LokiClient) QueryRange(ctx context.Context, logQL string, from, to time
 		return nil, fmt.Errorf("loki query: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("loki query: status %d", resp.StatusCode)
 	}
 
@@ -80,18 +86,21 @@ func (c *LokiClient) QueryRange(ctx context.Context, logQL string, from, to time
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("loki decode: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&raw); decodeErr != nil {
+		return nil, fmt.Errorf("loki decode: %w", decodeErr)
 	}
 
 	result := &LokiQueryResult{}
 	for _, stream := range raw.Data.Result {
 		for _, v := range stream.Values {
-			if len(v) < 2 {
+			const lokiValueFields = 2
+			if len(v) < lokiValueFields {
 				continue
 			}
-			var nsec int64
-			fmt.Sscanf(v[0], "%d", &nsec)
+			nsec, parseErr := strconv.ParseInt(v[0], 10, 64)
+			if parseErr != nil {
+				continue
+			}
 			result.Lines = append(result.Lines, LokiLine{
 				Timestamp: time.Unix(0, nsec),
 				Message:   v[1],

@@ -17,8 +17,8 @@ type Config struct {
 	Jellyfin   JellyfinConfig   `toml:"jellyfin"`
 	Sonarr     ArrConfig        `toml:"sonarr"`
 	Radarr     ArrConfig        `toml:"radarr"`
-	Loki       LokiConfig        `toml:"loki"`
-	MediaAgent MediaAgentConfig  `toml:"media_agent"`
+	Loki       LokiConfig       `toml:"loki"`
+	MediaAgent MediaAgentConfig `toml:"media_agent"`
 }
 
 type ServerConfig struct {
@@ -85,55 +85,52 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
 
-	// Allow secrets to be overridden via environment variables so that
-	// systemd EnvironmentFile (sops-nix) can inject them without them
-	// appearing in the world-readable TOML file.
-	if v := os.Getenv("MEDIA_FIXER_DISCORD_TOKEN"); v != "" {
-		cfg.Discord.Token = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_LLM_API_KEY"); v != "" {
-		cfg.LLM.APIKey = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_DECYPHARR_API_TOKEN"); v != "" {
-		cfg.Decypharr.APIToken = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_JELLYFIN_API_KEY"); v != "" {
-		cfg.Jellyfin.APIKey = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_SONARR_API_KEY"); v != "" {
-		cfg.Sonarr.APIKey = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_RADARR_API_KEY"); v != "" {
-		cfg.Radarr.APIKey = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_MEDIA_AGENT_API_KEY"); v != "" {
-		cfg.MediaAgent.APIKey = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_LOKI_TLS_CERT"); v != "" {
-		cfg.Loki.TLSCert = v
-	}
-	if v := os.Getenv("MEDIA_FIXER_LOKI_TLS_KEY"); v != "" {
-		cfg.Loki.TLSKey = v
-	}
+	applyEnvOverrides(cfg)
+	applyControlLLMDefaults(cfg)
+
+	return cfg, nil
+}
+
+// applyEnvOverrides overlays secrets from environment variables so that
+// systemd EnvironmentFile (sops-nix) can inject them without them
+// appearing in the world-readable TOML file.
+func applyEnvOverrides(cfg *Config) {
+	envOverride("MEDIA_FIXER_DISCORD_TOKEN", &cfg.Discord.Token)
+	envOverride("MEDIA_FIXER_LLM_API_KEY", &cfg.LLM.APIKey)
+	envOverride("MEDIA_FIXER_DECYPHARR_API_TOKEN", &cfg.Decypharr.APIToken)
+	envOverride("MEDIA_FIXER_JELLYFIN_API_KEY", &cfg.Jellyfin.APIKey)
+	envOverride("MEDIA_FIXER_SONARR_API_KEY", &cfg.Sonarr.APIKey)
+	envOverride("MEDIA_FIXER_RADARR_API_KEY", &cfg.Radarr.APIKey)
+	envOverride("MEDIA_FIXER_MEDIA_AGENT_API_KEY", &cfg.MediaAgent.APIKey)
+	envOverride("MEDIA_FIXER_LOKI_TLS_CERT", &cfg.Loki.TLSCert)
+	envOverride("MEDIA_FIXER_LOKI_TLS_KEY", &cfg.Loki.TLSKey)
+
 	if v := os.Getenv("MEDIA_FIXER_CONTROL_LLM_API_KEY"); v != "" {
 		if cfg.ControlLLM == nil {
 			cfg.ControlLLM = &LLMConfig{}
 		}
 		cfg.ControlLLM.APIKey = v
 	}
+}
 
-	// Fill control_llm defaults from [llm] when the block is present but partial.
-	if cfg.ControlLLM != nil {
-		if cfg.ControlLLM.BaseURL == "" {
-			cfg.ControlLLM.BaseURL = cfg.LLM.BaseURL
-		}
-		if cfg.ControlLLM.APIKey == "" {
-			cfg.ControlLLM.APIKey = cfg.LLM.APIKey
-		}
-		if cfg.ControlLLM.Model == "" {
-			cfg.ControlLLM.Model = cfg.LLM.Model
-		}
+// applyControlLLMDefaults fills unset control_llm fields from the main [llm] block.
+func applyControlLLMDefaults(cfg *Config) {
+	if cfg.ControlLLM == nil {
+		return
 	}
+	if cfg.ControlLLM.BaseURL == "" {
+		cfg.ControlLLM.BaseURL = cfg.LLM.BaseURL
+	}
+	if cfg.ControlLLM.APIKey == "" {
+		cfg.ControlLLM.APIKey = cfg.LLM.APIKey
+	}
+	if cfg.ControlLLM.Model == "" {
+		cfg.ControlLLM.Model = cfg.LLM.Model
+	}
+}
 
-	return cfg, nil
+func envOverride(key string, target *string) {
+	if v := os.Getenv(key); v != "" {
+		*target = v
+	}
 }
