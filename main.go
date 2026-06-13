@@ -71,6 +71,7 @@ func main() {
 	}
 
 	ag := agent.New(llmClient, cfg.LLM.Model, disp, database, log)
+	summarizer := agent.NewSummarizer(llmClient, cfg.LLM.Model)
 
 	var controlReviewer *agent.ControlReviewer
 	if cfg.ControlLLM != nil {
@@ -90,7 +91,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	svc := incident.NewService(database, ag, controlReviewer, bot, log)
+	svc := incident.NewService(database, ag, controlReviewer, summarizer, bot, log)
 	bot.SetService(svc)
 
 	if err := bot.Start(); err != nil {
@@ -100,6 +101,8 @@ func main() {
 	defer bot.Close()
 
 	srv := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, svc, log)
+
+	go svc.RecoverZombies(context.Background())
 
 	log.Info("media-fixer started")
 	if err := srv.Start(ctx); err != nil {

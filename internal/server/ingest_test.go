@@ -45,7 +45,7 @@ func newTestServer(t *testing.T) (*Server, *db.DB) {
 
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	notif := &stubNotifier{}
-	svc := incident.NewService(database, nil, nil, notif, discard)
+	svc := incident.NewService(database, nil, nil, nil, notif, discard)
 	srv := New(":0", "/media", database, svc, discard)
 	return srv, database
 }

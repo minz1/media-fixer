@@ -15,11 +15,12 @@ const systematicIncidentThreshold = 5
 
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
-	db      *db.DB
-	agent   *agent.Agent
-	control *agent.ControlReviewer
-	notif   Notifier
-	log     *slog.Logger
+	db         *db.DB
+	agent      *agent.Agent
+	control    *agent.ControlReviewer
+	summarizer *agent.Summarizer
+	notif      Notifier
+	log        *slog.Logger
 }
 
 // Notifier is implemented by the Discord bot to send DMs.
@@ -28,8 +29,8 @@ type Notifier interface {
 	NotifyUser(ctx context.Context, userID, msg string) error
 }
 
-func NewService(database *db.DB, ag *agent.Agent, control *agent.ControlReviewer, notif Notifier, log *slog.Logger) *Service {
-	return &Service{db: database, agent: ag, control: control, notif: notif, log: log}
+func NewService(database *db.DB, ag *agent.Agent, control *agent.ControlReviewer, summarizer *agent.Summarizer, notif Notifier, log *slog.Logger) *Service {
+	return &Service{db: database, agent: ag, control: control, summarizer: summarizer, notif: notif, log: log}
 }
 
 // Report is the normalised form of an incoming issue report from any source.
@@ -118,8 +119,9 @@ func (s *Service) runAgent(inc *db.Incident, seed []openai.ChatCompletionMessage
 		result, conversation, err = s.agent.Run(ctx, inc, seed)
 		if err != nil {
 			s.log.Error("agent error", "incident", inc.ID, "error", err)
+			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
 			_ = s.notif.NotifyOwner(ctx,
-				fmt.Sprintf("❌ Agent error for incident **%s** (#%s): %v", inc.Title, inc.ID[:8], err))
+				fmt.Sprintf("❌ Agent error for incident **%s** (#%s): %v\nIncident marked for manual review.", inc.Title, inc.ID[:8], err))
 			return
 		}
 
@@ -226,6 +228,46 @@ func (s *Service) Reopen(ctx context.Context, id string) error {
 		inc.Title, inc.ID[:8],
 	))
 	return nil
+}
+
+// Reinvestigate resumes a stuck or failed incident by summarizing the prior
+// conversation (if any) and spawning a fresh agent run seeded with the summary.
+func (s *Service) Reinvestigate(ctx context.Context, id string) error {
+	inc, err := s.db.GetIncident(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	var seed []openai.ChatCompletionMessage
+	if s.agent != nil && s.summarizer != nil {
+		if rawConv, err := s.db.LoadConversation(ctx, id); err == nil && len(rawConv) > 0 {
+			if summary, err := s.summarizer.Summarize(ctx, rawConv); err == nil && summary != "" {
+				seed = s.agent.BuildSummarySeed(inc, summary)
+				s.log.Info("reinvestigate with summary seed", "incident", id, "summary_len", len(summary))
+			} else if err != nil {
+				s.log.Warn("summarize failed, reinvestigating from scratch", "incident", id, "error", err)
+			}
+		}
+	}
+
+	go s.runAgent(inc, seed)
+	return nil
+}
+
+// RecoverZombies is called on startup to resume any incidents left in
+// "investigating" status from a previous process run.
+func (s *Service) RecoverZombies(ctx context.Context) {
+	incidents, err := s.db.FindByStatus(ctx, db.StatusInvestigating)
+	if err != nil {
+		s.log.Error("zombie recovery query", "error", err)
+		return
+	}
+	for _, inc := range incidents {
+		s.log.Warn("recovering zombie incident", "incident", inc.ID, "title", inc.Title)
+		if err := s.Reinvestigate(ctx, inc.ID); err != nil {
+			s.log.Error("zombie reinvestigate failed", "incident", inc.ID, "error", err)
+		}
+	}
 }
 
 // SetAutonomousPaused toggles the global pause switch.

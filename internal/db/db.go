@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS settings (
 
 INSERT OR IGNORE INTO settings (key, value) VALUES ('autonomous_paused', 'false');
 
+CREATE TABLE IF NOT EXISTS conversation_history (
+	incident_id TEXT PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
+	messages    TEXT NOT NULL,
+	updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_title  ON incidents(title);
 CREATE INDEX IF NOT EXISTS idx_actions_incident ON actions_log(incident_id);
@@ -393,6 +399,35 @@ func (d *DB) IsAutonomousPaused(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return v == "true", nil
+}
+
+// --- Conversation history ---
+
+func (d *DB) SaveConversation(ctx context.Context, incidentID string, data json.RawMessage) error {
+	_, err := d.sql.ExecContext(ctx,
+		`INSERT INTO conversation_history (incident_id, messages, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(incident_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at`,
+		incidentID, string(data), time.Now())
+	return err
+}
+
+func (d *DB) LoadConversation(ctx context.Context, incidentID string) (json.RawMessage, error) {
+	var s string
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT messages FROM conversation_history WHERE incident_id = ?`, incidentID,
+	).Scan(&s)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(s), nil
+}
+
+func (d *DB) FindByStatus(ctx context.Context, status IncidentStatus) ([]*Incident, error) {
+	return d.ListIncidents(ctx, string(status), 100, 0)
 }
 
 // --- helpers ---

@@ -155,6 +155,11 @@ var dashboardTmpl = template.Must(template.New("dashboard").Funcs(template.FuncM
           ✗ Still broken
         </button>
         {{else if eq .Incident.Status "manual_test_needed"}}
+        <button hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reinvestigate"
+                hx-swap="outerHTML" hx-target="body"
+                class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+          Re-investigate
+        </button>
         <button hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/resolve"
                 hx-swap="outerHTML" hx-target="body"
                 class="px-4 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700">
@@ -234,6 +239,15 @@ func (s *Server) dashboardIncident(w http.ResponseWriter, r *http.Request) {
 func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := s.svc.Resolve(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, s.baseURL+"/incidents/"+id, http.StatusSeeOther)
+}
+
+func (s *Server) actionReinvestigate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.svc.Reinvestigate(r.Context(), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

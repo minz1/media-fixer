@@ -40,7 +40,7 @@ func newTestService(t *testing.T) (*Service, *db.DB, *captureNotifier) {
 	notif := &captureNotifier{}
 	// agent is nil — tests must not trigger the agent goroutine, so all
 	// incidents are created with a nil agent and the goroutine exits early.
-	svc := NewService(database, nil, nil, notif, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(database, nil, nil, nil, notif, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return svc, database, notif
 }
 

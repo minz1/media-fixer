@@ -102,7 +102,7 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 	seenCalls := make(map[string]int) // "tool:args" → times seen
 
 	for round := 0; round < maxRounds; round++ {
-		resp, err := a.llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		resp, err := a.llmCall(ctx, openai.ChatCompletionRequest{
 			Model:    a.model,
 			Messages: messages,
 			Tools:    tools,
@@ -114,6 +114,10 @@ func (a *Agent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCom
 		choice := resp.Choices[0]
 		msg := choice.Message
 		messages = append(messages, msg)
+
+		if data, err := json.Marshal(messages); err == nil {
+			_ = a.db.SaveConversation(ctx, inc.ID, json.RawMessage(data))
+		}
 
 		a.logTurn(inc.ID, round, msg)
 
@@ -228,6 +232,39 @@ func (a *Agent) logTurn(incidentID string, round int, msg openai.ChatCompletionM
 		"round", round,
 		"message", json.RawMessage(b),
 	)
+}
+
+// llmCall wraps CreateChatCompletion with exponential backoff for transient errors.
+func (a *Agent) llmCall(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	delays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+	var lastErr error
+	for i, delay := range delays {
+		if i > 0 {
+			a.log.Warn("llm transient error, retrying", "attempt", i, "error", lastErr)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return openai.ChatCompletionResponse{}, ctx.Err()
+			}
+		}
+		resp, err := a.llm.CreateChatCompletion(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+	return openai.ChatCompletionResponse{}, fmt.Errorf("llm failed after %d attempts: %w", len(delays), lastErr)
+}
+
+// BuildSummarySeed constructs the seed messages for a resumed run from a prior-session summary.
+func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.ChatCompletionMessage {
+	return []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+		{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf(
+			"This is a resumed investigation. Here is what was found in the previous run:\n\n%s\n\nContinue the diagnosis. Call complete_diagnosis when you have enough information.",
+			summary,
+		)},
+	}
 }
 
 func isAutonomousAction(toolName string) bool {
