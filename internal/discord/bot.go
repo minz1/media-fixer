@@ -64,8 +64,8 @@ var reportCommand = &discordgo.ApplicationCommand{
 		{
 			Type:        discordgo.ApplicationCommandOptionString,
 			Name:        "details",
-			Description: "Any extra details (optional)",
-			Required:    false,
+			Description: "Describe what you're seeing",
+			Required:    true,
 		},
 	},
 }
