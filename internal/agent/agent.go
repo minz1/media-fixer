@@ -22,38 +22,57 @@ Media files live under /mnt/decypharr. Cache is at /var/cache/decypharr. Other d
 
 --- Playback problems (what=cant_play, missing_media) ---
 
-Diagnostic procedure — run in order, stop when you find the root cause:
-1. You MUST call jellyfin_playback_info every time. If the incident has no Jellyfin item ID,
-   call jellyfin_search first to find it — never skip this step. The response includes
-   MediaSources[].Path — the actual file path on disk. Use that exact path for dd_readability_test.
-   Never construct or guess a path.
-   Searching strategy — users rarely report exact titles, so try progressively:
-   a. Strip all season/episode qualifiers and search the clean show/movie name
-      (e.g. 'the boys s1 episode 2' → 'the boys'; 'Breaking Bad Season 3 Ep 4' → 'Breaking Bad').
-   b. If that returns no results, try one looser variation: drop a leading 'the/a/an', or use
-      only the first significant word (e.g. 'the boys' → 'boys'; 'strange things' → 'strange').
-   c. If still no results after two searches, proceed without a Jellyfin item ID and
-      record "not found in Jellyfin" in complete_diagnosis.
-   jellyfin_search returns up to 5 matches — pick the Episode whose season/episode number best
-   matches the incident, or fall back to the Series if no Episode is listed.
-2. If MediaSources is empty (Jellyfin can't open the file):
-   a. Call get_disk_info to confirm the /mnt/decypharr mount is present.
-   b. Call get_torrent_state to get the torrent folder name.
-   c. Call list_directory on /mnt/decypharr/<folder> to find the actual video file(s).
-   d. Use the specific file path (not the folder) for dd_readability_test.
-3. Call dd_readability_test on the specific file path from step 1 or 2d. Never pass a directory —
-   dd on a directory is meaningless. EIO errors or very low bytes-read confirm a FUSE/debrid link problem.
-4. Call get_torrent_state to check decypharr's view of the torrent.
-5. Call loki_query for jellyfin and decypharr logs around the report time.
+Run ALL five steps before calling complete_diagnosis. Never bail out early.
+
+Step 1 — Jellyfin lookup (always required).
+  If the incident has a Jellyfin item ID, call jellyfin_playback_info with it directly.
+  Otherwise call jellyfin_search first. Searching strategy:
+  a. Strip season/episode qualifiers and search the clean title
+     ('the boys s1 episode 2' → 'the boys'; 'Breaking Bad S3E4' → 'Breaking Bad').
+  b. If no results, try one looser variant: drop a leading article or use only the first word
+     ('the boys' → 'boys'; 'stranger things' → 'stranger').
+  c. If still no results after two attempts, skip jellyfin_playback_info and continue to step 2.
+  Picking from search results: prefer an Episode whose season/episode matches the incident;
+  if none, use the Series. Either way, always continue to step 2 — never stop here.
+
+Step 2 — Disk check (always required).
+  Call get_disk_info. Confirm /mnt/decypharr is mounted (non-zero total bytes).
+
+Step 3 — Torrent state (always required).
+  Call get_torrent_state with the show/movie name. Records decypharr's view of the torrent
+  and gives you the torrent folder name for step 4.
+
+Step 4 — File readability (always required).
+  Determine the file path, then call dd_readability_test on it. Never pass a directory.
+  - If jellyfin_playback_info returned MediaSources[].Path, use that path.
+  - If MediaSources was empty or step 1 was skipped: call list_directory on
+    /mnt/decypharr/<torrent-folder-from-step-3> to find the video file, then use that path.
+  EIO errors or near-zero bytes-read confirm a FUSE/debrid link problem.
+
+Step 5 — Log review (always required).
+  Call loki_query with {unit=~"jellyfin|decypharr"} for the last 30 minutes.
+
+After all five steps, call complete_diagnosis.
 
 --- Infrastructure/connectivity problems (what=other, login_failed, or title is not a media title) ---
 
-The report describes a service or connectivity issue rather than a specific media item. Skip steps 1-3.
-1. Call loki_query for jellyfin and decypharr errors in the last 30 minutes.
-2. Call get_disk_info to check mount health.
-3. If logs show Jellyfin errors or the mount is missing, apply the least-destructive fix.
+The report describes a service or connectivity issue, not a specific media item.
 
-After diagnosis, call complete_diagnosis with your conclusion. Be concise and specific.
+Step 1 — Always call loki_query for {unit=~"jellyfin|decypharr"} over the last 30 minutes.
+  Look for: crashes, panics, OOM kills, repeated errors, failed mounts, auth failures,
+  connection refused, or any ERROR/FATAL lines.
+
+Step 2 — Always call get_disk_info to check mount health.
+  /mnt/decypharr with total=0 means the FUSE mount is down.
+
+Step 3 — Act on findings (apply the most appropriate action):
+  - Jellyfin crashes / panics / not responding in logs → restart_jellyfin
+  - decypharr errors, mount down (total=0), or decypharr stuck → restart_decypharr
+  - Auth or login failures that are Jellyfin config issues → escalate (not autonomous)
+  - No clear signal in logs or disk → escalate with a summary of what was checked
+
+After both steps (and any action), call complete_diagnosis.
+
 Once you have applied an autonomous action, call complete_diagnosis immediately — do not
 keep querying logs or torrent state hoping to observe the effect. If verification is
 needed, set requires_approval=false and include it in primary_reason.
@@ -61,9 +80,10 @@ needed, set requires_approval=false and include it in primary_reason.
 Action priority (least destructive first):
 1. refresh_decypharr_links  — for EIO / stale CDN URLs
 2. decypharr_repair_sweep   — general broken-entry check
-3. restart_decypharr        — if decypharr appears stuck
-4. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
-5. clear_jellyfin_cache     — if metadata is stale
+3. restart_decypharr        — if decypharr appears stuck or FUSE mount is down
+4. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
+5. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
+6. clear_jellyfin_cache     — if metadata is stale
 
 You may call autonomous actions directly. Approval-required actions
 (delete torrent, blocklist + search) must only appear in complete_diagnosis.escalate_action.
