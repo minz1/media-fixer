@@ -117,25 +117,15 @@
         </div>
         {{end}}
 
-        <div class="mt-6 flex gap-3">
-          {{if eq .Incident.Status "agent_fixed"}}
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/resolve"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-          >
-            ✓ I tested it — resolved
-          </button>
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reopen"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
-          >
-            ✗ Still broken
-          </button>
-          {{else if eq .Incident.Status "manual_test_needed"}}
+        {{if .Incident.AutonomousLocked}}
+        <div class="mt-4 flex items-center gap-2 text-sm text-red-600">
+          🔒 Autonomous actions locked — the agent will not act on this incident
+          until you unlock it.
+        </div>
+        {{end}}
+
+        <!-- Every status is manually transitionable. -->
+        <div class="mt-4 flex flex-wrap gap-3">
           <button
             hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reinvestigate"
             hx-swap="outerHTML"
@@ -144,6 +134,7 @@
           >
             Re-investigate
           </button>
+          {{if ne .Incident.Status "resolved"}}
           <button
             hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/resolve"
             hx-swap="outerHTML"
@@ -152,22 +143,23 @@
           >
             Mark resolved
           </button>
+          {{end}}
           <button
             hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reopen"
             hx-swap="outerHTML"
             hx-target="body"
             class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
           >
-            Still broken — re-run agent
+            Reopen — still broken
           </button>
-          {{else if eq .Incident.Status "resolved"}}
+          {{if .Incident.AutonomousLocked}}
           <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reopen"
+            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/unlock"
             hx-swap="outerHTML"
             hx-target="body"
-            class="px-4 py-2 text-sm bg-orange-600 text-white rounded hover:bg-orange-700"
+            class="px-4 py-2 text-sm bg-amber-600 text-white rounded hover:bg-amber-700"
           >
-            Reopen
+            🔓 Unlock
           </button>
           {{end}}
         </div>

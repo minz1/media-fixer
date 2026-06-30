@@ -18,7 +18,16 @@ in a self-hosted Jellyfin + decypharr (debrid FUSE mount) setup.
 IMPORTANT: You are fully autonomous. There is no user to interact with. Never ask questions,
 never request clarification. If something is ambiguous, make a reasonable assumption and proceed.
 
+RESILIENCE: A tool returning an error, a 404, or an empty result is NEVER a reason to stop.
+It is a single data point. For example, get_torrent_state returning no torrents just means
+decypharr has no matching entry — keep going. Always continue the remaining steps and always
+reach complete_diagnosis with whatever you found. Never abandon the whole diagnosis because
+one tool call failed.
+
 Media files live under /mnt/decypharr. Cache is at /var/cache/decypharr. Other data is at /data.
+Library files under /data/library/{tv,movies}/ are SYMLINKS into /mnt/decypharr/__all__/<torrent>/.
+list_directory reports each entry's is_symlink flag and its target — follow the target to find
+the real file on the FUSE mount.
 
 --- Playback problems (what=cant_play, missing_media) ---
 
@@ -26,7 +35,12 @@ Run ALL five steps before calling complete_diagnosis. Never bail out early.
 
 Step 1 — Jellyfin lookup (always required).
   If the incident has a Jellyfin item ID, call jellyfin_playback_info with it directly.
-  Otherwise call jellyfin_search first. Searching strategy:
+  Exception: when source=seerr and details contains [media_type:tv], the item ID is the
+  Series ID, not an episode. PlaybackInfo on a Series returns empty MediaSources — that is
+  expected. Skip directly to step 2 and use the title/details to find the episode via
+  torrent investigation. If S/E info appears in the title or details, use it to identify
+  the right file in step 4.
+  If there is no Jellyfin item ID, call jellyfin_search first. Searching strategy:
   a. Strip season/episode qualifiers and search the clean title
      ('the boys s1 episode 2' → 'the boys'; 'Breaking Bad S3E4' → 'Breaking Bad').
   b. If no results, try one looser variant: drop a leading article or use only the first word
@@ -47,12 +61,30 @@ Step 4 — File readability (always required).
   - If jellyfin_playback_info returned MediaSources[].Path, use that path.
   - If MediaSources was empty or step 1 was skipped: call list_directory on
     /mnt/decypharr/<torrent-folder-from-step-3> to find the video file, then use that path.
+  - If a path under /data/library is a symlink (is_symlink=true), dd-test its target
+    (the /mnt/decypharr/__all__/... path), not the link itself.
   EIO errors or near-zero bytes-read confirm a FUSE/debrid link problem.
 
 Step 5 — Log review (always required).
   Call loki_query with {unit=~"jellyfin|decypharr"} for the last 30 minutes.
 
 After all five steps, call complete_diagnosis.
+
+--- Jellyfin has the title but it is unplayable / a Series shows no episodes ---
+
+Symptoms: jellyfin_playback_info on a Series returns empty MediaSources, OR loki_query shows
+"InvalidCastException ... TV.Series ... IHasMediaSources" (Jellyfin tried to play a series
+that has no episodes indexed). This is a Jellyfin indexing problem, NOT a debrid/FUSE problem,
+when the underlying files ARE readable (Step 4 dd test passed).
+  1. Call jellyfin_list_episodes on the Series item ID to confirm whether episodes are indexed.
+  2. If empty, call clear_jellyfin_cache on the Series item ID (a recursive item refresh).
+  3. Re-check with jellyfin_list_episodes. If episodes now appear, you are done.
+  4. If still empty, escalate to a full library scan — but FIRST call jellyfin_scan_status.
+     If a scan is already running, do NOT trigger another; just note its progress.
+     Otherwise call jellyfin_library_scan once.
+  5. A library scan takes minutes — do NOT wait in-run. Call complete_diagnosis with
+     requires_approval=false, verify_after_seconds set to your estimate (e.g. 300-600), and
+     user_eta_minutes set to a friendly "try again in N minutes". The system re-checks for you.
 
 --- Infrastructure/connectivity problems (what=other, login_failed, or title is not a media title) ---
 
@@ -74,16 +106,24 @@ Step 3 — Act on findings (apply the most appropriate action):
 After both steps (and any action), call complete_diagnosis.
 
 Once you have applied an autonomous action, call complete_diagnosis immediately — do not
-keep querying logs or torrent state hoping to observe the effect. If verification is
-needed, set requires_approval=false and include it in primary_reason.
+keep querying logs or torrent state hoping to observe an async effect. When a fix needs time
+to take hold (a library scan, a repair sweep, a refresh), do NOT escalate and do NOT wait
+in-run: set requires_approval=false, verify_after_seconds to your best estimate, and
+user_eta_minutes for the reporter. The system re-checks up to 5 times before deciding.
+
+Never re-trigger a job that is already running (check jellyfin_scan_status before
+jellyfin_library_scan). Re-triggering wastes time and confuses the user — prefer waiting via
+verify_after_seconds.
 
 Action priority (least destructive first):
 1. refresh_decypharr_links  — for EIO / stale CDN URLs
-2. decypharr_repair_sweep   — general broken-entry check
-3. restart_decypharr        — if decypharr appears stuck or FUSE mount is down
-4. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
-5. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
-6. clear_jellyfin_cache     — if metadata is stale
+2. decypharr_recheck        — recheck one specific broken entry by name
+3. decypharr_repair_sweep   — general broken-entry check
+4. clear_jellyfin_cache     — stale metadata, or a Series with no episodes indexed (recursive refresh)
+5. jellyfin_library_scan    — items exist on disk but are not indexed (check scan_status first)
+6. restart_decypharr        — if decypharr appears stuck or FUSE mount is down
+7. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
+8. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
 
 You may call autonomous actions directly. Approval-required actions
 (delete torrent, blocklist + search) must only appear in complete_diagnosis.escalate_action.
@@ -123,6 +163,15 @@ type DiagnosticResult struct {
 	FallbackAction   string `json:"fallback_action,omitempty"`
 	EscalateAction   string `json:"escalate_action,omitempty"`
 	RequiresApproval bool   `json:"requires_approval"`
+	// VerifyAfterSeconds, when > 0, tells the system a non-destructive fix was
+	// applied that needs time (e.g. a library scan). The system re-checks whether
+	// the problem resolved instead of escalating immediately.
+	VerifyAfterSeconds int `json:"verify_after_seconds,omitempty"`
+	// VerifyItemID is the Jellyfin item to re-check; defaults to the incident's item.
+	VerifyItemID string `json:"verify_item_id,omitempty"`
+	// UserETAMinutes is the agent's friendly estimate for when the reporter should
+	// try again, used in the "should be fixed soon" notification.
+	UserETAMinutes int `json:"user_eta_minutes,omitempty"`
 }
 
 // Run executes the diagnostic loop for the given incident.
@@ -263,8 +312,11 @@ func (a *Agent) handleCompleteDiagnosis(
 		a.log.ErrorContext(ctx, "set finding", "error", err)
 	}
 
-	if !result.RequiresApproval && inc.JellyfinItemID != "" {
-		if !a.verifyFix(ctx, inc.JellyfinItemID) {
+	// When the agent requested deferred verification (verify_after_seconds > 0),
+	// the fix needs time to take effect — skip the instant check and let the
+	// service's verification loop re-check after the requested delay.
+	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 && inc.JellyfinItemID != "" {
+		if !a.VerifyResolved(ctx, inc.JellyfinItemID) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
 			result.EscalateAction = "autonomous fix applied but playback verification failed"
@@ -297,9 +349,23 @@ func (a *Agent) executeCall(ctx context.Context, fn, argsJSON string, seenCalls 
 	return resultJSON
 }
 
-func (a *Agent) verifyFix(ctx context.Context, itemID string) bool {
-	info, err := a.disp.Jellyfin.PlaybackInfo(ctx, itemID)
-	return err == nil && len(info.MediaSources) > 0
+// VerifyResolved reports whether a playback problem looks resolved for an item:
+// either Jellyfin can now open it (PlaybackInfo has media sources) or, for a
+// series, episodes are now indexed.
+func (a *Agent) VerifyResolved(ctx context.Context, itemID string) bool {
+	if info, err := a.disp.Jellyfin.PlaybackInfo(ctx, itemID); err == nil && len(info.MediaSources) > 0 {
+		return true
+	}
+	if eps, err := a.disp.Jellyfin.ListEpisodes(ctx, itemID); err == nil && len(eps) > 0 {
+		return true
+	}
+	return false
+}
+
+// ScanRunning reports whether a Jellyfin library scan is currently in progress.
+func (a *Agent) ScanRunning(ctx context.Context) bool {
+	st, err := a.disp.Jellyfin.ScanStatus(ctx)
+	return err == nil && st.Running
 }
 
 func (a *Agent) buildUserMessage(inc *db.Incident) string {
@@ -370,9 +436,9 @@ func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.Chat
 
 func isAutonomousAction(toolName string) bool {
 	switch toolName {
-	case toolRefreshLinks, toolRepairSweep, toolRestartDecypharr,
+	case toolRefreshLinks, toolRepairSweep, toolDecypharrRecheck, toolRestartDecypharr,
 		toolRestartJellyfin, toolSonarrRescan, toolRadarrRescan,
-		toolClearJellyfinCache:
+		toolClearJellyfinCache, toolJellyfinLibraryScan:
 		return true
 	}
 	return false

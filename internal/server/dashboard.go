@@ -58,6 +58,10 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 				return "bg-gray-100 text-gray-600"
 			case db.StatusReopened:
 				return "bg-red-100 text-red-800"
+			case db.StatusBlocked:
+				return "bg-red-100 text-red-800"
+			case db.StatusVerifying:
+				return "bg-purple-100 text-purple-800"
 			default:
 				return "bg-gray-100 text-gray-600"
 			}
@@ -149,6 +153,19 @@ func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
 func (s *Server) actionResume(w http.ResponseWriter, r *http.Request) {
 	_ = s.svc.SetAutonomousPaused(r.Context(), false)
 	http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
+}
+
+func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.svc.Unlock(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	target, _ := url.JoinPath(s.baseURL, "incidents", id)
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 // parseUUIDParam extracts the "id" URL param and validates it as a UUID.

@@ -41,13 +41,18 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 		title = payload.Message
 	}
 
+	details := payload.Message
+	if payload.MediaType != "" {
+		details = "[media_type:" + payload.MediaType + "] " + details
+	}
+
 	rep := &incident.Report{
 		Source:         "seerr",
 		ReportedBy:     payload.ReportedBy,
 		What:           what,
 		Title:          title,
 		JellyfinItemID: payload.MediaJellyfinID,
-		Details:        payload.Message,
+		Details:        details,
 	}
 
 	inc, err := s.svc.Handle(r.Context(), rep)

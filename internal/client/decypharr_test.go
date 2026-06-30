@@ -89,6 +89,23 @@ func TestDecypharr_DeleteTorrent(t *testing.T) {
 	}
 }
 
+func TestDecypharr_ListTorrents_NotFoundIsEmpty(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := client.NewDecypharr(srv.URL, "")
+	torrents, err := c.ListTorrents(context.Background(), "Nonexistent", "")
+	if err != nil {
+		t.Fatalf("404 should be treated as no results, got error: %v", err)
+	}
+	if len(torrents) != 0 {
+		t.Errorf("expected empty list, got %d", len(torrents))
+	}
+}
+
 func TestDecypharr_ErrorResponse(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

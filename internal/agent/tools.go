@@ -14,21 +14,25 @@ import (
 
 // Tool name constants used in both toolDefs and dispatch.
 const (
-	toolJellyfinSearch     = "jellyfin_search"
-	toolJellyfinPlayback   = "jellyfin_playback_info"
-	toolDDReadability      = "dd_readability_test"
-	toolGetTorrentState    = "get_torrent_state"
-	toolLokiQuery          = "loki_query"
-	toolRefreshLinks       = "refresh_decypharr_links"
-	toolRepairSweep        = "decypharr_repair_sweep"
-	toolRestartDecypharr   = "restart_decypharr"
-	toolRestartJellyfin    = "restart_jellyfin"
-	toolSonarrRescan       = "sonarr_rescan"
-	toolRadarrRescan       = "radarr_rescan"
-	toolClearJellyfinCache = "clear_jellyfin_cache"
-	toolListDirectory      = "list_directory"
-	toolGetDiskInfo        = "get_disk_info"
-	toolCompleteDiagnosis  = "complete_diagnosis"
+	toolJellyfinSearch       = "jellyfin_search"
+	toolJellyfinPlayback     = "jellyfin_playback_info"
+	toolJellyfinListEpisodes = "jellyfin_list_episodes"
+	toolJellyfinScanStatus   = "jellyfin_scan_status"
+	toolJellyfinLibraryScan  = "jellyfin_library_scan"
+	toolDDReadability        = "dd_readability_test"
+	toolGetTorrentState      = "get_torrent_state"
+	toolLokiQuery            = "loki_query"
+	toolRefreshLinks         = "refresh_decypharr_links"
+	toolRepairSweep          = "decypharr_repair_sweep"
+	toolDecypharrRecheck     = "decypharr_recheck"
+	toolRestartDecypharr     = "restart_decypharr"
+	toolRestartJellyfin      = "restart_jellyfin"
+	toolSonarrRescan         = "sonarr_rescan"
+	toolRadarrRescan         = "radarr_rescan"
+	toolClearJellyfinCache   = "clear_jellyfin_cache"
+	toolListDirectory        = "list_directory"
+	toolGetDiskInfo          = "get_disk_info"
+	toolCompleteDiagnosis    = "complete_diagnosis"
 )
 
 // Shared map key names for JSON results.
@@ -37,6 +41,9 @@ const (
 	keyError  = "error"
 	keyRunID  = "run_id"
 )
+
+// statusStarted is the result value for an action that kicked off async work.
+const statusStarted = "started"
 
 // triggeredByAgent is the value stored in action log records for agent-initiated actions.
 const triggeredByAgent = "agent"
@@ -53,9 +60,10 @@ var errMediaAgentNotConfigured = errors.New("media-agent not configured")
 const (
 	paramTitle  = "title"
 	paramItemID = "item_id"
+	paramName   = "name"
 )
 
-const toolDefsCapacity = 15
+const toolDefsCapacity = 19
 
 // toolDefs returns the OpenAI function/tool definitions the agent can call.
 func toolDefs() []openai.Tool {
@@ -89,6 +97,27 @@ func diagnosticToolDefs() []openai.Tool {
 				Parameters: jsonSchema(map[string]any{
 					paramItemID: param("string", "Jellyfin item ID"),
 				}, []string{paramItemID}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name: toolJellyfinListEpisodes,
+				Description: "List the episodes Jellyfin has indexed for a Series item. An empty result means the " +
+					"series exists but has no playable episodes indexed — the classic cause of an unplayable show. " +
+					"Use this to confirm/verify episode indexing for a series item ID.",
+				Parameters: jsonSchema(map[string]any{
+					paramItemID: param("string", "Jellyfin Series item ID"),
+				}, []string{paramItemID}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name: toolJellyfinScanStatus,
+				Description: "Check whether a Jellyfin library scan is currently running and its progress percentage. " +
+					"Call this before jellyfin_library_scan so you never re-trigger a scan that is already in progress.",
+				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
 		},
 		{
@@ -164,6 +193,28 @@ func actionToolDefs() []openai.Tool {
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
+				Name: toolDecypharrRecheck,
+				Description: "Recheck a single decypharr entry by name (and optionally apply a fix). More targeted than a " +
+					"full repair sweep — use when get_torrent_state shows one specific broken/errored entry.",
+				Parameters: jsonSchema(map[string]any{
+					paramName: param("string", "Entry/torrent name as shown by get_torrent_state"),
+					"fix":     param("boolean", "Whether to apply a fix (default true)"),
+				}, []string{paramName}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name: toolJellyfinLibraryScan,
+				Description: "Trigger a full Jellyfin library scan (rebuilds the index so on-disk items get picked up). " +
+					"Non-destructive but server-wide and slow. Always call jellyfin_scan_status first; if a scan is " +
+					"already running, do NOT call this — wait for it instead. Returns status started or already_running.",
+				Parameters: jsonSchema(map[string]any{}, []string{}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
 				Name:        toolRestartDecypharr,
 				Description: "Restart the decypharr service. Use when decypharr appears stuck or the repair sweep hangs.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
@@ -217,13 +268,32 @@ func completionToolDef() openai.Tool {
 			Name:        toolCompleteDiagnosis,
 			Description: "Record the agent's diagnostic conclusion and ranked action recommendations, then end the diagnostic phase.",
 			Parameters: jsonSchema(map[string]any{
-				"root_cause":        param("string", "Concise description of the diagnosed root cause"),
-				"confidence":        param("string", "high|medium|low"),
-				"primary_action":    param("string", "The first action to take"),
-				"primary_reason":    param("string", "Why this action addresses the root cause"),
-				"fallback_action":   param("string", "Action to take if primary fails (optional)"),
-				"escalate_action":   param("string", "Approval-required action if autonomous fixes fail (optional)"),
-				"requires_approval": param("boolean", "Whether any recommended action requires owner approval"),
+				"root_cause":      param("string", "Concise description of the diagnosed root cause"),
+				"confidence":      param("string", "high|medium|low"),
+				"primary_action":  param("string", "The first action to take"),
+				"primary_reason":  param("string", "Why this action addresses the root cause"),
+				"fallback_action": param("string", "Action to take if primary fails (optional)"),
+				"escalate_action": param("string", "Approval-required action if autonomous fixes fail (optional)"),
+				"requires_approval": param(
+					"boolean",
+					"Whether any recommended action requires owner approval",
+				),
+				"verify_after_seconds": param(
+					"integer",
+					"If you applied a non-destructive fix that needs time (e.g. a library scan or "+
+						"refresh), set this to your best estimate in seconds before the fix should be "+
+						"verified. The system will re-check up to 5 times instead of escalating. Set 0/omit "+
+						"if no verification is needed.",
+				),
+				"verify_item_id": param(
+					"string",
+					"Jellyfin item ID to re-check during verification (optional; defaults to the incident item)",
+				),
+				"user_eta_minutes": param(
+					"integer",
+					"Friendly estimate in minutes for when the reporter should try again, used in the "+
+						"\"should be fixed soon\" message (optional)",
+				),
 			}, []string{"root_cause", "confidence", "primary_action", "primary_reason"}),
 		},
 	}
@@ -265,8 +335,9 @@ func (d *Dispatcher) dispatch(ctx context.Context, name string, args map[string]
 
 func isReadOnlyTool(name string) bool {
 	switch name {
-	case toolJellyfinSearch, toolJellyfinPlayback, toolDDReadability,
-		toolGetTorrentState, toolLokiQuery, toolListDirectory, toolGetDiskInfo:
+	case toolJellyfinSearch, toolJellyfinPlayback, toolJellyfinListEpisodes,
+		toolJellyfinScanStatus, toolDDReadability, toolGetTorrentState,
+		toolLokiQuery, toolListDirectory, toolGetDiskInfo:
 		return true
 	}
 	return false
@@ -281,6 +352,13 @@ func (d *Dispatcher) dispatchRead(ctx context.Context, name string, args map[str
 	case toolJellyfinPlayback:
 		itemID, _ := args[paramItemID].(string)
 		return d.Jellyfin.PlaybackInfo(ctx, itemID)
+
+	case toolJellyfinListEpisodes:
+		itemID, _ := args[paramItemID].(string)
+		return d.Jellyfin.ListEpisodes(ctx, itemID)
+
+	case toolJellyfinScanStatus:
+		return d.Jellyfin.ScanStatus(ctx)
 
 	case toolDDReadability:
 		filePath, _ := args["file_path"].(string)
@@ -328,7 +406,7 @@ func (d *Dispatcher) dispatchWrite(ctx context.Context, name string, args map[st
 			return nil, err
 		}
 		d.logAction(ctx, toolRefreshLinks, nil)
-		return map[string]string{keyRunID: runID, keyStatus: "started"}, nil
+		return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 
 	case toolRepairSweep:
 		runID, err := d.Decypharr.RunRepairSweep(ctx)
@@ -336,7 +414,13 @@ func (d *Dispatcher) dispatchWrite(ctx context.Context, name string, args map[st
 			return nil, err
 		}
 		d.logAction(ctx, "repair_sweep", nil)
-		return map[string]string{keyRunID: runID, keyStatus: "started"}, nil
+		return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
+
+	case toolDecypharrRecheck:
+		return d.dispatchDecypharrRecheck(ctx, args)
+
+	case toolJellyfinLibraryScan:
+		return d.dispatchLibraryScan(ctx)
 
 	case toolRestartDecypharr:
 		if err := d.Decypharr.Restart(ctx); err != nil {
@@ -371,6 +455,41 @@ func (d *Dispatcher) dispatchWrite(ctx context.Context, name string, args map[st
 	}
 
 	return nil, errors.New("unknown write tool: " + name)
+}
+
+// dispatchLibraryScan triggers a Jellyfin library scan, but first checks whether
+// one is already running so the agent never re-triggers an in-progress scan.
+func (d *Dispatcher) dispatchLibraryScan(ctx context.Context) (any, error) {
+	status, err := d.Jellyfin.ScanStatus(ctx)
+	if err == nil && status.Running {
+		return map[string]any{
+			keyStatus:      "already_running",
+			"progress_pct": status.ProgressPct,
+			"note":         "a library scan is already in progress — do not trigger another; wait for it to finish",
+		}, nil
+	}
+	if scanErr := d.Jellyfin.LibraryScan(ctx); scanErr != nil {
+		return nil, scanErr
+	}
+	d.logAction(ctx, toolJellyfinLibraryScan, nil)
+	return map[string]string{keyStatus: statusStarted}, nil
+}
+
+// dispatchDecypharrRecheck rechecks a single named decypharr entry.
+func (d *Dispatcher) dispatchDecypharrRecheck(ctx context.Context, args map[string]any) (any, error) {
+	name, _ := args[paramName].(string)
+	if name == "" {
+		return map[string]string{keyError: "name is required"}, nil
+	}
+	fix := true
+	if v, ok := args["fix"].(bool); ok {
+		fix = v
+	}
+	if err := d.Decypharr.RecheckEntry(ctx, name, fix); err != nil {
+		return nil, err
+	}
+	d.logAction(ctx, toolDecypharrRecheck, map[string]any{paramName: name, "fix": fix})
+	return map[string]string{keyStatus: "rechecked"}, nil
 }
 
 func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, args map[string]any) (any, error) {

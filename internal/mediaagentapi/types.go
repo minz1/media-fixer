@@ -33,9 +33,11 @@ type DiskResult struct {
 
 // ListDirEntry is one item returned by GET /ls.
 type ListDirEntry struct {
-	Name  string `json:"name"`
-	IsDir bool   `json:"is_dir"`
-	Size  int64  `json:"size,omitempty"` // bytes; 0 for directories
+	Name      string `json:"name"`
+	IsDir     bool   `json:"is_dir"`
+	Size      int64  `json:"size,omitempty"`       // bytes; 0 for directories
+	IsSymlink bool   `json:"is_symlink,omitempty"` // true if the entry is a symlink
+	Target    string `json:"target,omitempty"`     // symlink target (e.g. into /mnt/decypharr/__all__/...)
 }
 
 // ListDirResult is the response from GET /ls.

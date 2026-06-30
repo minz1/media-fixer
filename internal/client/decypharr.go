@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -54,6 +55,12 @@ func (c *DecypharrClient) ListTorrents(ctx context.Context, search, state string
 
 	var resp TorrentListResponse
 	if err := c.get(ctx, u.String(), &resp); err != nil {
+		// A 404 here means decypharr has no matching torrents — that is a valid
+		// "no results" answer, not a diagnostic failure. Return an empty list so
+		// the agent keeps investigating instead of aborting on the error.
+		if errors.Is(err, ErrNotFound) {
+			return []*TorrentEntry{}, nil
+		}
 		return nil, err
 	}
 	return resp.Torrents, nil
@@ -151,6 +158,9 @@ func (c *DecypharrClient) get(ctx context.Context, rawURL string, out any) error
 		return fmt.Errorf("decypharr GET %s: %w", u, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("decypharr GET %s: %w", u, ErrNotFound)
+	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("decypharr GET %s: status %d", u, resp.StatusCode)
 	}

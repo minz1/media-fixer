@@ -20,6 +20,17 @@ const (
 	retryDelay2 = 6 * time.Minute
 )
 
+const (
+	// maxVerifyLoops bounds how many times a deferred fix is re-checked before
+	// the system gives up and either reports an ETA or escalates.
+	maxVerifyLoops = 5
+	// verifyLoopDelayCap caps each verification wait so the goroutine can't sleep
+	// for an unbounded agent-supplied duration.
+	verifyLoopDelayCap = 2 * time.Minute
+	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
+	defaultUserETAMinutes = 10
+)
+
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
 	db         *db.DB
@@ -93,6 +104,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
+		_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
 		msg := fmt.Sprintf(
 			"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
 			openCount+1,
@@ -121,6 +133,13 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 		return
 	}
 
+	// A locked incident is not acted on autonomously. Manual paths (Reopen,
+	// Reinvestigate) clear the lock first, so an explicit human override still runs.
+	if inc.AutonomousLocked {
+		s.log.WarnContext(ctx, "incident autonomous-locked, skipping agent", "incident", inc.ID)
+		return
+	}
+
 	retryDelays := []time.Duration{0, retryDelay1, retryDelay2}
 
 	var (
@@ -140,13 +159,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 		}
 
 		if !result.RequiresApproval {
-			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
-			s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
-			s.notifyReporters(
-				ctx,
-				inc,
-				fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
-			)
+			s.handleAgentResolved(ctx, inc, result)
 			return
 		}
 
@@ -205,6 +218,77 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 	}
 }
 
+// handleAgentResolved processes a non-approval diagnosis: either it kicks off the
+// verification loop (when the fix needs time) or marks the incident fixed now.
+func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+	if result.VerifyAfterSeconds > 0 {
+		s.runVerification(ctx, inc, result)
+		return
+	}
+	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
+	s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
+	s.notifyReporters(
+		ctx,
+		inc,
+		fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
+	)
+}
+
+// runVerification re-checks, up to maxVerifyLoops times, whether a deferred
+// non-destructive fix (e.g. a library scan) resolved the problem. While checking,
+// the incident sits in "verifying". On success it is marked fixed and reporters
+// are told. If it never verifies but a scan is still running, reporters get a
+// friendly ETA and the incident stays in "verifying" — it is NOT escalated. Only
+// when nothing is in progress and it is still broken do we escalate to the owner.
+func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+	itemID := result.VerifyItemID
+	if itemID == "" {
+		itemID = inc.JellyfinItemID
+	}
+
+	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusVerifying)
+
+	delay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, verifyLoopDelayCap)
+
+	for range maxVerifyLoops {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return
+		}
+		if itemID != "" && s.agent.VerifyResolved(ctx, itemID) {
+			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
+			s.log.InfoContext(ctx, "fix verified", "incident", inc.ID, "action", result.PrimaryAction)
+			s.notifyReporters(
+				ctx,
+				inc,
+				fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
+			)
+			return
+		}
+	}
+
+	// Exhausted the verification budget. If a scan is still in progress, the fix
+	// is likely still landing — give the reporter an ETA instead of escalating.
+	if s.agent.ScanRunning(ctx) {
+		eta := result.UserETAMinutes
+		if eta <= 0 {
+			eta = defaultUserETAMinutes
+		}
+		s.log.InfoContext(ctx, "fix still applying, advising reporters", "incident", inc.ID, "eta_min", eta)
+		s.notifyReporters(ctx, inc, fmt.Sprintf(
+			"🔧 We're still rebuilding the library for **%s** — it should be playable in about %d minute(s). Give it a try then!",
+			inc.Title,
+			eta,
+		))
+		return
+	}
+
+	// Nothing in progress and still broken — escalate to the owner.
+	s.log.WarnContext(ctx, "fix not verified, escalating", "incident", inc.ID)
+	s.surfaceToOwner(ctx, inc, result, " (autonomous fix applied but could not be verified)")
+}
+
 func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err error) {
 	s.log.ErrorContext(ctx, "agent error", "incident", inc.ID, "error", err)
 	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
@@ -253,8 +337,17 @@ func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg str
 	}
 }
 
+// Unlock clears an incident's autonomous lock so the agent may act on it again.
+// This is a manual owner override (e.g. for a systemic-failure "blocked" incident).
+func (s *Service) Unlock(ctx context.Context, id string) error {
+	return s.db.SetAutonomousLocked(ctx, id, false)
+}
+
 // Reopen marks an incident as reopened (when human testing shows it's still broken).
 func (s *Service) Reopen(ctx context.Context, id string) error {
+	// Reopening is a deliberate human override — clear any autonomous lock so the
+	// re-run actually proceeds, even for a previously blocked/locked incident.
+	_ = s.db.SetAutonomousLocked(ctx, id, false)
 	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
 		return err
 	}
@@ -273,6 +366,8 @@ func (s *Service) Reopen(ctx context.Context, id string) error {
 // Reinvestigate resumes a stuck or failed incident by summarizing the prior
 // conversation (if any) and spawning a fresh agent run seeded with the summary.
 func (s *Service) Reinvestigate(ctx context.Context, id string) error {
+	// Deliberate human override — clear any autonomous lock so the re-run proceeds.
+	_ = s.db.SetAutonomousLocked(ctx, id, false)
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err

@@ -52,6 +52,7 @@ func New(addr, baseURL string, database *db.DB, svc *incident.Service, log *slog
 		r.Post("/incidents/{id}/resolve", s.actionResolve)
 		r.Post("/incidents/{id}/reopen", s.actionReopen)
 		r.Post("/incidents/{id}/reinvestigate", s.actionReinvestigate)
+		r.Post("/incidents/{id}/unlock", s.actionUnlock)
 		r.Post("/pause", s.actionPause)
 		r.Post("/resume", s.actionResume)
 	})

@@ -109,3 +109,105 @@ func TestJellyfin_SearchItem_NotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestJellyfin_ListEpisodes(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Shows/series-1/Episodes" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(client.ItemsResponse{
+			Items: []client.JellyfinItem{
+				{ID: "ep-1", Name: "Episode 1", Type: "Episode", Path: "/data/library/tv/Show/s01e01.mkv"},
+			},
+			TotalRecordCount: 1,
+		})
+	}))
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	eps, err := c.ListEpisodes(context.Background(), "series-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 1 || eps[0].ID != "ep-1" {
+		t.Errorf("episodes: %+v", eps)
+	}
+}
+
+func TestJellyfin_ListEpisodes_Empty(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(client.ItemsResponse{Items: []client.JellyfinItem{}, TotalRecordCount: 0})
+	}))
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	eps, err := c.ListEpisodes(context.Background(), "series-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 0 {
+		t.Errorf("expected no episodes, got %d", len(eps))
+	}
+}
+
+func TestJellyfin_LibraryScan(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/Library/Refresh" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	if err := c.LibraryScan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJellyfin_ScanStatus_Running(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"Key":"SomethingElse","Name":"Other","State":"Idle","CurrentProgressPercentage":0},
+			{"Key":"RefreshLibrary","Name":"Scan Media Library","State":"Running","CurrentProgressPercentage":42.5}
+		]`))
+	}))
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	st, err := c.ScanStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Running {
+		t.Error("expected Running")
+	}
+	if st.ProgressPct != 42.5 {
+		t.Errorf("progress: %v", st.ProgressPct)
+	}
+}
+
+func TestJellyfin_ScanStatus_Idle(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(
+			[]byte(
+				`[{"Key":"RefreshLibrary","Name":"Scan Media Library","State":"Idle","CurrentProgressPercentage":0}]`,
+			),
+		)
+	}))
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	st, err := c.ScanStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Running {
+		t.Error("expected not running")
+	}
+}

@@ -127,6 +127,12 @@ const (
 	StatusManualTestNeeded IncidentStatus = "manual_test_needed"
 	StatusResolved         IncidentStatus = "resolved"
 	StatusReopened         IncidentStatus = "reopened"
+	// StatusBlocked marks an incident the agent will not act on autonomously
+	// (e.g. locked due to a suspected systemic failure) until the owner intervenes.
+	StatusBlocked IncidentStatus = "blocked"
+	// StatusVerifying marks an incident where a non-destructive fix was applied
+	// and the system is waiting/re-checking whether it resolved the problem.
+	StatusVerifying IncidentStatus = "verifying"
 )
 
 // Incident is a single tracked playback problem.

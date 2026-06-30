@@ -140,8 +140,69 @@ func TestHandle_SystemicLock(t *testing.T) {
 	if !got.AutonomousLocked {
 		t.Error("expected autonomous_locked for 6th incident")
 	}
+	if got.Status != db.StatusBlocked {
+		t.Errorf("expected status blocked for systemic-locked incident, got %q", got.Status)
+	}
 	if len(notif.msgs) == 0 {
 		t.Error("expected owner notification for systemic lock")
+	}
+}
+
+func TestUnlock(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newTestService(t)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "x", What: "cant_play", Title: "Locked Show",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lockErr := database.SetAutonomousLocked(ctx, inc.ID, true); lockErr != nil {
+		t.Fatal(lockErr)
+	}
+
+	if unlockErr := svc.Unlock(ctx, inc.ID); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AutonomousLocked {
+		t.Error("expected incident to be unlocked")
+	}
+}
+
+func TestReopenClearsLock(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newTestService(t)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "x", What: "cant_play", Title: "Blocked Show",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lockErr := database.SetAutonomousLocked(ctx, inc.ID, true); lockErr != nil {
+		t.Fatal(lockErr)
+	}
+
+	// Reopen is a deliberate human override — it must clear the lock.
+	if reopenErr := svc.Reopen(ctx, inc.ID); reopenErr != nil {
+		t.Fatal(reopenErr)
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AutonomousLocked {
+		t.Error("reopen should clear the autonomous lock")
+	}
+	if got.Status != db.StatusReopened {
+		t.Errorf("status after reopen: %q", got.Status)
 	}
 }
 

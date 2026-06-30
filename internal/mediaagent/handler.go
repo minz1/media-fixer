@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -212,6 +213,12 @@ func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 	result := &mediaagentapi.ListDirResult{Path: path}
 	for _, e := range entries {
 		entry := mediaagentapi.ListDirEntry{Name: e.Name(), IsDir: e.IsDir()}
+		if e.Type()&os.ModeSymlink != 0 {
+			entry.IsSymlink = true
+			if target, linkErr := os.Readlink(filepath.Join(path, e.Name())); linkErr == nil {
+				entry.Target = target
+			}
+		}
 		if !e.IsDir() {
 			if info, infoErr := e.Info(); infoErr == nil {
 				entry.Size = info.Size()
