@@ -50,7 +50,6 @@ type LokiLine struct {
 }
 
 // QueryRange queries Loki for log lines matching logQL in the given time window.
-// units is a LogQL stream selector, e.g. `{unit=~"jellyfin|decypharr"}`.
 func (c *LokiClient) QueryRange(
 	ctx context.Context,
 	logQL string,

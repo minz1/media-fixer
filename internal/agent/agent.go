@@ -68,7 +68,7 @@ Step 4 — File readability (always required).
   EIO errors or near-zero bytes-read confirm a FUSE/debrid link problem.
 
 Step 5 — Log review (always required).
-  Call loki_query with {unit=~"jellyfin|decypharr"} for the last 30 minutes.
+  Call loki_query with {unit=~"jellyfin.service|decypharr.service"} for the last 30 minutes.
 
 After all five steps, call complete_diagnosis.
 
@@ -92,7 +92,7 @@ when the underlying files ARE readable (Step 4 dd test passed).
 
 The report describes a service or connectivity issue, not a specific media item.
 
-Step 1 — Always call loki_query for {unit=~"jellyfin|decypharr"} over the last 30 minutes.
+Step 1 — Always call loki_query for {unit=~"jellyfin.service|decypharr.service"} over the last 30 minutes.
   Look for: crashes, panics, OOM kills, repeated errors, failed mounts, auth failures,
   connection refused, or any ERROR/FATAL lines.
 

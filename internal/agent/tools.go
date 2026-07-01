@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -150,7 +152,7 @@ func diagnosticToolDefs() []openai.Tool {
 				Name:        toolLokiQuery,
 				Description: "Query Loki for recent log lines from jellyfin or decypharr around the incident time. Returns up to 100 relevant lines.",
 				Parameters: jsonSchema(map[string]any{
-					"units":        param("string", `LogQL stream selector, e.g. {unit=~"jellyfin|decypharr"}`),
+					"units":        param("string", lokiUnitParamDesc),
 					"minutes_back": param("number", "How many minutes before now to search (max 120)"),
 				}, []string{"units", "minutes_back"}),
 			},
@@ -421,6 +423,7 @@ func (d *Dispatcher) dispatchRead(ctx context.Context, name string, args map[str
 
 	case toolLokiQuery:
 		units, _ := args["units"].(string)
+		units = FixLokiUnitSelector(units)
 		minutes, _ := args["minutes_back"].(float64)
 		if minutes <= 0 || minutes > maxLokiMinutes {
 			minutes = defaultLokiMinutes
@@ -594,6 +597,44 @@ func (d *Dispatcher) logAction(ctx context.Context, action string, params map[st
 }
 
 // --- helpers ---
+
+// unitSelectorRe matches the quoted value of a LogQL unit label selector,
+// capturing the operator+opening-quote, the value, and the closing quote.
+var unitSelectorRe = regexp.MustCompile(`(unit=~?")([^"]*)(")`)
+
+// lokiUnitParamDesc is the tool parameter description for the `units` field.
+// Kept as a constant to stay within the 120-char line limit at the call site.
+const lokiUnitParamDesc = `LogQL stream selector, e.g. {unit=~"jellyfin.service|decypharr.service"}. ` +
+	`Loki unit labels always carry the .service suffix; bare names like "jellyfin" will never match.`
+
+// FixLokiUnitSelector ensures every unit name in a LogQL stream selector
+// carries the ".service" suffix required by systemd-journal labels in Loki.
+// LogQL =~ is a fully-anchored RE2 match, so {unit=~"jellyfin"} never
+// matches an entry labelled "jellyfin.service".
+func FixLokiUnitSelector(selector string) string {
+	return unitSelectorRe.ReplaceAllStringFunc(selector, func(m string) string {
+		sub := unitSelectorRe.FindStringSubmatch(m)
+		const wantGroups = 4
+		if len(sub) != wantGroups {
+			return m
+		}
+		op, val := sub[1], sub[2]
+		isRegex := strings.Contains(op, "~")
+		parts := strings.Split(val, "|")
+		for i, p := range parts {
+			bare := strings.Trim(p, "()")
+			if strings.HasSuffix(bare, ".service") || strings.HasSuffix(bare, `\.service`) {
+				continue
+			}
+			if isRegex {
+				parts[i] = bare + `\.service`
+			} else {
+				parts[i] = bare + ".service"
+			}
+		}
+		return op + strings.Join(parts, "|") + `"`
+	})
+}
 
 func jsonResult(v any) string {
 	b, _ := json.Marshal(v)
