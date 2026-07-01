@@ -67,6 +67,64 @@ func TestDecypharr_RefreshLinks(t *testing.T) {
 	}
 }
 
+func TestDecypharr_RepairStatus(t *testing.T) {
+	t.Parallel()
+	const sample = `{"running":true,"run_id":"run-9","progress":42}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/repair/status" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(sample))
+	}))
+	defer srv.Close()
+
+	c := client.NewDecypharr(srv.URL, "")
+	raw, err := c.RepairStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != sample {
+		t.Errorf("raw passthrough: got %q want %q", raw, sample)
+	}
+}
+
+func TestDecypharr_RepairHealth(t *testing.T) {
+	t.Parallel()
+	const sample = `[{"name":"Breaking.Bad.S01","healthy":false}]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/repair/health" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(sample))
+	}))
+	defer srv.Close()
+
+	c := client.NewDecypharr(srv.URL, "")
+	raw, err := c.RepairHealth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != sample {
+		t.Errorf("raw passthrough: got %q want %q", raw, sample)
+	}
+}
+
+func TestDecypharr_MountCacheCleanup(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/mount/cache/cleanup" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := client.NewDecypharr(srv.URL, "")
+	if err := c.MountCacheCleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDecypharr_DeleteTorrent(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -24,6 +24,9 @@ const (
 	toolLokiQuery            = "loki_query"
 	toolRefreshLinks         = "refresh_decypharr_links"
 	toolRepairSweep          = "decypharr_repair_sweep"
+	toolRepairStatus         = "get_repair_status"
+	toolRepairHealth         = "get_repair_health"
+	toolCacheCleanup         = "decypharr_cache_cleanup"
 	toolDecypharrRecheck     = "decypharr_recheck"
 	toolRestartDecypharr     = "restart_decypharr"
 	toolRestartJellyfin      = "restart_jellyfin"
@@ -63,12 +66,13 @@ const (
 	paramName   = "name"
 )
 
-const toolDefsCapacity = 19
+const toolDefsCapacity = 22
 
 // toolDefs returns the OpenAI function/tool definitions the agent can call.
 func toolDefs() []openai.Tool {
 	tools := make([]openai.Tool, 0, toolDefsCapacity)
 	tools = append(tools, diagnosticToolDefs()...)
+	tools = append(tools, repairReadToolDefs()...)
 	tools = append(tools, actionToolDefs()...)
 	tools = append(tools, completionToolDef())
 	return tools
@@ -172,6 +176,33 @@ func diagnosticToolDefs() []openai.Tool {
 	}
 }
 
+// repairReadToolDefs returns the read-only decypharr repair diagnostics that let
+// the agent inspect repair state without spending an autonomous action.
+func repairReadToolDefs() []openai.Tool {
+	return []openai.Tool{
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name: toolRepairStatus,
+				Description: "Check whether a decypharr repair job is currently running. Call this before " +
+					"refresh_decypharr_links or decypharr_repair_sweep so you never stack a second repair on " +
+					"top of one already in progress.",
+				Parameters: jsonSchema(map[string]any{}, []string{}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name: toolRepairHealth,
+				Description: "List decypharr entry health records (read-only). Use this to identify which " +
+					"specific entries are broken so you can target decypharr_recheck by name instead of running " +
+					"a full repair sweep.",
+				Parameters: jsonSchema(map[string]any{}, []string{}),
+			},
+		},
+	}
+}
+
 func actionToolDefs() []openai.Tool {
 	return []openai.Tool{
 		{
@@ -188,6 +219,16 @@ func actionToolDefs() []openai.Tool {
 				Name:        toolRepairSweep,
 				Description: "Trigger a general decypharr repair sweep without link refresh. Use after link refresh fails or to check for other broken entries.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
+			},
+		},
+		{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name: toolCacheCleanup,
+				Description: "Run a decypharr FUSE mount cache cleanup cycle. Use when the mount serves stale " +
+					"paths (EIO through the mount but the underlying debrid link is fine) — a lighter fix than " +
+					"restart_decypharr.",
+				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
 		},
 		{
@@ -337,7 +378,8 @@ func isReadOnlyTool(name string) bool {
 	switch name {
 	case toolJellyfinSearch, toolJellyfinPlayback, toolJellyfinListEpisodes,
 		toolJellyfinScanStatus, toolDDReadability, toolGetTorrentState,
-		toolLokiQuery, toolListDirectory, toolGetDiskInfo:
+		toolLokiQuery, toolListDirectory, toolGetDiskInfo,
+		toolRepairStatus, toolRepairHealth:
 		return true
 	}
 	return false
@@ -370,6 +412,12 @@ func (d *Dispatcher) dispatchRead(ctx context.Context, name string, args map[str
 	case toolGetTorrentState:
 		search, _ := args["search"].(string)
 		return d.Decypharr.ListTorrents(ctx, search, "")
+
+	case toolRepairStatus:
+		return d.Decypharr.RepairStatus(ctx)
+
+	case toolRepairHealth:
+		return d.Decypharr.RepairHealth(ctx)
 
 	case toolLokiQuery:
 		units, _ := args["units"].(string)
@@ -416,6 +464,13 @@ func (d *Dispatcher) dispatchWrite(ctx context.Context, name string, args map[st
 		d.logAction(ctx, "repair_sweep", nil)
 		return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 
+	case toolCacheCleanup:
+		if err := d.Decypharr.MountCacheCleanup(ctx); err != nil {
+			return nil, err
+		}
+		d.logAction(ctx, toolCacheCleanup, nil)
+		return map[string]string{keyStatus: statusStarted}, nil
+
 	case toolDecypharrRecheck:
 		return d.dispatchDecypharrRecheck(ctx, args)
 
@@ -423,7 +478,10 @@ func (d *Dispatcher) dispatchWrite(ctx context.Context, name string, args map[st
 		return d.dispatchLibraryScan(ctx)
 
 	case toolRestartDecypharr:
-		if err := d.Decypharr.Restart(ctx); err != nil {
+		if d.MediaAgent == nil {
+			return nil, errMediaAgentNotConfigured
+		}
+		if err := d.MediaAgent.RestartService(ctx, "decypharr"); err != nil {
 			return nil, err
 		}
 		d.logAction(ctx, toolRestartDecypharr, nil)

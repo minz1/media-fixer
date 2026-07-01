@@ -96,6 +96,32 @@ func (c *DecypharrClient) RunRepairSweep(ctx context.Context) (string, error) {
 	return resp.RunID, nil
 }
 
+// RepairStatus returns decypharr's current repair-job status as raw JSON.
+// The response shape is passed through untouched so the agent sees every field.
+func (c *DecypharrClient) RepairStatus(ctx context.Context) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if err := c.get(ctx, "/api/repair/status", &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// RepairHealth lists all decypharr entry health records as raw JSON.
+func (c *DecypharrClient) RepairHealth(ctx context.Context) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if err := c.get(ctx, "/api/repair/health", &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// MountCacheCleanup triggers a DFS cache cleanup cycle on the FUSE mount. Use
+// this as a lighter alternative to a full decypharr restart when the mount is
+// serving stale cached paths.
+func (c *DecypharrClient) MountCacheCleanup(ctx context.Context) error {
+	return c.post(ctx, "/api/mount/cache/cleanup", nil, nil)
+}
+
 // RecheckMedia asks decypharr to recheck a specific arr media item and
 // optionally apply fixes.
 func (c *DecypharrClient) RecheckMedia(ctx context.Context, arrName, mediaID string, fix bool) error {
@@ -136,11 +162,6 @@ func (c *DecypharrClient) DeleteTorrent(ctx context.Context, category, hash stri
 		return fmt.Errorf("decypharr DELETE %s: status %d", u, resp.StatusCode)
 	}
 	return nil
-}
-
-// Restart triggers a decypharr restart via the qBittorrent-compatible API.
-func (c *DecypharrClient) Restart(ctx context.Context) error {
-	return c.post(ctx, "/api/v2/app/restart", nil, nil)
 }
 
 func (c *DecypharrClient) get(ctx context.Context, rawURL string, out any) error {

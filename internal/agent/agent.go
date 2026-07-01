@@ -111,19 +111,25 @@ to take hold (a library scan, a repair sweep, a refresh), do NOT escalate and do
 in-run: set requires_approval=false, verify_after_seconds to your best estimate, and
 user_eta_minutes for the reporter. The system re-checks up to 5 times before deciding.
 
-Never re-trigger a job that is already running (check jellyfin_scan_status before
-jellyfin_library_scan). Re-triggering wastes time and confuses the user — prefer waiting via
-verify_after_seconds.
+Never re-trigger a job that is already running. Check jellyfin_scan_status before
+jellyfin_library_scan, and check get_repair_status before refresh_decypharr_links or
+decypharr_repair_sweep — if a repair is already running, do NOT trigger another; wait via
+verify_after_seconds instead. Re-triggering wastes time and confuses the user.
+
+get_repair_health is a read-only diagnostic (it does not count as an action): use it to see
+which specific entries decypharr considers broken, so you can target decypharr_recheck by name
+instead of running a full sweep.
 
 Action priority (least destructive first):
 1. refresh_decypharr_links  — for EIO / stale CDN URLs
 2. decypharr_recheck        — recheck one specific broken entry by name
 3. decypharr_repair_sweep   — general broken-entry check
-4. clear_jellyfin_cache     — stale metadata, or a Series with no episodes indexed (recursive refresh)
-5. jellyfin_library_scan    — items exist on disk but are not indexed (check scan_status first)
-6. restart_decypharr        — if decypharr appears stuck or FUSE mount is down
-7. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
-8. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
+4. decypharr_cache_cleanup  — FUSE mount serving stale paths (EIO through mount, debrid link OK)
+5. clear_jellyfin_cache     — stale metadata, or a Series with no episodes indexed (recursive refresh)
+6. jellyfin_library_scan    — items exist on disk but are not indexed (check scan_status first)
+7. restart_decypharr        — if decypharr appears stuck or FUSE mount is down
+8. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
+9. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
 
 You may call autonomous actions directly. Approval-required actions
 (delete torrent, blocklist + search) must only appear in complete_diagnosis.escalate_action.
@@ -436,8 +442,8 @@ func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.Chat
 
 func isAutonomousAction(toolName string) bool {
 	switch toolName {
-	case toolRefreshLinks, toolRepairSweep, toolDecypharrRecheck, toolRestartDecypharr,
-		toolRestartJellyfin, toolSonarrRescan, toolRadarrRescan,
+	case toolRefreshLinks, toolRepairSweep, toolCacheCleanup, toolDecypharrRecheck,
+		toolRestartDecypharr, toolRestartJellyfin, toolSonarrRescan, toolRadarrRescan,
 		toolClearJellyfinCache, toolJellyfinLibraryScan:
 		return true
 	}
