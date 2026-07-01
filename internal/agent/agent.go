@@ -50,7 +50,9 @@ Step 1 — Jellyfin lookup (always required).
   if none, use the Series. Either way, always continue to step 2 — never stop here.
 
 Step 2 — Disk check (always required).
-  Call get_disk_info. Confirm /mnt/decypharr is mounted (non-zero total bytes).
+  Call get_disk_info. Confirm /mnt/decypharr is mounted (mounted=true). Note: decypharr is a
+  cloud-backed FUSE mount — total_bytes=0 with mounted=true is normal and does NOT mean the mount
+  is down. Only mounted=false means the mount is absent.
 
 Step 3 — Torrent state (always required).
   Call get_torrent_state with the show/movie name. Records decypharr's view of the torrent
@@ -99,7 +101,7 @@ Step 2 — Always call get_disk_info to check mount health.
 
 Step 3 — Act on findings (apply the most appropriate action):
   - Jellyfin crashes / panics / not responding in logs → restart_jellyfin
-  - decypharr errors, mount down (total=0), or decypharr stuck → restart_decypharr
+  - decypharr errors, mount down (mounted=false), or decypharr stuck → restart_decypharr
   - Auth or login failures that are Jellyfin config issues → escalate (not autonomous)
   - No clear signal in logs or disk → escalate with a summary of what was checked
 
@@ -432,7 +434,10 @@ func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.Chat
 	return []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 		{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf(
-			"This is a resumed investigation of incident %q (type: %s).\n\nPrevious findings:\n%s\n\nContinue the diagnosis. Call complete_diagnosis when you have enough information.",
+			"This is a resumed investigation of incident %q (type: %s).\n\nPrevious findings:\n%s\n\n"+
+				"Continue the diagnosis. Before calling complete_diagnosis you MUST call loki_query and "+
+				"get_disk_info to refresh current state — conditions may have changed since the prior run. "+
+				"Do not skip these even if the summary already contains similar data.",
 			inc.Title,
 			inc.What,
 			summary,

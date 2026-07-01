@@ -169,7 +169,7 @@ func diagnosticToolDefs() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        toolGetDiskInfo,
-				Description: "Get disk usage for the media host mount points: /mnt/decypharr (FUSE media files), /var/cache/decypharr (decypharr cache), and /data. Use to check if a mount is present (non-zero total) and whether disk space is a factor.",
+				Description: "Get disk usage for the media host mount points: /mnt/decypharr (FUSE media files), /var/cache/decypharr (decypharr cache), and /data. Each entry includes a mounted bool. mounted=false means the path is absent. mounted=true with zero total_bytes means the mount is up but cloud-backed (normal for decypharr FUSE). Use to check mount presence and whether disk space is a factor.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
 		},

@@ -20,7 +20,10 @@ type RestartResult struct {
 
 // DiskMount represents one mount point's usage.
 type DiskMount struct {
-	Path           string `json:"path"`
+	Path string `json:"path"`
+	// Mounted is false when os.Stat on the path fails — the mount is absent or inaccessible.
+	// Cloud-backed FUSE mounts (e.g. decypharr) will have Mounted=true with zero byte counts.
+	Mounted        bool   `json:"mounted"`
 	UsedBytes      uint64 `json:"used_bytes"`
 	TotalBytes     uint64 `json:"total_bytes"`
 	AvailableBytes uint64 `json:"available_bytes"`

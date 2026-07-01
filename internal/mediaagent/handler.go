@@ -229,25 +229,43 @@ func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 	return result, nil
 }
 
+// mountInfoTargetField is the 0-based index of the mount target path in
+// /proc/self/mountinfo lines: "mountID parentID major:minor root mountTarget ...".
+const mountInfoTargetField = 4
+
+// activeMountPoints parses /proc/self/mountinfo and returns the set of active
+// mount targets.
+func activeMountPoints() map[string]struct{} {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]struct{})
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if fields := strings.Fields(line); len(fields) > mountInfoTargetField {
+			set[fields[mountInfoTargetField]] = struct{}{}
+		}
+	}
+	return set
+}
+
 func (o *RealOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
-	var mounts []mediaagentapi.DiskMount
+	mounted := activeMountPoints()
+	mounts := make([]mediaagentapi.DiskMount, 0, len(o.mounts))
 	for _, path := range o.mounts {
+		_, isMounted := mounted[path]
+		entry := mediaagentapi.DiskMount{Path: path, Mounted: isMounted}
+
+		// Statfs for byte counts; skip silently if Bsize==0 (cloud-backed, no blocks).
 		var stat syscall.Statfs_t
-		if err := syscall.Statfs(path, &stat); err != nil {
-			continue
+		if err := syscall.Statfs(path, &stat); err == nil && stat.Bsize > 0 {
+			bsize := uint64(stat.Bsize)
+			entry.TotalBytes = stat.Blocks * bsize
+			entry.AvailableBytes = stat.Bavail * bsize
+			entry.UsedBytes = entry.TotalBytes - entry.AvailableBytes
 		}
-		if stat.Bsize <= 0 {
-			continue
-		}
-		bsize := uint64(stat.Bsize)
-		total := stat.Blocks * bsize
-		avail := stat.Bavail * bsize
-		mounts = append(mounts, mediaagentapi.DiskMount{
-			Path:           path,
-			TotalBytes:     total,
-			AvailableBytes: avail,
-			UsedBytes:      total - avail,
-		})
+
+		mounts = append(mounts, entry)
 	}
 	return &mediaagentapi.DiskResult{Mounts: mounts}, nil
 }
