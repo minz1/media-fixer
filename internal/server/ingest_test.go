@@ -44,7 +44,7 @@ func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 
 	discard := slog.New(slog.DiscardHandler)
 	notif := &stubNotifier{}
-	svc := incident.NewService(database, nil, nil, nil, notif, discard)
+	svc := incident.NewService(context.Background(), database, nil, nil, nil, notif, discard)
 	srv, err := server.New(":0", "/media", database, svc, discard)
 	if err != nil {
 		t.Fatal(err)

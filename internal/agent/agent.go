@@ -50,9 +50,14 @@ Step 1 — Jellyfin lookup (always required).
   if none, use the Series. Either way, always continue to step 2 — never stop here.
 
 Step 2 — Disk check (always required).
-  Call get_disk_info. Confirm /mnt/decypharr is mounted (mounted=true). Note: decypharr is a
-  cloud-backed FUSE mount — total_bytes=0 with mounted=true is normal and does NOT mean the mount
-  is down. Only mounted=false means the mount is absent.
+  Call get_disk_info. Each path reports two independent booleans, accessible and is_mount_point:
+  - /mnt/decypharr is a FUSE mount and MUST be a mount point. Healthy = accessible:true AND
+    is_mount_point:true (total_bytes:0 is normal here — it is cloud-backed, not empty). If
+    is_mount_point:false, the FUSE mount has DIED and fallen back to an empty directory on the
+    root FS — it looks healthy (accessible:true, non-zero bytes) but is actually down. If
+    accessible:false with is_mount_point:true, the mount entry is stale and the FUSE daemon is dead.
+  - /data and /var/cache/decypharr may legitimately NOT be separate mounts, so is_mount_point:false
+    there is normal — only accessible:false indicates a problem for those.
 
 Step 3 — Torrent state (always required).
   Call get_torrent_state with the show/movie name. Records decypharr's view of the torrent
@@ -97,11 +102,12 @@ Step 1 — Always call loki_query for {unit=~"jellyfin.service|decypharr.service
   connection refused, or any ERROR/FATAL lines.
 
 Step 2 — Always call get_disk_info to check mount health.
-  /mnt/decypharr with total=0 means the FUSE mount is down.
+  /mnt/decypharr with is_mount_point:false means the FUSE mount is down (fell back to an empty
+  root-FS dir) even if accessible:true and byte counts look normal. accessible:false also = down.
 
 Step 3 — Act on findings (apply the most appropriate action):
   - Jellyfin crashes / panics / not responding in logs → restart_jellyfin
-  - decypharr errors, mount down (mounted=false), or decypharr stuck → restart_decypharr
+  - decypharr errors, mount down (/mnt/decypharr is_mount_point=false or accessible=false), or decypharr stuck → restart_decypharr
   - Auth or login failures that are Jellyfin config issues → escalate (not autonomous)
   - No clear signal in logs or disk → escalate with a summary of what was checked
 
@@ -195,7 +201,11 @@ func (a *Agent) Run(
 
 	a.disp.IncidentID = inc.ID
 
-	if err := a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusInvestigating); err != nil {
+	// Gate on the transition (not a raw status write) so a stale, superseded run
+	// can never clobber a finished incident's status back to "investigating" if it
+	// happens to reach this point after a newer run already completed.
+	if _, err := a.db.TransitionStatus(ctx, inc.ID, db.StatusInvestigating,
+		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened); err != nil {
 		return nil, nil, err
 	}
 

@@ -9,7 +9,7 @@ import (
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
-func TestRealOps_DiskUsage_AbsentPathNotMounted(t *testing.T) {
+func TestRealOps_DiskUsage_AbsentPath(t *testing.T) {
 	t.Parallel()
 	ops := mediaagent.NewRealOps([]string{"/nonexistent/path/that/cannot/exist"})
 	result, err := ops.DiskUsage()
@@ -20,18 +20,22 @@ func TestRealOps_DiskUsage_AbsentPathNotMounted(t *testing.T) {
 		t.Fatalf("expected 1 mount entry, got %d", len(result.Mounts))
 	}
 	m := result.Mounts[0]
-	if m.Mounted {
-		t.Error("expected Mounted=false for non-existent path")
+	if m.Accessible {
+		t.Error("expected Accessible=false for non-existent path")
+	}
+	if m.IsMountPoint {
+		t.Error("expected IsMountPoint=false for non-existent path")
 	}
 	if m.TotalBytes != 0 || m.UsedBytes != 0 || m.AvailableBytes != 0 {
 		t.Errorf("expected zero bytes for non-existent path, got total=%d", m.TotalBytes)
 	}
 }
 
-func TestRealOps_DiskUsage_PlainDirNotMounted(t *testing.T) {
+func TestRealOps_DiskUsage_PlainDirAccessibleButNotMountPoint(t *testing.T) {
 	t.Parallel()
-	// A regular directory that exists but is not a mount point must report Mounted=false.
-	// This is the case os.Stat gets wrong — it would return true for any existing path.
+	// A plain directory on the root FS is the /data case that bug 4 got wrong:
+	// it is Accessible with real byte counts, but it is NOT a mount point. Both
+	// signals must reflect that independently.
 	dir := t.TempDir()
 	ops := mediaagent.NewRealOps([]string{dir})
 	result, err := ops.DiskUsage()
@@ -41,14 +45,21 @@ func TestRealOps_DiskUsage_PlainDirNotMounted(t *testing.T) {
 	if len(result.Mounts) != 1 {
 		t.Fatalf("expected 1 mount entry, got %d", len(result.Mounts))
 	}
-	if result.Mounts[0].Mounted {
-		t.Error("expected Mounted=false for a plain directory that is not a mount point")
+	m := result.Mounts[0]
+	if !m.Accessible {
+		t.Error("expected Accessible=true for a real directory")
+	}
+	if m.IsMountPoint {
+		t.Error("expected IsMountPoint=false for a plain dir that is not a mount target")
+	}
+	if m.TotalBytes == 0 {
+		t.Error("expected non-zero TotalBytes for a real filesystem path")
 	}
 }
 
-func TestRealOps_DiskUsage_KnownMountIsDetected(t *testing.T) {
+func TestRealOps_DiskUsage_KnownKernelMountIsMountPoint(t *testing.T) {
 	t.Parallel()
-	// /proc is always a real mount on Linux; use it as a guaranteed positive case.
+	// /proc is always a mount point on Linux — pins the IsMountPoint signal itself.
 	ops := mediaagent.NewRealOps([]string{"/proc"})
 	result, err := ops.DiskUsage()
 	if err != nil {
@@ -57,8 +68,12 @@ func TestRealOps_DiskUsage_KnownMountIsDetected(t *testing.T) {
 	if len(result.Mounts) != 1 {
 		t.Fatalf("expected 1 mount entry, got %d", len(result.Mounts))
 	}
-	if !result.Mounts[0].Mounted {
-		t.Error("expected Mounted=true for /proc")
+	m := result.Mounts[0]
+	if !m.Accessible {
+		t.Error("expected Accessible=true for /proc")
+	}
+	if !m.IsMountPoint {
+		t.Error("expected IsMountPoint=true for /proc")
 	}
 }
 

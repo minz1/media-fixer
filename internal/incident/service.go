@@ -34,11 +34,12 @@ const (
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
 	db         *db.DB
-	agent      *agent.Agent
+	agent      AgentRunner
 	control    *agent.ControlReviewer
 	summarizer *agent.Summarizer
 	notif      Notifier
 	log        *slog.Logger
+	runs       *runManager
 }
 
 // Notifier is implemented by the Discord bot to send DMs.
@@ -47,16 +48,38 @@ type Notifier interface {
 	NotifyUser(ctx context.Context, userID, msg string) error
 }
 
-// NewService wires up the incident service.
+// NewService wires up the incident service. base is the process-lifetime context
+// (e.g. from signal.NotifyContext); all background agent runs derive from it, so
+// shutdown cancels them.
 func NewService(
+	base context.Context,
 	database *db.DB,
-	ag *agent.Agent,
+	ag AgentRunner,
 	control *agent.ControlReviewer,
 	summarizer *agent.Summarizer,
 	notif Notifier,
 	log *slog.Logger,
 ) *Service {
-	return &Service{db: database, agent: ag, control: control, summarizer: summarizer, notif: notif, log: log}
+	return &Service{
+		db:         database,
+		agent:      ag,
+		control:    control,
+		summarizer: summarizer,
+		notif:      notif,
+		log:        log,
+		runs:       newRunManager(base),
+	}
+}
+
+// launch starts (or restarts) the background agent pipeline for an incident under
+// the run manager. Because begin() cancels any in-flight run for the same incident,
+// a reopen/reinvestigate supersedes a prior run instead of racing it.
+func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) {
+	ctx, tok := s.runs.begin(inc.ID)
+	go func() {
+		defer s.runs.end(inc.ID, tok)
+		s.runAgent(ctx, inc, seed)
+	}()
 }
 
 // Report is the normalised form of an incoming issue report from any source.
@@ -117,7 +140,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		return inc, nil
 	}
 
-	go s.runAgent(context.WithoutCancel(ctx), inc, nil)
+	s.launch(inc, nil)
 
 	return inc, nil
 }
@@ -154,7 +177,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 
 		result, conversation, err = s.agent.Run(ctx, inc, seed)
 		if err != nil {
-			s.handleAgentError(ctx, inc, err)
+			s.handleRunError(ctx, inc, err)
 			return
 		}
 
@@ -181,8 +204,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 			return
 
 		case agent.VerdictEscalateToOwner:
-			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+			s.escalateToOwner(ctx, inc, fmt.Sprintf(
 				"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).\nRoot cause: %s\nConcern: %s",
 				inc.Title,
 				inc.ID[:8],
@@ -193,8 +215,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 
 		case agent.VerdictSuggestAlternative:
 			if attempt == len(retryDelays)-1 {
-				_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-				_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+				s.escalateToOwner(ctx, inc, fmt.Sprintf(
 					"⚠️ **%s** (#%s): agent still needs approval after %d retries.\nRoot cause: %s\nAction needed: %s",
 					inc.Title, inc.ID[:8], attempt+1, result.RootCause, result.EscalateAction,
 				))
@@ -225,8 +246,26 @@ func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, res
 		s.runVerification(ctx, inc, result)
 		return
 	}
-	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
-	s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
+	s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
+}
+
+// markFixedAndNotify atomically flips the incident to agent_fixed and DMs reporters
+// only if this goroutine actually performed the transition. agent_fixed is excluded
+// from the allowed source states, so a second concurrent finisher (e.g. a stale
+// verification loop after a reopen) transitions nothing and stays silent — the fix
+// for the duplicate "fixed automatically" DM.
+func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, action string) {
+	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed,
+		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened)
+	if err != nil {
+		s.log.ErrorContext(ctx, "mark fixed transition", "incident", inc.ID, "error", err)
+		return
+	}
+	if !changed {
+		s.log.InfoContext(ctx, "fix already recorded by another run, not re-notifying", "incident", inc.ID)
+		return
+	}
+	s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", action)
 	s.notifyReporters(
 		ctx,
 		inc,
@@ -246,7 +285,18 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 		itemID = inc.JellyfinItemID
 	}
 
-	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusVerifying)
+	// Gate entry the same way as every other transition: if a concurrent run has
+	// already finished this incident, do not resurrect it into "verifying".
+	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusVerifying,
+		db.StatusOpen, db.StatusInvestigating, db.StatusReopened)
+	if err != nil {
+		s.log.ErrorContext(ctx, "enter verifying transition", "incident", inc.ID, "error", err)
+		return
+	}
+	if !changed {
+		s.log.InfoContext(ctx, "not entering verification, incident already progressed", "incident", inc.ID)
+		return
+	}
 
 	delay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, verifyLoopDelayCap)
 
@@ -257,13 +307,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 			return
 		}
 		if itemID != "" && s.agent.VerifyResolved(ctx, itemID) {
-			_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusAgentFixed)
-			s.log.InfoContext(ctx, "fix verified", "incident", inc.ID, "action", result.PrimaryAction)
-			s.notifyReporters(
-				ctx,
-				inc,
-				fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
-			)
+			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
 			return
 		}
 	}
@@ -289,23 +333,51 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 	s.surfaceToOwner(ctx, inc, result, " (autonomous fix applied but could not be verified)")
 }
 
+// escalateToOwner atomically marks the incident manual_test_needed and DMs the
+// owner, but only if this call actually performs the transition. Every "give up
+// and ask a human" path (agent error, control-review escalation, verification
+// exhausted, max retries hit) routes through here so escalation is idempotent
+// under concurrent/superseded runs — the same TransitionStatus pattern used for
+// the "fixed" notification, applied once structurally instead of per call site.
+func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg string) {
+	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusManualTestNeeded,
+		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
+		db.StatusBlocked, db.StatusAgentFixed)
+	if err != nil {
+		s.log.ErrorContext(ctx, "escalate transition", "incident", inc.ID, "error", err)
+		return
+	}
+	if !changed {
+		s.log.InfoContext(ctx, "already escalated by another run, not re-notifying owner", "incident", inc.ID)
+		return
+	}
+	_ = s.notif.NotifyOwner(ctx, msg)
+}
+
+// handleRunError distinguishes a superseded run (its context was cancelled by a
+// newer reopen/reinvestigate) from a genuine diagnostic failure. A superseded run's
+// LLM call fails because its context died, not because diagnosis failed, so it
+// exits quietly instead of escalating to the owner.
+func (s *Service) handleRunError(ctx context.Context, inc *db.Incident, err error) {
+	if errors.Is(err, context.Canceled) {
+		s.log.InfoContext(ctx, "run superseded, exiting quietly", "incident", inc.ID)
+		return
+	}
+	s.handleAgentError(ctx, inc, err)
+}
+
 func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err error) {
 	s.log.ErrorContext(ctx, "agent error", "incident", inc.ID, "error", err)
-	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-	_ = s.notif.NotifyOwner(
-		ctx,
-		fmt.Sprintf(
-			"❌ Agent error for incident **%s** (#%s): %v\nIncident marked for manual review.",
-			inc.Title,
-			inc.ID[:8],
-			err,
-		),
-	)
+	s.escalateToOwner(ctx, inc, fmt.Sprintf(
+		"❌ Agent error for incident **%s** (#%s): %v\nIncident marked for manual review.",
+		inc.Title,
+		inc.ID[:8],
+		err,
+	))
 }
 
 func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
-	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+	s.escalateToOwner(ctx, inc, fmt.Sprintf(
 		"🔍 Incident **%s** (#%s) needs your attention%s.\nRoot cause: %s\nAction needed: %s",
 		inc.Title, inc.ID[:8], note, result.RootCause, result.EscalateAction,
 	))
@@ -355,7 +427,7 @@ func (s *Service) Reopen(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	go s.runAgent(context.WithoutCancel(ctx), inc, nil)
+	s.launch(inc, nil)
 	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
 		"🔁 Incident **%s** (#%s) was reopened — re-running diagnostics.",
 		inc.Title, inc.ID[:8],
@@ -374,7 +446,7 @@ func (s *Service) Reinvestigate(ctx context.Context, id string) error {
 	}
 
 	seed := s.buildReinvestigateSeed(ctx, id, inc)
-	go s.runAgent(context.WithoutCancel(ctx), inc, seed)
+	s.launch(inc, seed)
 	return nil
 }
 

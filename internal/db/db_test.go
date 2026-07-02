@@ -57,6 +57,54 @@ func TestCreateAndGetIncident(t *testing.T) {
 	}
 }
 
+func TestTransitionStatus_Idempotent(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status: db.StatusOpen, Source: "discord",
+		ReportedBy: "alice", What: "cant_play", Title: "T",
+	}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	allowed := []db.IncidentStatus{
+		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
+	}
+
+	// First finisher wins the transition.
+	changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed, allowed...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first transition open→agent_fixed should return true")
+	}
+
+	// Second finisher: already agent_fixed (not in allowedFrom) → no change, no notify.
+	changed, err = d.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed, allowed...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Error("second transition should return false (already agent_fixed)")
+	}
+
+	// After a legitimate reopen, the transition is allowed again.
+	if err = d.UpdateIncidentStatus(ctx, inc.ID, db.StatusReopened); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = d.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed, allowed...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Error("transition reopened→agent_fixed should return true")
+	}
+}
+
 func TestFindOpenByTitle_Dedup(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
@@ -218,6 +266,53 @@ func TestReporters(t *testing.T) {
 	}
 	if len(reporters) != testReporterCount {
 		t.Errorf("reporters: got %d want %d", len(reporters), testReporterCount)
+	}
+}
+
+// TestReporters_DedupeSameDiscordUserDifferentDisplayName reproduces the
+// duplicate-DM bug: the same Discord user reports under two different display
+// names (a nickname change between calls, or a retried /report interaction).
+// The partial unique index on (incident_id, discord_user_id) must reject the
+// second row at write time, so a single person is stored — and therefore
+// notified — exactly once, regardless of which reader is used.
+func TestReporters_DedupeSameDiscordUserDifferentDisplayName(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status: db.StatusOpen, Source: "discord",
+		ReportedBy: "alice", What: "cant_play", Title: "T",
+	}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.AddReporter(ctx, inc.ID, "alice", "discord", "discord-user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AddReporter(ctx, inc.ID, "alice-new-nick", "discord", "discord-user-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AddReporter(ctx, inc.ID, "bob", "discord", "discord-user-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Structural guarantee: the second nick for discord-user-1 never became a row.
+	reporters, err := d.ListReporters(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reporters) != 2 {
+		t.Errorf("reporter rows: got %d want 2 (alice + bob) — %v", len(reporters), reporters)
+	}
+
+	ids, err := d.ListDiscordReporterIDs(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("ids: got %d want 2 (one per unique discord user) — %v", len(ids), ids)
 	}
 }
 

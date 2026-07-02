@@ -79,6 +79,26 @@ CREATE INDEX IF NOT EXISTS idx_incidents_title  ON incidents(title);
 CREATE INDEX IF NOT EXISTS idx_actions_incident ON actions_log(incident_id);
 `
 
+// dedupReportersByDiscordID removes duplicate reporter rows for the same Discord
+// user within an incident (keeping the earliest), so a unique index can be built.
+// Rows without a discord_user_id are left alone — they dedup by the PK (reporter).
+const dedupReportersByDiscordID = `
+DELETE FROM incident_reporters
+WHERE discord_user_id IS NOT NULL AND discord_user_id != ''
+  AND rowid NOT IN (
+    SELECT MIN(rowid) FROM incident_reporters
+    WHERE discord_user_id IS NOT NULL AND discord_user_id != ''
+    GROUP BY incident_id, discord_user_id
+  );`
+
+// createReporterDiscordIndex enforces one row per (incident, Discord user) so that
+// AddReporter's INSERT OR IGNORE dedups the person at write time. It is partial:
+// non-empty discord_user_id only, so non-Discord reporters are unaffected.
+const createReporterDiscordIndex = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reporters_discord
+ON incident_reporters(incident_id, discord_user_id)
+WHERE discord_user_id IS NOT NULL AND discord_user_id != '';`
+
 // DB wraps [sql.DB] with schema management and typed query methods.
 type DB struct {
 	sql    *sql.DB
@@ -100,6 +120,17 @@ func Open(path string) (*DB, error) {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("migrate incident_reporters.discord_user_id: %w", err)
 		}
+	}
+	// A Discord user's identity for notification is discord_user_id, not the
+	// display-name text in the PK. Enforce one reporter row per (incident, discord
+	// user) structurally so every reader dedups for free. The DELETE clears any
+	// pre-existing duplicates (a unique index fails to build otherwise); it is a
+	// no-op once deduplicated, so it is safe to run on every startup.
+	if _, err = conn.ExecContext(context.Background(), dedupReportersByDiscordID); err != nil {
+		return nil, fmt.Errorf("dedup incident_reporters by discord_user_id: %w", err)
+	}
+	if _, err = conn.ExecContext(context.Background(), createReporterDiscordIndex); err != nil {
+		return nil, fmt.Errorf("create incident_reporters discord index: %w", err)
 	}
 	return &DB{
 		sql:    conn,
@@ -256,6 +287,37 @@ func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status Inciden
 	return err
 }
 
+// TransitionStatus atomically sets an incident's status to `to`, but only when its
+// current status is one of allowedFrom. It returns true iff this call actually
+// performed the change. Callers gate side effects (notifications) on the result so
+// that concurrent runs racing to the same terminal state notify exactly once: the
+// first transition wins, and any later caller sees a status not in allowedFrom and
+// gets false. Passing no allowedFrom transitions unconditionally.
+func (d *DB) TransitionStatus(
+	ctx context.Context, id string, to IncidentStatus, allowedFrom ...IncidentStatus,
+) (bool, error) {
+	args := []any{to, time.Now(), id}
+	q := `UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?`
+	if len(allowedFrom) > 0 {
+		placeholders := make([]string, len(allowedFrom))
+		for i, s := range allowedFrom {
+			placeholders[i] = "?"
+			args = append(args, s)
+		}
+		//nolint:gosec // only literal "?" placeholders are concatenated; all status values are parameterized via args
+		q += " AND status IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	res, err := d.sql.ExecContext(ctx, q, args...)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // SetIncidentFinding persists the diagnostic result for an incident.
 func (d *DB) SetIncidentFinding(ctx context.Context, id string, finding, actions any) error {
 	fb, _ := json.Marshal(finding)
@@ -323,12 +385,17 @@ func (d *DB) ListReporters(ctx context.Context, incidentID string) ([]string, er
 	return out, rows.Err()
 }
 
-// ListDiscordReporterIDs returns Discord user IDs for all reporters of an incident.
+// ListDiscordReporterIDs returns the distinct Discord user IDs for an incident.
+// A single user can end up with multiple incident_reporters rows (their
+// display name/nickname differs between reports, or a retried /report
+// interaction), so this groups by discord_user_id to guarantee each person
+// is notified exactly once.
 func (d *DB) ListDiscordReporterIDs(ctx context.Context, incidentID string) ([]string, error) {
 	rows, err := d.sql.QueryContext(ctx,
 		`SELECT discord_user_id FROM incident_reporters
 		 WHERE incident_id = ? AND discord_user_id IS NOT NULL AND discord_user_id != ''
-		 ORDER BY reported_at`,
+		 GROUP BY discord_user_id
+		 ORDER BY MIN(reported_at)`,
 		incidentID)
 	if err != nil {
 		return nil, err

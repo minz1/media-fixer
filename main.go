@@ -115,7 +115,7 @@ func run() error {
 		return err
 	}
 
-	svc := incident.NewService(database, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
+	svc := incident.NewService(ctx, database, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
 	bot.SetService(svc)
 
 	if err = bot.Start(); err != nil {

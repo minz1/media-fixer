@@ -234,7 +234,7 @@ func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 const mountInfoTargetField = 4
 
 // activeMountPoints parses /proc/self/mountinfo and returns the set of active
-// mount targets.
+// mount targets. Used to compute DiskMount.IsMountPoint.
 func activeMountPoints() map[string]struct{} {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
@@ -250,11 +250,20 @@ func activeMountPoints() map[string]struct{} {
 }
 
 func (o *RealOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
-	mounted := activeMountPoints()
+	mountPoints := activeMountPoints()
 	mounts := make([]mediaagentapi.DiskMount, 0, len(o.mounts))
 	for _, path := range o.mounts {
-		_, isMounted := mounted[path]
-		entry := mediaagentapi.DiskMount{Path: path, Mounted: isMounted}
+		// Two orthogonal facts. Accessible: can the agent reach the path (os.Stat).
+		// IsMountPoint: is a filesystem actually mounted there (mountinfo). A dead
+		// FUSE mount reverts to an empty root-FS dir → Accessible=true but
+		// IsMountPoint=false, which is the only way to tell it is really down.
+		_, statErr := os.Stat(path)
+		_, isMountPoint := mountPoints[path]
+		entry := mediaagentapi.DiskMount{
+			Path:         path,
+			Accessible:   statErr == nil,
+			IsMountPoint: isMountPoint,
+		}
 
 		// Statfs for byte counts; skip silently if Bsize==0 (cloud-backed, no blocks).
 		var stat syscall.Statfs_t

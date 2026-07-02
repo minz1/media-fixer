@@ -62,6 +62,14 @@ const (
 
 var errMediaAgentNotConfigured = errors.New("media-agent not configured")
 
+// diskInfoDesc documents the two independent per-path signals the tool returns.
+const diskInfoDesc = "Get disk usage for the media host paths: /mnt/decypharr (FUSE media files), " +
+	"/var/cache/decypharr (cache), and /data. Each entry has two independent booleans plus byte counts. " +
+	"accessible = os.Stat succeeds (path reachable). is_mount_point = a filesystem is actually mounted there. " +
+	"For /mnt/decypharr, is_mount_point=false means the FUSE mount died and fell back to an empty directory — " +
+	"it looks healthy (accessible=true, non-zero bytes) but is down. total_bytes=0 with both booleans true is " +
+	"normal (cloud-backed). For /data and /var/cache/decypharr, is_mount_point=false is normal."
+
 const (
 	paramTitle  = "title"
 	paramItemID = "item_id"
@@ -171,7 +179,7 @@ func diagnosticToolDefs() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        toolGetDiskInfo,
-				Description: "Get disk usage for the media host mount points: /mnt/decypharr (FUSE media files), /var/cache/decypharr (decypharr cache), and /data. Each entry includes a mounted bool. mounted=false means the path is absent. mounted=true with zero total_bytes means the mount is up but cloud-backed (normal for decypharr FUSE). Use to check mount presence and whether disk space is a factor.",
+				Description: diskInfoDesc,
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
 		},
