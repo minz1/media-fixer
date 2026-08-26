@@ -263,7 +263,7 @@ func (c *ArrClient) GetEpisodes(ctx context.Context, seriesID, season int) ([]Ep
 	u.RawQuery = q.Encode()
 
 	var episodes []Episode
-	if err := c.get(ctx, u.RequestURI(), &episodes); err != nil {
+	if err := c.get(ctx, u.String(), &episodes); err != nil {
 		return nil, err
 	}
 	return episodes, nil
@@ -277,7 +277,7 @@ func (c *ArrClient) GetEpisodeFiles(ctx context.Context, seriesID int) ([]Episod
 	u.RawQuery = q.Encode()
 
 	var files []EpisodeFile
-	if err := c.get(ctx, u.RequestURI(), &files); err != nil {
+	if err := c.get(ctx, u.String(), &files); err != nil {
 		return nil, err
 	}
 	return files, nil
@@ -297,7 +297,7 @@ func (c *ArrClient) GetMovieFiles(ctx context.Context, movieID int) ([]MovieFile
 	u.RawQuery = q.Encode()
 
 	var files []MovieFile
-	if err := c.get(ctx, u.RequestURI(), &files); err != nil {
+	if err := c.get(ctx, u.String(), &files); err != nil {
 		return nil, err
 	}
 	return files, nil
@@ -326,7 +326,7 @@ func (c *ArrClient) SeriesGrabHistory(ctx context.Context, seriesID, season int)
 	u.RawQuery = q.Encode()
 
 	var records []HistoryRecord
-	if err := c.get(ctx, u.RequestURI(), &records); err != nil {
+	if err := c.get(ctx, u.String(), &records); err != nil {
 		return nil, err
 	}
 	return records, nil
@@ -341,7 +341,7 @@ func (c *ArrClient) MovieGrabHistory(ctx context.Context, movieID int) ([]Histor
 	u.RawQuery = q.Encode()
 
 	var records []HistoryRecord
-	if err := c.get(ctx, u.RequestURI(), &records); err != nil {
+	if err := c.get(ctx, u.String(), &records); err != nil {
 		return nil, err
 	}
 	return records, nil
@@ -391,8 +391,18 @@ func (c *ArrClient) postCommand(ctx context.Context, body any) error {
 	return nil
 }
 
+// get issues a GET request. path may be a bare path (prefixed with c.base) or
+// an already-absolute URL — callers that build a query string by parsing
+// c.base plus a path must pass the resulting URL's full string form, not
+// just its path+query, or the path component of c.base gets prefixed a
+// second time (e.g. a base of ".../sonarr" becomes ".../sonarr/sonarr/...",
+// which 404s at the reverse proxy and returns an HTML error page instead of
+// JSON).
 func (c *ArrClient) get(ctx context.Context, path string, out any) error {
-	u := c.base + path
+	u := path
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		u = c.base + path
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err

@@ -84,6 +84,64 @@ func TestArr_SearchMovie_NormalizedMatch(t *testing.T) {
 	}
 }
 
+// TestArr_PathPrefixedBase_NoDoublePrefix is a regression test for a bug
+// where GetEpisodes/GetEpisodeFiles/GetMovieFiles/SeriesGrabHistory/
+// MovieGrabHistory built their query string via url.Parse(base+"/api/v3/...")
+// but then passed u.RequestURI() (which already includes base's path) back
+// into get(), which prepended base a second time. Against a bare-host test
+// server (no path component in base) the bug was invisible; it only shows up
+// with a path-prefixed base like production's "http://host:8989/sonarr" —
+// exactly what this test uses.
+func TestArr_PathPrefixedBase_NoDoublePrefix(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sonarr/api/v3/episode", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("seriesId") != "7" {
+			t.Errorf("unexpected query: %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode([]client.Episode{})
+	})
+	mux.HandleFunc("/sonarr/api/v3/episodefile", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]client.EpisodeFile{})
+	})
+	mux.HandleFunc("/sonarr/api/v3/history/series", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]client.HistoryRecord{})
+	})
+	mux.HandleFunc("/radarr/api/v3/moviefile", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]client.MovieFile{})
+	})
+	mux.HandleFunc("/radarr/api/v3/history/movie", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]client.HistoryRecord{})
+	})
+	// Catches a doubled prefix (e.g. /sonarr/sonarr/...), which would 404 on
+	// this mux and previously surfaced as an HTML error page downstream.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request path: %s", r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	sonarr := client.NewArr(srv.URL+"/sonarr", "key")
+	if _, err := sonarr.GetEpisodes(context.Background(), 7, -1); err != nil {
+		t.Errorf("GetEpisodes: %v", err)
+	}
+	if _, err := sonarr.GetEpisodeFiles(context.Background(), 7); err != nil {
+		t.Errorf("GetEpisodeFiles: %v", err)
+	}
+	if _, err := sonarr.SeriesGrabHistory(context.Background(), 7, -1); err != nil {
+		t.Errorf("SeriesGrabHistory: %v", err)
+	}
+
+	radarr := client.NewArr(srv.URL+"/radarr", "key")
+	if _, err := radarr.GetMovieFiles(context.Background(), 42); err != nil {
+		t.Errorf("GetMovieFiles: %v", err)
+	}
+	if _, err := radarr.MovieGrabHistory(context.Background(), 42); err != nil {
+		t.Errorf("MovieGrabHistory: %v", err)
+	}
+}
+
 func TestArr_GetEpisodeFiles(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
