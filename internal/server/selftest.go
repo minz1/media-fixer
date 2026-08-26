@@ -26,11 +26,21 @@ func (s *Server) selftestIndex(w http.ResponseWriter, _ *http.Request) {
 // fragment for htmx to swap in. Disruptive checks are never reachable from
 // the web — only the CLI can pass -disruptive. "Include safe writes" maps to
 // AllowWrite.
+//
+// Single-flighted via s.checkRunning: two overlapping runs would each call
+// write-tier decypharr actions independently and race into decypharr's own
+// single-flight repair lock, producing a 409 there that looks like a
+// livecheck bug rather than the self-inflicted double-fire it actually is.
 func (s *Server) selftestRun(w http.ResponseWriter, r *http.Request) {
 	if s.checker == nil {
 		http.Error(w, "live checks not configured", http.StatusServiceUnavailable)
 		return
 	}
+	if !s.checkRunning.CompareAndSwap(false, true) {
+		http.Error(w, "a check run is already in progress", http.StatusConflict)
+		return
+	}
+	defer s.checkRunning.Store(false)
 
 	opts := livecheck.Options{AllowWrite: r.FormValue("write") == "on"}
 	report := livecheck.New(s.checker, opts).Run(r.Context())

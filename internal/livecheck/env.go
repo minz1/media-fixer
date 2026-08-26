@@ -2,7 +2,6 @@ package livecheck
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -92,13 +91,11 @@ func checkDecypharrRepairEnv(ctx context.Context, disp *agent.Dispatcher) Result
 	if err != nil {
 		return Result{Tool: envToolDecypharrRepair, Status: StatusFail, Error: err.Error()}
 	}
-	var status struct {
-		Running bool `json:"running"`
-	}
-	if jsonErr := json.Unmarshal(raw, &status); jsonErr != nil {
+	running, recognized := decypharrRepairRunning(raw)
+	if !recognized {
 		return Result{Tool: envToolDecypharrRepair, Status: StatusDegraded, Detail: "unrecognized repair status shape"}
 	}
-	if status.Running {
+	if running {
 		return Result{Tool: envToolDecypharrRepair, Status: StatusOK, Detail: "running"}
 	}
 	return Result{Tool: envToolDecypharrRepair, Status: StatusOK, Detail: "idle"}

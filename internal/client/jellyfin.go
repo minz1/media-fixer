@@ -1,19 +1,28 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type JellyfinClient struct {
 	base   string
 	apiKey string
 	http   *http.Client
+
+	// userID caches the resolved user ID used for user-scoped calls like
+	// PlaybackInfo (see resolveUserID). Guarded by userIDMu since the client
+	// is shared across concurrent incident/live-check goroutines.
+	userIDMu sync.Mutex
+	userID   string
 }
 
 func NewJellyfin(base, apiKey string) *JellyfinClient {
@@ -22,6 +31,49 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 		apiKey: apiKey,
 		http:   &http.Client{Timeout: defaultHTTPTimeout},
 	}
+}
+
+// jellyfinUser is the subset of GET /Users we need.
+type jellyfinUser struct {
+	ID string `json:"Id"`
+}
+
+// resolveUserID lazily fetches and caches a real Jellyfin user ID for
+// user-scoped calls. Some Jellyfin builds throw ArgumentException ("Guid
+// can't be empty") deep in UserManager.GetUserById when handed a zero GUID
+// instead of treating it as anonymous — confirmed live via a PlaybackInfo
+// 400. Uses the first account returned by GET /Users (the admin account on
+// a typical single-user setup).
+func (c *JellyfinClient) resolveUserID(ctx context.Context) (string, error) {
+	c.userIDMu.Lock()
+	defer c.userIDMu.Unlock()
+	if c.userID != "" {
+		return c.userID, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/Users", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-Emby-Token", c.apiKey)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("jellyfin list users: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("jellyfin list users: status %d", resp.StatusCode)
+	}
+	var users []jellyfinUser
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&users); decodeErr != nil {
+		return "", fmt.Errorf("jellyfin list users decode: %w", decodeErr)
+	}
+	if len(users) == 0 || users[0].ID == "" {
+		return "", errors.New("jellyfin: no users found")
+	}
+	c.userID = users[0].ID
+	return c.userID, nil
 }
 
 type PlaybackInfoResult struct {
@@ -51,22 +103,37 @@ type MediaStream struct {
 	IsExternal bool   `json:"IsExternal"`
 }
 
+// maxStreamingBitrate is the DeviceProfile bitrate ceiling advertised in
+// PlaybackInfo requests — generously high since this is a diagnostic caller,
+// not an actual player.
+const maxStreamingBitrate = 120_000_000
+
 // PlaybackInfo calls the Jellyfin /Items/{id}/PlaybackInfo endpoint and
 // returns the media sources. An empty MediaSources slice means Jellyfin
 // cannot open the file.
 func (c *JellyfinClient) PlaybackInfo(ctx context.Context, itemID string) (*PlaybackInfoResult, error) {
+	userID, err := c.resolveUserID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("jellyfin PlaybackInfo: %w", err)
+	}
+
 	u := fmt.Sprintf("%s/Items/%s/PlaybackInfo", c.base, url.PathEscape(itemID))
 
-	// POST with a minimal DeviceProfile so Jellyfin returns full info.
-	body := strings.NewReader(`{
-		"DeviceProfile": {
-			"MaxStreamingBitrate": 120000000,
-			"DirectPlayProfiles": [{"Type": "Video"}],
-			"TranscodingProfiles": [{"Type": "Video", "Container": "ts", "Protocol": "hls"}]
+	// POST with a minimal DeviceProfile so Jellyfin returns full info, and a
+	// real UserId — some Jellyfin builds throw rather than treating a zero
+	// GUID as anonymous (see resolveUserID).
+	reqBody, err := json.Marshal(map[string]any{
+		"DeviceProfile": map[string]any{
+			"MaxStreamingBitrate": maxStreamingBitrate,
+			"DirectPlayProfiles":  []map[string]any{{"Type": "Video"}},
+			"TranscodingProfiles": []map[string]any{{"Type": "Video", "Container": "ts", "Protocol": "hls"}},
 		},
-		"UserId": "00000000000000000000000000000000"
-	}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, body)
+		"UserId": userID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +252,29 @@ func (c *JellyfinClient) LibraryScan(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("jellyfin library scan: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// Ping calls Jellyfin's lightweight, unauthenticated GET /System/Ping. Used
+// to confirm the service is actually accepting requests after a restart —
+// systemd considering the unit "active" only means the process launched,
+// not that Jellyfin has finished initializing (plugin load, ffmpeg probe,
+// etc. can take several more seconds); confirmed live via a restart_jellyfin
+// that reported success while /Library/Refresh still connection-refused for
+// a few more seconds.
+func (c *JellyfinClient) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/System/Ping", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("jellyfin ping: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("jellyfin ping: status %d", resp.StatusCode)
 	}
 	return nil
 }

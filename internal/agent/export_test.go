@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"context"
+	"time"
+
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -35,3 +38,10 @@ const (
 	JSONSchemaTypeKey    = jsonSchemaTypeKey
 	JSONSchemaTypeObject = jsonSchemaTypeObject
 )
+
+// WaitUntilReadyForTest exposes waitUntilReady for tools_test.go.
+func WaitUntilReadyForTest(
+	ctx context.Context, timeout, interval time.Duration, probe func(context.Context) error,
+) error {
+	return waitUntilReady(ctx, timeout, interval, probe)
+}

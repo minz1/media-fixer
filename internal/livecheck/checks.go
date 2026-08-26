@@ -117,10 +117,10 @@ func checkJellyfinSearch(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 }
 
 func checkJellyfinPlayback(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if fx.JellyfinItemID == "" {
-		return degraded("no fixture: no Jellyfin item discovered")
+	if fx.JellyfinPlaybackItemID == "" {
+		return degraded("no fixture: no playback-safe Jellyfin item discovered")
 	}
-	result, err := disp.Call(ctx, "jellyfin_playback_info", map[string]any{argItemID: fx.JellyfinItemID})
+	result, err := disp.Call(ctx, "jellyfin_playback_info", map[string]any{argItemID: fx.JellyfinPlaybackItemID})
 	return classify(result, err)
 }
 
@@ -176,6 +176,12 @@ func checkLokiQuery(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ 
 	return r
 }
 
+// checkListDirectory tries every directory layout this stack has used for a
+// torrent's files (see decypharrCandidateDirs) rather than assuming
+// /mnt/decypharr/<torrent> directly — real files often live under
+// /mnt/decypharr/__all__/<torrent>/ instead, and a hardcoded single guess
+// here previously ENOENT'd even when discoverSamplePath (which already tries
+// both) had found the file fine.
 func checkListDirectory(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
 	if disp.MediaAgent == nil {
 		return unconfiguredMediaAgent()
@@ -183,8 +189,15 @@ func checkListDirectory(ctx context.Context, disp *agent.Dispatcher, fx *Fixture
 	if fx.TorrentName == "" {
 		return degraded("no fixture: no torrent discovered")
 	}
-	result, err := disp.Call(ctx, "list_directory", map[string]any{argPath: "/mnt/decypharr/" + fx.TorrentName})
-	return classify(result, err)
+	var lastErr error
+	for _, dir := range decypharrCandidateDirs(fx.TorrentName) {
+		result, err := disp.Call(ctx, "list_directory", map[string]any{argPath: dir})
+		if err == nil {
+			return classify(result, nil)
+		}
+		lastErr = err
+	}
+	return classify(nil, lastErr)
 }
 
 func checkGetDiskInfo(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
@@ -334,13 +347,60 @@ func skipIfRepairRunning(ctx context.Context, disp *agent.Dispatcher) (bool, Res
 		// entirely; the action call below will surface any real problem.
 		return false, Result{}
 	}
-	var status struct {
-		Running bool `json:"running"`
-	}
-	if jsonErr := json.Unmarshal(raw, &status); jsonErr == nil && status.Running {
-		return true, Result{Status: StatusSkipped, Detail: "a decypharr repair is already running"}
+	if running, _ := decypharrRepairRunning(raw); running {
+		detail := "a decypharr repair is already running" + decypharrActiveRunStageSuffix(raw)
+		return true, Result{Status: StatusSkipped, Detail: detail}
 	}
 	return false, Result{}
+}
+
+// decypharrActiveRunStageSuffix best-effort appends the active run's stage
+// (e.g. "probing") to a skip message. Most sweeps right now are decypharr's
+// own due=0 fast path (nothing due yet — recheck_interval is measured in
+// days) that completes in under a second, which technically satisfies
+// decypharrRepairRunning for that brief window but isn't remotely the same
+// as a real multi-minute sweep over hundreds of candidates; the stage at
+// least hints at which one this is. Falls back to no suffix if the shape
+// can't be parsed — a plainer message beats a wrong one. (Field to add once
+// confirmed: a candidate count, if/when its real JSON key is verified live —
+// see ROADMAP.)
+func decypharrActiveRunStageSuffix(raw json.RawMessage) string {
+	var status struct {
+		ActiveRun *struct {
+			Stage string `json:"stage"`
+		} `json:"active_run"`
+	}
+	if err := json.Unmarshal(raw, &status); err != nil || status.ActiveRun == nil || status.ActiveRun.Stage == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (stage: %s)", status.ActiveRun.Stage)
+}
+
+// decypharrRepairStatus is decypharr's GET /api/repair/status response.
+// Confirmed against decypharr's own source (pkg/manager/repair.go): Status()
+// builds last_run by explicitly skipping the currently-active run (and any
+// run still in a running state), so last_run.status can NEVER be "running"
+// — a first attempt at this check parsed last_run.status and the guard never
+// tripped as a result, letting two sweeps race into decypharr's own lock.
+// active_run is the only field populated while a sweep is actually in
+// progress, and is set synchronously (the run record is persisted before
+// RunNow even returns the run_id to the caller), so there's no
+// persistence-lag race to worry about either.
+type decypharrRepairStatus struct {
+	ActiveRun json.RawMessage `json:"active_run,omitempty"`
+}
+
+// decypharrRepairRunning reports whether raw (a GET /api/repair/status
+// response) shows a repair currently in progress — active_run present and
+// non-null — and whether the shape was recognized at all (false on decode
+// failure, distinguishing "definitely idle" from "couldn't tell").
+func decypharrRepairRunning(raw json.RawMessage) (bool, bool) {
+	var status decypharrRepairStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return false, false
+	}
+	running := len(status.ActiveRun) > 0 && string(status.ActiveRun) != "null"
+	return running, true
 }
 
 func degraded(detail string) Result { return Result{Status: StatusDegraded, Detail: detail} }

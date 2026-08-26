@@ -38,10 +38,12 @@ Run ALL five steps before calling complete_diagnosis. Never bail out early.
 Step 1 — Jellyfin lookup (always required).
   If the incident has a Jellyfin item ID, call jellyfin_playback_info with it directly.
   Exception: when source=seerr and details contains [media_type:tv], the item ID is the
-  Series ID, not an episode. PlaybackInfo on a Series returns empty MediaSources — that is
-  expected. Skip directly to step 2 and use the title/details to find the episode via
-  torrent investigation. If S/E info appears in the title or details, use it to identify
-  the right file in step 4.
+  Series ID, not an episode. PlaybackInfo on a Series ID throws an error on some Jellyfin
+  builds (InvalidCastException casting Series to IHasMediaSources) rather than returning
+  empty MediaSources — confirmed happening even when the series has episodes indexed, so
+  don't read anything diagnostic into that error either way. Skip directly to step 2 and use
+  the title/details to find the episode via torrent investigation. If S/E info appears in the
+  title or details, use it to identify the right file in step 4.
   If there is no Jellyfin item ID, call jellyfin_search first. Searching strategy:
   a. Strip season/episode qualifiers and search the clean title
      ('the boys s1 episode 2' → 'the boys'; 'Breaking Bad S3E4' → 'Breaking Bad').
@@ -81,10 +83,13 @@ After all five steps, call complete_diagnosis.
 
 --- Jellyfin has the title but it is unplayable / a Series shows no episodes ---
 
-Symptoms: jellyfin_playback_info on a Series returns empty MediaSources, OR loki_query shows
-"InvalidCastException ... TV.Series ... IHasMediaSources" (Jellyfin tried to play a series
-that has no episodes indexed). This is a Jellyfin indexing problem, NOT a debrid/FUSE problem,
-when the underlying files ARE readable (Step 4 dd test passed).
+Symptoms: jellyfin_list_episodes on the Series item ID returns empty. (loki_query may also show
+"InvalidCastException ... TV.Series ... IHasMediaSources" around playback attempts, but that
+exception alone is NOT diagnostic — on some Jellyfin builds calling jellyfin_playback_info
+directly on a Series ID throws this every time, indexed or not. Use jellyfin_list_episodes,
+not the exception, to confirm indexing is actually the problem.) This is a Jellyfin indexing
+problem, NOT a debrid/FUSE problem, when the underlying files ARE readable (Step 4 dd test
+passed).
   1. Call jellyfin_list_episodes on the Series item ID to confirm whether episodes are indexed.
   2. If empty, call clear_jellyfin_cache on the Series item ID (a recursive item refresh).
   3. Re-check with jellyfin_list_episodes. If episodes now appear, you are done.

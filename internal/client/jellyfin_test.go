@@ -11,9 +11,26 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 )
 
+// jellyfinPlaybackTestServer serves GET /Users (one user, "admin-1") plus
+// whatever playbackHandler answers for the PlaybackInfo POST — every
+// PlaybackInfo test needs the /Users stub now that PlaybackInfo resolves a
+// real user ID first.
+func jellyfinPlaybackTestServer(t *testing.T, playbackHandler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Users", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("Users method: %s", r.Method)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": "admin-1"}})
+	})
+	mux.HandleFunc("/Items/item123/PlaybackInfo", playbackHandler)
+	return httptest.NewServer(mux)
+}
+
 func TestJellyfin_PlaybackInfo_HasSources(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := jellyfinPlaybackTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method: %s", r.Method)
 		}
@@ -27,7 +44,7 @@ func TestJellyfin_PlaybackInfo_HasSources(t *testing.T) {
 				SupportsDirectPlay: true,
 			}},
 		})
-	}))
+	})
 	defer srv.Close()
 
 	c := client.NewJellyfin(srv.URL, "key")
@@ -45,12 +62,12 @@ func TestJellyfin_PlaybackInfo_HasSources(t *testing.T) {
 
 func TestJellyfin_PlaybackInfo_EmptySources(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := jellyfinPlaybackTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(client.PlaybackInfoResult{
 			MediaSources: []client.MediaSource{},
 			ErrorCode:    "NoCompatibleStream",
 		})
-	}))
+	})
 	defer srv.Close()
 
 	c := client.NewJellyfin(srv.URL, "key")
@@ -63,6 +80,80 @@ func TestJellyfin_PlaybackInfo_EmptySources(t *testing.T) {
 	}
 	if result.ErrorCode != "NoCompatibleStream" {
 		t.Errorf("error code: %q", result.ErrorCode)
+	}
+}
+
+// TestJellyfin_PlaybackInfo_UsesResolvedUserID is a regression test for a
+// live 400: some Jellyfin builds throw ArgumentException ("Guid can't be
+// empty") in UserManager.GetUserById rather than treating a zero-GUID
+// UserId as anonymous. PlaybackInfo must send a real, resolved user ID.
+func TestJellyfin_PlaybackInfo_UsesResolvedUserID(t *testing.T) {
+	t.Parallel()
+	var gotUserID string
+	srv := jellyfinPlaybackTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			UserID string `json:"UserId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotUserID = body.UserID
+		_ = json.NewEncoder(w).Encode(client.PlaybackInfoResult{})
+	})
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	if _, err := c.PlaybackInfo(context.Background(), "item123"); err != nil {
+		t.Fatal(err)
+	}
+	if gotUserID != "admin-1" {
+		t.Errorf("UserId = %q, want the resolved user admin-1 (not a zero GUID)", gotUserID)
+	}
+}
+
+// TestJellyfin_PlaybackInfo_UserIDCached verifies /Users is only fetched
+// once across repeated PlaybackInfo calls.
+func TestJellyfin_PlaybackInfo_UserIDCached(t *testing.T) {
+	t.Parallel()
+	usersCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Users", func(w http.ResponseWriter, _ *http.Request) {
+		usersCalls++
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": "admin-1"}})
+	})
+	mux.HandleFunc("/Items/item123/PlaybackInfo", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(client.PlaybackInfoResult{})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	for range 3 {
+		if _, err := c.PlaybackInfo(context.Background(), "item123"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if usersCalls != 1 {
+		t.Errorf("GET /Users called %d times, want 1 (cached)", usersCalls)
+	}
+}
+
+// TestJellyfin_PlaybackInfo_NoUsers verifies PlaybackInfo fails loudly
+// rather than silently falling back to a zero GUID when no user can be
+// resolved.
+func TestJellyfin_PlaybackInfo_NoUsers(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Users", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{})
+	})
+	mux.HandleFunc("/Items/item123/PlaybackInfo", func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("PlaybackInfo should not be called when no user could be resolved")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := client.NewJellyfin(srv.URL, "key")
+	if _, err := c.PlaybackInfo(context.Background(), "item123"); err == nil {
+		t.Error("expected an error when no Jellyfin user is found")
 	}
 }
 

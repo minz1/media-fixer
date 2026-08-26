@@ -740,12 +740,49 @@ func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, _ map[string]any) 
 	return map[string]string{keyStatus: statusStarted}, nil
 }
 
+// restartReadyTimeout/Interval bound how long a restart dispatch waits for
+// the service to actually accept requests after systemd reports the restart
+// done. systemd's "active" state only means the process launched — it says
+// nothing about whether the app inside has finished initializing. Confirmed
+// live: restart_jellyfin reported success in 3.1s, but Jellyfin didn't
+// finish loading plugins/probing ffmpeg and start accepting connections
+// until ~6s in, and the very next tool call in the same run hit it during
+// that gap and got connection-refused.
+const (
+	restartReadyTimeout  = 30 * time.Second
+	restartReadyInterval = time.Second
+)
+
+// waitUntilReady polls probe until it succeeds or timeout elapses, returning
+// the last error if it never succeeds (or ctx.Err() if ctx is canceled
+// first).
+func waitUntilReady(ctx context.Context, timeout, interval time.Duration, probe func(context.Context) error) error {
+	deadline := time.Now().Add(timeout)
+	lastErr := probe(ctx)
+	for lastErr != nil && time.Now().Before(deadline) {
+		select {
+		case <-time.After(interval):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		lastErr = probe(ctx)
+	}
+	return lastErr
+}
+
 func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
 	}
 	if err := d.MediaAgent.RestartService(ctx, "decypharr"); err != nil {
 		return nil, err
+	}
+	probe := func(ctx context.Context) error {
+		_, err := d.Decypharr.RepairStatus(ctx)
+		return err
+	}
+	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, probe); err != nil {
+		return nil, fmt.Errorf("decypharr restarted but did not become ready: %w", err)
 	}
 	d.logAction(ctx, toolRestartDecypharr, nil)
 	return map[string]string{keyStatus: "restarted"}, nil
@@ -757,6 +794,9 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, _ map[string]a
 	}
 	if err := d.MediaAgent.RestartService(ctx, "jellyfin"); err != nil {
 		return nil, err
+	}
+	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, d.Jellyfin.Ping); err != nil {
+		return nil, fmt.Errorf("jellyfin restarted but did not become ready: %w", err)
 	}
 	d.logAction(ctx, toolRestartJellyfin, nil)
 	return map[string]string{keyStatus: "restarted"}, nil

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +35,14 @@ type Server struct {
 	checker    *agent.Dispatcher
 	reportMu   sync.Mutex
 	lastReport *livecheck.Report
+	// checkRunning single-flights selftestRun: two overlapping runs (a
+	// double-click, a page retry) would each independently call
+	// refresh_decypharr_links/decypharr_repair_sweep and race each other
+	// into decypharr's own single-flight repair lock, producing a confusing
+	// 409 that looks like a livecheck bug rather than a self-inflicted
+	// double-fire. Confirmed live via decypharr's persisted run history
+	// showing two runs 5s apart from the same source.
+	checkRunning atomic.Bool
 }
 
 // SetChecker wires the dispatcher the /selftest page runs checks against.

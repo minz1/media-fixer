@@ -15,11 +15,19 @@ import (
 type Fixtures struct {
 	JellyfinItemID   string `json:"jellyfin_item_id,omitempty"`
 	JellyfinItemType string `json:"jellyfin_item_type,omitempty"`
-	SeriesTitle      string `json:"series_title,omitempty"`
-	MovieTitle       string `json:"movie_title,omitempty"`
-	TorrentName      string `json:"torrent_name,omitempty"`
-	SamplePath       string `json:"sample_path,omitempty"`
-	RepairEntryName  string `json:"repair_entry_name,omitempty"`
+	// JellyfinPlaybackItemID is what jellyfin_playback_info is actually
+	// called against. On at least some Jellyfin builds, PlaybackInfo on a
+	// Series throws (InvalidCastException: Series -> IHasMediaSources)
+	// instead of returning empty MediaSources, regardless of whether the
+	// series has episodes indexed — confirmed against a live instance whose
+	// series had 51 indexed episodes and still 500'd. So when JellyfinItemID
+	// is a Series, this is resolved to its first episode instead.
+	JellyfinPlaybackItemID string `json:"jellyfin_playback_item_id,omitempty"`
+	SeriesTitle            string `json:"series_title,omitempty"`
+	MovieTitle             string `json:"movie_title,omitempty"`
+	TorrentName            string `json:"torrent_name,omitempty"`
+	SamplePath             string `json:"sample_path,omitempty"`
+	RepairEntryName        string `json:"repair_entry_name,omitempty"`
 
 	// Notes records why a fixture could not be discovered, so a "degraded"
 	// dependent check has an explanation instead of a bare "no fixture".
@@ -75,25 +83,52 @@ func discoverArrTitles(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures
 // discoverJellyfinItem finds a Jellyfin item ID by searching for the
 // already-discovered series title, preferring a Series-typed match — this
 // deliberately reuses the same SearchItem call the jellyfin_search tool
-// makes, so fixture discovery exercises the real lookup path too.
+// makes, so fixture discovery exercises the real lookup path too. It then
+// resolves a separate playback-safe item ID (see JellyfinPlaybackItemID).
 func discoverJellyfinItem(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
-	if fx.JellyfinItemID != "" || fx.SeriesTitle == "" {
-		return
-	}
-	items, err := disp.Jellyfin.SearchItem(ctx, fx.SeriesTitle)
-	if err != nil {
-		fx.missing("jellyfin item discovery: " + err.Error())
-		return
-	}
-	best := items[0]
-	for _, item := range items {
-		if item.Type == "Series" {
-			best = item
-			break
+	if fx.JellyfinItemID == "" {
+		if fx.SeriesTitle == "" {
+			return
 		}
+		items, err := disp.Jellyfin.SearchItem(ctx, fx.SeriesTitle)
+		if err != nil {
+			fx.missing("jellyfin item discovery: " + err.Error())
+			return
+		}
+		best := items[0]
+		for _, item := range items {
+			if item.Type == "Series" {
+				best = item
+				break
+			}
+		}
+		fx.JellyfinItemID = best.ID
+		fx.JellyfinItemType = best.Type
 	}
-	fx.JellyfinItemID = best.ID
-	fx.JellyfinItemType = best.Type
+	discoverJellyfinPlaybackItem(ctx, disp, fx)
+}
+
+// discoverJellyfinPlaybackItem resolves the item ID jellyfin_playback_info is
+// actually safe to call: itself if it's not a Series, otherwise its first
+// indexed episode.
+func discoverJellyfinPlaybackItem(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
+	if fx.JellyfinPlaybackItemID != "" {
+		return
+	}
+	if fx.JellyfinItemType != "Series" {
+		fx.JellyfinPlaybackItemID = fx.JellyfinItemID
+		return
+	}
+	episodes, err := disp.Jellyfin.ListEpisodes(ctx, fx.JellyfinItemID)
+	if err != nil {
+		fx.missing("jellyfin playback item discovery: " + err.Error())
+		return
+	}
+	if len(episodes) == 0 {
+		fx.missing("series has no indexed episodes to test playback info against")
+		return
+	}
+	fx.JellyfinPlaybackItemID = episodes[0].ID
 }
 
 // discoverTorrentAndSample finds a torrent name from decypharr, then a
@@ -199,8 +234,10 @@ func firstRepairEntryName(raw json.RawMessage) (string, bool) {
 // array of entry objects.
 func firstRepairEntryNameInArray(raw json.RawMessage) (string, bool) {
 	// Field names tried, in order, for an entry's identifying name across
-	// decypharr's various repair-health response shapes.
-	entryKeys := []string{"name", "entry", "id"}
+	// decypharr's various repair-health response shapes. entry_name is the
+	// confirmed field on the live minz branch; the others are speculative
+	// fallbacks for other builds.
+	entryKeys := []string{"entry_name", "name", "entry", "id"}
 
 	var arr []map[string]any
 	if err := json.Unmarshal(raw, &arr); err != nil {
