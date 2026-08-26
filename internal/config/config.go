@@ -19,6 +19,7 @@ type Config struct {
 	Radarr     ArrConfig        `toml:"radarr"`
 	Loki       LokiConfig       `toml:"loki"`
 	MediaAgent MediaAgentConfig `toml:"media_agent"`
+	SelfTest   SelfTestConfig   `toml:"selftest"`
 }
 
 type ServerConfig struct {
@@ -68,6 +69,17 @@ type LokiConfig struct {
 type MediaAgentConfig struct {
 	URL    string `toml:"url"`
 	APIKey string `toml:"api_key"`
+}
+
+// SelfTestConfig optionally seeds or overrides the live-check suite's
+// auto-discovered fixtures (see internal/livecheck). Every field is
+// optional; discovery fills in whatever is left blank.
+type SelfTestConfig struct {
+	JellyfinItemID string `toml:"jellyfin_item_id"`
+	SeriesTitle    string `toml:"series_title"`
+	MovieTitle     string `toml:"movie_title"`
+	TorrentName    string `toml:"torrent_name"`
+	SamplePath     string `toml:"sample_path"`
 }
 
 func Load(path string) (*Config, error) {

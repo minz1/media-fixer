@@ -324,6 +324,14 @@ func (a *sequencedAgent) BuildSummarySeed(_ *db.Incident, _ string) []openai.Cha
 	return nil
 }
 
+func (a *sequencedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *sequencedAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
 // syncNotifier is a Notifier safe for concurrent use (captureNotifier is not),
 // needed once a test drives genuinely overlapping goroutines. userMsgs additionally
 // lets a test block until a reporter DM arrives instead of polling.

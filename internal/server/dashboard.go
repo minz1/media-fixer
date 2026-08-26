@@ -13,12 +13,22 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/livecheck"
 )
 
 //go:embed templates/dashboard.html
 var templateFS embed.FS
 
 const dashboardPageSize = 50
+
+// tplKeyBaseURL is the template data key every page passes s.baseURL under.
+const tplKeyBaseURL = "BaseURL"
+
+// Shared Tailwind badge classes, reused across statusColor and checkColor.
+const (
+	badgeGray = "bg-gray-100 text-gray-600"
+	badgeRed  = "bg-red-100 text-red-800"
+)
 
 // dashboardTemplates holds the parsed template set.
 type dashboardTemplates struct {
@@ -55,15 +65,31 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 			case db.StatusManualTestNeeded:
 				return "bg-orange-100 text-orange-800"
 			case db.StatusResolved:
-				return "bg-gray-100 text-gray-600"
+				return badgeGray
 			case db.StatusReopened:
-				return "bg-red-100 text-red-800"
+				return badgeRed
 			case db.StatusBlocked:
-				return "bg-red-100 text-red-800"
+				return badgeRed
 			case db.StatusVerifying:
 				return "bg-purple-100 text-purple-800"
 			default:
-				return "bg-gray-100 text-gray-600"
+				return badgeGray
+			}
+		},
+		"checkColor": func(s livecheck.Status) string {
+			switch s {
+			case livecheck.StatusOK:
+				return "bg-green-100 text-green-800"
+			case livecheck.StatusDegraded:
+				return "bg-yellow-100 text-yellow-800"
+			case livecheck.StatusFail, livecheck.StatusMissing:
+				return badgeRed
+			case livecheck.StatusUnconfigured:
+				return "bg-orange-100 text-orange-800"
+			case livecheck.StatusSkipped:
+				return "bg-gray-100 text-gray-500"
+			default:
+				return badgeGray
 			}
 		},
 	}).ParseFS(templateFS, "templates/dashboard.html")
@@ -83,9 +109,9 @@ func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.Execute(w, map[string]any{
-		"Incidents": incidents,
-		"Paused":    paused,
-		"BaseURL":   s.baseURL,
+		"Incidents":   incidents,
+		"Paused":      paused,
+		tplKeyBaseURL: s.baseURL,
 	})
 }
 
@@ -100,9 +126,9 @@ func (s *Server) dashboardIncident(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "incident", map[string]any{
-		"Incident": inc,
-		"Actions":  actions,
-		"BaseURL":  s.baseURL,
+		"Incident":    inc,
+		"Actions":     actions,
+		tplKeyBaseURL: s.baseURL,
 	})
 }
 
@@ -161,6 +187,41 @@ func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.svc.Unlock(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	target, _ := url.JoinPath(s.baseURL, "incidents", id)
+	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// escalationPreview renders a read-only plan preview for the incident's
+// recommended escalation, swapped into the incident page's preview slot. On
+// error it renders the error inline instead of an HTTP error status, since
+// htmx does not swap non-2xx responses by default.
+func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	data := map[string]any{}
+	plan, err := s.svc.PreviewEscalation(r.Context(), id)
+	if err != nil {
+		data["Error"] = err.Error()
+	} else {
+		data["Plan"] = plan
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.t.ExecuteTemplate(w, "escalation_preview", data)
+}
+
+// approveEscalation executes the incident's recommended escalation after
+// owner approval.
+func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.svc.ApproveEscalation(r.Context(), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

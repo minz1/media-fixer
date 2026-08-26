@@ -24,4 +24,10 @@ type AgentRunner interface {
 	ScanRunning(ctx context.Context) bool
 	// BuildSummarySeed constructs seed messages for a resumed run from a summary.
 	BuildSummarySeed(inc *db.Incident, summary string) []openai.ChatCompletionMessage
+	// PlanEscalation previews a diagnostic result's recommended escalation
+	// without making any changes.
+	PlanEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)
+	// RunEscalation executes a diagnostic result's recommended escalation
+	// after owner approval.
+	RunEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)
 }

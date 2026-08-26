@@ -11,7 +11,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
-	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/clientset"
 	"github.com/minz1/mediafixer/internal/config"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/discord"
@@ -29,25 +29,15 @@ type agentBundle struct {
 	ag      *agent.Agent
 	summary *agent.Summarizer
 	ctrl    *agent.ControlReviewer
+	clients *clientset.Set
 }
 
 func buildAgentComponents(cfg *config.Config, database *db.DB, log *slog.Logger) (*agentBundle, error) {
-	decypharr := client.NewDecypharr(cfg.Decypharr.URL, cfg.Decypharr.APIToken)
-	jellyfin := client.NewJellyfin(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey)
-	sonarr := client.NewArr(cfg.Sonarr.URL, cfg.Sonarr.APIKey)
-	radarr := client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey)
-
-	loki, err := client.NewLoki(cfg.Loki.URL, cfg.Loki.TLSCert, cfg.Loki.TLSKey)
+	clients, err := clientset.Build(cfg, log)
 	if err != nil {
 		return nil, err
 	}
-
-	var mediaAgent *client.MediaAgentClient
-	if cfg.MediaAgent.URL != "" {
-		mediaAgent = client.NewMediaAgent(cfg.MediaAgent.URL, cfg.MediaAgent.APIKey)
-	} else {
-		log.Warn("media-agent not configured — dd tests and remote restarts unavailable")
-	}
+	disp := clients.Dispatcher(database)
 
 	llmCfg := openai.DefaultConfig(cfg.LLM.APIKey)
 	if cfg.LLM.BaseURL != "" {
@@ -55,19 +45,10 @@ func buildAgentComponents(cfg *config.Config, database *db.DB, log *slog.Logger)
 	}
 	llmClient := openai.NewClientWithConfig(llmCfg)
 
-	disp := &agent.Dispatcher{
-		Decypharr:  decypharr,
-		Jellyfin:   jellyfin,
-		Sonarr:     sonarr,
-		Radarr:     radarr,
-		Loki:       loki,
-		MediaAgent: mediaAgent,
-		DB:         database,
-	}
-
 	b := &agentBundle{
 		ag:      agent.New(llmClient, cfg.LLM.Model, disp, database, log),
 		summary: agent.NewSummarizer(llmClient, cfg.LLM.Model),
+		clients: clients,
 	}
 
 	if cfg.ControlLLM != nil {
@@ -129,6 +110,10 @@ func run() error {
 		log.Error("init server", "error", err)
 		return err
 	}
+	// A separate dispatcher with no DB, so live-check runs triggered from the
+	// dashboard (which have no real incident to attach action-log rows to)
+	// never write actions_log entries — same as the media-fixer-check CLI.
+	srv.SetChecker(bundle.clients.Dispatcher(nil))
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 

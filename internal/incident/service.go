@@ -191,7 +191,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 			return
 		}
 
-		verdict, verdictErr := s.control.Review(ctx, conversation, result.EscalateAction)
+		verdict, verdictErr := s.control.Review(ctx, conversation, agent.EscalationSummary(result))
 		if verdictErr != nil {
 			s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
 			s.surfaceToOwner(ctx, inc, result, " (control review failed)")
@@ -217,7 +217,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 			if attempt == len(retryDelays)-1 {
 				s.escalateToOwner(ctx, inc, fmt.Sprintf(
 					"⚠️ **%s** (#%s): agent still needs approval after %d retries.\nRoot cause: %s\nAction needed: %s",
-					inc.Title, inc.ID[:8], attempt+1, result.RootCause, result.EscalateAction,
+					inc.Title, inc.ID[:8], attempt+1, result.RootCause, agent.EscalationSummary(result),
 				))
 				return
 			}
@@ -287,8 +287,10 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 
 	// Gate entry the same way as every other transition: if a concurrent run has
 	// already finished this incident, do not resurrect it into "verifying".
+	// StatusManualTestNeeded is included so ApproveEscalation (owner ran a fix
+	// from manual_test_needed) can drop into the same re-check loop.
 	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusVerifying,
-		db.StatusOpen, db.StatusInvestigating, db.StatusReopened)
+		db.StatusOpen, db.StatusInvestigating, db.StatusReopened, db.StatusManualTestNeeded)
 	if err != nil {
 		s.log.ErrorContext(ctx, "enter verifying transition", "incident", inc.ID, "error", err)
 		return
@@ -378,8 +380,8 @@ func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err er
 
 func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
 	s.escalateToOwner(ctx, inc, fmt.Sprintf(
-		"🔍 Incident **%s** (#%s) needs your attention%s.\nRoot cause: %s\nAction needed: %s",
-		inc.Title, inc.ID[:8], note, result.RootCause, result.EscalateAction,
+		"🔍 Incident **%s** (#%s) needs your attention%s.\nRoot cause: %s\nAction needed: %s\nReason: %s",
+		inc.Title, inc.ID[:8], note, result.RootCause, agent.EscalationSummary(result), result.PrimaryReason,
 	))
 }
 

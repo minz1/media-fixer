@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -139,8 +141,24 @@ Action priority (least destructive first):
 8. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
 9. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
 
-You may call autonomous actions directly. Approval-required actions
-(delete torrent, blocklist + search) must only appear in complete_diagnosis.escalate_action.
+You may call autonomous actions directly. Approval-required actions must only appear in
+complete_diagnosis.escalate_action, never called as a tool yourself.
+
+escalate_action must be one of: none | remove_and_search | manual_investigation.
+  - remove_and_search: the file(s) on disk are wrong/corrupt and Sonarr/Radarr should delete
+    them, blocklist the release that produced them, and search for a replacement. Use this
+    when dd_readability_test or get_torrent_state points at a specific bad file/release
+    (not a FUSE/mount/service problem — those are refresh_decypharr_links, restart_decypharr,
+    etc., which you call directly). When you set this, you MUST also set escalate_params:
+    media_type ("tv"|"movie"), title, scope ("episode"|"season"|"series", tv only), season
+    and episode (ints, when scope needs them), blocklist (bool, default true). Be as specific
+    as the evidence allows — prefer scope=episode over season or series when you know which
+    episode is bad.
+  - manual_investigation: you cannot form a confident diagnosis or fix; the owner needs to look.
+  - none: no escalation needed (requires_approval should be false in this case).
+
+This deletes files and triggers a re-download — it is owner-approved only. Never claim you
+performed it; you only recommend it.
 
 Max 3 autonomous actions before you must complete_diagnosis regardless.`
 
@@ -170,13 +188,19 @@ func New(llm *openai.Client, model string, disp *Dispatcher, database *db.DB, lo
 
 // DiagnosticResult is the structured output from complete_diagnosis.
 type DiagnosticResult struct {
-	RootCause        string `json:"root_cause"`
-	Confidence       string `json:"confidence"`
-	PrimaryAction    string `json:"primary_action"`
-	PrimaryReason    string `json:"primary_reason"`
-	FallbackAction   string `json:"fallback_action,omitempty"`
-	EscalateAction   string `json:"escalate_action,omitempty"`
-	RequiresApproval bool   `json:"requires_approval"`
+	RootCause      string `json:"root_cause"`
+	Confidence     string `json:"confidence"`
+	PrimaryAction  string `json:"primary_action"`
+	PrimaryReason  string `json:"primary_reason"`
+	FallbackAction string `json:"fallback_action,omitempty"`
+	// EscalateAction is one of the escalateActionEnum values (see tools.go) —
+	// an owner-approval-required action the agent could not apply itself.
+	EscalateAction string `json:"escalate_action,omitempty"`
+	// EscalateParams carries the target for EscalateAction (e.g. media_type,
+	// title, scope, season, episode, blocklist for remove_and_search). Passed
+	// straight through to Agent.PlanEscalation/RunEscalation.
+	EscalateParams   map[string]any `json:"escalate_params,omitempty"`
+	RequiresApproval bool           `json:"requires_approval"`
 	// VerifyAfterSeconds, when > 0, tells the system a non-destructive fix was
 	// applied that needs time (e.g. a library scan). The system re-checks whether
 	// the problem resolved instead of escalating immediately.
@@ -186,6 +210,44 @@ type DiagnosticResult struct {
 	// UserETAMinutes is the agent's friendly estimate for when the reporter should
 	// try again, used in the "should be fixed soon" notification.
 	UserETAMinutes int `json:"user_eta_minutes,omitempty"`
+}
+
+// escalationLabel gives a short human-readable phrase for an
+// escalateActionEnum value, used in owner-facing notifications.
+func escalationLabel(action string) string {
+	switch action {
+	case EscalateNone:
+		return "no action"
+	case EscalateRemoveAndSearch:
+		return "remove file(s) and re-search"
+	case EscalateManualInvestigation:
+		return "manual investigation needed"
+	default:
+		return action
+	}
+}
+
+// EscalationSummary composes a one-line human-readable description of a
+// recommended escalation for owner notifications: a short label for
+// EscalateAction, plus the target media from EscalateParams when present.
+func EscalationSummary(result *DiagnosticResult) string {
+	label := escalationLabel(result.EscalateAction)
+	title, _ := result.EscalateParams[paramTitle].(string)
+	if title == "" {
+		return label
+	}
+
+	parts := []string{title}
+	if scope, hasScope := result.EscalateParams[paramScope].(string); hasScope && scope != "" {
+		parts = append(parts, scope)
+	}
+	if season, hasSeason := result.EscalateParams[paramSeason].(float64); hasSeason {
+		parts = append(parts, fmt.Sprintf("S%02d", int(season)))
+	}
+	if episode, hasEpisode := result.EscalateParams[paramEpisode].(float64); hasEpisode {
+		parts = append(parts, fmt.Sprintf("E%02d", int(episode)))
+	}
+	return fmt.Sprintf("%s (%s)", label, strings.Join(parts, " "))
 }
 
 // Run executes the diagnostic loop for the given incident.
@@ -337,7 +399,8 @@ func (a *Agent) handleCompleteDiagnosis(
 		if !a.VerifyResolved(ctx, inc.JellyfinItemID) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
-			result.EscalateAction = "autonomous fix applied but playback verification failed"
+			result.EscalateAction = EscalateManualInvestigation
+			result.PrimaryReason = "autonomous fix applied but playback verification failed; " + result.PrimaryReason
 		}
 	}
 
@@ -378,6 +441,35 @@ func (a *Agent) VerifyResolved(ctx context.Context, itemID string) bool {
 		return true
 	}
 	return false
+}
+
+// errNoEscalationPlan is returned by PlanEscalation/RunEscalation for
+// escalate_action values that have no automated preview or execution — the
+// owner must act on them manually from the diagnosis alone.
+var errNoEscalationPlan = errors.New("escalate_action has no automated plan; act manually")
+
+// PlanEscalation resolves what RunEscalation would do for a diagnostic
+// result's recommended escalation, without making any changes. Used by the
+// dashboard's Preview button and by live-check tooling.
+func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
+	switch result.EscalateAction {
+	case EscalateRemoveAndSearch:
+		return a.disp.readArrRemoveAndSearchPlan(ctx, result.EscalateParams)
+	default:
+		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
+	}
+}
+
+// RunEscalation executes a diagnostic result's recommended escalation after
+// owner approval. It re-resolves the plan against current state rather than
+// trusting a possibly-stale preview.
+func (a *Agent) RunEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
+	switch result.EscalateAction {
+	case EscalateRemoveAndSearch:
+		return a.disp.executeArrRemoveAndSearch(ctx, result.EscalateParams)
+	default:
+		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
+	}
 }
 
 // ScanRunning reports whether a Jellyfin library scan is currently in progress.
@@ -453,14 +545,4 @@ func (a *Agent) BuildSummarySeed(inc *db.Incident, summary string) []openai.Chat
 			summary,
 		)},
 	}
-}
-
-func isAutonomousAction(toolName string) bool {
-	switch toolName {
-	case toolRefreshLinks, toolRepairSweep, toolCacheCleanup, toolDecypharrRecheck,
-		toolRestartDecypharr, toolRestartJellyfin, toolSonarrRescan, toolRadarrRescan,
-		toolClearJellyfinCache, toolJellyfinLibraryScan:
-		return true
-	}
-	return false
 }

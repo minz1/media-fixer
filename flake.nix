@@ -54,11 +54,23 @@
               };
             }
           );
+
+          media-fixer-check = pkgs.buildGoModule (
+            commonArgs
+            // {
+              pname = "media-fixer-check";
+              subPackages = [ "cmd/media-fixer-check" ];
+              meta = {
+                description = "Live tool-availability check for media-fixer's agent tools";
+                mainProgram = "media-fixer-check";
+              };
+            }
+          );
         in
         {
           packages = {
             default = media-fixer;
-            inherit media-fixer media-agent;
+            inherit media-fixer media-agent media-fixer-check;
           };
 
           devShells.default = pkgs.mkShell {
