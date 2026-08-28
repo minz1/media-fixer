@@ -47,7 +47,15 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Escalation execution deletes files and triggers a re-search — as
+	// disruptive as anything the autonomous loop does — so it shares the same
+	// global diagnostic lock a concurrent incident's Agent.Run holds (see
+	// runManager.globalSlot) rather than racing it.
+	if lockErr := s.runs.acquireGlobal(ctx); lockErr != nil {
+		return lockErr
+	}
 	execResult, runErr := s.agent.RunEscalation(ctx, result)
+	s.runs.releaseGlobal()
 	s.logEscalation(ctx, inc.ID, result, execResult, runErr)
 	if runErr != nil {
 		return runErr

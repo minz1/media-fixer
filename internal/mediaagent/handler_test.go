@@ -126,3 +126,87 @@ func TestRealOps_ListDir_RegularFileNotSymlink(t *testing.T) {
 		t.Errorf("regular file should have no target, got %q", reg.Target)
 	}
 }
+
+// TestRealOps_DDTest_MissingFile_SetsNotFound is the direct regression test
+// for the ENOENT/EIO conflation: a file that simply doesn't exist must set
+// NotFound:true, structurally distinguishing "content was never downloaded"
+// from an I/O error on a file that does exist — the Rick and Morty S09E09
+// incident got exactly this error and, with no structured signal, concluded
+// "FUSE serving stale paths" instead of checking Sonarr.
+func TestRealOps_DDTest_MissingFile_SetsNotFound(t *testing.T) {
+	t.Parallel()
+	ops := mediaagent.NewRealOps(nil)
+
+	result, err := ops.DDTest("/nonexistent/path/that/cannot/exist.mkv")
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !result.NotFound {
+		t.Errorf("expected NotFound=true for a missing file, got %+v", result)
+	}
+	if result.Error == "" {
+		t.Error("expected a non-empty error message")
+	}
+}
+
+// TestRealOps_DDTest_MissingParentDirectory_SetsNotFound covers the other
+// half of the bug: a file whose PARENT directory doesn't exist (the season
+// folder itself is gone) must also set NotFound:true — [os.Stat] reports this
+// identically to a missing file, and this is the shape list_directory
+// returning "no such file or directory" on a whole torrent folder took in
+// production.
+func TestRealOps_DDTest_MissingParentDirectory_SetsNotFound(t *testing.T) {
+	t.Parallel()
+	ops := mediaagent.NewRealOps(nil)
+
+	result, err := ops.DDTest("/nonexistent/season/folder/episode.mkv")
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !result.NotFound {
+		t.Errorf("expected NotFound=true when the parent directory doesn't exist, got %+v", result)
+	}
+}
+
+// TestRealOps_DDTest_Directory_NotFoundFalse confirms a path that DOES exist
+// but is a directory (not a file) is a distinct case from ENOENT — it must
+// not be reported as NotFound.
+func TestRealOps_DDTest_Directory_NotFoundFalse(t *testing.T) {
+	t.Parallel()
+	ops := mediaagent.NewRealOps(nil)
+	root := t.TempDir()
+
+	result, err := ops.DDTest(root)
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if result.NotFound {
+		t.Error("a directory that exists should not be reported as NotFound")
+	}
+	if result.Error == "" {
+		t.Error("expected an error explaining the path is a directory")
+	}
+}
+
+// TestRealOps_DDTest_ReadableFile_NoErrorNoNotFound confirms the healthy
+// path reports neither an error nor NotFound.
+func TestRealOps_DDTest_ReadableFile_NoErrorNoNotFound(t *testing.T) {
+	t.Parallel()
+	ops := mediaagent.NewRealOps(nil)
+	root := t.TempDir()
+	path := filepath.Join(root, "video.mkv")
+	if err := os.WriteFile(path, []byte("hello world"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ops.DDTest(path)
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if result.NotFound || result.Error != "" {
+		t.Errorf("expected a clean read, got %+v", result)
+	}
+	if result.BytesRead == 0 {
+		t.Error("expected BytesRead > 0")
+	}
+}

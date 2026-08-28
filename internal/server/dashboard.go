@@ -123,12 +123,17 @@ func (s *Server) dashboardIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actions, _ := s.db.ListActions(r.Context(), id)
+	// PendingOutcome is nil (not an error) when the incident has no async
+	// fix in flight/escalated — GetPendingOutcome's db.ErrNotFound is exactly
+	// that case, so the template's {{if .PendingOutcome}} just sees nothing.
+	pendingOutcome, _ := s.db.GetPendingOutcome(r.Context(), id)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "incident", map[string]any{
-		"Incident":    inc,
-		"Actions":     actions,
-		tplKeyBaseURL: s.baseURL,
+		"Incident":       inc,
+		"Actions":        actions,
+		"PendingOutcome": pendingOutcome,
+		tplKeyBaseURL:    s.baseURL,
 	})
 }
 
@@ -166,6 +171,21 @@ func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
 func (s *Server) actionResume(w http.ResponseWriter, r *http.Request) {
 	_ = s.svc.SetAutonomousPaused(r.Context(), false)
 	http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
+}
+
+// actionKeepSearching re-arms a pending arr_search_missing outcome that was
+// escalated because no release was found yet (see Service.KeepSearching).
+func (s *Server) actionKeepSearching(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	if err := s.svc.KeepSearching(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	target, _ := url.JoinPath(s.baseURL, "incidents", id)
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {

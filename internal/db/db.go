@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS conversation_history (
 	updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- last_disruption is a single-row table (id is CHECK'd to 1) recording the most
+-- recent service-wide disruptive action (restart_jellyfin, jellyfin_library_scan,
+-- etc.) taken by any incident. A run starting shortly after one gets a note in its
+-- prompt so it doesn't mistake that disruption's transient side effects for its
+-- own incident's root cause. See Agent.disruptionNote.
+CREATE TABLE IF NOT EXISTS last_disruption (
+	id          INTEGER PRIMARY KEY CHECK (id = 1),
+	action      TEXT NOT NULL,
+	incident_id TEXT NOT NULL,
+	at          DATETIME NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incidents_title  ON incidents(title);
 CREATE INDEX IF NOT EXISTS idx_actions_incident ON actions_log(incident_id);
@@ -125,6 +137,24 @@ func Open(path string) (*DB, error) {
 	if _, err = conn.ExecContext(context.Background(), migrateLastHeartbeat); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, fmt.Errorf("migrate incidents.last_heartbeat: %w", err)
+		}
+	}
+	// pending_outcome/pending_outcome_next_check track an async fix (currently
+	// arr_search_missing) from trigger through resolution in durable storage —
+	// a download can take hours, far longer than any in-memory verification
+	// loop should hold a goroutine or survive a process restart. Kept as two
+	// columns rather than one JSON blob so FindDuePendingOutcomes can filter
+	// on next_check_at with a plain indexed WHERE instead of a JSON extract.
+	const migratePendingOutcome = `ALTER TABLE incidents ADD COLUMN pending_outcome TEXT`
+	if _, err = conn.ExecContext(context.Background(), migratePendingOutcome); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("migrate incidents.pending_outcome: %w", err)
+		}
+	}
+	const migratePendingOutcomeNextCheck = `ALTER TABLE incidents ADD COLUMN pending_outcome_next_check DATETIME`
+	if _, err = conn.ExecContext(context.Background(), migratePendingOutcomeNextCheck); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("migrate incidents.pending_outcome_next_check: %w", err)
 		}
 	}
 	// A Discord user's identity for notification is discord_user_id, not the
@@ -609,6 +639,151 @@ func (d *DB) FindStaleInvestigating(ctx context.Context, staleBefore time.Time) 
 		out = append(out, inc)
 	}
 	return out, rows.Err()
+}
+
+// --- Pending outcome tracking (async fixes, e.g. arr_search_missing) ---
+
+// PendingOutcome tracks an asynchronous fix from trigger through resolution.
+// Currently only produced for arr_search_missing (a triggered
+// search+download can take minutes to hours), but the shape isn't
+// arr-specific. Season/Episode of -1 mean "not applicable" (movie, or a
+// whole-series search), matching the sentinel used throughout the client/
+// agent packages for the same reason.
+type PendingOutcome struct {
+	MediaType string `json:"media_type"`
+	Title     string `json:"title"`
+	Season    int    `json:"season"`
+	Episode   int    `json:"episode"`
+
+	StartedAt       time.Time `json:"started_at"`
+	LastStage       string    `json:"last_stage,omitempty"`
+	LastProgressAt  time.Time `json:"last_progress_at"`
+	LastProgressPct float64   `json:"last_progress_pct"`
+
+	// GrabNotified is set once the reporter has been told "found it,
+	// downloading" — a one-time milestone DM, not a per-check spam.
+	GrabNotified bool `json:"grab_notified"`
+	// KeepSearching/KeepSearchingUntil are set by Service.KeepSearching after
+	// an owner explicitly opts to keep watching for a release past the
+	// initial grace period (e.g. brand-new content with no release yet).
+	KeepSearching bool `json:"keep_searching"`
+	// KeepSearchingUntil's zero value ("0001-01-01...") is emitted as-is when
+	// KeepSearching is false — encoding/json's omitempty has no effect on a
+	// struct-typed field (time.Time is never considered "empty"), so it's
+	// omitted here rather than left in place implying an effect it doesn't have.
+	KeepSearchingUntil time.Time `json:"keep_searching_until"`
+}
+
+// SetPendingOutcome upserts the pending-outcome state for an incident and
+// schedules its next sweep check.
+func (d *DB) SetPendingOutcome(ctx context.Context, id string, po *PendingOutcome, nextCheck time.Time) error {
+	b, err := json.Marshal(po)
+	if err != nil {
+		return err
+	}
+	_, err = d.sql.ExecContext(ctx,
+		`UPDATE incidents SET pending_outcome = ?, pending_outcome_next_check = ?, updated_at = ? WHERE id = ?`,
+		string(b), nextCheck, time.Now(), id)
+	return err
+}
+
+// ClearPendingOutcome removes any pending-outcome state for an incident
+// (called once it resolves, so the sweeper stops touching it).
+func (d *DB) ClearPendingOutcome(ctx context.Context, id string) error {
+	_, err := d.sql.ExecContext(ctx,
+		`UPDATE incidents SET pending_outcome = NULL, pending_outcome_next_check = NULL, updated_at = ? WHERE id = ?`,
+		time.Now(), id)
+	return err
+}
+
+// GetPendingOutcome returns the current pending-outcome state for an
+// incident, or ErrNotFound if it has none.
+func (d *DB) GetPendingOutcome(ctx context.Context, id string) (*PendingOutcome, error) {
+	var s sql.NullString
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT pending_outcome FROM incidents WHERE id = ?`, id,
+	).Scan(&s)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !s.Valid) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var po PendingOutcome
+	if unmarshalErr := json.Unmarshal([]byte(s.String), &po); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	return &po, nil
+}
+
+// FindDuePendingOutcomes returns incidents in StatusVerifying with a pending
+// outcome whose next check time has passed. Scoped to StatusVerifying
+// (rather than "has a pending_outcome at all") so an incident escalated to
+// manual_test_needed after a no-release-found timeout stops being swept
+// automatically — it only resumes once Service.KeepSearching explicitly
+// re-arms it, which transitions status back to verifying.
+func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*Incident, error) {
+	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
+	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
+	             COALESCE(finding,''), COALESCE(recommended_actions,''),
+	             action_count, autonomous_locked
+	      FROM incidents
+	      WHERE status = ? AND pending_outcome IS NOT NULL AND pending_outcome_next_check <= ?`
+	rows, err := d.sql.QueryContext(ctx, q, StatusVerifying, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Incident
+	for rows.Next() {
+		inc, scanErr := scanIncident(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, inc)
+	}
+	return out, rows.Err()
+}
+
+// --- Disruption tracking ---
+
+// Disruption is the most recent service-wide disruptive action recorded by
+// RecordDisruption.
+type Disruption struct {
+	Action     string
+	IncidentID string
+	At         time.Time
+}
+
+// RecordDisruption upserts the single last_disruption row. Called whenever a
+// service-wide action (restart, scan, sweep, cleanup — see
+// Dispatcher.disruptiveActions) is logged, so any run starting shortly after
+// can be warned it may be looking at that disruption's side effects rather
+// than its own incident's root cause.
+func (d *DB) RecordDisruption(ctx context.Context, action, incidentID string) error {
+	_, err := d.sql.ExecContext(ctx, `
+		INSERT INTO last_disruption (id, action, incident_id, at) VALUES (1, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET action = excluded.action, incident_id = excluded.incident_id,
+		                               at = excluded.at`,
+		action, incidentID, time.Now())
+	return err
+}
+
+// LastDisruption returns the most recent recorded disruption, or ErrNotFound
+// if none has ever been recorded.
+func (d *DB) LastDisruption(ctx context.Context) (*Disruption, error) {
+	var disp Disruption
+	err := d.sql.QueryRowContext(ctx,
+		`SELECT action, incident_id, at FROM last_disruption WHERE id = 1`,
+	).Scan(&disp.Action, &disp.IncidentID, &disp.At)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &disp, nil
 }
 
 // --- helpers ---

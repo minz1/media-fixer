@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -319,7 +320,7 @@ func (a *sequencedAgent) Run(
 	}, nil, nil
 }
 
-func (a *sequencedAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+func (a *sequencedAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
 	a.verifyResolvedCalls.Add(1)
 	return false
 }
@@ -338,6 +339,12 @@ func (a *sequencedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticRe
 
 func (a *sequencedAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
 	return map[string]any{}, nil
+}
+
+func (a *sequencedAgent) CheckPendingOutcome(
+	_ context.Context, _ *db.PendingOutcome,
+) (*agent.PendingOutcomeObservation, error) {
+	return &agent.PendingOutcomeObservation{}, nil
 }
 
 // syncNotifier is a Notifier safe for concurrent use (captureNotifier is not),
@@ -483,7 +490,7 @@ func (a *alwaysFixedAgent) Run(
 	}, nil, nil
 }
 
-func (a *alwaysFixedAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+func (a *alwaysFixedAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
 	return true
 }
 func (a *alwaysFixedAgent) ScanRunning(_ context.Context) bool { return false }
@@ -500,6 +507,12 @@ func (a *alwaysFixedAgent) PlanEscalation(_ context.Context, _ *agent.Diagnostic
 
 func (a *alwaysFixedAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
 	return map[string]any{}, nil
+}
+
+func (a *alwaysFixedAgent) CheckPendingOutcome(
+	_ context.Context, _ *db.PendingOutcome,
+) (*agent.PendingOutcomeObservation, error) {
+	return &agent.PendingOutcomeObservation{}, nil
 }
 
 func waitForUserMsg(t *testing.T, n *syncNotifier) string {
@@ -585,6 +598,114 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 	}
 }
 
+// concurrencyTrackingAgent is a fake AgentRunner whose Run call records how
+// many Run calls were ever in flight simultaneously across all incidents,
+// proving (or disproving) global serialization directly rather than by timing
+// inference. A short sleep inside Run widens the window in which a second,
+// unserialized Run call would be observed overlapping the first.
+type concurrencyTrackingAgent struct {
+	inFlight    atomic.Int32
+	maxInFlight atomic.Int32
+	runCalls    chan struct{}
+}
+
+func newConcurrencyTrackingAgent() *concurrencyTrackingAgent {
+	return &concurrencyTrackingAgent{runCalls: make(chan struct{}, 8)}
+}
+
+func (a *concurrencyTrackingAgent) Run(
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	n := a.inFlight.Add(1)
+	for {
+		cur := a.maxInFlight.Load()
+		if n <= cur || a.maxInFlight.CompareAndSwap(cur, n) {
+			break
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	a.inFlight.Add(-1)
+	a.runCalls <- struct{}{}
+	return &agent.DiagnosticResult{
+		RootCause: "test", Confidence: "high",
+		PrimaryAction: "test-action", PrimaryReason: "test",
+	}, nil, nil
+}
+
+func (a *concurrencyTrackingAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
+	return true
+}
+func (a *concurrencyTrackingAgent) ScanRunning(_ context.Context) bool { return false }
+
+func (a *concurrencyTrackingAgent) BuildSummarySeed(
+	_ context.Context, _ *db.Incident, _ string,
+) []openai.ChatCompletionMessage {
+	return nil
+}
+
+func (a *concurrencyTrackingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *concurrencyTrackingAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *concurrencyTrackingAgent) CheckPendingOutcome(
+	_ context.Context, _ *db.PendingOutcome,
+) (*agent.PendingOutcomeObservation, error) {
+	return &agent.PendingOutcomeObservation{}, nil
+}
+
+// TestConcurrentIncidents_DiagnosticRunsAreSerialized reports two different
+// incidents at once (Handle launches each in its own background goroutine)
+// and asserts the fake agent never observed more than one Run call in flight
+// simultaneously — the property runManager.globalSlot exists to guarantee, so
+// one incident's evidence-gathering can never interleave with another's
+// disruptive action mid-tool-call.
+func TestConcurrentIncidents_DiagnosticRunsAreSerialized(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	fakeAgent := newConcurrencyTrackingAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(
+		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+	)
+	ctx := context.Background()
+
+	const numIncidents = 3
+	for i := range numIncidents {
+		if _, handleErr := svc.Handle(ctx, &incident.Report{
+			Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+			What: "cant_play", Title: fmt.Sprintf("Show %d", i),
+		}); handleErr != nil {
+			t.Fatal(handleErr)
+		}
+	}
+
+	for range numIncidents {
+		select {
+		case <-fakeAgent.runCalls:
+		case <-time.After(notifyWaitTimeout):
+			t.Fatal("timed out waiting for a Run call")
+		}
+	}
+
+	if maxObserved := fakeAgent.maxInFlight.Load(); maxObserved != 1 {
+		t.Errorf("expected at most 1 concurrent Run call, observed %d", maxObserved)
+	}
+}
+
 func TestActionAlreadyTried(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)
@@ -654,22 +775,79 @@ func TestReviewRiskReason(t *testing.T) {
 	}
 }
 
+// TestReviewRiskReason_LadderClimbing is the regression test for the gap
+// exact-repeat detection can't catch: each rung of a ladder-climb is a NEW
+// action (clear cache, then scan, then restart), so actionAlreadyTried never
+// fires even though the pattern is exactly what the systemPrompt says not to
+// do. Two distinct already-applied actions must be enough to force review of
+// a third, confident, never-before-tried action.
+func TestReviewRiskReason_LadderClimbing(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newTestService(t)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "x", What: "cant_play", Title: "Doctor Who",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Only one distinct action applied so far: a fresh, confident, different
+	// third action should NOT trigger review on the ladder-climbing rule yet.
+	if logErr := database.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "clear_jellyfin_cache", TriggeredBy: "agent", Status: db.ActionApplied,
+	}); logErr != nil {
+		t.Fatal(logErr)
+	}
+	second := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "jellyfin_library_scan"}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, second); got != "" {
+		t.Errorf("expected no risk reason with only 1 distinct prior action, got %q", got)
+	}
+
+	// Two distinct actions applied: a third, fresh, confident, never-tried
+	// action must now trigger review even though it isn't itself a repeat.
+	if logErr := database.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "jellyfin_library_scan", TriggeredBy: "agent", Status: db.ActionApplied,
+	}); logErr != nil {
+		t.Fatal(logErr)
+	}
+	third := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "restart_jellyfin"}
+	got := svc.ReviewRiskReasonForTest(ctx, inc.ID, third)
+	if got == "" {
+		t.Error("expected a risk reason once 2+ distinct actions have already been tried")
+	}
+	if !strings.Contains(got, "2 different actions") {
+		t.Errorf("expected the reason to name the count, got %q", got)
+	}
+
+	if n := svc.DistinctAppliedActionCountForTest(ctx, inc.ID); n != 2 {
+		t.Errorf("distinct applied action count: got %d want 2", n)
+	}
+}
+
 func TestControlProposal(t *testing.T) {
 	t.Parallel()
 
 	approval := &agent.DiagnosticResult{
 		RequiresApproval: true, EscalateAction: "manual_investigation",
 	}
-	if got := incident.ControlProposalForTest(approval, ""); !strings.Contains(got, "escalate") {
+	if got := incident.ControlProposalForTest(approval, "", ""); !strings.Contains(got, "escalate") {
 		t.Errorf("expected an escalation-flavored proposal, got %q", got)
 	}
 
 	autonomous := &agent.DiagnosticResult{
 		PrimaryAction: "clear_jellyfin_cache", RootCause: "stale metadata",
 	}
-	got := incident.ControlProposalForTest(autonomous, `"clear_jellyfin_cache" was already applied`)
+	got := incident.ControlProposalForTest(
+		autonomous, `"clear_jellyfin_cache" was already applied`,
+		"\nActions already applied on this incident (none resolved it): jellyfin_library_scan",
+	)
 	if !strings.Contains(got, "clear_jellyfin_cache") || !strings.Contains(got, "already applied") {
 		t.Errorf("expected the proposal to name the action and the risk reason, got %q", got)
+	}
+	if !strings.Contains(got, "jellyfin_library_scan") {
+		t.Errorf("expected the proposal to include the action history, got %q", got)
 	}
 }
 
@@ -716,7 +894,7 @@ func (a *lowConfidenceOnceAgent) Run(
 		}, nil
 }
 
-func (a *lowConfidenceOnceAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+func (a *lowConfidenceOnceAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
 	return true
 }
 func (a *lowConfidenceOnceAgent) ScanRunning(_ context.Context) bool { return false }
@@ -733,6 +911,12 @@ func (a *lowConfidenceOnceAgent) PlanEscalation(_ context.Context, _ *agent.Diag
 
 func (a *lowConfidenceOnceAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
 	return map[string]any{}, nil
+}
+
+func (a *lowConfidenceOnceAgent) CheckPendingOutcome(
+	_ context.Context, _ *db.PendingOutcome,
+) (*agent.PendingOutcomeObservation, error) {
+	return &agent.PendingOutcomeObservation{}, nil
 }
 
 // TestRunAgent_LowConfidence_TriggersControlReview_ApproveProceedsAutonomously

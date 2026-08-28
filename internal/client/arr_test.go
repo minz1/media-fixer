@@ -346,3 +346,35 @@ func TestArr_SystemStatus(t *testing.T) {
 		t.Errorf("got %+v", status)
 	}
 }
+
+// TestArr_GetQueue confirms the response envelope's "records" field is
+// unwrapped correctly and progress math (size - sizeleft) is available to
+// the caller via the raw Size/SizeLeft fields — the pending-outcome sweeper
+// (internal/agent.CheckPendingOutcome) computes percent complete from these.
+func TestArr_GetQueue(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/queue" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("includeUnknownSeriesItems") != "true" || q.Get("includeUnknownMovieItems") != "true" {
+			t.Errorf("unexpected query: %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"records": []client.QueueRecord{
+				{ID: 1, SeriesID: 42, Title: "Rick and Morty S09E09", Status: "downloading", Size: 1000, SizeLeft: 400},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := client.NewArr(srv.URL, "key")
+	records, err := c.GetQueue(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].SeriesID != 42 || records[0].Status != "downloading" {
+		t.Errorf("got %+v", records)
+	}
+}

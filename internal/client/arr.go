@@ -347,6 +347,49 @@ func (c *ArrClient) MovieGrabHistory(ctx context.Context, movieID int) ([]Histor
 	return records, nil
 }
 
+// QueueRecord is one in-progress download tracked by Sonarr/Radarr's queue
+// (GET /api/v3/queue) — a search having been triggered doesn't mean anything
+// is actually downloading yet; the queue is the live signal that it landed
+// on a release and is fetching it.
+type QueueRecord struct {
+	ID        int    `json:"id"`
+	SeriesID  int    `json:"seriesId,omitempty"`
+	EpisodeID int    `json:"episodeId,omitempty"`
+	MovieID   int    `json:"movieId,omitempty"`
+	Title     string `json:"title"`
+	// Status is Sonarr/Radarr's queue item status, e.g. "queued",
+	// "downloading", "completed", "warning", "failed".
+	Status   string  `json:"status"`
+	Size     float64 `json:"size"`
+	SizeLeft float64 `json:"sizeleft"`
+}
+
+// queueResponse is the paginated envelope GET /api/v3/queue returns.
+type queueResponse struct {
+	Records []QueueRecord `json:"records"`
+}
+
+// queuePageSize is generously large for a single self-hosted instance's
+// queue — large enough that pagination is never needed in practice.
+const queuePageSize = 250
+
+// GetQueue returns every item currently in Sonarr/Radarr's download queue —
+// the live "is anything actually downloading for this" signal, checked by
+// the pending-outcome sweeper instead of guessing how long a search+download
+// should take. includeUnknownSeriesItems/includeUnknownMovieItems are
+// harmless no-ops on whichever API (Sonarr/Radarr) doesn't recognize them.
+func (c *ArrClient) GetQueue(ctx context.Context) ([]QueueRecord, error) {
+	u := fmt.Sprintf(
+		"%s/api/v3/queue?pageSize=%d&includeUnknownSeriesItems=true&includeUnknownMovieItems=true",
+		c.base, queuePageSize,
+	)
+	var resp queueResponse
+	if err := c.get(ctx, u, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Records, nil
+}
+
 // MarkHistoryFailed blocklists the release behind a history grab record —
 // this, not another search command, is what actually blocklists a release in
 // Sonarr/Radarr's v3 API.

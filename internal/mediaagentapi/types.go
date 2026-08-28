@@ -10,6 +10,17 @@ type DDTestResult struct {
 	BytesRead int64   `json:"bytes_read"`
 	SpeedMBs  float64 `json:"speed_mb_s"`
 	Error     string  `json:"error,omitempty"`
+	// NotFound is true when Error is specifically "the path does not exist"
+	// (ENOENT — on the file itself, or on a parent directory component,
+	// which os.IsNotExist reports identically) rather than an I/O error on a
+	// file that does exist (EIO, a stale FUSE handle, etc.). The two need
+	// completely different fixes: content that was never downloaded is an
+	// *arr problem, not a FUSE/decypharr one. Surfaced structurally so the
+	// distinction doesn't depend on the model pattern-matching the error
+	// string — confirmed necessary live: the Rick and Morty S09E09 incident
+	// got exactly this error on both the file and its parent directory and
+	// still concluded "FUSE serving stale paths".
+	NotFound bool `json:"not_found,omitempty"`
 }
 
 // RestartResult is the response from POST /restart/:service.

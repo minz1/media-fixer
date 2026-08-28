@@ -77,6 +77,8 @@ func readCheckSpecs() []checkSpec {
 		{Tool: "get_disk_info", Tier: tierRead, Run: checkGetDiskInfo},
 		{Tool: "get_repair_status", Tier: tierRead, Run: checkRepairStatus},
 		{Tool: "get_repair_health", Tier: tierRead, Run: checkRepairHealth},
+		{Tool: "arr_media_status", Tier: tierRead, Run: checkArrMediaStatus},
+		{Tool: "arr_grab_history", Tier: tierRead, Run: checkArrGrabHistory},
 	}
 }
 
@@ -89,6 +91,7 @@ func writeCheckSpecs() []checkSpec {
 		{Tool: "sonarr_rescan", Tier: tierWrite, Run: checkSonarrRescan},
 		{Tool: "radarr_rescan", Tier: tierWrite, Run: checkRadarrRescan},
 		{Tool: "clear_jellyfin_cache", Tier: tierWrite, Run: checkClearJellyfinCache},
+		{Tool: "arr_search_missing", Tier: tierWrite, Run: checkArrSearchMissing},
 	}
 }
 
@@ -218,6 +221,38 @@ func checkRepairHealth(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures,
 	return classifyDecypharr(result, err)
 }
 
+// arrMediaStatusArgs prefers a TV fixture (exercises the season/episode
+// breakdown) and falls back to a movie fixture, matching
+// arrRemoveAndSearchArgs's preference below.
+func arrMediaStatusArgs(fx *Fixtures) (map[string]any, string, bool) {
+	switch {
+	case fx.SeriesTitle != "":
+		return map[string]any{argMediaType: "tv", argTitle: fx.SeriesTitle}, "", true
+	case fx.MovieTitle != "":
+		return map[string]any{argMediaType: "movie", argTitle: fx.MovieTitle}, "", true
+	default:
+		return nil, "no series or movie title discovered", false
+	}
+}
+
+func checkArrMediaStatus(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	args, reason, ok := arrMediaStatusArgs(fx)
+	if !ok {
+		return degraded("no fixture: " + reason)
+	}
+	result, err := disp.Call(ctx, "arr_media_status", args)
+	return classify(result, err)
+}
+
+func checkArrGrabHistory(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	args, reason, ok := arrMediaStatusArgs(fx)
+	if !ok {
+		return degraded("no fixture: " + reason)
+	}
+	result, err := disp.Call(ctx, "arr_grab_history", args)
+	return classify(result, err)
+}
+
 // --- write checks ---
 
 func checkRefreshLinks(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
@@ -271,6 +306,26 @@ func checkClearJellyfinCache(ctx context.Context, disp *agent.Dispatcher, fx *Fi
 		return degraded("no fixture: no Jellyfin item discovered")
 	}
 	result, err := disp.Call(ctx, "clear_jellyfin_cache", map[string]any{argItemID: fx.JellyfinItemID})
+	return classify(result, err)
+}
+
+// checkArrSearchMissing exercises the tool's own safety precondition rather
+// than a real search: the discovered fixture title is drawn from the live
+// library, so on a healthy setup it already has a file, and the tool is
+// expected to refuse with agent.ErrArrTargetHasFile — that refusal IS the
+// pass condition, proving the guard actually re-resolves and checks current
+// state rather than trusting its caller. A real, on-disk-missing title would
+// make this genuinely trigger a search, which is an acceptable (and correct)
+// outcome too — either way the tool worked as designed.
+func checkArrSearchMissing(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	args, reason, ok := arrMediaStatusArgs(fx)
+	if !ok {
+		return degraded("no fixture: " + reason)
+	}
+	result, err := disp.Call(ctx, "arr_search_missing", args)
+	if errors.Is(err, agent.ErrArrTargetHasFile) {
+		return Result{Status: StatusOK, Detail: "refused as expected: target already has a file"}
+	}
 	return classify(result, err)
 }
 

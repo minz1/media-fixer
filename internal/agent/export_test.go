@@ -57,6 +57,14 @@ func (a *Agent) ActionAlreadyAppliedForTest(ctx context.Context, incidentID, act
 }
 
 // CaptureSignatureForTest exposes Agent.captureSignature for agent_test.go.
-func (a *Agent) CaptureSignatureForTest(ctx context.Context, itemID string) *FixSignature {
-	return a.captureSignature(ctx, itemID)
+func (a *Agent) CaptureSignatureForTest(ctx context.Context, itemID, title string) *FixSignature {
+	return a.captureSignature(ctx, itemID, title)
+}
+
+// ImprovedForTest exposes the improved helper for agent_test.go.
+func ImprovedForTest(pre, post *FixSignature) bool { return improved(pre, post) }
+
+// DisruptionNoteForTest exposes Agent.disruptionNote for agent_test.go.
+func (a *Agent) DisruptionNoteForTest(ctx context.Context, incidentID string) string {
+	return a.disruptionNote(ctx, incidentID)
 }

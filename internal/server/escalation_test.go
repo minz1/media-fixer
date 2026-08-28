@@ -39,7 +39,7 @@ func (a *stubEscalationAgent) Run(
 	return nil, nil, nil
 }
 
-func (a *stubEscalationAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+func (a *stubEscalationAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
 	return true
 }
 func (a *stubEscalationAgent) ScanRunning(_ context.Context) bool { return false }
@@ -56,6 +56,12 @@ func (a *stubEscalationAgent) PlanEscalation(_ context.Context, _ *agent.Diagnos
 
 func (a *stubEscalationAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
 	return a.runResult, a.runErr
+}
+
+func (a *stubEscalationAgent) CheckPendingOutcome(
+	_ context.Context, _ *db.PendingOutcome,
+) (*agent.PendingOutcomeObservation, error) {
+	return &agent.PendingOutcomeObservation{}, nil
 }
 
 // newEscalationTestServer builds a server backed by a real DB and a stub

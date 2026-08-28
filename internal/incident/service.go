@@ -83,7 +83,7 @@ func NewService(
 		log:        log,
 		runs:       newRunManager(base),
 	}
-	go s.sweepStaleRunsLoop(base)
+	go s.backgroundSweepLoop(base)
 	return s
 }
 
@@ -198,7 +198,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 			time.Sleep(delay)
 		}
 
-		result, conversation, runErr := s.agent.Run(ctx, inc, seed)
+		result, conversation, runErr := s.runDiagnosis(ctx, inc, seed)
 		if runErr != nil {
 			s.handleRunError(ctx, inc, runErr)
 			return
@@ -210,6 +210,22 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 		}
 		seed = outcome.seed
 	}
+}
+
+// runDiagnosis executes one agent.Run call under the process-wide diagnostic
+// lock (runManager.globalSlot), so a concurrent incident's restart/scan/cleanup
+// can never be observed mid-disruption by this run's evidence gathering — see
+// runManager's doc comment. Deliberately does NOT wrap runVerification or
+// escalation's durable outcome tracking; only the ~10s tool-calling loop itself
+// is serialized.
+func (s *Service) runDiagnosis(
+	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	if err := s.runs.acquireGlobal(ctx); err != nil {
+		return nil, nil, err
+	}
+	defer s.runs.releaseGlobal()
+	return s.agent.Run(ctx, inc, seed)
 }
 
 // diagnosisOutcome is what runAgent's retry loop does next after evaluating
@@ -254,7 +270,8 @@ func (s *Service) evaluateDiagnosis(
 		return diagnosisOutcome{done: true}
 	}
 
-	verdict, verdictErr := s.control.Review(ctx, conversation, controlProposal(result, riskReason))
+	proposal := controlProposal(result, riskReason, s.actionHistorySummary(ctx, inc.ID))
+	verdict, verdictErr := s.control.Review(ctx, conversation, proposal)
 	if verdictErr != nil {
 		s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
 		if result.RequiresApproval {
@@ -327,8 +344,29 @@ func (s *Service) reviewRiskReason(ctx context.Context, incidentID string, resul
 	if s.actionAlreadyTried(ctx, incidentID, result.PrimaryAction) {
 		return fmt.Sprintf("%q was already applied on this incident and did not resolve it", result.PrimaryAction)
 	}
+	// Catches ladder-climbing that actionAlreadyTried can't: each rung is a
+	// *new* action (clear cache, then scan, then restart...), so the exact
+	// same-action check above never fires even though the pattern — working
+	// down a priority list rather than following new evidence — is exactly
+	// what the systemPrompt tells the model not to do. This doesn't try to
+	// judge whether THIS proposal is evidenced; it just makes sure a human
+	// reviewer looks once the incident has already burned through a couple
+	// of distinct fixes.
+	if n := s.distinctAppliedActionCount(ctx, incidentID); n >= ladderClimbActionThreshold {
+		return fmt.Sprintf(
+			"%d different actions have already been tried on this incident without resolving it, and this "+
+				"would be another new one — worth confirming it's grounded in evidence from this run rather "+
+				"than a mechanical walk down the priority list",
+			n,
+		)
+	}
 	return ""
 }
+
+// ladderClimbActionThreshold is the number of distinct already-applied
+// actions on an incident that triggers control review for any further new
+// action, regardless of the model's own confidence.
+const ladderClimbActionThreshold = 2
 
 // actionAlreadyTried reports whether action has already been logged as
 // successfully applied on this incident.
@@ -348,26 +386,71 @@ func (s *Service) actionAlreadyTried(ctx context.Context, incidentID, action str
 	return false
 }
 
+// distinctAppliedActionCount counts how many different action names have
+// been successfully applied on this incident (not how many times — three
+// applications of the same action count as one).
+func (s *Service) distinctAppliedActionCount(ctx context.Context, incidentID string) int {
+	actions, err := s.db.ListActions(ctx, incidentID)
+	if err != nil {
+		return 0
+	}
+	seen := make(map[string]bool)
+	for _, act := range actions {
+		if act.Status == db.ActionApplied {
+			seen[act.Action] = true
+		}
+	}
+	return len(seen)
+}
+
+// actionHistorySummary renders the distinct actions already applied on this
+// incident, for the control reviewer's context — it needs to see the pattern
+// it's being asked to judge (see distinctAppliedActionCount's ladder-climbing
+// trigger above), not just this one proposal in isolation.
+func (s *Service) actionHistorySummary(ctx context.Context, incidentID string) string {
+	actions, err := s.db.ListActions(ctx, incidentID)
+	if err != nil || len(actions) == 0 {
+		return ""
+	}
+	var applied []string
+	for _, act := range actions {
+		if act.Status == db.ActionApplied {
+			applied = append(applied, act.Action)
+		}
+	}
+	if len(applied) == 0 {
+		return ""
+	}
+	return "\nActions already applied on this incident (none resolved it): " + strings.Join(applied, ", ")
+}
+
 // controlProposal builds the description of what's being reviewed and why,
 // passed to ControlReviewer.Review — see controlSystemPrompt in
 // internal/agent/control.go for how the two trigger cases are meant to read.
-func controlProposal(result *agent.DiagnosticResult, riskReason string) string {
+func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory string) string {
 	if result.RequiresApproval {
 		return fmt.Sprintf(
-			"The agent wants to escalate the following action for owner approval:\n\n%s",
-			agent.EscalationSummary(result),
+			"The agent wants to escalate the following action for owner approval:\n\n%s%s",
+			agent.EscalationSummary(result), actionHistory,
 		)
 	}
 	return fmt.Sprintf(
 		"The agent proposes to autonomously apply %q (not flagged for owner approval), but this "+
-			"review was triggered because %s.\n\nRoot cause: %s\nReason: %s",
-		result.PrimaryAction, riskReason, result.RootCause, result.PrimaryReason,
+			"review was triggered because %s.\n\nRoot cause: %s\nReason: %s%s",
+		result.PrimaryAction, riskReason, result.RootCause, result.PrimaryReason, actionHistory,
 	)
 }
 
-// handleAgentResolved processes a non-approval diagnosis: either it kicks off the
-// verification loop (when the fix needs time) or marks the incident fixed now.
+// handleAgentResolved processes a non-approval diagnosis: routes an
+// arr_search_missing fix to durable pending-outcome tracking (a download can
+// take hours — far longer than the generic verify loop's ~10-minute budget),
+// kicks off the generic verification loop for any other fix that needs time,
+// or marks the incident fixed now.
 func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+	if result.PrimaryAction == agent.ToolArrSearchMissing {
+		s.startPendingOutcomeTracking(ctx, inc, result)
+		return
+	}
 	if result.VerifyAfterSeconds > 0 {
 		s.runVerification(ctx, inc, result)
 		return
@@ -434,7 +517,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 		case <-ctx.Done():
 			return
 		}
-		if itemID != "" && s.agent.VerifyResolved(ctx, itemID, result.PreFix) {
+		if itemID != "" && s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix) {
 			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
 			return
 		}
@@ -662,10 +745,13 @@ func (s *Service) SweepStaleRuns(ctx context.Context) {
 	}
 }
 
-// sweepStaleRunsLoop periodically calls SweepStaleRuns until base is done.
-// Started once from NewService, tied to the same process-lifetime context
-// that owns every other piece of Service's background lifecycle (runManager).
-func (s *Service) sweepStaleRunsLoop(base context.Context) {
+// backgroundSweepLoop periodically calls SweepStaleRuns and
+// AdvancePendingOutcomes until base is done — one ticker for both, since
+// neither needs a different cadence than the other and a second ticker would
+// just be more moving parts for no benefit. Started once from NewService,
+// tied to the same process-lifetime context that owns every other piece of
+// Service's background lifecycle (runManager).
+func (s *Service) backgroundSweepLoop(base context.Context) {
 	ticker := time.NewTicker(staleRunSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -674,6 +760,7 @@ func (s *Service) sweepStaleRunsLoop(base context.Context) {
 			return
 		case <-ticker.C:
 			s.SweepStaleRuns(base)
+			s.AdvancePendingOutcomes(base)
 		}
 	}
 }

@@ -20,8 +20,13 @@ func (s *Service) ReviewRiskReasonForTest(
 }
 
 // ControlProposalForTest exposes controlProposal for service_test.go.
-func ControlProposalForTest(result *agent.DiagnosticResult, riskReason string) string {
-	return controlProposal(result, riskReason)
+func ControlProposalForTest(result *agent.DiagnosticResult, riskReason, actionHistory string) string {
+	return controlProposal(result, riskReason, actionHistory)
+}
+
+// DistinctAppliedActionCountForTest exposes Service.distinctAppliedActionCount.
+func (s *Service) DistinctAppliedActionCountForTest(ctx context.Context, incidentID string) int {
+	return s.distinctAppliedActionCount(ctx, incidentID)
 }
 
 // NotifyReportersForTest exposes Service.notifyReporters for service_test.go.

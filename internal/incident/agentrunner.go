@@ -18,10 +18,12 @@ type AgentRunner interface {
 	// prior conversation, and returns the result plus the full conversation.
 	Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) (
 		*agent.DiagnosticResult, []openai.ChatCompletionMessage, error)
-	// VerifyResolved reports whether a previously-applied fix now looks resolved,
-	// by comparing the item's current state against pre (the state captured
-	// before the fix ran; nil disables the "did anything actually change" check).
-	VerifyResolved(ctx context.Context, itemID string, pre *agent.FixSignature) bool
+	// VerifyResolved reports whether a previously-applied fix now looks
+	// resolved, by comparing the item's current state (itemID, title — title
+	// is used for a best-effort *arr file-existence check) against pre (the
+	// state captured before the fix ran; nil disables the "is this a strict
+	// improvement" check).
+	VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool
 	// ScanRunning reports whether a Jellyfin library scan is currently in progress.
 	ScanRunning(ctx context.Context) bool
 	// BuildSummarySeed constructs seed messages for a resumed run from a summary.
@@ -32,4 +34,7 @@ type AgentRunner interface {
 	// RunEscalation executes a diagnostic result's recommended escalation
 	// after owner approval.
 	RunEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)
+	// CheckPendingOutcome polls live state for one pending arr_search_missing
+	// outcome — see Service.advancePendingOutcome, the sweeper that drives it.
+	CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)
 }

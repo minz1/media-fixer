@@ -136,7 +136,7 @@ const (
 func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return &mediaagentapi.DDTestResult{Error: err.Error()}, nil
+		return &mediaagentapi.DDTestResult{Error: err.Error(), NotFound: os.IsNotExist(err)}, nil
 	}
 	if info.IsDir() {
 		return &mediaagentapi.DDTestResult{
@@ -146,7 +146,7 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 
 	f, err := os.Open(path)
 	if err != nil {
-		return &mediaagentapi.DDTestResult{Error: err.Error()}, nil
+		return &mediaagentapi.DDTestResult{Error: err.Error(), NotFound: os.IsNotExist(err)}, nil
 	}
 	defer f.Close()
 

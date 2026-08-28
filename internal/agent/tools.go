@@ -40,6 +40,9 @@ const (
 	toolGetDiskInfo          = "get_disk_info"
 	toolCompleteDiagnosis    = "complete_diagnosis"
 	toolArrRemoveAndSearch   = "arr_remove_and_search"
+	toolArrMediaStatus       = "arr_media_status"
+	toolArrGrabHistory       = "arr_grab_history"
+	toolArrSearchMissing     = "arr_search_missing"
 )
 
 // Shared map key names for JSON results.
@@ -89,6 +92,13 @@ const (
 	EscalateManualInvestigation = "manual_investigation"
 )
 
+// ToolArrSearchMissing is arr_search_missing's registry name, exported so
+// internal/incident can recognize it as result.PrimaryAction (routing to
+// durable pending-outcome tracking instead of the generic verify loop) and
+// look it up in actions_log (to recover the search target's params) without
+// hardcoding the string a second time.
+const ToolArrSearchMissing = toolArrSearchMissing
+
 // escalateActionEnum lists every value the escalate_action schema accepts.
 func escalateActionEnum() []string {
 	return []string{EscalateNone, EscalateRemoveAndSearch, EscalateManualInvestigation}
@@ -130,7 +140,7 @@ type toolSpec struct {
 	Handler func(*Dispatcher, context.Context, map[string]any) (any, error)
 }
 
-const toolRegistryCapacity = 22
+const toolRegistryCapacity = 26
 
 // toolRegistry is the single source of truth for every tool the agent knows
 // about: its schema, its risk class, and how to execute it. toolDefs (what the
@@ -147,11 +157,63 @@ func toolRegistry() []toolSpec {
 	return specs
 }
 
-// readToolSpecs returns the Jellyfin and host-diagnostic read-only tools.
+// readToolSpecs returns the Jellyfin, host-diagnostic, and *arr read-only tools.
 func readToolSpecs() []toolSpec {
 	specs := jellyfinReadToolSpecs()
 	specs = append(specs, hostReadToolSpecs()...)
+	specs = append(specs, arrReadToolSpecs()...)
 	return specs
+}
+
+// arrReadToolSpecs returns the Sonarr/Radarr read-only diagnostic tools:
+// whether Sonarr/Radarr actually has a file for a title, and its grab
+// history. Without these the agent has no way to tell "this content was
+// never downloaded" apart from "decypharr/FUSE is serving it badly" — both
+// look identical from the Jellyfin/dd-test side (empty sources, ENOENT) but
+// need completely different fixes (arr_search_missing vs. a decypharr/
+// Jellyfin action).
+func arrReadToolSpecs() []toolSpec {
+	return []toolSpec{
+		{
+			Name: toolArrMediaStatus,
+			Def: &openai.FunctionDefinition{
+				Name: toolArrMediaStatus,
+				Description: "Check whether Sonarr/Radarr actually has a file for this title (and, for TV, " +
+					"a specific season/episode). Returns has_file, the on-disk path/size Sonarr/Radarr " +
+					"tracks, and for TV every episode of the requested season with its own has_file. Call " +
+					"this whenever content appears to be missing (dd_readability_test or list_directory " +
+					"returned \"no such file or directory\") BEFORE concluding it's a FUSE/decypharr " +
+					"problem — a missing file usually means nothing was ever downloaded, which is an *arr " +
+					"problem, not a mount problem.",
+				Parameters: jsonSchema(map[string]any{
+					paramMediaType: param("string", "tv|movie"),
+					paramTitle:     param("string", "Series or movie title"),
+					paramSeason:    param("integer", "Season number (tv only; omit to check every season)"),
+					paramEpisode:   param("integer", "Episode number (tv only; omit to check the whole season)"),
+				}, []string{paramMediaType, paramTitle}),
+			},
+			Risk:    riskRead,
+			Handler: (*Dispatcher).readArrMediaStatus,
+		},
+		{
+			Name: toolArrGrabHistory,
+			Def: &openai.FunctionDefinition{
+				Name: toolArrGrabHistory,
+				Description: "List recent Sonarr/Radarr grab events for a title (and, for TV, a season). " +
+					"Use this to distinguish \"this was never grabbed\" from \"it was grabbed but the " +
+					"download or import failed\" — arr_media_status alone can't tell those apart, and the " +
+					"fix differs (arr_search_missing vs. escalate_action=remove_and_search on a corrupt " +
+					"file that WAS imported).",
+				Parameters: jsonSchema(map[string]any{
+					paramMediaType: param("string", "tv|movie"),
+					paramTitle:     param("string", "Series or movie title"),
+					paramSeason:    param("integer", "Season number (tv only; omit for all seasons)"),
+				}, []string{paramMediaType, paramTitle}),
+			},
+			Risk:    riskRead,
+			Handler: (*Dispatcher).readArrGrabHistory,
+		},
+	}
 }
 
 // jellyfinReadToolSpecs returns the Jellyfin read-only diagnostic tools.
@@ -219,8 +281,12 @@ func hostReadToolSpecs() []toolSpec {
 		{
 			Name: toolDDReadability,
 			Def: &openai.FunctionDefinition{
-				Name:        toolDDReadability,
-				Description: "Run a non-destructive dd read test on a file path on the media host. Returns bytes read, speed, and any I/O error. EIO errors confirm a debrid/link problem.",
+				Name: toolDDReadability,
+				Description: "Run a non-destructive dd read test on a file path on the media host. Returns " +
+					"bytes read, speed, and any I/O error. not_found:true means the path (or its parent " +
+					"directory) doesn't exist at all — a missing-content problem, NOT a FUSE/debrid one; " +
+					"check arr_media_status before concluding anything about decypharr. Any other error " +
+					"(e.g. EIO) on a path that DOES exist confirms a FUSE/debrid link problem.",
 				Parameters: jsonSchema(map[string]any{
 					"file_path": param("string", "Absolute path to the file on the media host FUSE mount"),
 				}, []string{"file_path"}),
@@ -449,6 +515,27 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 			},
 			Risk:    riskWrite,
 			Handler: (*Dispatcher).dispatchClearJellyfinCache,
+		},
+		{
+			Name: toolArrSearchMissing,
+			Def: &openai.FunctionDefinition{
+				Name: toolArrSearchMissing,
+				Description: "Trigger Sonarr/Radarr to search for and download missing content. Refused " +
+					"unless arr_media_status just confirmed has_file=false for this exact target — an " +
+					"existing (bad) file is only ever replaced via escalate_action=remove_and_search, which " +
+					"is owner-approved, never this tool. Non-destructive: with nothing on disk there is " +
+					"nothing to delete or blocklist. Give season+episode for one episode, season only for a " +
+					"whole season, neither for the whole series (tv); season/episode are ignored for movie. " +
+					"This kicks off an async download — see the systemPrompt guidance on verify_after_seconds.",
+				Parameters: jsonSchema(map[string]any{
+					paramMediaType: param("string", "tv|movie"),
+					paramTitle:     param("string", "Series or movie title"),
+					paramSeason:    param("integer", "Season number (tv only)"),
+					paramEpisode:   param("integer", "Episode number (tv only; requires season)"),
+				}, []string{paramMediaType, paramTitle}),
+			},
+			Risk:    riskWrite,
+			Handler: (*Dispatcher).dispatchArrSearchMissing,
 		},
 	}
 }
@@ -740,6 +827,161 @@ func (d *Dispatcher) readDiskInfo(ctx context.Context, _ map[string]any) (any, e
 	return d.MediaAgent.DiskUsage(ctx)
 }
 
+// EpisodeStatus is one episode's presence/file state, as reported by
+// resolveMediaStatus for a TV title.
+type EpisodeStatus struct {
+	Season  int    `json:"season"`
+	Episode int    `json:"episode"`
+	HasFile bool   `json:"has_file"`
+	Path    string `json:"path,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+}
+
+// MediaStatusResult is the resolved presence/file state for a title —
+// optionally narrowed to one season, or one season+episode — in Sonarr or
+// Radarr. The single source of truth for "does this content actually exist":
+// used by the arr_media_status tool (this file), arr_search_missing's
+// non-destructive precondition (below), and VerifyResolved's item-level check
+// (agent.go).
+type MediaStatusResult struct {
+	MediaType string `json:"media_type"`
+	Title     string `json:"title"`
+	SeriesID  int    `json:"series_id,omitempty"`
+	MovieID   int    `json:"movie_id,omitempty"`
+	// HasFile answers the specific question this call asked: for a movie,
+	// whether Radarr has a file; for TV with season+episode given, whether
+	// that one episode has a file; for TV with only a season given (or
+	// neither), whether EVERY episode returned has a file — see Episodes for
+	// the per-episode breakdown when that's false.
+	HasFile bool   `json:"has_file"`
+	Path    string `json:"path,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+	// Episodes is populated for TV: every episode of the requested season, or
+	// every episode Sonarr knows about if no season was given. Empty for movies.
+	Episodes []EpisodeStatus `json:"episodes,omitempty"`
+}
+
+// resolveMediaStatus resolves a title (and, for TV, an optional season/episode)
+// against live Sonarr/Radarr state. season/episode of -1 mean "not specified".
+func (d *Dispatcher) resolveMediaStatus(
+	ctx context.Context, mediaType, title string, season, episode int,
+) (*MediaStatusResult, error) {
+	switch mediaType {
+	case client.ReplaceMediaMovie:
+		return d.resolveMovieStatus(ctx, title)
+	case client.ReplaceMediaTV:
+		return d.resolveTVStatus(ctx, title, season, episode)
+	default:
+		return nil, fmt.Errorf("arr_media_status: unknown media_type %q", mediaType)
+	}
+}
+
+func (d *Dispatcher) resolveMovieStatus(ctx context.Context, title string) (*MediaStatusResult, error) {
+	movie, err := d.Radarr.SearchMovie(ctx, title)
+	if err != nil {
+		return nil, err
+	}
+	res := &MediaStatusResult{
+		MediaType: client.ReplaceMediaMovie,
+		Title:     movie.Title,
+		MovieID:   movie.ID,
+		HasFile:   movie.HasFile,
+	}
+	if !movie.HasFile {
+		return res, nil
+	}
+	files, err := d.Radarr.GetMovieFiles(ctx, movie.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		if f.ID == movie.MovieFileID {
+			res.Path, res.Size = f.Path, f.Size
+			break
+		}
+	}
+	return res, nil
+}
+
+func (d *Dispatcher) resolveTVStatus(
+	ctx context.Context, title string, season, episode int,
+) (*MediaStatusResult, error) {
+	series, err := d.Sonarr.SearchSeries(ctx, title)
+	if err != nil {
+		return nil, err
+	}
+	res := &MediaStatusResult{MediaType: client.ReplaceMediaTV, Title: series.Title, SeriesID: series.ID}
+
+	episodes, err := d.Sonarr.GetEpisodes(ctx, series.ID, season)
+	if err != nil {
+		return nil, err
+	}
+	files, err := d.Sonarr.GetEpisodeFiles(ctx, series.ID)
+	if err != nil {
+		return nil, err
+	}
+	fileByID := make(map[int]client.EpisodeFile, len(files))
+	for _, f := range files {
+		fileByID[f.ID] = f
+	}
+
+	allHaveFile := len(episodes) > 0
+	for _, ep := range episodes {
+		es := EpisodeStatus{Season: ep.SeasonNumber, Episode: ep.EpisodeNumber, HasFile: ep.HasFile}
+		if ep.HasFile {
+			if f, ok := fileByID[ep.EpisodeFileID]; ok {
+				es.Path, es.Size = f.Path, f.Size
+			}
+		} else {
+			allHaveFile = false
+		}
+		res.Episodes = append(res.Episodes, es)
+
+		if episode >= 0 && ep.EpisodeNumber == episode && (season < 0 || ep.SeasonNumber == season) {
+			res.HasFile, res.Path, res.Size = es.HasFile, es.Path, es.Size
+		}
+	}
+	if episode < 0 {
+		res.HasFile = allHaveFile
+	}
+	return res, nil
+}
+
+func (d *Dispatcher) readArrMediaStatus(ctx context.Context, args map[string]any) (any, error) {
+	mediaType, _ := args[paramMediaType].(string)
+	title, _ := args[paramTitle].(string)
+	return d.resolveMediaStatus(
+		ctx,
+		mediaType,
+		title,
+		intArgOrSentinel(args, paramSeason),
+		intArgOrSentinel(args, paramEpisode),
+	)
+}
+
+func (d *Dispatcher) readArrGrabHistory(ctx context.Context, args map[string]any) (any, error) {
+	mediaType, _ := args[paramMediaType].(string)
+	title, _ := args[paramTitle].(string)
+	season := intArgOrSentinel(args, paramSeason)
+
+	switch mediaType {
+	case client.ReplaceMediaMovie:
+		movie, err := d.Radarr.SearchMovie(ctx, title)
+		if err != nil {
+			return nil, err
+		}
+		return d.Radarr.MovieGrabHistory(ctx, movie.ID)
+	case client.ReplaceMediaTV:
+		series, err := d.Sonarr.SearchSeries(ctx, title)
+		if err != nil {
+			return nil, err
+		}
+		return d.Sonarr.SeriesGrabHistory(ctx, series.ID, season)
+	default:
+		return nil, fmt.Errorf("arr_grab_history: unknown media_type %q", mediaType)
+	}
+}
+
 // --- write (autonomous action) handlers ---
 
 func (d *Dispatcher) dispatchRefreshLinks(ctx context.Context, _ map[string]any) (any, error) {
@@ -906,6 +1148,85 @@ func (d *Dispatcher) dispatchClearJellyfinCache(ctx context.Context, args map[st
 	return map[string]string{keyStatus: "cache_cleared"}, nil
 }
 
+// ErrArrTargetHasFile is returned by dispatchArrSearchMissing's precondition
+// check — exported (rather than an ad-hoc [fmt.Errorf] at the call site) so
+// both tests and live-check tooling can assert on it with [errors.Is] instead
+// of matching message text. Live-check in particular expects to see this on
+// a healthy library: the discovered fixture title normally already has a
+// file, so the check exercising this tool is expected to hit the refusal
+// path, not a real search.
+var ErrArrTargetHasFile = errors.New(
+	"arr_search_missing refused: a file already exists for this target — use " +
+		"escalate_action=remove_and_search (owner-approved) if it's bad, not this tool")
+
+// dispatchArrSearchMissing triggers Sonarr/Radarr to search for content
+// confirmed missing by arr_media_status. The safety property is this
+// precondition, not a prompt instruction: it re-resolves the target itself
+// (never trusts a possibly-stale earlier arr_media_status call) and refuses
+// unless HasFile is false, so this tool can never become a backdoor around
+// owner-approved remove_and_search — with nothing on disk there is nothing
+// to delete or blocklist, so triggering a search is always non-destructive.
+func (d *Dispatcher) dispatchArrSearchMissing(ctx context.Context, args map[string]any) (any, error) {
+	mediaType, _ := args[paramMediaType].(string)
+	title, _ := args[paramTitle].(string)
+	season := intArgOrSentinel(args, paramSeason)
+	episode := intArgOrSentinel(args, paramEpisode)
+
+	status, err := d.resolveMediaStatus(ctx, mediaType, title, season, episode)
+	if err != nil {
+		return nil, err
+	}
+	if status.HasFile {
+		return nil, ErrArrTargetHasFile
+	}
+
+	scope, searchErr := d.triggerArrSearch(ctx, mediaType, status, season, episode)
+	if searchErr != nil {
+		return nil, searchErr
+	}
+	d.logAction(ctx, toolArrSearchMissing, map[string]any{
+		paramMediaType: mediaType, paramTitle: title, paramSeason: season, paramEpisode: episode,
+	})
+	return map[string]any{keyStatus: statusStarted, paramScope: scope}, nil
+}
+
+// triggerArrSearch fires the narrowest search command the given target
+// supports and returns its scope for reporting.
+func (d *Dispatcher) triggerArrSearch(
+	ctx context.Context, mediaType string, status *MediaStatusResult, season, episode int,
+) (string, error) {
+	switch {
+	case mediaType == client.ReplaceMediaMovie:
+		return "movie", d.Radarr.SearchMovieNow(ctx, status.MovieID)
+	case episode >= 0:
+		epID, findErr := d.findSonarrEpisodeID(ctx, status.SeriesID, season, episode)
+		if findErr != nil {
+			return "", findErr
+		}
+		return "episode", d.Sonarr.SearchEpisode(ctx, epID)
+	case season >= 0:
+		return "season", d.Sonarr.SeasonSearch(ctx, status.SeriesID, season)
+	default:
+		return "series", d.Sonarr.SeriesSearch(ctx, status.SeriesID)
+	}
+}
+
+// findSonarrEpisodeID looks up Sonarr's internal episode ID for a
+// season/episode number — SearchEpisode takes that ID, not the human-facing
+// episode number MediaStatusResult reports.
+func (d *Dispatcher) findSonarrEpisodeID(ctx context.Context, seriesID, season, episode int) (int, error) {
+	episodes, err := d.Sonarr.GetEpisodes(ctx, seriesID, season)
+	if err != nil {
+		return 0, err
+	}
+	for _, ep := range episodes {
+		if ep.EpisodeNumber == episode {
+			return ep.ID, nil
+		}
+	}
+	return 0, fmt.Errorf("arr_search_missing: season %d episode %d not found", season, episode)
+}
+
 // --- approval (owner-approved escalation) handlers ---
 
 // readArrRemoveAndSearchPlan builds a read-only preview of a Sonarr/Radarr
@@ -952,8 +1273,8 @@ func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceReq
 		MediaType: mediaType,
 		Title:     title,
 		Scope:     scope,
-		Season:    intArgOrDefault(args, paramSeason, -1),
-		Episode:   intArgOrDefault(args, paramEpisode, -1),
+		Season:    intArgOrSentinel(args, paramSeason),
+		Episode:   intArgOrSentinel(args, paramEpisode),
 	}
 	if blocklist, ok := args[paramBlocklist].(bool); ok {
 		req.SkipBlocklist = !blocklist
@@ -969,18 +1290,45 @@ func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceReq
 	}
 }
 
-// intArgOrDefault extracts an int from a JSON-decoded args map, where numbers
-// always decode as float64. Returns def if the key is absent or not a number.
-func intArgOrDefault(args map[string]any, key string, def int) int {
+// noArgValue is the sentinel intArgOrSentinel returns for an absent/non-numeric
+// season or episode argument, matching the "-1 means not applicable" convention
+// used throughout this package and internal/client for the same fields.
+const noArgValue = -1
+
+// intArgOrSentinel extracts an int from a JSON-decoded args map, where numbers
+// always decode as float64. Returns noArgValue if the key is absent or not a number.
+func intArgOrSentinel(args map[string]any, key string) int {
 	if v, ok := args[key].(float64); ok {
 		return int(v)
 	}
-	return def
+	return noArgValue
+}
+
+// isDisruptiveAction reports whether action mutates service-wide state (a
+// restart, a full library scan, a mount-wide cache cleanup or repair sweep)
+// rather than one item. Their side effects can outlast the run that
+// triggered them and be mistaken by a concurrently-starting run for evidence
+// about its own incident — see Agent.disruptionNote. Deliberately excludes
+// item-scoped actions (clear_jellyfin_cache, decypharr_recheck, the
+// *_rescan tools, arr_search_missing): those only ever affect the one title
+// they name.
+func isDisruptiveAction(action string) bool {
+	switch action {
+	case toolRestartDecypharr, toolRestartJellyfin, toolJellyfinLibraryScan,
+		toolCacheCleanup, toolRepairSweep, toolRefreshLinks:
+		return true
+	default:
+		return false
+	}
 }
 
 // logAction records a completed action to the database. A nil DB (e.g. when
 // the dispatcher is used by the live-check CLI, which has no incident to
-// attach actions to) is a silent no-op rather than a panic.
+// attach actions to) is a silent no-op rather than a panic. Also records
+// disruptive actions to last_disruption so a concurrently-starting run's
+// prompt can be warned about them (see runManager.globalSlot and
+// Agent.disruptionNote) — this is a best-effort visibility aid, not a lock;
+// globalSlot is what actually prevents the interference.
 func (d *Dispatcher) logAction(ctx context.Context, action string, params map[string]any) {
 	if d.DB == nil {
 		return
@@ -992,6 +1340,9 @@ func (d *Dispatcher) logAction(ctx context.Context, action string, params map[st
 		TriggeredBy: triggeredByAgent,
 		Status:      db.ActionApplied,
 	})
+	if isDisruptiveAction(action) {
+		_ = d.DB.RecordDisruption(ctx, action, d.IncidentID)
+	}
 }
 
 // --- helpers ---

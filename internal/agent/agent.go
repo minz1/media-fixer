@@ -11,6 +11,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -25,6 +26,12 @@ It is a single data point. For example, get_torrent_state returning no torrents 
 decypharr has no matching entry — keep going. Always continue the remaining steps and always
 reach complete_diagnosis with whatever you found. Never abandon the whole diagnosis because
 one tool call failed.
+
+If your user message includes a "NOTE: <action> was run ... while investigating incident #..."
+line: a different incident's service-wide action may still be settling. Do NOT diagnose a root
+cause from evidence gathered inside that window — an EIO, a connection-refused, or a missing
+path seen right now could be a transient side effect of that disruption, not a fact about this
+incident. Prefer re-checking (a fresh dd_readability_test, disk check, etc.) over concluding.
 
 Media files live under /mnt/decypharr. Cache is at /var/cache/decypharr. Other data is at /data.
 Library files under /data/library/{tv,movies}/ are SYMLINKS into /mnt/decypharr/__all__/<torrent>/.
@@ -74,7 +81,17 @@ Step 4 — File readability (always required).
     /mnt/decypharr/<torrent-folder-from-step-3> to find the video file, then use that path.
   - If a path under /data/library is a symlink (is_symlink=true), dd-test its target
     (the /mnt/decypharr/__all__/... path), not the link itself.
-  EIO errors or near-zero bytes-read confirm a FUSE/debrid link problem.
+  EIO errors or near-zero bytes-read on a file that DOES exist confirm a FUSE/debrid link
+  problem. dd_readability_test's not_found:true (the file, or its parent directory via
+  list_directory, does not exist at all — "no such file or directory") is a DIFFERENT finding
+  and must never be treated as EIO: the content is not there, which usually means it was never
+  fully downloaded, not that the mount is broken. On not_found:true, call arr_media_status for
+  this title (with season/episode if known) BEFORE concluding anything about decypharr/FUSE. If
+  it reports has_file=false, that IS the root cause — use arr_search_missing, not a
+  decypharr/Jellyfin action.
+  If arr_media_status shows has_file=false and you want to know WHY (never grabbed vs. grabbed
+  but the import failed), call arr_grab_history — the fix differs (arr_search_missing for
+  "never grabbed"; escalate_action=remove_and_search if a bad file WAS imported).
 
 Step 5 — Log review (always required).
   Call loki_query with {unit=~"jellyfin.service|decypharr.service"} for the last 30 minutes, and
@@ -103,6 +120,22 @@ passed).
   5. A library scan takes minutes — do NOT wait in-run. Call complete_diagnosis with
      requires_approval=false, verify_after_seconds set to your estimate (e.g. 300-600), and
      user_eta_minutes set to a friendly "try again in N minutes". The system re-checks for you.
+
+--- Content is missing entirely (arr_media_status confirms has_file=false) ---
+
+This is the fix when Step 4 above found the file (or its containing directory) does not exist,
+AND arr_media_status confirmed has_file=false for the specific target. This is NOT a
+decypharr/Jellyfin problem — nothing was ever downloaded (or a prior download was later
+removed). Do not reach for clear_jellyfin_cache, jellyfin_library_scan, decypharr_cache_cleanup,
+or any restart here; none of them can produce a file that was never downloaded.
+  1. Call arr_search_missing with the narrowest target you can identify (episode > season >
+     series). It is refused if arr_media_status was wrong and a file actually exists — in that
+     case use escalate_action=remove_and_search instead (owner-approved; the file is bad, not
+     missing).
+  2. This kicks off an asynchronous search + download — do NOT wait in-run. Call
+     complete_diagnosis with requires_approval=false and verify_after_seconds set generously
+     (a download takes far longer than a library scan or cache refresh — prefer 1800+), with
+     user_eta_minutes reflecting that (e.g. 20-30). The system tracks it through to completion.
 
 --- Infrastructure/connectivity problems (what=other, login_failed, or title is not a media title) ---
 
@@ -144,9 +177,16 @@ If your user message includes a "Actions already attempted on this incident" sec
 actions were applied successfully but did NOT resolve the problem — this incident is still open
 after them. That is evidence AGAINST the diagnosis that led to them, not a reason to retry. If
 your current evidence points toward an action already in that list, do not call it again (a
-repeat is blocked and returns an error) — move to the next-lower-priority action below, or set
-escalate_action to manual_investigation. Retrying the same fix on the same evidence wastes a
-turn and delays the reporter for nothing.
+repeat is blocked and returns an error).
+
+A DIFFERENT action is only justified by evidence YOU observed in this run that points at a
+different cause than the one already tried — not by mechanically moving to the next item in the
+priority list below. The priority list ranks actions by how destructive they are, given a cause;
+it is not a queue to work through when one fix fails. If nothing you've found in this run points
+at a specific different cause, set escalate_action to manual_investigation instead of guessing —
+a plausible-sounding but unevidenced escalation to a more disruptive action (e.g. a restart after
+a cache clear failed, with no new evidence a restart would help) is worse than asking for help,
+and control review will likely catch it anyway once two or more actions have been tried.
 
 Action priority (least destructive first):
 1. refresh_decypharr_links  — for EIO / stale CDN URLs
@@ -238,19 +278,32 @@ type DiagnosticResult struct {
 	PreFix *FixSignature `json:"pre_fix,omitempty"`
 }
 
-// FixSignature is a snapshot of a Jellyfin item's observable playback state:
-// whether it's indexed, and whether the file it currently points at is
-// readable. VerifyResolved requires this to differ before and after a fix —
-// without that, "verified" meant only "Jellyfin still reports a source",
-// which is true for nearly any indexed item whether or not it actually
-// plays, and is why every fix claim in a week of production logs "verified"
-// even on incidents that came right back.
+// FixSignature is a snapshot of a title's observable state: Jellyfin's
+// indexing/playback view, and — best-effort — *arr's view of whether it
+// actually has a file at all. VerifyResolved requires post to be a strict
+// improvement over pre, not just different — without that, "verified" meant
+// only "Jellyfin still reports a source" (true for nearly any indexed item
+// whether or not it actually plays) or "the signature isn't byte-identical"
+// (true even when a count went down, not up), and is why every fix claim in
+// a week of production logs "verified" even on incidents that came right
+// back, including one where the specific missing episode never got a file
+// but the series' other 9 episodes staying indexed was enough to pass.
 type FixSignature struct {
 	Path         string `json:"path,omitempty"`
 	SourceCount  int    `json:"source_count"`
 	EpisodeCount int    `json:"episode_count"`
 	DDBytesRead  int64  `json:"dd_bytes_read"`
 	DDError      string `json:"dd_error,omitempty"`
+	// ArrChecked/ArrHasFile carry *arr's aggregate "has every file" answer
+	// for the incident's title (see Agent.arrHasFileForTitle) — plain bools
+	// rather than a *bool so FixSignature stays comparable by value (a
+	// pointer field would make two equal-valued signatures compare unequal
+	// by address, silently defeating every comparison below). ArrHasFile is
+	// only meaningful when ArrChecked is true; unchecked (title didn't
+	// resolve against Sonarr/Radarr, or neither is configured) never blocks
+	// verification — it just means this signal isn't available.
+	ArrChecked bool `json:"arr_checked,omitempty"`
+	ArrHasFile bool `json:"arr_has_file,omitempty"`
 }
 
 // escalationLabel gives a short human-readable phrase for an
@@ -329,7 +382,7 @@ func (a *Agent) Run(
 	// item looks afterward. Captured once per run (not persisted across a
 	// later Rerun) — "did what this run's action changed" is the question that
 	// matters, and a fresh Run already gets a fresh baseline.
-	preFix := a.captureSignature(ctx, inc.JellyfinItemID)
+	preFix := a.captureSignature(ctx, inc.JellyfinItemID, inc.Title)
 
 	messages := a.initMessages(ctx, inc, seed)
 	tools := toolDefs()
@@ -501,7 +554,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	// the fix needs time to take effect — skip the instant check and let the
 	// service's verification loop re-check after the requested delay.
 	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 && itemID != "" {
-		if !a.VerifyResolved(ctx, itemID, preFix) {
+		if !a.VerifyResolved(ctx, itemID, inc.Title, preFix) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
 			result.EscalateAction = EscalateManualInvestigation
@@ -539,16 +592,22 @@ func (a *Agent) executeCall(ctx context.Context, fn, argsJSON string, seenCalls 
 	return resultJSON
 }
 
-// captureSignature snapshots an item's current observable state: what
-// Jellyfin reports for it right now, and whether the path Jellyfin currently
-// points at (which can change between runs — the underlying file may be
-// replaced) is actually readable. Best-effort: every failure is recorded in
-// the signature rather than returned as an error, since a snapshot must never
-// abort a diagnosis. Returns a zero-value signature for an empty itemID
-// (common on a freshly-reported incident whose item hasn't been resolved
-// yet) — VerifyResolved treats that as "no baseline", not as "unchanged".
-func (a *Agent) captureSignature(ctx context.Context, itemID string) *FixSignature {
+// captureSignature snapshots a title's current observable state: what
+// Jellyfin reports for the item right now, whether the path Jellyfin
+// currently points at (which can change between runs — the underlying file
+// may be replaced) is actually readable, and — best-effort — whether *arr
+// actually has a file for this title at all (see arrHasFileForTitle).
+// Every failure is recorded in the signature rather than returned as an
+// error, since a snapshot must never abort a diagnosis. Returns a signature
+// with only the *arr fields populated for an empty itemID (common on a
+// freshly-reported incident whose Jellyfin item hasn't been resolved yet) —
+// VerifyResolved treats a fully-zero signature as "no baseline", not as
+// "unchanged".
+func (a *Agent) captureSignature(ctx context.Context, itemID, title string) *FixSignature {
 	sig := &FixSignature{}
+	if a.disp != nil {
+		sig.ArrHasFile, sig.ArrChecked = a.arrHasFileForTitle(ctx, title)
+	}
 	if itemID == "" || a.disp == nil {
 		return sig
 	}
@@ -574,27 +633,94 @@ func (a *Agent) captureSignature(ctx context.Context, itemID string) *FixSignatu
 	return sig
 }
 
+// arrHasFileForTitle attempts to resolve whether Sonarr/Radarr has every
+// file for title as a whole (every episode, for TV; the one file, for a
+// movie) — best-effort, since an incident's media type isn't structurally
+// known at this point (only the LLM parses that from title/details during
+// diagnosis). Tries Sonarr first, then Radarr; returns checked=false if
+// neither is configured or neither has a matching title, meaning "this
+// signal isn't available" — VerifyResolved must never treat that the same
+// as "confirmed missing".
+//
+// This is whole-title rather than single-episode granularity: the codebase
+// has no season/episode parser outside the LLM's own reasoning, so a
+// specific-episode check (as arr_search_missing's pending-outcome tracking
+// does, where the season/episode came from the tool call that triggered it)
+// isn't available here. Even at whole-title granularity this is a real
+// improvement: resolveMediaStatus's whole-series HasFile is false if ANY
+// episode is missing, which is a ground-truth signal Jellyfin's own episode
+// index can't provide — Jellyfin kept reporting the Rick and Morty series as
+// healthy (9 of 10 episodes indexed) for as long as S09E09 was missing.
+// Returns (hasFile, checked).
+func (a *Agent) arrHasFileForTitle(ctx context.Context, title string) (bool, bool) {
+	if title == "" {
+		return false, false
+	}
+	if a.disp.Sonarr != nil {
+		if status, err := a.disp.resolveMediaStatus(ctx, client.ReplaceMediaTV, title, -1, -1); err == nil {
+			return status.HasFile, true
+		}
+	}
+	if a.disp.Radarr != nil {
+		if status, err := a.disp.resolveMediaStatus(ctx, client.ReplaceMediaMovie, title, -1, -1); err == nil {
+			return status.HasFile, true
+		}
+	}
+	return false, false
+}
+
 // VerifyResolved reports whether a playback problem looks resolved for an
-// item. It requires evidence the item is currently usable — a movie/episode
-// needs a real, successful dd read of whatever path Jellyfin is reporting
-// right now (not the path recorded at diagnosis time); a series needs
-// episodes indexed, since PlaybackInfo throws on a Series ID on some Jellyfin
-// builds regardless of indexing state (see systemPrompt) and can't be used
-// there — AND, when pre is non-nil, that the current signature actually
-// differs from it. An identical signature means nothing observably changed
-// as a result of whatever was just applied, which used to pass this check as
-// long as the item looked healthy at all — true for nearly any indexed item
-// whether or not it actually plays, which is why every fix claim in a week
-// of production logs "verified" even on incidents that came right back.
-func (a *Agent) VerifyResolved(ctx context.Context, itemID string, pre *FixSignature) bool {
-	post := a.captureSignature(ctx, itemID)
+// item. Two independent requirements, both needed:
+//
+//  1. A hard gate: if *arr's file state could be confirmed and it says the
+//     content is missing, nothing else matters — Jellyfin/dd signals can't
+//     make missing content playable, and this is exactly the gap that let
+//     the Rick and Morty S09E09 incident "verify" purely because the series'
+//     other 9 episodes stayed indexed throughout.
+//  2. Real usability evidence, and — when pre is non-nil — that post is a
+//     STRICT IMPROVEMENT over it, not just different (see improved). An
+//     identical-or-worse signature used to pass as long as it merely
+//     differed from pre in any direction, including a lower episode count.
+func (a *Agent) VerifyResolved(ctx context.Context, itemID, title string, pre *FixSignature) bool {
+	post := a.captureSignature(ctx, itemID, title)
+
+	if post.ArrChecked && !post.ArrHasFile {
+		return false
+	}
 
 	sourceOK := post.SourceCount > 0 && post.Path != "" && post.DDBytesRead > 0 && post.DDError == ""
 	episodesOK := post.EpisodeCount > 0
 	if !sourceOK && !episodesOK {
 		return false
 	}
-	return pre == nil || *post != *pre
+	if pre == nil {
+		return true
+	}
+	return improved(pre, post)
+}
+
+// improved reports whether post is a genuine improvement over pre along at
+// least one dimension VerifyResolved cares about, not merely different from
+// it: newly readable when it wasn't, now resolving to a different path that
+// itself reads successfully (the underlying file was replaced/relinked),
+// more episodes indexed than before (not fewer, not the same), or *arr's
+// file state newly confirmed present when it previously wasn't known or
+// wasn't there.
+func improved(pre, post *FixSignature) bool {
+	preReadable := pre.DDBytesRead > 0 && pre.DDError == ""
+	postReadable := post.DDBytesRead > 0 && post.DDError == ""
+	switch {
+	case postReadable && !preReadable:
+		return true
+	case postReadable && preReadable && post.Path != "" && post.Path != pre.Path:
+		return true
+	case post.EpisodeCount > pre.EpisodeCount:
+		return true
+	case post.ArrChecked && post.ArrHasFile && (!pre.ArrChecked || !pre.ArrHasFile):
+		return true
+	default:
+		return false
+	}
 }
 
 // ErrIncidentNotInvestigatable is returned by Run when the incident's status
@@ -633,6 +759,91 @@ func (a *Agent) RunEscalation(ctx context.Context, result *DiagnosticResult) (an
 	}
 }
 
+// PendingOutcomeObservation is what CheckPendingOutcome reports after polling
+// live *arr state for one pending arr_search_missing outcome. Deliberately
+// pure observation with no time-based decisions (grace periods, stall
+// timeouts) — those live in Service.advancePendingOutcome, which has the
+// outcome's history (StartedAt, LastProgressAt) to compare a fresh
+// observation against.
+type PendingOutcomeObservation struct {
+	// HasFile is true once *arr actually has a file for the target — the
+	// terminal "resolved" signal.
+	HasFile bool
+	// QueueStage is Sonarr/Radarr's queue status string ("queued",
+	// "downloading", "completed", ...) for the matching queue item, or ""
+	// if nothing is currently in the queue for this target (still waiting
+	// on an indexer, no release exists yet, or it already imported and
+	// dropped out of the queue — HasFile is what distinguishes the last case).
+	QueueStage string
+	// ProgressPct is 0-100, meaningful only when QueueStage != "".
+	ProgressPct float64
+}
+
+// CheckPendingOutcome polls live Sonarr/Radarr state for one pending
+// arr_search_missing outcome: whether the target now has a file, and — if
+// not — whether anything is actively in the download queue for it. Matching
+// a queue record to the target uses series/movie ID, which resolveMediaStatus
+// already resolved from the title, rather than the more granular episode ID:
+// good enough to answer "is anything happening for this show/movie", which
+// is the question that matters for the season/series-scope searches this
+// also has to support.
+func (a *Agent) CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*PendingOutcomeObservation, error) {
+	status, err := a.disp.resolveMediaStatus(ctx, po.MediaType, po.Title, po.Season, po.Episode)
+	if err != nil {
+		return nil, err
+	}
+	obs := &PendingOutcomeObservation{HasFile: status.HasFile}
+	if obs.HasFile {
+		return obs, nil
+	}
+
+	queue, queueErr := a.fetchQueue(ctx, po.MediaType)
+	if queueErr != nil {
+		// Best-effort: a transient queue-fetch failure shouldn't be mistaken
+		// for "nothing is happening" (which would restart the grace-period
+		// clock's reasoning in the caller) — report what we know (not yet
+		// resolved) and let the next scheduled check try again.
+		return obs, nil //nolint:nilerr // deliberate: see comment above, not a swallowed error
+	}
+	for _, q := range queue {
+		if !queueRecordMatches(q, po.MediaType, status) {
+			continue
+		}
+		obs.QueueStage = q.Status
+		if q.Size > 0 {
+			obs.ProgressPct = (q.Size - q.SizeLeft) / q.Size * progressPercentScale
+		}
+		break
+	}
+	return obs, nil
+}
+
+// progressPercentScale converts a fraction (Size-SizeLeft)/Size into a 0-100
+// percentage for PendingOutcomeObservation.ProgressPct.
+const progressPercentScale = 100.0
+
+func (a *Agent) fetchQueue(ctx context.Context, mediaType string) ([]client.QueueRecord, error) {
+	switch mediaType {
+	case client.ReplaceMediaMovie:
+		if a.disp.Radarr == nil {
+			return nil, nil
+		}
+		return a.disp.Radarr.GetQueue(ctx)
+	default:
+		if a.disp.Sonarr == nil {
+			return nil, nil
+		}
+		return a.disp.Sonarr.GetQueue(ctx)
+	}
+}
+
+func queueRecordMatches(q client.QueueRecord, mediaType string, status *MediaStatusResult) bool {
+	if mediaType == client.ReplaceMediaMovie {
+		return q.MovieID == status.MovieID
+	}
+	return q.SeriesID == status.SeriesID
+}
+
 // ScanRunning reports whether a Jellyfin library scan is currently in progress.
 func (a *Agent) ScanRunning(ctx context.Context) bool {
 	st, err := a.disp.Jellyfin.ScanStatus(ctx)
@@ -648,7 +859,7 @@ Reported by: %s
 Details: %s
 Jellyfin item ID: %s
 Report time: %s
-%s
+%s%s
 Please diagnose the root cause and apply the least-destructive fix(es) autonomously.
 Call complete_diagnosis when done.`,
 		inc.Title,
@@ -659,7 +870,47 @@ Call complete_diagnosis when done.`,
 		inc.JellyfinItemID,
 		inc.CreatedAt.Format(time.RFC3339),
 		a.attemptHistory(ctx, inc.ID),
+		a.disruptionNote(ctx, inc.ID),
 	)
+}
+
+// disruptionQuietWindow is how long after a service-wide disruptive action a
+// newly-starting run is warned about it. Comfortably above waitUntilReady's
+// restartReadyTimeout (30s) and a typical library-scan-trigger call, so the
+// warning covers the period where the disrupted service is plausibly still
+// settling, not indefinitely.
+const disruptionQuietWindow = 2 * time.Minute
+
+// disruptionNote returns a warning for a run starting shortly after a
+// service-wide action (restart, scan, cleanup, sweep) was applied — possibly
+// by a different, concurrently-running incident (see runManager.globalSlot,
+// which prevents them literally overlapping, but not a fresh run starting
+// just after one finishes while the disrupted service is still settling).
+// Returns "" when nothing was recorded, the disruption is stale, or it was
+// this same incident's own action (already covered by attemptHistory, and
+// not something to warn an incident about itself).
+func (a *Agent) disruptionNote(ctx context.Context, incidentID string) string {
+	disp, err := a.db.LastDisruption(ctx)
+	if err != nil || disp.IncidentID == incidentID || time.Since(disp.At) > disruptionQuietWindow {
+		return ""
+	}
+	return fmt.Sprintf(
+		"\nNOTE: %s was run %s ago while investigating incident #%s. Transient errors or missing "+
+			"paths seen just now may be artifacts of that disruption, not this incident's own "+
+			"problem — see the RESILIENCE note above.\n",
+		disp.Action, time.Since(disp.At).Round(time.Second), shortID(disp.IncidentID),
+	)
+}
+
+// shortID returns the first 8 characters of a UUID for compact display, or
+// the whole string if it's shorter (defensive — every real incident ID is a
+// full UUID, but a test fixture might not be).
+func shortID(id string) string {
+	const shortLen = 8
+	if len(id) <= shortLen {
+		return id
+	}
+	return id[:shortLen]
 }
 
 // attemptHistory renders every action already logged against this incident, so
@@ -691,26 +942,42 @@ func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 	return sb.String()
 }
 
+// identityParamKeys are the tool argument keys used across the registry to
+// identify *what* an action targets, checked by identityParamsMatch.
+func identityParamKeys() []string {
+	return []string{paramItemID, paramName, paramTitle, paramSeriesID, paramMovieID, paramSeason, paramEpisode}
+}
+
 // identityParamsMatch reports whether a and b identify the same target: both
-// empty (a parameterless action like restart_jellyfin), or sharing a value
-// for one of the tool argument keys used across the registry to identify
-// *what* an action targets. Checked individually instead of comparing full
-// JSON objects because logAction sometimes records extra resolved fields the
-// LLM's own call arguments never contain — e.g. sonarr_rescan logs
-// series_id alongside the title the LLM passed.
+// empty (a parameterless action like restart_jellyfin), or agreeing on every
+// identity key present in both. Checked individually instead of comparing
+// full JSON objects because logAction sometimes records extra resolved
+// fields the LLM's own call arguments never contain — e.g. sonarr_rescan
+// logs series_id alongside the title the LLM passed.
+//
+// Every shared key must match, not just the first one found: with only the
+// first checked, two arr_search_missing calls for different episodes of the
+// same series (season/episode differ, but title — checked earlier in the
+// key list — is identical) were wrongly treated as the same action and the
+// second was blocked as a duplicate before ever running. season/episode
+// must both be checked for a title match to mean anything for that tool.
 func identityParamsMatch(a, b map[string]any) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
 	}
-	identityParamKeys := []string{paramItemID, paramName, paramTitle, paramSeriesID, paramMovieID}
-	for _, k := range identityParamKeys {
+	matchedAny := false
+	for _, k := range identityParamKeys() {
 		av, aok := a[k]
 		bv, bok := b[k]
-		if aok && bok {
-			return fmt.Sprint(av) == fmt.Sprint(bv)
+		if !aok || !bok {
+			continue
 		}
+		if fmt.Sprint(av) != fmt.Sprint(bv) {
+			return false
+		}
+		matchedAny = true
 	}
-	return false
+	return matchedAny
 }
 
 // actionAlreadyApplied reports whether this exact action — same tool name,
@@ -770,19 +1037,39 @@ func (a *Agent) llmCall(ctx context.Context, req openai.ChatCompletionRequest) (
 	return openai.ChatCompletionResponse{}, fmt.Errorf("llm failed after %d attempts: %w", len(delays), lastErr)
 }
 
-// BuildSummarySeed constructs the seed messages for a resumed run from a prior-session summary.
+// BuildSummarySeed constructs the seed messages for a resumed run from a
+// prior-session summary. The summary is explicitly labeled as unverified
+// prior inference, not established fact, and the seed requires the FULL
+// protocol to be re-run (not just two of five steps) before any conclusion.
+//
+// A resumed run re-diagnosing "100 meters" once cited ffprobe errors from a
+// two-day-old summary as its root cause — the errors were actually about a
+// completely different file, but the seed only mandated refreshing
+// loki_query and get_disk_info, so nothing else was re-checked and the stale
+// inference was never challenged. Requiring the full protocol, and requiring
+// the eventual diagnosis to cite evidence gathered in THIS run rather than
+// just repeating what the summary said, closes both halves of that gap.
 func (a *Agent) BuildSummarySeed(ctx context.Context, inc *db.Incident, summary string) []openai.ChatCompletionMessage {
 	return []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 		{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf(
-			"This is a resumed investigation of incident %q (type: %s).\n\nPrevious findings:\n%s\n%s\n\n"+
-				"Continue the diagnosis. Before calling complete_diagnosis you MUST call loki_query and "+
-				"get_disk_info to refresh current state — conditions may have changed since the prior run. "+
-				"Do not skip these even if the summary already contains similar data.",
+			"This is a resumed investigation of incident %q (type: %s).\n\n"+
+				"Previous findings — UNVERIFIED prior inference from an earlier run, NOT established fact. "+
+				"Conditions may have changed since, and even at the time it may have drawn a conclusion from "+
+				"evidence about a different file, a transient disruption, or a stale log window:\n%s\n%s%s\n\n"+
+				"Continue the diagnosis. Before calling complete_diagnosis you MUST re-run the FULL protocol "+
+				"for this incident type from the system prompt above — for a playback problem, all five "+
+				"steps (including dd_readability_test, and arr_media_status if content appears missing), not "+
+				"just loki_query and get_disk_info; for an infrastructure problem, both steps. Do not skip a "+
+				"step because the summary already contains similar-looking data — that data may be stale or "+
+				"about the wrong file. Your complete_diagnosis.primary_reason MUST cite evidence YOU observed "+
+				"in this run; a claim carried over from the previous findings above, on its own, is not "+
+				"sufficient grounds for an action.",
 			inc.Title,
 			inc.What,
 			summary,
 			a.attemptHistory(ctx, inc.ID),
+			a.disruptionNote(ctx, inc.ID),
 		)},
 	}
 }

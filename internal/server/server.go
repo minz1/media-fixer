@@ -78,6 +78,7 @@ func New(addr, baseURL string, database *db.DB, svc *incident.Service, log *slog
 
 		r.Post("/incidents/{id}/resolve", s.actionResolve)
 		r.Post("/incidents/{id}/rerun", s.actionRerun)
+		r.Post("/incidents/{id}/keep-searching", s.actionKeepSearching)
 		r.Post("/incidents/{id}/unlock", s.actionUnlock)
 		r.Get("/incidents/{id}/escalation-preview", s.escalationPreview)
 		r.Post("/incidents/{id}/approve-escalation", s.approveEscalation)
