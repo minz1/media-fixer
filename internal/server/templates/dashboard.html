@@ -132,12 +132,12 @@
         <!-- Every status is manually transitionable. -->
         <div class="mt-4 flex flex-wrap gap-3">
           <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reinvestigate"
+            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/rerun"
             hx-swap="outerHTML"
             hx-target="body"
-            class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
           >
-            Re-investigate
+            Re-run diagnosis
           </button>
           {{if ne .Incident.Status "resolved"}}
           <button
@@ -149,14 +149,6 @@
             Mark resolved
           </button>
           {{end}}
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/reopen"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
-          >
-            Reopen — still broken
-          </button>
           {{if .Incident.AutonomousLocked}}
           <button
             hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/unlock"

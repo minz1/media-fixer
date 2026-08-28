@@ -372,3 +372,65 @@ func TestSetIncidentFinding(t *testing.T) {
 		t.Errorf("root_cause: %v", m["root_cause"])
 	}
 }
+
+// TestFindStaleInvestigating is the regression test for the heartbeat/stale
+// run detection: an incident that has been sitting in "investigating" since
+// before staleBefore, with no heartbeat written, must be found; one whose
+// heartbeat was touched after staleBefore must not, even though its
+// updated_at (when it first entered "investigating") is older.
+func TestFindStaleInvestigating(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	stale := &db.Incident{
+		Status:     db.StatusInvestigating,
+		Source:     "discord",
+		ReportedBy: "x",
+		What:       "cant_play",
+		Title:      "Stale",
+	}
+	if err := d.CreateIncident(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	fresh := &db.Incident{
+		Status:     db.StatusInvestigating,
+		Source:     "discord",
+		ReportedBy: "x",
+		What:       "cant_play",
+		Title:      "Fresh",
+	}
+	if err := d.CreateIncident(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	notInvestigating := &db.Incident{
+		Status:     db.StatusOpen,
+		Source:     "discord",
+		ReportedBy: "x",
+		What:       "cant_play",
+		Title:      "Open",
+	}
+	if err := d.CreateIncident(ctx, notInvestigating); err != nil {
+		t.Fatal(err)
+	}
+
+	// fresh gets a heartbeat after the cutoff; stale gets none at all, so it
+	// falls back to (also pre-cutoff) updated_at.
+	cutoff := time.Now()
+	time.Sleep(10 * time.Millisecond)
+	if err := d.TouchHeartbeat(ctx, fresh.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.FindStaleInvestigating(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != stale.ID {
+		ids := make([]string, len(got))
+		for i, inc := range got {
+			ids[i] = inc.Title
+		}
+		t.Fatalf("expected only %q, got %v", stale.Title, ids)
+	}
+}

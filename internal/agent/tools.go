@@ -73,9 +73,11 @@ const diskInfoDesc = "Get disk usage for the media host paths: /mnt/decypharr (F
 	"normal (cloud-backed). For /data and /var/cache/decypharr, is_mount_point=false is normal."
 
 const (
-	paramTitle  = "title"
-	paramItemID = "item_id"
-	paramName   = "name"
+	paramTitle    = "title"
+	paramItemID   = "item_id"
+	paramName     = "name"
+	paramSeriesID = "series_id"
+	paramMovieID  = "movie_id"
 )
 
 // Escalation action names the agent may set in complete_diagnosis.escalate_action.
@@ -246,6 +248,16 @@ func hostReadToolSpecs() []toolSpec {
 				Parameters: jsonSchema(map[string]any{
 					"units":        param("string", lokiUnitParamDesc),
 					"minutes_back": param("number", "How many minutes before now to search (max 120)"),
+					"filter": param("string",
+						"Substring the log line must contain — the title, filename, or item ID you're "+
+							"investigating. Strongly recommended for media incidents: without it you get every "+
+							"line from both services in the window, including ones about a completely "+
+							"different title, which are not evidence about this incident. Omit only for a "+
+							"general infrastructure/connectivity incident with no specific item to filter on."),
+					"around_incident": param("boolean",
+						"Center the window on when the incident was reported instead of the current time "+
+							"(default true). Leave true unless you deliberately want to see what's happening "+
+							"right now — e.g. re-checking after applying a fix."),
 				}, []string{"units", "minutes_back"}),
 			},
 			Risk:    riskRead,
@@ -593,6 +605,11 @@ type Dispatcher struct {
 	MediaAgent *client.MediaAgentClient
 	DB         *db.DB
 	IncidentID string
+	// IncidentTime anchors loki_query's default window (around_incident=true)
+	// on when the incident was reported rather than time.Now(), so
+	// re-diagnosing an incident that's hours or days old still greps logs
+	// from when the failure actually happened.
+	IncidentTime time.Time
 }
 
 // Dispatch executes a tool call and returns a JSON string result for the LLM.
@@ -670,13 +687,42 @@ func (d *Dispatcher) readRepairHealth(ctx context.Context, _ map[string]any) (an
 func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (any, error) {
 	units, _ := args["units"].(string)
 	units = FixLokiUnitSelector(units)
+	if filter, ok := args["filter"].(string); ok && filter != "" {
+		units += ` |= "` + escapeLogQLString(filter) + `"`
+	}
+
 	minutes, _ := args["minutes_back"].(float64)
 	if minutes <= 0 || minutes > maxLokiMinutes {
 		minutes = defaultLokiMinutes
 	}
-	to := time.Now()
-	from := to.Add(-time.Duration(minutes) * time.Minute)
+
+	// Default true: an incident re-diagnosed hours or days after it was first
+	// reported should still grep logs from when the failure happened, not from
+	// right now. A caller can set this false to deliberately look at the
+	// current moment instead (e.g. re-checking right after applying a fix).
+	aroundIncident := true
+	if v, ok := args["around_incident"].(bool); ok {
+		aroundIncident = v
+	}
+	anchor := time.Now()
+	if aroundIncident && !d.IncidentTime.IsZero() {
+		anchor = d.IncidentTime
+	}
+
+	const windowHalves = 2
+	half := time.Duration(minutes/windowHalves) * time.Minute
+	from, to := anchor.Add(-half), anchor.Add(half)
+	if now := time.Now(); to.After(now) {
+		to = now
+	}
 	return d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
+}
+
+// escapeLogQLString escapes backslashes and double quotes so a filter string
+// can be safely embedded in a double-quoted LogQL string literal.
+func escapeLogQLString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
 func (d *Dispatcher) readListDirectory(ctx context.Context, args map[string]any) (any, error) {
@@ -831,8 +877,8 @@ func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, args map[string]a
 	if rescanErr := d.Sonarr.RescanSeries(ctx, series.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
-	d.logAction(ctx, toolSonarrRescan, map[string]any{"series_id": series.ID, paramTitle: title})
-	return map[string]any{"series_id": series.ID, keyStatus: "rescan_queued"}, nil
+	d.logAction(ctx, toolSonarrRescan, map[string]any{paramSeriesID: series.ID, paramTitle: title})
+	return map[string]any{paramSeriesID: series.ID, keyStatus: "rescan_queued"}, nil
 }
 
 func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, args map[string]any) (any, error) {
@@ -847,8 +893,8 @@ func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, args map[string]a
 	if rescanErr := d.Radarr.RescanMovie(ctx, movie.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
-	d.logAction(ctx, toolRadarrRescan, map[string]any{"movie_id": movie.ID, paramTitle: title})
-	return map[string]any{"movie_id": movie.ID, keyStatus: "rescan_queued"}, nil
+	d.logAction(ctx, toolRadarrRescan, map[string]any{paramMovieID: movie.ID, paramTitle: title})
+	return map[string]any{paramMovieID: movie.ID, keyStatus: "rescan_queued"}, nil
 }
 
 func (d *Dispatcher) dispatchClearJellyfinCache(ctx context.Context, args map[string]any) (any, error) {

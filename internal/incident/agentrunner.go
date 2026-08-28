@@ -18,12 +18,14 @@ type AgentRunner interface {
 	// prior conversation, and returns the result plus the full conversation.
 	Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) (
 		*agent.DiagnosticResult, []openai.ChatCompletionMessage, error)
-	// VerifyResolved reports whether a previously-applied fix now looks resolved.
-	VerifyResolved(ctx context.Context, itemID string) bool
+	// VerifyResolved reports whether a previously-applied fix now looks resolved,
+	// by comparing the item's current state against pre (the state captured
+	// before the fix ran; nil disables the "did anything actually change" check).
+	VerifyResolved(ctx context.Context, itemID string, pre *agent.FixSignature) bool
 	// ScanRunning reports whether a Jellyfin library scan is currently in progress.
 	ScanRunning(ctx context.Context) bool
 	// BuildSummarySeed constructs seed messages for a resumed run from a summary.
-	BuildSummarySeed(inc *db.Incident, summary string) []openai.ChatCompletionMessage
+	BuildSummarySeed(ctx context.Context, inc *db.Incident, summary string) []openai.ChatCompletionMessage
 	// PlanEscalation previews a diagnostic result's recommended escalation
 	// without making any changes.
 	PlanEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)

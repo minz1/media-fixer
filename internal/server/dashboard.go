@@ -145,25 +145,12 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
-func (s *Server) actionReinvestigate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUIDParam(w, r)
 	if !ok {
 		return
 	}
-	if err := s.svc.Reinvestigate(r.Context(), id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (s *Server) actionReopen(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseUUIDParam(w, r)
-	if !ok {
-		return
-	}
-	if err := s.svc.Reopen(r.Context(), id); err != nil {
+	if err := s.svc.Rerun(r.Context(), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

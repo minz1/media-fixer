@@ -121,6 +121,12 @@ func Open(path string) (*DB, error) {
 			return nil, fmt.Errorf("migrate incident_reporters.discord_user_id: %w", err)
 		}
 	}
+	const migrateLastHeartbeat = `ALTER TABLE incidents ADD COLUMN last_heartbeat DATETIME`
+	if _, err = conn.ExecContext(context.Background(), migrateLastHeartbeat); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, fmt.Errorf("migrate incidents.last_heartbeat: %w", err)
+		}
+	}
 	// A Discord user's identity for notification is discord_user_id, not the
 	// display-name text in the PK. Enforce one reporter row per (incident, discord
 	// user) structurally so every reader dedups for free. The DELETE clears any
@@ -442,16 +448,24 @@ type ActionLog struct {
 	Error       string       `json:"error,omitempty"`
 }
 
-// LogAction inserts an action record, generating an ID if absent.
+// LogAction inserts an action record, generating an ID if absent. Callers
+// (Dispatcher.logAction) only log an action after the underlying operation has
+// already succeeded, so "now" is an accurate applied_at — there is no separate
+// "pending" phase in this codebase's usage, unlike the applied_at/UpdateAction
+// pair the schema was originally built for.
 func (d *DB) LogAction(ctx context.Context, a *ActionLog) error {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
+	if a.AppliedAt == nil {
+		now := time.Now()
+		a.AppliedAt = &now
+	}
 	pb, _ := json.Marshal(a.Params)
 	_, err := d.sql.ExecContext(ctx, `
-		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status)
+		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status, applied_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status, a.AppliedAt)
 	return err
 }
 
@@ -556,6 +570,45 @@ func (d *DB) LoadConversation(ctx context.Context, incidentID string) (json.RawM
 // FindByStatus returns all incidents in the given status (up to findByStatusLimit).
 func (d *DB) FindByStatus(ctx context.Context, status IncidentStatus) ([]*Incident, error) {
 	return d.ListIncidents(ctx, string(status), findByStatusLimit, 0)
+}
+
+// TouchHeartbeat records that an active agent run is still making progress.
+// Called once per LLM round (Agent.logTurn) — best-effort, a failed write
+// here should never abort a diagnosis.
+func (d *DB) TouchHeartbeat(ctx context.Context, id string) error {
+	_, err := d.sql.ExecContext(ctx,
+		`UPDATE incidents SET last_heartbeat = ? WHERE id = ?`, time.Now(), id)
+	return err
+}
+
+// FindStaleInvestigating returns incidents stuck in "investigating" whose
+// heartbeat (or, if a run never got far enough to write one, updated_at —
+// set when the run entered "investigating") is older than staleBefore.
+// RecoverZombies only catches a crashed process (nothing left running to
+// check); this catches a hung one — a run whose goroutine is still alive but
+// stopped making progress, which zombie recovery cannot see at all.
+func (d *DB) FindStaleInvestigating(ctx context.Context, staleBefore time.Time) ([]*Incident, error) {
+	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
+	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
+	             COALESCE(finding,''), COALESCE(recommended_actions,''),
+	             action_count, autonomous_locked
+	      FROM incidents
+	      WHERE status = ? AND COALESCE(last_heartbeat, updated_at) < ?`
+	rows, err := d.sql.QueryContext(ctx, q, StatusInvestigating, staleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Incident
+	for rows.Next() {
+		inc, scanErr := scanIncident(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, inc)
+	}
+	return out, rows.Err()
 }
 
 // --- helpers ---

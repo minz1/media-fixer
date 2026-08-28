@@ -2,7 +2,12 @@ package incident_test
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -11,6 +16,7 @@ import (
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+	_ "modernc.org/sqlite" // register SQLite driver for the raw-backdate test helper
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
@@ -182,7 +188,7 @@ func TestUnlock(t *testing.T) {
 	}
 }
 
-func TestReopenClearsLock(t *testing.T) {
+func TestRerunClearsLock(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)
 	ctx := context.Background()
@@ -197,23 +203,23 @@ func TestReopenClearsLock(t *testing.T) {
 		t.Fatal(lockErr)
 	}
 
-	// Reopen is a deliberate human override — it must clear the lock.
-	if reopenErr := svc.Reopen(ctx, inc.ID); reopenErr != nil {
-		t.Fatal(reopenErr)
+	// Rerun is a deliberate human override — it must clear the lock.
+	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+		t.Fatal(rerunErr)
 	}
 	got, err := database.GetIncident(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.AutonomousLocked {
-		t.Error("reopen should clear the autonomous lock")
+		t.Error("rerun should clear the autonomous lock")
 	}
 	if got.Status != db.StatusReopened {
-		t.Errorf("status after reopen: %q", got.Status)
+		t.Errorf("status after rerun: %q", got.Status)
 	}
 }
 
-func TestResolveAndReopen(t *testing.T) {
+func TestResolveAndRerun(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)
 	ctx := context.Background()
@@ -238,16 +244,16 @@ func TestResolveAndReopen(t *testing.T) {
 		t.Errorf("status after resolve: %q", got.Status)
 	}
 
-	// Reopen with nil agent just marks it reopened (agent goroutine exits immediately).
-	if reopenErr := svc.Reopen(ctx, inc.ID); reopenErr != nil {
-		t.Fatal(reopenErr)
+	// Rerun with nil agent just marks it reopened (agent goroutine exits immediately).
+	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+		t.Fatal(rerunErr)
 	}
 	got, err = database.GetIncident(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Status != db.StatusReopened {
-		t.Errorf("status after reopen: %q", got.Status)
+		t.Errorf("status after rerun: %q", got.Status)
 	}
 }
 
@@ -313,14 +319,16 @@ func (a *sequencedAgent) Run(
 	}, nil, nil
 }
 
-func (a *sequencedAgent) VerifyResolved(_ context.Context, _ string) bool {
+func (a *sequencedAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
 	a.verifyResolvedCalls.Add(1)
 	return false
 }
 
 func (a *sequencedAgent) ScanRunning(_ context.Context) bool { return false }
 
-func (a *sequencedAgent) BuildSummarySeed(_ *db.Incident, _ string) []openai.ChatCompletionMessage {
+func (a *sequencedAgent) BuildSummarySeed(
+	_ context.Context, _ *db.Incident, _ string,
+) []openai.ChatCompletionMessage {
 	return nil
 }
 
@@ -362,14 +370,14 @@ func (n *syncNotifier) NotifyUser(_ context.Context, _, msg string) error {
 
 const notifyWaitTimeout = 2 * time.Second
 
-// TestReopen_SupersedesInFlightRun_NotifiesReporterExactlyOnce reproduces the
-// reported bug directly: reopening an incident while its first run is still in
+// TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce reproduces the
+// reported bug directly: rerunning an incident while its first run is still in
 // (simulated) verification must cancel that stale run rather than let it race a
 // second run to completion. Before the runManager/TransitionStatus fix, both runs
 // could independently conclude "fixed" and each DM the reporter once — the
 // duplicate "fixed automatically" message. This asserts exactly one DM arrives and
 // that the superseded run never got far enough to call VerifyResolved.
-func TestReopen_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
+func TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
@@ -408,9 +416,9 @@ func TestReopen_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) 
 		t.Fatal("timed out waiting for run A to start")
 	}
 
-	// Reopen must supersede (cancel) run A and launch run B.
-	if reopenErr := svc.Reopen(ctx, inc.ID); reopenErr != nil {
-		t.Fatal(reopenErr)
+	// Rerun must supersede (cancel) run A and launch run B.
+	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+		t.Fatal(rerunErr)
 	}
 
 	select {
@@ -452,5 +460,441 @@ func TestReopen_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) 
 	}
 	if got.Status != db.StatusAgentFixed {
 		t.Errorf("final status: got %q want %q", got.Status, db.StatusAgentFixed)
+	}
+}
+
+// alwaysFixedAgent is a minimal fake AgentRunner whose Run call always resolves
+// immediately (no approval, no verification needed).
+type alwaysFixedAgent struct {
+	runCalls chan struct{}
+}
+
+func newAlwaysFixedAgent() *alwaysFixedAgent {
+	return &alwaysFixedAgent{runCalls: make(chan struct{}, 4)}
+}
+
+func (a *alwaysFixedAgent) Run(
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	a.runCalls <- struct{}{}
+	return &agent.DiagnosticResult{
+		RootCause: "test", Confidence: "high",
+		PrimaryAction: "test-action", PrimaryReason: "test",
+	}, nil, nil
+}
+
+func (a *alwaysFixedAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+	return true
+}
+func (a *alwaysFixedAgent) ScanRunning(_ context.Context) bool { return false }
+
+func (a *alwaysFixedAgent) BuildSummarySeed(
+	_ context.Context, _ *db.Incident, _ string,
+) []openai.ChatCompletionMessage {
+	return nil
+}
+
+func (a *alwaysFixedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *alwaysFixedAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func waitForUserMsg(t *testing.T, n *syncNotifier) string {
+	t.Helper()
+	select {
+	case msg := <-n.userMsgs:
+		return msg
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("timed out waiting for reporter DM")
+		return ""
+	}
+}
+
+// TestRerun_OfTerminalIncident_ActuallyRunsAgain is the regression test for the
+// "Re-investigate does nothing" bug: rerunning an incident that already reached
+// a terminal status (agent_fixed) must still produce a second, visible run.
+// Before the fix, neither Reopen nor Reinvestigate reset status to something
+// Agent.Run's own transition gate would accept from a terminal state, so the
+// second run executed but could never transition the incident — no status
+// change, no second notification, nothing visible on the dashboard.
+func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	fakeAgent := newAlwaysFixedAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(
+		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+	)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "House",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First run resolves and fixes the incident.
+	if dm := waitForUserMsg(t, notif); !strings.Contains(dm, "fixed automatically") {
+		t.Fatalf("unexpected first DM: %q", dm)
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusAgentFixed {
+		t.Fatalf("status after first run: got %q want %q", got.Status, db.StatusAgentFixed)
+	}
+
+	// Re-run diagnosis on the now-terminal incident.
+	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+		t.Fatal(rerunErr)
+	}
+
+	// The second run must actually execute and reach the same terminal status
+	// again — proof the rerun was not silently swallowed.
+	if dm := waitForUserMsg(t, notif); !strings.Contains(dm, "fixed automatically") {
+		t.Fatalf("unexpected second DM: %q", dm)
+	}
+	got, err = database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusAgentFixed {
+		t.Fatalf("status after rerun: got %q want %q", got.Status, db.StatusAgentFixed)
+	}
+	// Both DMs were sent after their respective Run() calls returned, so by now
+	// both sends into the buffered runCalls channel have already landed.
+	if n := len(fakeAgent.runCalls); n != 2 {
+		t.Fatalf("expected exactly 2 Run calls, channel holds %d", n)
+	}
+}
+
+func TestActionAlreadyTried(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newTestService(t)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "x", What: "cant_play", Title: "T",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if svc.ActionAlreadyTriedForTest(ctx, inc.ID, "clear_jellyfin_cache") {
+		t.Error("expected no prior action on a fresh incident")
+	}
+
+	if logErr := database.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "clear_jellyfin_cache", TriggeredBy: "agent", Status: db.ActionApplied,
+	}); logErr != nil {
+		t.Fatal(logErr)
+	}
+
+	if !svc.ActionAlreadyTriedForTest(ctx, inc.ID, "clear_jellyfin_cache") {
+		t.Error("expected the logged action to be detected as already tried")
+	}
+	if svc.ActionAlreadyTriedForTest(ctx, inc.ID, "restart_jellyfin") {
+		t.Error("a different action should not be flagged as already tried")
+	}
+}
+
+// TestReviewRiskReason is the unit-level regression test for the Phase 4
+// trigger conditions: a diagnosis the model itself never flags
+// requires_approval for must still be flagged for control review when its
+// confidence is low, or when it repeats an action already applied on this
+// incident — the two conditions that, before this, were never checked at
+// all, leaving the control reviewer permanently unreachable in production.
+func TestReviewRiskReason(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newTestService(t)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "x", What: "cant_play", Title: "T",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "clear_jellyfin_cache"}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, fresh); got != "" {
+		t.Errorf("expected no risk reason for a fresh, confident diagnosis; got %q", got)
+	}
+
+	low := &agent.DiagnosticResult{Confidence: "low", PrimaryAction: "clear_jellyfin_cache"}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, low); got == "" {
+		t.Error("expected a risk reason for a low-confidence diagnosis")
+	}
+
+	if logErr := database.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "clear_jellyfin_cache", TriggeredBy: "agent", Status: db.ActionApplied,
+	}); logErr != nil {
+		t.Fatal(logErr)
+	}
+	repeat := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "clear_jellyfin_cache"}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, repeat); got == "" {
+		t.Error("expected a risk reason for repeating an already-applied action")
+	}
+}
+
+func TestControlProposal(t *testing.T) {
+	t.Parallel()
+
+	approval := &agent.DiagnosticResult{
+		RequiresApproval: true, EscalateAction: "manual_investigation",
+	}
+	if got := incident.ControlProposalForTest(approval, ""); !strings.Contains(got, "escalate") {
+		t.Errorf("expected an escalation-flavored proposal, got %q", got)
+	}
+
+	autonomous := &agent.DiagnosticResult{
+		PrimaryAction: "clear_jellyfin_cache", RootCause: "stale metadata",
+	}
+	got := incident.ControlProposalForTest(autonomous, `"clear_jellyfin_cache" was already applied`)
+	if !strings.Contains(got, "clear_jellyfin_cache") || !strings.Contains(got, "already applied") {
+		t.Errorf("expected the proposal to name the action and the risk reason, got %q", got)
+	}
+}
+
+// fakeControlLLMServer serves the /chat/completions shape go-openai expects,
+// with the review verdict baked into the message content.
+func fakeControlLLMServer(t *testing.T, verdictJSON string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat/completions", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "test", "object": "chat.completion", "created": 0, "model": "test",
+			"choices": []map[string]any{{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": verdictJSON},
+				"finish_reason": "stop",
+			}},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// lowConfidenceOnceAgent is a minimal fake AgentRunner whose Run call always
+// returns a low-confidence, non-approval diagnosis — Phase 4's
+// "review on low confidence" trigger.
+type lowConfidenceOnceAgent struct {
+	runCalls chan struct{}
+}
+
+func newLowConfidenceOnceAgent() *lowConfidenceOnceAgent {
+	return &lowConfidenceOnceAgent{runCalls: make(chan struct{}, 4)}
+}
+
+func (a *lowConfidenceOnceAgent) Run(
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	a.runCalls <- struct{}{}
+	return &agent.DiagnosticResult{
+			RootCause: "test", Confidence: "low",
+			PrimaryAction: "clear_jellyfin_cache", PrimaryReason: "test",
+		}, []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleUser, Content: "test conversation"},
+		}, nil
+}
+
+func (a *lowConfidenceOnceAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+	return true
+}
+func (a *lowConfidenceOnceAgent) ScanRunning(_ context.Context) bool { return false }
+
+func (a *lowConfidenceOnceAgent) BuildSummarySeed(
+	_ context.Context, _ *db.Incident, _ string,
+) []openai.ChatCompletionMessage {
+	return nil
+}
+
+func (a *lowConfidenceOnceAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *lowConfidenceOnceAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+// TestRunAgent_LowConfidence_TriggersControlReview_ApproveProceedsAutonomously
+// is the end-to-end regression test for Phase 4: before this, control review
+// only ever ran when the model itself set requires_approval — which it did
+// zero times across a week of production traffic, so the reviewer never once
+// executed. This confirms a low-confidence-but-autonomous diagnosis is
+// routed through review, and that an "approve" verdict on it proceeds
+// autonomously (a "fixed" DM) rather than being surfaced to the owner as if
+// it were a genuine approval request.
+func TestRunAgent_LowConfidence_TriggersControlReview_ApproveProceedsAutonomously(t *testing.T) {
+	t.Parallel()
+
+	srv := fakeControlLLMServer(t, `{"verdict":"approve","reason":"looks fine"}`)
+
+	llmCfg := openai.DefaultConfig("test-key")
+	llmCfg.BaseURL = srv.URL
+	control := agent.NewControlReviewer(openai.NewClientWithConfig(llmCfg), "test-model", slog.New(slog.DiscardHandler))
+
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	fakeAgent := newLowConfidenceOnceAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(
+		context.Background(), database, fakeAgent, control, nil, notif, slog.New(slog.DiscardHandler),
+	)
+	ctx := context.Background()
+
+	if _, err = svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "Low Confidence Show",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dm := waitForUserMsg(t, notif)
+	if !strings.Contains(dm, "fixed automatically") {
+		t.Fatalf("expected an autonomous fix notification once control review approved, got: %q", dm)
+	}
+	if n := len(fakeAgent.runCalls); n != 1 {
+		t.Fatalf("expected exactly 1 Run call, channel holds %d", n)
+	}
+}
+
+// failingUserNotifier always fails NotifyUser (simulating a Discord "no
+// mutual guilds" DM failure) but records NotifyOwner calls, to test the
+// reporter-DM fallback path.
+type failingUserNotifier struct{ ownerMsgs []string }
+
+func (n *failingUserNotifier) NotifyOwner(_ context.Context, msg string) error {
+	n.ownerMsgs = append(n.ownerMsgs, msg)
+	return nil
+}
+
+func (n *failingUserNotifier) NotifyUser(_ context.Context, _, _ string) error {
+	return errors.New("no mutual guilds")
+}
+
+// TestNotifyReporters_FailedDMFallsBackToOwner is the regression test for a
+// reporter DM that fails silently: before this, a failed NotifyUser call was
+// only ever ERROR-logged — the reporter was never told anything, and no one
+// else was either.
+func TestNotifyReporters_FailedDMFallsBackToOwner(t *testing.T) {
+	t.Parallel()
+	notif := &failingUserNotifier{}
+
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	svc := incident.NewService(context.Background(), database, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "House",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.NotifyReportersForTest(ctx, inc, "✅ your report has been fixed")
+
+	if len(notif.ownerMsgs) != 1 {
+		t.Fatalf("expected 1 owner fallback message, got %d: %v", len(notif.ownerMsgs), notif.ownerMsgs)
+	}
+	if !strings.Contains(notif.ownerMsgs[0], "discord-alice") || !strings.Contains(notif.ownerMsgs[0], "House") {
+		t.Errorf("owner fallback message missing reporter/incident context: %q", notif.ownerMsgs[0])
+	}
+}
+
+// TestSweepStaleRuns_RerunsHungIncident is the regression test for the
+// heartbeat/stale-run detection gap named in ROADMAP.md: RecoverZombies only
+// catches a crashed process (nothing left running to check); this is what
+// catches a run whose goroutine is still alive but stopped making progress.
+func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	dbPath := f.Name()
+
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Hung"}
+	if createErr := database.CreateIncident(ctx, inc); createErr != nil {
+		t.Fatal(createErr)
+	}
+	if statusErr := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusInvestigating); statusErr != nil {
+		t.Fatal(statusErr)
+	}
+
+	// Backdate updated_at (no heartbeat written yet) well past the stale
+	// threshold, simulating a run whose goroutine hung mid-diagnosis — via a
+	// second raw connection, since db.DB exposes no "set an arbitrary past
+	// timestamp" method (nor should it, outside a test).
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, execErr := raw.ExecContext(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
+		time.Now().Add(-20*time.Minute), inc.ID); execErr != nil {
+		t.Fatal(execErr)
+	}
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	fakeAgent := newAlwaysFixedAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(
+		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+	)
+
+	svc.SweepStaleRuns(ctx)
+
+	select {
+	case <-fakeAgent.runCalls:
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("timed out waiting for the stale run to be rerun")
 	}
 }

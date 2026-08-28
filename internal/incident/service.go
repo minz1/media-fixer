@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -29,6 +30,19 @@ const (
 	verifyLoopDelayCap = 2 * time.Minute
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
 	defaultUserETAMinutes = 10
+)
+
+const (
+	// staleRunThreshold is how long a run can sit in "investigating" without a
+	// heartbeat before SweepStaleRuns treats it as hung rather than mid-retry.
+	// Comfortably above retryDelay1+retryDelay2 (8 minutes total), the longest
+	// gap a legitimately-retrying run can go without writing one — Run's own
+	// TransitionStatus keeps status at "investigating" across retries, and
+	// Agent.logTurn (the heartbeat write) doesn't fire again until the next
+	// attempt's first LLM round completes.
+	staleRunThreshold = 15 * time.Minute
+	// staleRunSweepInterval is how often SweepStaleRuns runs in the background.
+	staleRunSweepInterval = 5 * time.Minute
 )
 
 // Service manages incident lifecycle and orchestrates agent runs.
@@ -60,7 +74,7 @@ func NewService(
 	notif Notifier,
 	log *slog.Logger,
 ) *Service {
-	return &Service{
+	s := &Service{
 		db:         database,
 		agent:      ag,
 		control:    control,
@@ -69,15 +83,29 @@ func NewService(
 		log:        log,
 		runs:       newRunManager(base),
 	}
+	go s.sweepStaleRunsLoop(base)
+	return s
 }
 
-// launch starts (or restarts) the background agent pipeline for an incident under
-// the run manager. Because begin() cancels any in-flight run for the same incident,
-// a reopen/reinvestigate supersedes a prior run instead of racing it.
+// launch starts a background agent run for an incident with a fixed seed (nil
+// for a fresh run). Thin wrapper over launchWithSeed for callers that already
+// have a fully-built seed in hand.
 func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) {
+	s.launchWithSeed(inc, func(context.Context) []openai.ChatCompletionMessage { return seed })
+}
+
+// launchWithSeed starts (or restarts) the background agent pipeline for an
+// incident under the run manager. Because begin() cancels any in-flight run for
+// the same incident, a rerun supersedes a prior run instead of racing it.
+// buildSeed runs on the new run's own (background) context rather than the
+// caller's, so a seed built from an expensive call (buildReinvestigateSeed
+// summarizes the prior conversation via an LLM call) never blocks — or gets
+// silently dropped by — an HTTP request context.
+func (s *Service) launchWithSeed(inc *db.Incident, buildSeed func(context.Context) []openai.ChatCompletionMessage) {
 	ctx, tok := s.runs.begin(inc.ID)
 	go func() {
 		defer s.runs.end(inc.ID, tok)
+		seed := buildSeed(ctx)
 		s.runAgent(ctx, inc, seed)
 	}()
 }
@@ -165,78 +193,176 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 
 	retryDelays := []time.Duration{0, retryDelay1, retryDelay2}
 
-	var (
-		result       *agent.DiagnosticResult
-		conversation []openai.ChatCompletionMessage
-	)
-
 	for attempt, delay := range retryDelays {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
 
-		result, conversation, err = s.agent.Run(ctx, inc, seed)
-		if err != nil {
-			s.handleRunError(ctx, inc, err)
+		result, conversation, runErr := s.agent.Run(ctx, inc, seed)
+		if runErr != nil {
+			s.handleRunError(ctx, inc, runErr)
 			return
 		}
 
-		if !result.RequiresApproval {
+		outcome := s.evaluateDiagnosis(ctx, inc, result, conversation, attempt, len(retryDelays))
+		if outcome.done {
+			return
+		}
+		seed = outcome.seed
+	}
+}
+
+// diagnosisOutcome is what runAgent's retry loop does next after evaluating
+// one agent.Run result: stop (the incident reached a terminal state for this
+// call) or retry with an updated seed (a control reviewer suggested trying
+// something else).
+type diagnosisOutcome struct {
+	done bool
+	seed []openai.ChatCompletionMessage
+}
+
+// evaluateDiagnosis routes one Run() result through control review — not
+// only when the model itself flagged requires_approval, but also when its
+// own confidence is low or it just proposed repeating an action already
+// tried (and failed) on this incident. Gating review purely on the model's
+// self-assessment meant the reviewer only ever saw what the model chose to
+// flag about itself — in a week of production traffic, that was never once,
+// even on incidents re-diagnosed three times with the same "high
+// confidence" action each time.
+func (s *Service) evaluateDiagnosis(
+	ctx context.Context,
+	inc *db.Incident,
+	result *agent.DiagnosticResult,
+	conversation []openai.ChatCompletionMessage,
+	attempt, maxAttempts int,
+) diagnosisOutcome {
+	riskReason := s.reviewRiskReason(ctx, inc.ID, result)
+	if !result.RequiresApproval && riskReason == "" {
+		s.handleAgentResolved(ctx, inc, result)
+		return diagnosisOutcome{done: true}
+	}
+
+	if s.control == nil {
+		if result.RequiresApproval {
+			s.surfaceToOwner(ctx, inc, result, "")
+		} else {
+			// No reviewer configured to double-check a repeat/low-confidence
+			// proposal the model didn't itself flag — proceed rather than block
+			// on a review that can never happen.
 			s.handleAgentResolved(ctx, inc, result)
-			return
 		}
+		return diagnosisOutcome{done: true}
+	}
 
-		if s.control == nil {
-			s.surfaceToOwner(ctx, inc, result, "")
-			return
-		}
-
-		verdict, verdictErr := s.control.Review(ctx, conversation, agent.EscalationSummary(result))
-		if verdictErr != nil {
-			s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
+	verdict, verdictErr := s.control.Review(ctx, conversation, controlProposal(result, riskReason))
+	if verdictErr != nil {
+		s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
+		if result.RequiresApproval {
 			s.surfaceToOwner(ctx, inc, result, " (control review failed)")
-			return
+		} else {
+			s.handleAgentResolved(ctx, inc, result)
 		}
+		return diagnosisOutcome{done: true}
+	}
 
-		switch verdict.Verdict {
-		case agent.VerdictApprove:
+	switch verdict.Verdict {
+	case agent.VerdictApprove:
+		if result.RequiresApproval {
 			s.surfaceToOwner(ctx, inc, result, "")
-			return
+		} else {
+			// The reviewer approved a fix the model didn't itself flag for
+			// approval (this review was triggered by our own repeat/low-
+			// confidence heuristic) — let it proceed autonomously as proposed.
+			s.handleAgentResolved(ctx, inc, result)
+		}
+		return diagnosisOutcome{done: true}
 
-		case agent.VerdictEscalateToOwner:
+	case agent.VerdictEscalateToOwner:
+		s.escalateToOwner(ctx, inc, fmt.Sprintf(
+			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).\nRoot cause: %s\nConcern: %s",
+			inc.Title,
+			inc.ID[:8],
+			result.RootCause,
+			verdict.Reason,
+		))
+		return diagnosisOutcome{done: true}
+
+	case agent.VerdictSuggestAlternative:
+		if attempt == maxAttempts-1 {
 			s.escalateToOwner(ctx, inc, fmt.Sprintf(
-				"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).\nRoot cause: %s\nConcern: %s",
-				inc.Title,
-				inc.ID[:8],
-				result.RootCause,
-				verdict.Reason,
+				"⚠️ **%s** (#%s): agent still needs approval after %d retries.\nRoot cause: %s\nAction needed: %s",
+				inc.Title, inc.ID[:8], attempt+1, result.RootCause, agent.EscalationSummary(result),
 			))
-			return
+			return diagnosisOutcome{done: true}
+		}
+		feedback := openai.ChatCompletionMessage{
+			Role: openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf(
+				"Control review suggests an alternative approach: %s\n\nPlease re-evaluate and try this approach before escalating.",
+				verdict.AlternativeAction,
+			),
+		}
+		conversation = append(conversation, feedback)
+		s.log.InfoContext(ctx, "control reviewer suggested alternative, retrying",
+			"incident", inc.ID,
+			"attempt", attempt+1,
+			"alternative", verdict.AlternativeAction,
+		)
+		return diagnosisOutcome{done: false, seed: conversation}
+	}
 
-		case agent.VerdictSuggestAlternative:
-			if attempt == len(retryDelays)-1 {
-				s.escalateToOwner(ctx, inc, fmt.Sprintf(
-					"⚠️ **%s** (#%s): agent still needs approval after %d retries.\nRoot cause: %s\nAction needed: %s",
-					inc.Title, inc.ID[:8], attempt+1, result.RootCause, agent.EscalationSummary(result),
-				))
-				return
-			}
-			feedback := openai.ChatCompletionMessage{
-				Role: openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf(
-					"Control review suggests an alternative approach: %s\n\nPlease re-evaluate and try this approach before escalating.",
-					verdict.AlternativeAction,
-				),
-			}
-			conversation = append(conversation, feedback)
-			seed = conversation
-			s.log.InfoContext(ctx, "control reviewer suggested alternative, retrying",
-				"incident", inc.ID,
-				"attempt", attempt+1,
-				"alternative", verdict.AlternativeAction,
-			)
+	// Unreachable: ControlVerdict.Verdict is validated by ControlReviewer.Review
+	// to one of the three cases above before it can ever be returned.
+	return diagnosisOutcome{done: true}
+}
+
+// reviewRiskReason reports why an otherwise-autonomous diagnosis (one the
+// model itself didn't flag requires_approval for) should still be routed
+// through control review, or "" if it shouldn't need one. Checked in addition
+// to result.RequiresApproval in runAgent.
+func (s *Service) reviewRiskReason(ctx context.Context, incidentID string, result *agent.DiagnosticResult) string {
+	if strings.EqualFold(result.Confidence, "low") {
+		return "the agent's own confidence in this diagnosis is low"
+	}
+	if s.actionAlreadyTried(ctx, incidentID, result.PrimaryAction) {
+		return fmt.Sprintf("%q was already applied on this incident and did not resolve it", result.PrimaryAction)
+	}
+	return ""
+}
+
+// actionAlreadyTried reports whether action has already been logged as
+// successfully applied on this incident.
+func (s *Service) actionAlreadyTried(ctx context.Context, incidentID, action string) bool {
+	if action == "" {
+		return false
+	}
+	actions, err := s.db.ListActions(ctx, incidentID)
+	if err != nil {
+		return false
+	}
+	for _, act := range actions {
+		if act.Action == action && act.Status == db.ActionApplied {
+			return true
 		}
 	}
+	return false
+}
+
+// controlProposal builds the description of what's being reviewed and why,
+// passed to ControlReviewer.Review — see controlSystemPrompt in
+// internal/agent/control.go for how the two trigger cases are meant to read.
+func controlProposal(result *agent.DiagnosticResult, riskReason string) string {
+	if result.RequiresApproval {
+		return fmt.Sprintf(
+			"The agent wants to escalate the following action for owner approval:\n\n%s",
+			agent.EscalationSummary(result),
+		)
+	}
+	return fmt.Sprintf(
+		"The agent proposes to autonomously apply %q (not flagged for owner approval), but this "+
+			"review was triggered because %s.\n\nRoot cause: %s\nReason: %s",
+		result.PrimaryAction, riskReason, result.RootCause, result.PrimaryReason,
+	)
 }
 
 // handleAgentResolved processes a non-approval diagnosis: either it kicks off the
@@ -308,7 +434,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 		case <-ctx.Done():
 			return
 		}
-		if itemID != "" && s.agent.VerifyResolved(ctx, itemID) {
+		if itemID != "" && s.agent.VerifyResolved(ctx, itemID, result.PreFix) {
 			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
 			return
 		}
@@ -356,12 +482,14 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg str
 	_ = s.notif.NotifyOwner(ctx, msg)
 }
 
-// handleRunError distinguishes a superseded run (its context was cancelled by a
-// newer reopen/reinvestigate) from a genuine diagnostic failure. A superseded run's
-// LLM call fails because its context died, not because diagnosis failed, so it
-// exits quietly instead of escalating to the owner.
+// handleRunError distinguishes a superseded run from a genuine diagnostic
+// failure. A run is superseded either because its context was cancelled by a
+// newer rerun (LLM call fails with [context.Canceled]) or because it lost the
+// race to claim the incident's status before starting
+// (agent.ErrIncidentNotInvestigatable). Either way it exits quietly instead of
+// escalating to the owner.
 func (s *Service) handleRunError(ctx context.Context, inc *db.Incident, err error) {
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, agent.ErrIncidentNotInvestigatable) {
 		s.log.InfoContext(ctx, "run superseded, exiting quietly", "incident", inc.ID)
 		return
 	}
@@ -407,6 +535,15 @@ func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg str
 	for _, id := range ids {
 		if notifyErr := s.notif.NotifyUser(ctx, id, msg); notifyErr != nil {
 			s.log.ErrorContext(ctx, "notify reporter", "user", id, "incident", inc.ID, "error", notifyErr)
+			// A failed reporter DM (e.g. "no mutual guilds" — the reporter DM'd the
+			// bot from a server it isn't in) used to just vanish into an ERROR log
+			// line: the reporter was never told anything, and no one else was
+			// either. Fall back to the owner so a silently-undeliverable DM is at
+			// least visible somewhere.
+			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+				"⚠️ Could not DM reporter %s for **%s** (#%s): %v\nMessage was: %s",
+				id, inc.Title, inc.ID[:8], notifyErr, msg,
+			))
 		}
 	}
 }
@@ -417,9 +554,23 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 	return s.db.SetAutonomousLocked(ctx, id, false)
 }
 
-// Reopen marks an incident as reopened (when human testing shows it's still broken).
-func (s *Service) Reopen(ctx context.Context, id string) error {
-	// Reopening is a deliberate human override — clear any autonomous lock so the
+// Rerun re-runs diagnosis for an incident: on the dashboard's "still broken"
+// path, on the "Re-investigate" path, and on zombie recovery after a crash.
+// These used to be two separate methods (Reopen/Reinvestigate) that did the
+// same thing with different seeding, and both had the same bug: neither reset
+// status to a state Agent.Run's own transition gate would accept, so
+// re-running an already-terminal incident (agent_fixed, manual_test_needed)
+// silently did nothing — the run executed but could never transition the
+// incident, and runVerification's matching gate then refused to enter
+// verification too, logging "not entering verification, incident already
+// progressed" with no visible effect on the dashboard.
+//
+// Rerun fixes that by setting status to Reopened — an allowed source for
+// every downstream transition — before launching, and always seeds the run
+// with a summary of the prior conversation (if any) so the agent knows what
+// it already tried and does not repeat a failed action from scratch.
+func (s *Service) Rerun(ctx context.Context, id string) error {
+	// Deliberate human/system override — clear any autonomous lock so the
 	// re-run actually proceeds, even for a previously blocked/locked incident.
 	_ = s.db.SetAutonomousLocked(ctx, id, false)
 	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
@@ -429,26 +580,13 @@ func (s *Service) Reopen(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.launch(inc, nil)
+	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
+		return s.buildReinvestigateSeed(seedCtx, id, inc)
+	})
 	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-		"🔁 Incident **%s** (#%s) was reopened — re-running diagnostics.",
+		"🔁 Incident **%s** (#%s) is being re-run.",
 		inc.Title, inc.ID[:8],
 	))
-	return nil
-}
-
-// Reinvestigate resumes a stuck or failed incident by summarizing the prior
-// conversation (if any) and spawning a fresh agent run seeded with the summary.
-func (s *Service) Reinvestigate(ctx context.Context, id string) error {
-	// Deliberate human override — clear any autonomous lock so the re-run proceeds.
-	_ = s.db.SetAutonomousLocked(ctx, id, false)
-	inc, err := s.db.GetIncident(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	seed := s.buildReinvestigateSeed(ctx, id, inc)
-	s.launch(inc, seed)
 	return nil
 }
 
@@ -484,11 +622,15 @@ func (s *Service) buildReinvestigateSeed(
 		return nil
 	}
 	s.log.InfoContext(ctx, "reinvestigate with summary seed", "incident", id, "summary_len", len(summary))
-	return s.agent.BuildSummarySeed(inc, summary)
+	return s.agent.BuildSummarySeed(ctx, inc, summary)
 }
 
 // RecoverZombies is called on startup to resume any incidents left in
-// "investigating" status from a previous process run.
+// "investigating" status from a previous process run — a crashed process
+// with nothing left running to check. SweepStaleRuns is the companion for a
+// process that never crashed at all: a run whose goroutine is still alive
+// but has stopped making progress, which this cannot see (nothing here is
+// wrong from the process's point of view).
 func (s *Service) RecoverZombies(ctx context.Context) {
 	incidents, err := s.db.FindByStatus(ctx, db.StatusInvestigating)
 	if err != nil {
@@ -497,8 +639,41 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 	}
 	for _, inc := range incidents {
 		s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "title", inc.Title)
-		if reinvestErr := s.Reinvestigate(ctx, inc.ID); reinvestErr != nil {
-			s.log.ErrorContext(ctx, "zombie reinvestigate failed", "incident", inc.ID, "error", reinvestErr)
+		if rerunErr := s.Rerun(ctx, inc.ID); rerunErr != nil {
+			s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
+		}
+	}
+}
+
+// SweepStaleRuns reruns any incident stuck in "investigating" whose heartbeat
+// (see Agent.logTurn/db.TouchHeartbeat) is older than staleRunThreshold — a
+// run whose goroutine is still alive but stopped making progress.
+func (s *Service) SweepStaleRuns(ctx context.Context) {
+	stale, err := s.db.FindStaleInvestigating(ctx, time.Now().Add(-staleRunThreshold))
+	if err != nil {
+		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
+		return
+	}
+	for _, inc := range stale {
+		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
+		if rerunErr := s.Rerun(ctx, inc.ID); rerunErr != nil {
+			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
+		}
+	}
+}
+
+// sweepStaleRunsLoop periodically calls SweepStaleRuns until base is done.
+// Started once from NewService, tied to the same process-lifetime context
+// that owns every other piece of Service's background lifecycle (runManager).
+func (s *Service) sweepStaleRunsLoop(base context.Context) {
+	ticker := time.NewTicker(staleRunSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-base.Done():
+			return
+		case <-ticker.C:
+			s.SweepStaleRuns(base)
 		}
 	}
 }

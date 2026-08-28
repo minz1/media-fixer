@@ -39,10 +39,14 @@ func (a *stubEscalationAgent) Run(
 	return nil, nil, nil
 }
 
-func (a *stubEscalationAgent) VerifyResolved(_ context.Context, _ string) bool { return true }
-func (a *stubEscalationAgent) ScanRunning(_ context.Context) bool              { return false }
+func (a *stubEscalationAgent) VerifyResolved(_ context.Context, _ string, _ *agent.FixSignature) bool {
+	return true
+}
+func (a *stubEscalationAgent) ScanRunning(_ context.Context) bool { return false }
 
-func (a *stubEscalationAgent) BuildSummarySeed(_ *db.Incident, _ string) []openai.ChatCompletionMessage {
+func (a *stubEscalationAgent) BuildSummarySeed(
+	_ context.Context, _ *db.Incident, _ string,
+) []openai.ChatCompletionMessage {
 	return nil
 }
 
