@@ -17,6 +17,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -83,8 +84,13 @@ func newEscalationTestServer(t *testing.T, ag incident.AgentRunner) (*server.Ser
 
 	discard := slog.New(slog.DiscardHandler)
 	notif := &stubNotifier{}
-	svc := incident.NewService(context.Background(), database, ag, nil, nil, notif, discard)
-	srv, err := server.New(":0", "/media", database, svc, discard)
+	// Server and Service must share one Journal instance: Subscribe/notify
+	// state lives in-process on the Journal value itself, not in the
+	// database, so two separately-constructed journal.New(database) values
+	// would never see each other's appends.
+	jrnl := journal.New(database)
+	svc := incident.NewService(context.Background(), database, jrnl, ag, nil, nil, notif, discard)
+	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)
 	}

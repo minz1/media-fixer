@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
@@ -50,7 +51,7 @@ func TestAttemptHistory_EmptyForFreshIncident(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 	if got := a.AttemptHistoryForTest(ctx, inc.ID); got != "" {
 		t.Errorf("expected empty history for a fresh incident, got %q", got)
 	}
@@ -84,7 +85,7 @@ func TestAttemptHistory_RendersPriorActions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 	got := a.AttemptHistoryForTest(ctx, inc.ID)
 
 	for _, want := range []string{"clear_jellyfin_cache", "21e909427236eaf5de52bc19834f51c4", "did NOT resolve"} {
@@ -104,7 +105,7 @@ func TestAttemptHistory_RendersPriorActions(t *testing.T) {
 func TestBuildSummarySeed_LabelsFindingsUnverifiedAndRequiresFullProtocol(t *testing.T) {
 	t.Parallel()
 	database := newTestAgentDB(t)
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 	ctx := context.Background()
 
 	inc := &db.Incident{
@@ -172,7 +173,7 @@ func TestActionAlreadyApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 
 	if !a.ActionAlreadyAppliedForTest(ctx, inc.ID, "clear_jellyfin_cache", `{"item_id":"item-a"}`) {
 		t.Error("expected a repeat of the same action+target to be detected")
@@ -221,7 +222,7 @@ func TestActionAlreadyApplied_DifferentEpisodesSameSeries_DoNotCollide(t *testin
 		t.Fatal(err)
 	}
 
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 
 	// Same series, same episode: this IS a repeat.
 	if !a.ActionAlreadyAppliedForTest(ctx, inc.ID, "arr_search_missing",
@@ -261,7 +262,7 @@ func TestActionAlreadyApplied_ParameterlessAction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 	if !a.ActionAlreadyAppliedForTest(ctx, inc.ID, "restart_jellyfin", `{}`) {
 		t.Error("expected a repeat parameterless restart_jellyfin to be detected")
 	}
@@ -320,7 +321,7 @@ func TestVerifyResolved_IdenticalSignature_ReturnsFalse(t *testing.T) {
 	ddError.Store("")
 
 	disp := verifyTestServers(t, &ddBytesRead, &ddError)
-	a := agent.New(nil, "", disp, nil, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", disp, nil, nil, slog.New(slog.DiscardHandler))
 	ctx := context.Background()
 
 	pre := a.CaptureSignatureForTest(ctx, "item1", "")
@@ -341,7 +342,7 @@ func TestVerifyResolved_ChangedSignature_ReturnsTrue(t *testing.T) {
 	ddError.Store("input/output error")
 
 	disp := verifyTestServers(t, &ddBytesRead, &ddError)
-	a := agent.New(nil, "", disp, nil, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", disp, nil, nil, slog.New(slog.DiscardHandler))
 	ctx := context.Background()
 
 	pre := a.CaptureSignatureForTest(ctx, "item1", "")
@@ -368,7 +369,7 @@ func TestVerifyResolved_NilBaseline_StillRequiresReadability(t *testing.T) {
 	ddError.Store("input/output error")
 
 	disp := verifyTestServers(t, &ddBytesRead, &ddError)
-	a := agent.New(nil, "", disp, nil, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", disp, nil, nil, slog.New(slog.DiscardHandler))
 	ctx := context.Background()
 
 	if a.VerifyResolved(ctx, "item1", "", nil) {
@@ -402,7 +403,7 @@ func TestVerifyResolved_ArrConfirmsMissing_HardGateBlocksVerification(t *testing
 	defer arrSrv.Close()
 	disp.Sonarr = client.NewArr(arrSrv.URL, "key")
 
-	a := agent.New(nil, "", disp, nil, slog.New(slog.DiscardHandler))
+	a := agent.New(nil, "", disp, nil, nil, slog.New(slog.DiscardHandler))
 	ctx := context.Background()
 
 	if a.VerifyResolved(ctx, "item1", "Rick and Morty", nil) {
@@ -482,53 +483,68 @@ func TestDisruptionNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-
-	a := agent.New(nil, "", nil, database, slog.New(slog.DiscardHandler))
+	jrnl := journal.New(database)
 	ctx := context.Background()
 
-	if note := a.DisruptionNoteForTest(ctx, "11111111-1111-1111-1111-111111111111"); note != "" {
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	// LogAction now enforces the incident_id foreign key (Phase 0's pragma
+	// fix actually turned it on), unlike the old RecordDisruption, which
+	// wrote to a last_disruption row with no such constraint — both fixture
+	// incidents need to exist for real.
+	for _, id := range []string{incidentA, incidentB} {
+		if createErr := database.CreateIncident(ctx, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		}); createErr != nil {
+			t.Fatal(createErr)
+		}
+	}
+
+	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
+
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
 		t.Fatalf("expected no note before any disruption recorded, got %q", note)
 	}
 
-	if recordErr := database.RecordDisruption(
-		ctx,
-		"restart_jellyfin",
-		"11111111-1111-1111-1111-111111111111",
-	); recordErr != nil {
-		t.Fatal(recordErr)
+	if logErr := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: incidentA, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); logErr != nil {
+		t.Fatal(logErr)
 	}
-	if note := a.DisruptionNoteForTest(ctx, "11111111-1111-1111-1111-111111111111"); note != "" {
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
 		t.Fatalf("expected no note about an incident's own action, got %q", note)
 	}
 
-	if recordErr := database.RecordDisruption(
-		ctx,
-		"restart_jellyfin",
-		"22222222-2222-2222-2222-222222222222",
-	); recordErr != nil {
-		t.Fatal(recordErr)
+	if logErr := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: incidentB, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); logErr != nil {
+		t.Fatal(logErr)
 	}
-	gotNote := a.DisruptionNoteForTest(ctx, "11111111-1111-1111-1111-111111111111")
+	gotNote := a.DisruptionNoteForTest(ctx, incidentA)
 	if !strings.Contains(gotNote, "restart_jellyfin") || !strings.Contains(gotNote, "22222222") {
 		t.Fatalf("expected a note naming the action and incident, got %q", gotNote)
 	}
 
 	// A stale disruption (older than disruptionQuietWindow) must not warn —
-	// simulated via a second raw connection to backdate the timestamp, since
-	// RecordDisruption always stamps time.Now() (same pattern as
+	// simulated via a second raw connection to backdate the event's
+	// timestamp, since LogAction always stamps time.Now() (same pattern as
 	// TestSweepStaleRuns_RerunsHungIncident in internal/incident/service_test.go).
 	raw, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, execErr := raw.ExecContext(ctx, `UPDATE last_disruption SET at = ?`,
-		time.Now().Add(-10*time.Minute)); execErr != nil {
+	if _, execErr := raw.ExecContext(ctx,
+		`UPDATE incident_events SET at = ? WHERE incident_id = ? AND kind = 'action_applied'`,
+		time.Now().Add(-10*time.Minute), incidentB,
+	); execErr != nil {
 		t.Fatal(execErr)
 	}
 	if closeErr := raw.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if note := a.DisruptionNoteForTest(ctx, "11111111-1111-1111-1111-111111111111"); note != "" {
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
 		t.Fatalf("expected no note for a stale disruption, got %q", note)
 	}
 }
@@ -623,4 +639,40 @@ func parseLokiWindow(t *testing.T, q url.Values) (time.Time, time.Time) {
 		t.Fatalf("parse end: %v", err)
 	}
 	return time.Unix(0, startNS), time.Unix(0, endNS)
+}
+
+func TestParseDiagnosticResult_RoundTripsThroughMapAny(t *testing.T) {
+	t.Parallel()
+	// db.SetIncidentFinding persists a DiagnosticResult generically as `any`
+	// and db.Incident.Finding comes back as map[string]any (via
+	// json.Unmarshal into an `any` field) — reproduce that shape rather than
+	// passing a *DiagnosticResult directly, which would trivially "round trip".
+	want := agent.DiagnosticResult{
+		RootCause: "bad release", Confidence: "high",
+		PrimaryAction: "manual_investigation", PrimaryReason: "file is corrupt",
+		EscalateAction: "remove_and_search", RequiresApproval: true,
+	}
+	b, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asMap map[string]any
+	if unmarshalErr := json.Unmarshal(b, &asMap); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+
+	got, ok := agent.ParseDiagnosticResult(asMap)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if got.RootCause != want.RootCause || got.EscalateAction != want.EscalateAction {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestParseDiagnosticResult_NilFinding(t *testing.T) {
+	t.Parallel()
+	if _, ok := agent.ParseDiagnosticResult(nil); ok {
+		t.Error("expected ok=false for a nil finding")
+	}
 }

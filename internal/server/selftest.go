@@ -31,13 +31,19 @@ func (s *Server) selftestIndex(w http.ResponseWriter, _ *http.Request) {
 // write-tier decypharr actions independently and race into decypharr's own
 // single-flight repair lock, producing a 409 there that looks like a
 // livecheck bug rather than the self-inflicted double-fire it actually is.
+//
+// Error responses render the styled "selftest_error" fragment rather than
+// plain [http.Error] text: htmx 2 didn't swap non-2xx responses by default, so
+// the old plain-text body was invisible; htmx 4 swaps everything but
+// 204/304, so an unstyled plain-text error would otherwise land directly in
+// #selftest-results.
 func (s *Server) selftestRun(w http.ResponseWriter, r *http.Request) {
 	if s.checker == nil {
-		http.Error(w, "live checks not configured", http.StatusServiceUnavailable)
+		s.selftestRunError(w, http.StatusServiceUnavailable, "live checks not configured")
 		return
 	}
 	if !s.checkRunning.CompareAndSwap(false, true) {
-		http.Error(w, "a check run is already in progress", http.StatusConflict)
+		s.selftestRunError(w, http.StatusConflict, "a check run is already in progress")
 		return
 	}
 	defer s.checkRunning.Store(false)
@@ -51,4 +57,11 @@ func (s *Server) selftestRun(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "selftest_table", report)
+}
+
+// selftestRunError writes the styled error fragment at the given status code.
+func (s *Server) selftestRunError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_ = s.tmpl.t.ExecuteTemplate(w, "selftest_error", msg)
 }

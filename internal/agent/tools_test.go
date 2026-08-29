@@ -484,6 +484,7 @@ func TestCheckPendingOutcome_HasFile_SkipsQueue(t *testing.T) {
 		"",
 		&agent.Dispatcher{Sonarr: client.NewArr(srv.URL, "key")},
 		nil,
+		nil,
 		slog.New(slog.DiscardHandler),
 	)
 	obs, err := a.CheckPendingOutcome(context.Background(), &db.PendingOutcome{
@@ -516,6 +517,7 @@ func TestCheckPendingOutcome_QueueMatch_ReportsStageAndProgress(t *testing.T) {
 		nil,
 		"",
 		&agent.Dispatcher{Sonarr: client.NewArr(srv.URL, "key")},
+		nil,
 		nil,
 		slog.New(slog.DiscardHandler),
 	)
@@ -550,6 +552,7 @@ func TestCheckPendingOutcome_NoMatchingQueueItem(t *testing.T) {
 		nil,
 		"",
 		&agent.Dispatcher{Sonarr: client.NewArr(srv.URL, "key")},
+		nil,
 		nil,
 		slog.New(slog.DiscardHandler),
 	)

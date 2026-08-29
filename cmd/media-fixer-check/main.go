@@ -46,7 +46,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "build clients: %v\n", err)
 		return exitFail
 	}
-	disp := clients.Dispatcher(nil)
+	disp := clients.Dispatcher(nil, nil)
 
 	opts := livecheck.Options{
 		AllowWrite:       *allowWrite,

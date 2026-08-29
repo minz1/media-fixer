@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -29,16 +28,11 @@ func NewSummarizer(llm *openai.Client, model string) *Summarizer {
 	return &Summarizer{llm: llm, model: model}
 }
 
-// Summarize converts a stored JSON conversation into a plain-text fact sheet.
-// Returns ("", nil) when rawConversation is empty.
-func (s *Summarizer) Summarize(ctx context.Context, rawConversation json.RawMessage) (string, error) {
-	if len(rawConversation) == 0 {
+// Summarize converts a stored conversation into a plain-text fact sheet.
+// Returns ("", nil) when messages is empty.
+func (s *Summarizer) Summarize(ctx context.Context, messages []openai.ChatCompletionMessage) (string, error) {
+	if len(messages) == 0 {
 		return "", nil
-	}
-
-	var messages []openai.ChatCompletionMessage
-	if err := json.Unmarshal(rawConversation, &messages); err != nil {
-		return "", fmt.Errorf("unmarshal conversation: %w", err)
 	}
 
 	var sb strings.Builder

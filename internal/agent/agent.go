@@ -13,6 +13,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const systemPrompt = `You are a media stack diagnostic agent. You help troubleshoot problems
@@ -232,16 +233,19 @@ const (
 
 // Agent orchestrates the LLM diagnostic loop for one incident.
 type Agent struct {
-	llm   *openai.Client
-	model string
-	disp  *Dispatcher
-	db    *db.DB
-	log   *slog.Logger
+	llm     *openai.Client
+	model   string
+	disp    *Dispatcher
+	db      *db.DB
+	journal *journal.Journal
+	log     *slog.Logger
 }
 
 // New creates an Agent.
-func New(llm *openai.Client, model string, disp *Dispatcher, database *db.DB, log *slog.Logger) *Agent {
-	return &Agent{llm: llm, model: model, disp: disp, db: database, log: log}
+func New(
+	llm *openai.Client, model string, disp *Dispatcher, database *db.DB, jrnl *journal.Journal, log *slog.Logger,
+) *Agent {
+	return &Agent{llm: llm, model: model, disp: disp, db: database, journal: jrnl, log: log}
 }
 
 // DiagnosticResult is the structured output from complete_diagnosis.
@@ -304,6 +308,29 @@ type FixSignature struct {
 	// verification — it just means this signal isn't available.
 	ArrChecked bool `json:"arr_checked,omitempty"`
 	ArrHasFile bool `json:"arr_has_file,omitempty"`
+}
+
+// ParseDiagnosticResult re-decodes an incident's stored finding — persisted
+// generically as `any` by db.SetIncidentFinding, so db.Incident.Finding comes
+// back as a map[string]any, not a *DiagnosticResult — into its typed form,
+// for rendering a structured report instead of a raw JSON dump. Returns
+// (nil, false) on any decode failure (an old row in an unexpected shape, or
+// simply no finding yet) rather than a partially-populated struct, so the
+// caller can cleanly fall back to the raw view instead of rendering
+// zero-valued fields as if they meant something.
+func ParseDiagnosticResult(finding any) (*DiagnosticResult, bool) {
+	if finding == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(finding)
+	if err != nil {
+		return nil, false
+	}
+	var result DiagnosticResult
+	if unmarshalErr := json.Unmarshal(b, &result); unmarshalErr != nil {
+		return nil, false
+	}
+	return &result, true
 }
 
 // escalationLabel gives a short human-readable phrase for an
@@ -376,6 +403,7 @@ func (a *Agent) Run(
 		a.log.WarnContext(ctx, "run could not claim incident; status changed before start", "incident", inc.ID)
 		return nil, nil, ErrIncidentNotInvestigatable
 	}
+	a.recordStatusChanged(ctx, inc.ID, string(db.StatusInvestigating))
 
 	// Snapshot the target item's state before any tool runs, so a fix can be
 	// verified against what actually changed rather than just how healthy the
@@ -385,6 +413,8 @@ func (a *Agent) Run(
 	preFix := a.captureSignature(ctx, inc.JellyfinItemID, inc.Title)
 
 	messages := a.initMessages(ctx, inc, seed)
+	a.recordRunStarted(ctx, inc.ID, messages)
+
 	tools := toolDefs()
 	autonomousActions := 0
 	seenCalls := make(map[string]int)
@@ -396,22 +426,20 @@ func (a *Agent) Run(
 			Tools:    tools,
 		})
 		if err != nil {
+			a.recordRunFinished(ctx, inc.ID, round, err)
 			return nil, messages, fmt.Errorf("llm round %d: %w", round, err)
 		}
 
 		msg := resp.Choices[0].Message
 		messages = append(messages, msg)
-
-		if data, marshalErr := json.Marshal(messages); marshalErr == nil {
-			_ = a.db.SaveConversation(ctx, inc.ID, json.RawMessage(data))
-		}
-
 		a.logTurn(ctx, inc.ID, round, msg)
 
 		if len(msg.ToolCalls) == 0 {
+			a.recordRound(ctx, inc.ID, round, msg, nil)
 			break
 		}
 
+		toolMsgStart := len(messages)
 		result, done, err := a.processToolCalls(
 			ctx,
 			inc,
@@ -421,21 +449,87 @@ func (a *Agent) Run(
 			&autonomousActions,
 			&messages,
 		)
+		// Recorded once per round, AFTER tool calls are processed — not, as the
+		// old per-round SaveConversation did, right after the assistant message
+		// and before this. That ordering was the reason the final round's tool
+		// results (the ones complete_diagnosis itself triggers no further round
+		// to re-save) were never persisted at all, and every other round's
+		// landed one round late.
+		a.recordRound(ctx, inc.ID, round, msg, messages[toolMsgStart:])
 		if err != nil {
+			a.recordRunFinished(ctx, inc.ID, round, err)
 			return nil, messages, err
 		}
 		if done {
+			a.recordRunFinished(ctx, inc.ID, round, nil)
 			return result, messages, nil
 		}
 	}
 
-	return &DiagnosticResult{
+	exhausted := &DiagnosticResult{
 		RootCause:        "diagnostic loop exhausted without conclusion",
 		Confidence:       "low",
 		PrimaryAction:    "manual_investigation",
 		PrimaryReason:    "agent did not reach a conclusion within iteration limit",
 		RequiresApproval: true,
-	}, messages, nil
+	}
+	a.recordRunFinished(ctx, inc.ID, maxRounds, errLoopExhausted)
+	return exhausted, messages, nil
+}
+
+// errLoopExhausted labels a run_finished event whose loop ran out of rounds
+// without complete_diagnosis ever being called — distinct from a genuine LLM
+// or tool error, but still worth recording as non-nil so the transcript shows
+// it wasn't a clean exit.
+var errLoopExhausted = errors.New("diagnostic loop exhausted without conclusion")
+
+// recordRunStarted, recordRound, and recordRunFinished are best-effort:
+// journal writes must never abort a diagnosis, and a.journal is nil in
+// contexts that don't care about the durable transcript (e.g. some tests
+// construct an Agent without one).
+func (a *Agent) recordRunStarted(ctx context.Context, incidentID string, seed []openai.ChatCompletionMessage) {
+	if a.journal == nil {
+		return
+	}
+	if err := a.journal.RunStarted(ctx, incidentID, seed); err != nil {
+		a.log.WarnContext(ctx, "record run_started", "incident", incidentID, "error", err)
+	}
+}
+
+func (a *Agent) recordRound(
+	ctx context.Context, incidentID string, round int,
+	assistant openai.ChatCompletionMessage, toolMessages []openai.ChatCompletionMessage,
+) {
+	if a.journal == nil {
+		return
+	}
+	if err := a.journal.LLMRound(ctx, incidentID, round, assistant, toolMessages); err != nil {
+		a.log.WarnContext(ctx, "record llm_round", "incident", incidentID, "round", round, "error", err)
+	}
+}
+
+func (a *Agent) recordRunFinished(ctx context.Context, incidentID string, rounds int, runErr error) {
+	if a.journal == nil {
+		return
+	}
+	if err := a.journal.RunFinished(ctx, incidentID, rounds, runErr); err != nil {
+		a.log.WarnContext(ctx, "record run_finished", "incident", incidentID, "error", err)
+	}
+}
+
+// recordStatusChanged notifies live subscribers (see incidentEvents in
+// internal/server) that this incident's status moved, for the two status
+// transitions Agent itself performs directly (claiming the incident into
+// "investigating", and the max-autonomous-actions escalation) — every other
+// transition happens one layer up in Service, which has its own identical
+// helper for the same reason.
+func (a *Agent) recordStatusChanged(ctx context.Context, incidentID, status string) {
+	if a.journal == nil {
+		return
+	}
+	if err := a.journal.StatusChanged(ctx, incidentID, status); err != nil {
+		a.log.WarnContext(ctx, "record status_changed", "incident", incidentID, "error", err)
+	}
 }
 
 // initMessages returns the starting message list for a run.
@@ -508,6 +602,7 @@ func (a *Agent) processToolCalls(
 			if *autonomousActions > maxAutonomousActions {
 				_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
 				_ = a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
+				a.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
 				return &DiagnosticResult{
 					RootCause:        "max autonomous actions reached without resolution",
 					Confidence:       "low",
@@ -564,6 +659,11 @@ func (a *Agent) handleCompleteDiagnosis(
 
 	if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
 		a.log.ErrorContext(ctx, "set finding", "error", err)
+	}
+	if a.journal != nil {
+		if err := a.journal.DiagnosisCompleted(ctx, inc.ID, result); err != nil {
+			a.log.WarnContext(ctx, "record diagnosis_completed", "incident", inc.ID, "error", err)
+		}
 	}
 
 	return &result, nil
@@ -890,7 +990,10 @@ const disruptionQuietWindow = 2 * time.Minute
 // this same incident's own action (already covered by attemptHistory, and
 // not something to warn an incident about itself).
 func (a *Agent) disruptionNote(ctx context.Context, incidentID string) string {
-	disp, err := a.db.LastDisruption(ctx)
+	if a.journal == nil {
+		return ""
+	}
+	disp, err := a.journal.LastDisruption(ctx)
 	if err != nil || disp.IncidentID == incidentID || time.Since(disp.At) > disruptionQuietWindow {
 		return ""
 	}
@@ -1002,6 +1105,13 @@ func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID, action, ar
 	return false
 }
 
+// logTurn is process-wide operational visibility (journalctl/Loki), separate
+// from the durable per-incident transcript recordRound writes to the event
+// log — the two serve different audiences and neither replaces the other.
+// The "run that's still making progress" signal FindStaleInvestigating's
+// sweeper needs no longer lives here: any event append (recordRound above,
+// via a.journal) already updates the incident's most recent activity, so a
+// dedicated heartbeat write is no longer necessary.
 func (a *Agent) logTurn(ctx context.Context, incidentID string, round int, msg openai.ChatCompletionMessage) {
 	b, _ := json.Marshal(msg)
 	a.log.InfoContext(ctx, "agent_turn",
@@ -1009,10 +1119,6 @@ func (a *Agent) logTurn(ctx context.Context, incidentID string, round int, msg o
 		"round", round,
 		"message", json.RawMessage(b),
 	)
-	// Best-effort: a run that's still making progress touches its heartbeat once
-	// per round, so a sweeper can tell "hung" (process alive, stuck) apart from
-	// "just slow" without waiting for the whole diagnostic loop to time out.
-	_ = a.db.TouchHeartbeat(ctx, incidentID)
 }
 
 // llmCall wraps CreateChatCompletion with exponential backoff for transient errors.

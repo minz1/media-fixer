@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,20 @@ var ErrNotFound = errors.New("not found")
 const nullJSON = "null"
 
 const findByStatusLimit = 100
+
+// readPoolSize bounds concurrent readers (dashboard pages, SSE streams, the
+// live-check suite). SQLite's WAL mode lets any number of readers run
+// alongside the single writer without blocking each other; this just caps
+// how many physical connections the read pool opens for a single-user local
+// admin tool where a handful is already generous headroom.
+const readPoolSize = 4
+
+// busyTimeoutMS is how long a connection waits on SQLITE_BUSY before
+// returning an error, applied via the DSN so every physical connection in
+// both pools gets it (see applyQueryParams in modernc.org/sqlite: pragmas
+// passed via query params are re-applied on every new connection, not just
+// the first).
+const busyTimeoutMS = 5000
 
 const schema = `
 CREATE TABLE IF NOT EXISTS incidents (
@@ -111,75 +126,502 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_reporters_discord
 ON incident_reporters(incident_id, discord_user_id)
 WHERE discord_user_id IS NOT NULL AND discord_user_id != '';`
 
-// DB wraps [sql.DB] with schema management and typed query methods.
+// DB wraps two [sql.DB] pools over the same SQLite file with schema
+// management and typed query methods. Splitting write/read matters because
+// SQLite only ever allows one writer at a time — write is capped at one
+// connection for that reason — while WAL mode (see dsn) lets any number of
+// readers run concurrently with that writer without blocking. Before this,
+// a single one-connection pool serialized everything, including long-lived
+// SSE readers, behind the agent's own writes.
 type DB struct {
-	sql    *sql.DB
+	write  *sql.DB
+	read   *sql.DB
 	yearRE *regexp.Regexp
 }
 
-// Open creates or opens the SQLite database at path, applying the schema.
+// dsn builds the SQLite connection string for path. _pragma values use
+// modernc.org/sqlite's own syntax (`_pragma=name(value)`), not
+// mattn/go-sqlite3's `?_journal_mode=...&_foreign_keys=...` — the two
+// drivers' DSN query keys don't overlap, and unknown keys are silently
+// ignored by modernc.org/sqlite rather than erroring, so a mismatch here
+// fails silent, not loud. See applyQueryParams in the vendored driver.
+func dsn(path string) string {
+	return path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(" +
+		strconv.Itoa(busyTimeoutMS) + ")"
+}
+
+// Open creates or opens the SQLite database at path, applying the schema and
+// running any migrations that haven't been applied yet.
 func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_foreign_keys=on")
+	ctx := context.Background()
+	d := dsn(path)
+
+	write, err := sql.Open("sqlite", d)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+		return nil, fmt.Errorf("open sqlite %s (write): %w", path, err)
 	}
-	conn.SetMaxOpenConns(1) // SQLite WAL handles readers, but serialise writes
-	if _, err = conn.ExecContext(context.Background(), schema); err != nil {
-		return nil, fmt.Errorf("apply schema: %w", err)
+	write.SetMaxOpenConns(1) // SQLite permits exactly one writer regardless of pool size
+
+	read, err := sql.Open("sqlite", d)
+	if err != nil {
+		_ = write.Close()
+		return nil, fmt.Errorf("open sqlite %s (read): %w", path, err)
 	}
-	const migrateDiscordUserID = `ALTER TABLE incident_reporters ADD COLUMN discord_user_id TEXT`
-	if _, err = conn.ExecContext(context.Background(), migrateDiscordUserID); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return nil, fmt.Errorf("migrate incident_reporters.discord_user_id: %w", err)
-		}
+	read.SetMaxOpenConns(readPoolSize)
+
+	if err = migrate(ctx, write); err != nil {
+		_ = write.Close()
+		_ = read.Close()
+		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
-	const migrateLastHeartbeat = `ALTER TABLE incidents ADD COLUMN last_heartbeat DATETIME`
-	if _, err = conn.ExecContext(context.Background(), migrateLastHeartbeat); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return nil, fmt.Errorf("migrate incidents.last_heartbeat: %w", err)
-		}
-	}
-	// pending_outcome/pending_outcome_next_check track an async fix (currently
-	// arr_search_missing) from trigger through resolution in durable storage —
-	// a download can take hours, far longer than any in-memory verification
-	// loop should hold a goroutine or survive a process restart. Kept as two
-	// columns rather than one JSON blob so FindDuePendingOutcomes can filter
-	// on next_check_at with a plain indexed WHERE instead of a JSON extract.
-	const migratePendingOutcome = `ALTER TABLE incidents ADD COLUMN pending_outcome TEXT`
-	if _, err = conn.ExecContext(context.Background(), migratePendingOutcome); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return nil, fmt.Errorf("migrate incidents.pending_outcome: %w", err)
-		}
-	}
-	const migratePendingOutcomeNextCheck = `ALTER TABLE incidents ADD COLUMN pending_outcome_next_check DATETIME`
-	if _, err = conn.ExecContext(context.Background(), migratePendingOutcomeNextCheck); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return nil, fmt.Errorf("migrate incidents.pending_outcome_next_check: %w", err)
-		}
-	}
-	// A Discord user's identity for notification is discord_user_id, not the
-	// display-name text in the PK. Enforce one reporter row per (incident, discord
-	// user) structurally so every reader dedups for free. The DELETE clears any
-	// pre-existing duplicates (a unique index fails to build otherwise); it is a
-	// no-op once deduplicated, so it is safe to run on every startup.
-	if _, err = conn.ExecContext(context.Background(), dedupReportersByDiscordID); err != nil {
-		return nil, fmt.Errorf("dedup incident_reporters by discord_user_id: %w", err)
-	}
-	if _, err = conn.ExecContext(context.Background(), createReporterDiscordIndex); err != nil {
-		return nil, fmt.Errorf("create incident_reporters discord index: %w", err)
-	}
+
 	return &DB{
-		sql:    conn,
+		write:  write,
+		read:   read,
 		yearRE: regexp.MustCompile(`\s*\(\d{4}\)\s*$`),
 	}, nil
 }
 
-// Close closes the underlying database connection.
-func (d *DB) Close() error { return d.sql.Close() }
+// Close closes both underlying connection pools.
+func (d *DB) Close() error {
+	writeErr := d.write.Close()
+	readErr := d.read.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return readErr
+}
+
+// runTx runs fn inside a write transaction on conn, committing on success and
+// rolling back on any error (including a panic, which is re-thrown after
+// rollback). All multi-statement writes — a migration, or (from
+// internal/journal) an event append plus its projection — go through this
+// rather than issuing bare sequential ExecContext calls, so a crash or error
+// mid-sequence can never leave the database in a state no single write ever
+// asked for. A free function (not a *DB method) because migrate runs before
+// a *DB exists — it only has the raw write pool.
+func runTx(ctx context.Context, conn *sql.DB, fn func(ctx context.Context, tx *sql.Tx) error) (err error) {
+	txn, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = txn.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			_ = txn.Rollback()
+			return
+		}
+		err = txn.Commit()
+	}()
+	err = fn(ctx, txn)
+	return err
+}
 
 // normalizeTitle strips trailing " (YYYY)" year suffixes for fuzzy deduplication.
 func (d *DB) normalizeTitle(title string) string {
 	return strings.TrimSpace(d.yearRE.ReplaceAllString(title, ""))
+}
+
+// --- Schema migrations ---
+//
+// Migrations 1-6 recreate, verbatim, what Open used to do unconditionally on
+// every startup: apply the base schema, then four ALTER TABLE ADD COLUMNs,
+// then a one-time dedup + unique index. There was no schema_version table
+// before this, so the production database already has all six applied but
+// has never recorded that fact anywhere. Each carries an "already" check —
+// a structural marker (does the table/column/index exist) rather than a
+// trusted assumption — so bootstrapping against that database reconciles
+// correctly regardless of exactly which subset was actually applied,
+// without needing to guess a baseline version number. New migrations added
+// after this system exists (see internal/journal) need no "already" check:
+// schema_version alone is authoritative for them.
+const (
+	migBaseSchema                       = 1
+	migReportersDiscordUserID           = 2
+	migIncidentsLastHeartbeat           = 3
+	migIncidentsPendingOutcome          = 4
+	migIncidentsPendingOutcomeNextCheck = 5
+	migReportersDedupDiscordIndex       = 6
+	migIncidentEvents                   = 7
+	migBackfillIncidentEvents           = 8
+	migDropLastHeartbeat                = 9
+	migDropConversationHistory          = 10
+	migDropLastDisruption               = 11
+)
+
+type migration struct {
+	version int
+	name    string
+	// already reports whether this migration's effect is already present in
+	// the database, for reconciling a pre-schema_version (legacy) database.
+	// nil means "not applicable" — always run exec, relying on its own
+	// idempotent SQL (IF NOT EXISTS, etc.); used for genuinely new
+	// migrations where schema_version is trusted outright.
+	already func(ctx context.Context, conn *sql.DB) (bool, error)
+	exec    func(ctx context.Context, tx *sql.Tx) error
+}
+
+// migrations returns the full ordered list: the six legacy, pre-schema_version
+// migrations (see legacyMigrations) followed by the five that introduced the
+// event log (see eventLogMigrations). Split into two functions purely to stay
+// under a reasonable single-function length — they're one logical list.
+func migrations() []migration {
+	return append(legacyMigrations(), eventLogMigrations()...)
+}
+
+func legacyMigrations() []migration {
+	return []migration{
+		{
+			version: migBaseSchema,
+			name:    "base_schema",
+			already: func(ctx context.Context, conn *sql.DB) (bool, error) { return tableExists(ctx, conn, "incidents") },
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, schema)
+				return err
+			},
+		},
+		{
+			version: migReportersDiscordUserID,
+			name:    "incident_reporters_discord_user_id",
+			already: func(ctx context.Context, conn *sql.DB) (bool, error) {
+				return columnExists(ctx, conn, "incident_reporters", "discord_user_id")
+			},
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `ALTER TABLE incident_reporters ADD COLUMN discord_user_id TEXT`)
+				return err
+			},
+		},
+		{
+			version: migIncidentsLastHeartbeat,
+			name:    "incidents_last_heartbeat",
+			already: func(ctx context.Context, conn *sql.DB) (bool, error) {
+				return columnExists(ctx, conn, "incidents", "last_heartbeat")
+			},
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `ALTER TABLE incidents ADD COLUMN last_heartbeat DATETIME`)
+				return err
+			},
+		},
+		{
+			version: migIncidentsPendingOutcome,
+			name:    "incidents_pending_outcome",
+			already: func(ctx context.Context, conn *sql.DB) (bool, error) {
+				return columnExists(ctx, conn, "incidents", "pending_outcome")
+			},
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `ALTER TABLE incidents ADD COLUMN pending_outcome TEXT`)
+				return err
+			},
+		},
+		{
+			version: migIncidentsPendingOutcomeNextCheck,
+			name:    "incidents_pending_outcome_next_check",
+			already: func(ctx context.Context, conn *sql.DB) (bool, error) {
+				return columnExists(ctx, conn, "incidents", "pending_outcome_next_check")
+			},
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `ALTER TABLE incidents ADD COLUMN pending_outcome_next_check DATETIME`)
+				return err
+			},
+		},
+		{
+			// A Discord user's identity for notification is discord_user_id, not
+			// the display-name text in the PK. This enforces one reporter row per
+			// (incident, Discord user) structurally so every reader dedups for
+			// free; the DELETE clears any pre-existing duplicates first, since the
+			// unique index fails to build otherwise.
+			version: migReportersDedupDiscordIndex,
+			name:    "incident_reporters_dedup_discord_index",
+			already: func(ctx context.Context, conn *sql.DB) (bool, error) {
+				return indexExists(ctx, conn, "idx_reporters_discord")
+			},
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, dedupReportersByDiscordID); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, createReporterDiscordIndex)
+				return err
+			},
+		},
+	}
+}
+
+// eventLogMigrations replace four hand-rolled, single-purpose mechanisms
+// (last_disruption, last_heartbeat, conversation_history, and
+// actions_log-re-reading for attempt history) with one append-only event log
+// that backs all of them plus the live dashboard, the full thought-process
+// transcript, and the JSON export (see internal/journal). None of these five
+// need an "already" check — unlike legacyMigrations, they postdate
+// schema_version, so it alone is authoritative for whether they've run.
+func eventLogMigrations() []migration {
+	return []migration{
+		{
+			version: migIncidentEvents,
+			name:    "incident_events",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, incidentEventsSchema)
+				return err
+			},
+		},
+		{
+			// Recovers what's actually recoverable from the pre-event-log schema:
+			// incident_created from incidents.created_at, reporter_added from
+			// incident_reporters, action_applied from actions_log (this alone is
+			// enough for the collapsed last_disruption query to keep working over
+			// historical data — see journal.LastDisruption), and one
+			// conversation_imported per incident that had a conversation_history
+			// row. conversation_history is keyed incident_id PRIMARY KEY and
+			// upserted, so every rerun already destroyed the previous run's
+			// conversation — only the latest one survives to backfill; per-round
+			// history for old incidents was never recoverable. Tagged
+			// source='backfill' throughout so the UI can label these timestamps
+			// approximate rather than claim a precision the data doesn't have.
+			version: migBackfillIncidentEvents,
+			name:    "backfill_incident_events",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				for _, q := range backfillIncidentEventsSQL() {
+					if _, err := tx.ExecContext(ctx, q); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
+		{
+			version: migDropLastHeartbeat,
+			name:    "drop_last_heartbeat",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `ALTER TABLE incidents DROP COLUMN last_heartbeat`)
+				return err
+			},
+		},
+		{
+			version: migDropConversationHistory,
+			name:    "drop_conversation_history",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `DROP TABLE conversation_history`)
+				return err
+			},
+		},
+		{
+			version: migDropLastDisruption,
+			name:    "drop_last_disruption",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `DROP TABLE last_disruption`)
+				return err
+			},
+		},
+	}
+}
+
+const incidentEventsSchema = `
+CREATE TABLE IF NOT EXISTS incident_events (
+	seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+	incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+	at          DATETIME NOT NULL,
+	kind        TEXT NOT NULL,
+	payload     TEXT NOT NULL,
+	source      TEXT NOT NULL DEFAULT 'live'
+);
+CREATE INDEX IF NOT EXISTS idx_events_incident_seq ON incident_events(incident_id, seq);
+CREATE INDEX IF NOT EXISTS idx_events_kind_at ON incident_events(kind, at);
+`
+
+// backfillIncidentEventsSQL recreates, from the tables that held it, every
+// event kind that can honestly be reconstructed from pre-event-log data. Run
+// once by the backfill_incident_events migration, in its own transaction, while
+// conversation_history and last_disruption still exist (both are dropped by
+// later migrations in the same list).
+func backfillIncidentEventsSQL() []string {
+	return []string{
+		`INSERT INTO incident_events (incident_id, at, kind, payload, source)
+	 SELECT id, created_at, 'incident_created',
+	        json_object('source', source, 'reported_by', reported_by, 'what', what, 'title', title),
+	        'backfill'
+	 FROM incidents ORDER BY created_at`,
+
+		`INSERT INTO incident_events (incident_id, at, kind, payload, source)
+	 SELECT incident_id, reported_at, 'reporter_added',
+	        json_object('reporter', reporter, 'source', source, 'discord_user_id', discord_user_id),
+	        'backfill'
+	 FROM incident_reporters ORDER BY reported_at`,
+
+		`INSERT INTO incident_events (incident_id, at, kind, payload, source)
+	 SELECT incident_id, COALESCE(applied_at, CURRENT_TIMESTAMP), 'action_applied',
+	        json_object('action', action, 'params', json(COALESCE(params, 'null')),
+	                     'triggered_by', triggered_by, 'status', status,
+	                     'result', COALESCE(result, ''), 'error', COALESCE(error, '')),
+	        'backfill'
+	 FROM actions_log ORDER BY applied_at`,
+
+		`INSERT INTO incident_events (incident_id, at, kind, payload, source)
+	 SELECT incident_id, updated_at, 'conversation_imported', json_object('messages', json(messages)), 'backfill'
+	 FROM conversation_history ORDER BY updated_at`,
+	}
+}
+
+const createSchemaVersionTable = `
+CREATE TABLE IF NOT EXISTS schema_version (
+	version    INTEGER PRIMARY KEY,
+	name       TEXT NOT NULL,
+	applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`
+
+// migrate applies every migration not yet recorded in schema_version, each
+// in its own transaction (so a failure partway through never leaves a
+// migration half-applied and unrecorded, which would otherwise make it
+// silently re-run — and half-apply again — on the next restart).
+func migrate(ctx context.Context, write *sql.DB) error {
+	if _, err := write.ExecContext(ctx, createSchemaVersionTable); err != nil {
+		return fmt.Errorf("create schema_version: %w", err)
+	}
+
+	applied, err := loadAppliedVersions(ctx, write)
+	if err != nil {
+		return fmt.Errorf("read schema_version: %w", err)
+	}
+
+	for _, m := range migrations() {
+		if applied[m.version] {
+			continue
+		}
+		if applyErr := applyMigration(ctx, write, m); applyErr != nil {
+			return fmt.Errorf("migration %d (%s): %w", m.version, m.name, applyErr)
+		}
+	}
+	return nil
+}
+
+// loadAppliedVersions returns the set of migration versions already
+// recorded in schema_version.
+func loadAppliedVersions(ctx context.Context, write *sql.DB) (map[int]bool, error) {
+	rows, err := write.QueryContext(ctx, `SELECT version FROM schema_version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	applied := map[int]bool{}
+	for rows.Next() {
+		var v int
+		if scanErr := rows.Scan(&v); scanErr != nil {
+			return nil, scanErr
+		}
+		applied[v] = true
+	}
+	return applied, rows.Err()
+}
+
+// applyMigration runs one migration's exec (unless its "already" check finds
+// the effect already present) and records it in schema_version, all inside a
+// single transaction.
+func applyMigration(ctx context.Context, write *sql.DB, m migration) error {
+	skipExec := false
+	if m.already != nil {
+		ok, err := m.already(ctx, write)
+		if err != nil {
+			return fmt.Errorf("check already-applied: %w", err)
+		}
+		skipExec = ok
+	}
+
+	// A legacy database's very first reconciliation is also the first time
+	// foreign-key enforcement has ever been turned on for it (Open's DSN
+	// never actually enabled it before — see dsn's doc comment). Verify
+	// there's nothing for the newly-enforced ON DELETE CASCADEs to trip over,
+	// rather than assume a clean history.
+	if m.version == migBaseSchema && skipExec {
+		if err := checkNoForeignKeyViolations(ctx, write); err != nil {
+			return err
+		}
+	}
+
+	return runTx(ctx, write, func(ctx context.Context, tx *sql.Tx) error {
+		if !skipExec {
+			if err := m.exec(ctx, tx); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO schema_version (version, name) VALUES (?, ?)`, m.version, m.name)
+		return err
+	})
+}
+
+// checkNoForeignKeyViolations fails loudly if the database has rows that
+// violate a foreign key now being enforced for the first time, rather than
+// silently letting SQLite start rejecting writes that touch them.
+func checkNoForeignKeyViolations(ctx context.Context, conn *sql.DB) error {
+	rows, err := conn.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("foreign_key_check: %w", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New(
+			"foreign_key_check found existing violations; " +
+				"resolve orphaned rows before enabling foreign key enforcement")
+	}
+	return rows.Err()
+}
+
+// tableExists reports whether a table with this name exists in the database.
+func tableExists(ctx context.Context, conn *sql.DB, name string) (bool, error) {
+	var n int
+	err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name,
+	).Scan(&n)
+	return n > 0, err
+}
+
+// indexExists reports whether an index with this name exists in the database.
+func indexExists(ctx context.Context, conn *sql.DB, name string) (bool, error) {
+	var n int
+	err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, name,
+	).Scan(&n)
+	return n > 0, err
+}
+
+// columnExists reports whether table has a column with this name, via
+// PRAGMA table_info rather than trying the ALTER and pattern-matching the
+// driver's "duplicate column name" error string. table is always one of a
+// fixed set of internal literals passed by migrations above, never user
+// input, so building the PRAGMA statement by concatenation is safe.
+func columnExists(ctx context.Context, conn *sql.DB, table, column string) (bool, error) {
+	rows, err := conn.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return false, err
+	}
+	dest := make([]any, len(cols))
+	nameIdx := -1
+	for i, c := range cols {
+		if c == "name" {
+			nameIdx = i
+		}
+		dest[i] = new(any)
+	}
+	if nameIdx < 0 {
+		return false, errors.New("PRAGMA table_info: no name column in result")
+	}
+	for rows.Next() {
+		if scanErr := rows.Scan(dest...); scanErr != nil {
+			return false, scanErr
+		}
+		if v, ok := (*dest[nameIdx].(*any)).(string); ok && v == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // --- Incidents ---
@@ -228,7 +670,7 @@ func (d *DB) CreateIncident(ctx context.Context, inc *Incident) error {
 	inc.CreatedAt = time.Now()
 	inc.UpdatedAt = inc.CreatedAt
 
-	_, err := d.sql.ExecContext(ctx, `
+	_, err := d.write.ExecContext(ctx, `
 		INSERT INTO incidents (id, created_at, updated_at, status, source, reported_by, what, title, jellyfin_item_id, details)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		inc.ID, inc.CreatedAt, inc.UpdatedAt, inc.Status,
@@ -240,7 +682,7 @@ func (d *DB) CreateIncident(ctx context.Context, inc *Incident) error {
 
 // GetIncident retrieves an incident by ID.
 func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
-	row := d.sql.QueryRowContext(ctx, `
+	row := d.read.QueryRowContext(ctx, `
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
@@ -255,7 +697,7 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 // Returns ErrNotFound when no matching open incident exists.
 func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, error) {
 	norm := d.normalizeTitle(title)
-	row := d.sql.QueryRowContext(ctx, `
+	row := d.read.QueryRowContext(ctx, `
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
@@ -286,7 +728,7 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 	q += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := d.sql.QueryContext(ctx, q, args...)
+	rows, err := d.read.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +751,7 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 // CountOpenIncidents returns the number of non-resolved incidents.
 func (d *DB) CountOpenIncidents(ctx context.Context) (int, error) {
 	var n int
-	err := d.sql.QueryRowContext(ctx,
+	err := d.read.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM incidents WHERE status NOT IN ('resolved')`,
 	).Scan(&n)
 	return n, err
@@ -317,7 +759,7 @@ func (d *DB) CountOpenIncidents(ctx context.Context) (int, error) {
 
 // UpdateIncidentStatus sets the status of an incident.
 func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status IncidentStatus) error {
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?`,
 		status, time.Now(), id)
 	return err
@@ -343,7 +785,7 @@ func (d *DB) TransitionStatus(
 		//nolint:gosec // only literal "?" placeholders are concatenated; all status values are parameterized via args
 		q += " AND status IN (" + strings.Join(placeholders, ",") + ")"
 	}
-	res, err := d.sql.ExecContext(ctx, q, args...)
+	res, err := d.write.ExecContext(ctx, q, args...)
 	if err != nil {
 		return false, err
 	}
@@ -358,7 +800,7 @@ func (d *DB) TransitionStatus(
 func (d *DB) SetIncidentFinding(ctx context.Context, id string, finding, actions any) error {
 	fb, _ := json.Marshal(finding)
 	ab, _ := json.Marshal(actions)
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`UPDATE incidents SET finding = ?, recommended_actions = ?, updated_at = ? WHERE id = ?`,
 		string(fb), string(ab), time.Now(), id)
 	return err
@@ -367,7 +809,7 @@ func (d *DB) SetIncidentFinding(ctx context.Context, id string, finding, actions
 // IncrementActionCount atomically increments the action counter and returns the new value.
 func (d *DB) IncrementActionCount(ctx context.Context, id string) (int, error) {
 	var n int
-	err := d.sql.QueryRowContext(ctx,
+	err := d.write.QueryRowContext(ctx,
 		`UPDATE incidents SET action_count = action_count + 1, updated_at = ? WHERE id = ?
 		 RETURNING action_count`,
 		time.Now(), id).Scan(&n)
@@ -380,7 +822,7 @@ func (d *DB) SetAutonomousLocked(ctx context.Context, id string, locked bool) er
 	if locked {
 		v = 1
 	}
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`UPDATE incidents SET autonomous_locked = ?, updated_at = ? WHERE id = ?`,
 		v, time.Now(), id)
 	return err
@@ -390,7 +832,7 @@ func (d *DB) SetAutonomousLocked(ctx context.Context, id string, locked bool) er
 
 // AddReporter records a reporter for an incident (INSERT OR IGNORE).
 func (d *DB) AddReporter(ctx context.Context, incidentID, reporter, source, discordUserID string) error {
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`INSERT OR IGNORE INTO incident_reporters (incident_id, reporter, source, discord_user_id, reported_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		incidentID, reporter, source, nullStr(discordUserID), time.Now())
@@ -399,7 +841,7 @@ func (d *DB) AddReporter(ctx context.Context, incidentID, reporter, source, disc
 
 // ListReporters returns all reporter names for an incident.
 func (d *DB) ListReporters(ctx context.Context, incidentID string) ([]string, error) {
-	rows, err := d.sql.QueryContext(ctx,
+	rows, err := d.read.QueryContext(ctx,
 		`SELECT reporter FROM incident_reporters WHERE incident_id = ? ORDER BY reported_at`,
 		incidentID)
 	if err != nil {
@@ -427,7 +869,7 @@ func (d *DB) ListReporters(ctx context.Context, incidentID string) ([]string, er
 // interaction), so this groups by discord_user_id to guarantee each person
 // is notified exactly once.
 func (d *DB) ListDiscordReporterIDs(ctx context.Context, incidentID string) ([]string, error) {
-	rows, err := d.sql.QueryContext(ctx,
+	rows, err := d.read.QueryContext(ctx,
 		`SELECT discord_user_id FROM incident_reporters
 		 WHERE incident_id = ? AND discord_user_id IS NOT NULL AND discord_user_id != ''
 		 GROUP BY discord_user_id
@@ -479,11 +921,25 @@ type ActionLog struct {
 }
 
 // LogAction inserts an action record, generating an ID if absent. Callers
-// (Dispatcher.logAction) only log an action after the underlying operation has
-// already succeeded, so "now" is an accurate applied_at — there is no separate
-// "pending" phase in this codebase's usage, unlike the applied_at/UpdateAction
-// pair the schema was originally built for.
+// only log an action after the underlying operation has already succeeded,
+// so "now" is an accurate applied_at — there is no separate "pending" phase
+// in this codebase's usage, unlike the applied_at/UpdateAction pair the
+// schema was originally built for. Production code now writes actions_log
+// exclusively via internal/journal (an action_applied event's projection,
+// written atomically with the event via InsertActionLog below) — this
+// remains for direct/test use as a plain standalone write.
 func (d *DB) LogAction(ctx context.Context, a *ActionLog) error {
+	return d.RunTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		return InsertActionLog(ctx, tx, a)
+	})
+}
+
+// InsertActionLog inserts one actions_log row within tx, generating an ID and
+// applied_at if absent. A free function (not a *DB method) so
+// internal/journal can call it from inside its own RunTx closure, writing an
+// action_applied event and its actions_log projection atomically — both
+// succeed or both roll back.
+func InsertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
@@ -492,7 +948,7 @@ func (d *DB) LogAction(ctx context.Context, a *ActionLog) error {
 		a.AppliedAt = &now
 	}
 	pb, _ := json.Marshal(a.Params)
-	_, err := d.sql.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status, applied_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status, a.AppliedAt)
@@ -502,7 +958,7 @@ func (d *DB) LogAction(ctx context.Context, a *ActionLog) error {
 // UpdateAction updates the status and result of an action.
 func (d *DB) UpdateAction(ctx context.Context, id string, status ActionStatus, result, errMsg string) error {
 	now := time.Now()
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`UPDATE actions_log SET status = ?, applied_at = ?, result = ?, error = ? WHERE id = ?`,
 		status, now, result, errMsg, id)
 	return err
@@ -510,7 +966,7 @@ func (d *DB) UpdateAction(ctx context.Context, id string, status ActionStatus, r
 
 // ListActions returns all logged actions for an incident ordered by insertion.
 func (d *DB) ListActions(ctx context.Context, incidentID string) ([]*ActionLog, error) {
-	rows, err := d.sql.QueryContext(ctx, `
+	rows, err := d.read.QueryContext(ctx, `
 		SELECT id, incident_id, action, COALESCE(params,''), triggered_by, status,
 		       applied_at, COALESCE(result,''), COALESCE(error,'')
 		FROM actions_log WHERE incident_id = ? ORDER BY rowid`, incidentID)
@@ -547,13 +1003,13 @@ func (d *DB) ListActions(ctx context.Context, incidentID string) ([]*ActionLog, 
 // GetSetting retrieves a settings value by key.
 func (d *DB) GetSetting(ctx context.Context, key string) (string, error) {
 	var v string
-	err := d.sql.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	err := d.read.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
 	return v, err
 }
 
 // SetSetting upserts a settings key/value pair.
 func (d *DB) SetSetting(ctx context.Context, key, value string) error {
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`INSERT INTO settings (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		key, value)
@@ -569,62 +1025,32 @@ func (d *DB) IsAutonomousPaused(ctx context.Context) (bool, error) {
 	return v == "true", nil
 }
 
-// --- Conversation history ---
-
-// SaveConversation upserts the serialised conversation for an incident.
-func (d *DB) SaveConversation(ctx context.Context, incidentID string, data json.RawMessage) error {
-	_, err := d.sql.ExecContext(ctx,
-		`INSERT INTO conversation_history (incident_id, messages, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(incident_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at`,
-		incidentID, string(data), time.Now())
-	return err
-}
-
-// LoadConversation retrieves the stored conversation for an incident.
-// Returns ErrNotFound when no conversation has been saved yet.
-func (d *DB) LoadConversation(ctx context.Context, incidentID string) (json.RawMessage, error) {
-	var s string
-	err := d.sql.QueryRowContext(ctx,
-		`SELECT messages FROM conversation_history WHERE incident_id = ?`, incidentID,
-	).Scan(&s)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(s), nil
-}
-
 // FindByStatus returns all incidents in the given status (up to findByStatusLimit).
 func (d *DB) FindByStatus(ctx context.Context, status IncidentStatus) ([]*Incident, error) {
 	return d.ListIncidents(ctx, string(status), findByStatusLimit, 0)
 }
 
-// TouchHeartbeat records that an active agent run is still making progress.
-// Called once per LLM round (Agent.logTurn) — best-effort, a failed write
-// here should never abort a diagnosis.
-func (d *DB) TouchHeartbeat(ctx context.Context, id string) error {
-	_, err := d.sql.ExecContext(ctx,
-		`UPDATE incidents SET last_heartbeat = ? WHERE id = ?`, time.Now(), id)
-	return err
-}
-
-// FindStaleInvestigating returns incidents stuck in "investigating" whose
-// heartbeat (or, if a run never got far enough to write one, updated_at —
-// set when the run entered "investigating") is older than staleBefore.
-// RecoverZombies only catches a crashed process (nothing left running to
-// check); this catches a hung one — a run whose goroutine is still alive but
-// stopped making progress, which zombie recovery cannot see at all.
+// FindStaleInvestigating returns incidents stuck in "investigating" whose most
+// recent incident_events activity (or, if nothing has been logged yet,
+// updated_at — set when the run entered "investigating") is older than
+// staleBefore. Formerly driven by a dedicated last_heartbeat column touched
+// once per LLM round; any event append now serves the same purpose (see
+// internal/journal), so no separate heartbeat write exists — this is a plain
+// read over incidents joined against incident_events, both this package's own
+// tables. RecoverZombies only catches a crashed process (nothing left running
+// to check); this catches a hung one — a run whose goroutine is still alive
+// but stopped making progress, which zombie recovery cannot see at all.
 func (d *DB) FindStaleInvestigating(ctx context.Context, staleBefore time.Time) ([]*Incident, error) {
-	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
-	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
-	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked
-	      FROM incidents
-	      WHERE status = ? AND COALESCE(last_heartbeat, updated_at) < ?`
-	rows, err := d.sql.QueryContext(ctx, q, StatusInvestigating, staleBefore)
+	q := `SELECT i.id, i.created_at, i.updated_at, i.status, i.source, i.reported_by, i.what, i.title,
+	             COALESCE(i.jellyfin_item_id,''), COALESCE(i.details,''),
+	             COALESCE(i.finding,''), COALESCE(i.recommended_actions,''),
+	             i.action_count, i.autonomous_locked
+	      FROM incidents i
+	      LEFT JOIN (
+	        SELECT incident_id, MAX(at) AS last_activity FROM incident_events GROUP BY incident_id
+	      ) e ON e.incident_id = i.id
+	      WHERE i.status = ? AND COALESCE(e.last_activity, i.updated_at) < ?`
+	rows, err := d.read.QueryContext(ctx, q, StatusInvestigating, staleBefore)
 	if err != nil {
 		return nil, err
 	}
@@ -681,7 +1107,7 @@ func (d *DB) SetPendingOutcome(ctx context.Context, id string, po *PendingOutcom
 	if err != nil {
 		return err
 	}
-	_, err = d.sql.ExecContext(ctx,
+	_, err = d.write.ExecContext(ctx,
 		`UPDATE incidents SET pending_outcome = ?, pending_outcome_next_check = ?, updated_at = ? WHERE id = ?`,
 		string(b), nextCheck, time.Now(), id)
 	return err
@@ -690,7 +1116,7 @@ func (d *DB) SetPendingOutcome(ctx context.Context, id string, po *PendingOutcom
 // ClearPendingOutcome removes any pending-outcome state for an incident
 // (called once it resolves, so the sweeper stops touching it).
 func (d *DB) ClearPendingOutcome(ctx context.Context, id string) error {
-	_, err := d.sql.ExecContext(ctx,
+	_, err := d.write.ExecContext(ctx,
 		`UPDATE incidents SET pending_outcome = NULL, pending_outcome_next_check = NULL, updated_at = ? WHERE id = ?`,
 		time.Now(), id)
 	return err
@@ -700,7 +1126,7 @@ func (d *DB) ClearPendingOutcome(ctx context.Context, id string) error {
 // incident, or ErrNotFound if it has none.
 func (d *DB) GetPendingOutcome(ctx context.Context, id string) (*PendingOutcome, error) {
 	var s sql.NullString
-	err := d.sql.QueryRowContext(ctx,
+	err := d.read.QueryRowContext(ctx,
 		`SELECT pending_outcome FROM incidents WHERE id = ?`, id,
 	).Scan(&s)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && !s.Valid) {
@@ -729,7 +1155,7 @@ func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*I
 	             action_count, autonomous_locked
 	      FROM incidents
 	      WHERE status = ? AND pending_outcome IS NOT NULL AND pending_outcome_next_check <= ?`
-	rows, err := d.sql.QueryContext(ctx, q, StatusVerifying, before)
+	rows, err := d.read.QueryContext(ctx, q, StatusVerifying, before)
 	if err != nil {
 		return nil, err
 	}
@@ -746,44 +1172,101 @@ func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*I
 	return out, rows.Err()
 }
 
-// --- Disruption tracking ---
+// --- Events (append-only incident_events log; see internal/journal) ---
+//
+// db only stores and retrieves event rows — internal/journal owns what each
+// Kind means, how its payload is shaped, and what projection (if any) an
+// append also writes (e.g. an action_applied event's actions_log row). This
+// table replaces last_disruption, last_heartbeat, and conversation_history;
+// see the migBackfillIncidentEvents migration above for how existing data
+// carried over.
 
-// Disruption is the most recent service-wide disruptive action recorded by
-// RecordDisruption.
-type Disruption struct {
-	Action     string
-	IncidentID string
-	At         time.Time
+// Event is one row of incident_events.
+type Event struct {
+	Seq        int64           `json:"seq"`
+	IncidentID string          `json:"incident_id"`
+	At         time.Time       `json:"at"`
+	Kind       string          `json:"kind"`
+	Payload    json.RawMessage `json:"payload"`
+	Source     string          `json:"source"`
 }
 
-// RecordDisruption upserts the single last_disruption row. Called whenever a
-// service-wide action (restart, scan, sweep, cleanup — see
-// Dispatcher.disruptiveActions) is logged, so any run starting shortly after
-// can be warned it may be looking at that disruption's side effects rather
-// than its own incident's root cause.
-func (d *DB) RecordDisruption(ctx context.Context, action, incidentID string) error {
-	_, err := d.sql.ExecContext(ctx, `
-		INSERT INTO last_disruption (id, action, incident_id, at) VALUES (1, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET action = excluded.action, incident_id = excluded.incident_id,
-		                               at = excluded.at`,
-		action, incidentID, time.Now())
-	return err
-}
-
-// LastDisruption returns the most recent recorded disruption, or ErrNotFound
-// if none has ever been recorded.
-func (d *DB) LastDisruption(ctx context.Context) (*Disruption, error) {
-	var disp Disruption
-	err := d.sql.QueryRowContext(ctx,
-		`SELECT action, incident_id, at FROM last_disruption WHERE id = 1`,
-	).Scan(&disp.Action, &disp.IncidentID, &disp.At)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+// AppendEvent inserts one event row within tx (see (*DB).RunTx) and returns
+// its assigned seq. A free function, not a *DB method, so a caller composing
+// an event insert with a projection write (both must land in the same
+// transaction) isn't tempted to reach for a second, unrelated *DB write pool
+// mid-transaction.
+func AppendEvent(ctx context.Context, tx *sql.Tx, e *Event) (int64, error) {
+	if e.Source == "" {
+		e.Source = "live"
 	}
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO incident_events (incident_id, at, kind, payload, source) VALUES (?, ?, ?, ?, ?)`,
+		e.IncidentID, e.At, e.Kind, string(e.Payload), e.Source)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// EventsSince returns every event for incidentID with seq > afterSeq, in seq
+// order — the full history when afterSeq is 0. Backs both the live SSE
+// stream's replay-on-reconnect (afterSeq = the client's Last-Event-ID) and a
+// full-history read (the transcript page, the JSON export).
+func (d *DB) EventsSince(ctx context.Context, incidentID string, afterSeq int64) ([]*Event, error) {
+	rows, err := d.read.QueryContext(ctx, `
+		SELECT seq, incident_id, at, kind, payload, source
+		FROM incident_events WHERE incident_id = ? AND seq > ? ORDER BY seq`,
+		incidentID, afterSeq)
 	if err != nil {
 		return nil, err
 	}
-	return &disp, nil
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+// EventsByKind returns the most recent events of a given kind across every
+// incident, newest first, up to limit. Used for queries that aren't scoped to
+// one incident — e.g. journal.LastDisruption, which needs the latest
+// disruptive action_applied event regardless of which incident logged it.
+// Filtering on anything inside payload (e.g. "was this one disruptive") is
+// left to the caller — db has no opinion on what a kind's payload means.
+func (d *DB) EventsByKind(ctx context.Context, kind string, limit int) ([]*Event, error) {
+	rows, err := d.read.QueryContext(ctx, `
+		SELECT seq, incident_id, at, kind, payload, source
+		FROM incident_events WHERE kind = ? ORDER BY seq DESC LIMIT ?`,
+		kind, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func scanEvents(rows *sql.Rows) ([]*Event, error) {
+	var out []*Event
+	for rows.Next() {
+		e := &Event{}
+		var payload string
+		if err := rows.Scan(&e.Seq, &e.IncidentID, &e.At, &e.Kind, &payload, &e.Source); err != nil {
+			return nil, err
+		}
+		e.Payload = json.RawMessage(payload)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// RunTx runs fn inside a write transaction against d's write pool. Exported
+// for internal/journal, which composes an event insert with its projection
+// write (e.g. the actions_log row an action_applied event backs) atomically —
+// both succeed or both roll back, so the log and its derived read-optimized
+// tables can never drift apart.
+func (d *DB) RunTx(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	return runTx(ctx, d.write, fn)
 }
 
 // --- helpers ---

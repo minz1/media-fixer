@@ -23,7 +23,7 @@
           commonArgs = {
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-4OnOEq97YkZCkXgQYFaQIAq/WjwMT/JQBboc0tbuP5M=";
+            vendorHash = "sha256-poi3xB2+kRpiSgh5Mwm5U8tUBV3gToG3ci2nWFuYlXA=";
             env.CGO_ENABLED = "0";
             ldflags = [
               "-s"
@@ -31,7 +31,7 @@
             ];
           };
 
-          media-fixer = pkgs.buildGoModule (
+          media-fixer = pkgs.buildGo127Module (
             commonArgs
             // {
               pname = "media-fixer";
@@ -43,7 +43,7 @@
             }
           );
 
-          media-agent = pkgs.buildGoModule (
+          media-agent = pkgs.buildGo127Module (
             commonArgs
             // {
               pname = "media-agent";
@@ -55,7 +55,7 @@
             }
           );
 
-          media-fixer-check = pkgs.buildGoModule (
+          media-fixer-check = pkgs.buildGo127Module (
             commonArgs
             // {
               pname = "media-fixer-check";
@@ -75,7 +75,7 @@
 
           devShells.default = pkgs.mkShell {
             buildInputs = with pkgs; [
-              go
+              go_1_27
               gopls
               gotools
               go-tools

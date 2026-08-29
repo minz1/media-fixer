@@ -90,7 +90,7 @@ func newPendingOutcomeTestService(t *testing.T, ag incident.AgentRunner) (*incid
 	t.Cleanup(func() { database.Close() })
 
 	notif := newSyncNotifier()
-	svc := incident.NewService(context.Background(), database, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
 	return svc, database, notif
 }
 

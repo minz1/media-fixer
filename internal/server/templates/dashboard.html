@@ -1,12 +1,16 @@
+{{define "head"}}
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/htmx.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3"></script>
+</head>
+{{end}}
+
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Media Fixer</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
-  </head>
+  {{template "head" (dict "Title" "Media Fixer")}}
   <body class="bg-gray-50 font-sans">
     <div class="max-w-5xl mx-auto px-4 py-8">
       <div class="flex items-center justify-between mb-8">
@@ -25,7 +29,7 @@
             hx-post="{{.BaseURL}}/resume"
             hx-target="body"
             hx-swap="outerHTML"
-            class="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+            class="px-3 py-1.5 text-sm bg-green-600 text-white rounded-sm hover:bg-green-700"
           >
             Resume
           </button>
@@ -34,7 +38,7 @@
             hx-post="{{.BaseURL}}/pause"
             hx-target="body"
             hx-swap="outerHTML"
-            class="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+            class="px-3 py-1.5 text-sm bg-red-600 text-white rounded-sm hover:bg-red-700"
           >
             Pause agent
           </button>
@@ -42,206 +46,362 @@
         </div>
       </div>
 
-      <div class="space-y-3">
-        {{range .Incidents}}
-        <a
-          href="{{$.BaseURL}}/incidents/{{.ID}}"
-          class="block bg-white border border-gray-200 rounded-lg p-4 hover:shadow-sm transition-shadow"
-        >
-          <div class="flex items-start justify-between">
-            <div>
-              <div class="font-medium text-gray-900">{{.Title}}</div>
-              <div class="text-sm text-gray-500 mt-0.5">
-                {{.What}} · {{.Source}} · {{timeAgo .CreatedAt}}
-              </div>
-            </div>
-            <span
-              class="ml-4 shrink-0 px-2 py-0.5 text-xs font-medium rounded-full {{statusColor .Status}}"
-            >
-              {{.Status}}
-            </span>
-          </div>
-          {{if .AutonomousLocked}}
-          <div class="mt-2 text-xs text-red-600">
-            🔒 Autonomous actions locked
-          </div>
-          {{end}}
-        </a>
-        {{else}}
-        <div class="text-center py-16 text-gray-400">No incidents</div>
-        {{end}}
-      </div>
+      <!-- Connects but never itself swaps (hx-swap="none"); incoming
+           <hx-partial> elements target #incidents-list by id instead. -->
+      <div hx-sse:connect="{{.BaseURL}}/events" hx-swap="none"></div>
+      {{template "incidents_list" .}}
     </div>
   </body>
 </html>
 
+{{define "incidents_list"}}
+<div id="incidents-list" class="space-y-3">
+  {{range .Incidents}}
+  <a
+    href="{{$.BaseURL}}/incidents/{{.ID}}"
+    class="block bg-white border border-gray-200 rounded-lg p-4 hover:shadow-xs transition-shadow"
+  >
+    <div class="flex items-start justify-between">
+      <div>
+        <div class="font-medium text-gray-900">{{.Title}}</div>
+        <div class="text-sm text-gray-500 mt-0.5">
+          {{.What}} · {{.Source}} · {{timeAgo .CreatedAt}}
+        </div>
+      </div>
+      <span
+        class="ml-4 shrink-0 px-2 py-0.5 text-xs font-medium rounded-full {{statusColor .Status}}"
+      >
+        {{.Status}}
+      </span>
+    </div>
+    {{if .AutonomousLocked}}
+    <div class="mt-2 text-xs text-red-600">🔒 Autonomous actions locked</div>
+    {{end}}
+  </a>
+  {{else}}
+  <div class="text-center py-16 text-gray-400">No incidents</div>
+  {{end}}
+</div>
+{{end}}
+
 {{define "incident"}}
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Incident {{.Incident.ID}} · Media Fixer</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
-  </head>
+  {{template "head" (dict "Title" (printf "Incident %s · Media Fixer" .Incident.ID))}}
   <body class="bg-gray-50 font-sans">
     <div class="max-w-4xl mx-auto px-4 py-8">
       <a href="{{.BaseURL}}/" class="text-sm text-blue-600 hover:underline"
         >← All incidents</a
       >
 
-      <div class="mt-4 bg-white border border-gray-200 rounded-lg p-6">
-        <div class="flex items-start justify-between">
-          <div>
-            <h2 class="text-xl font-bold text-gray-900">{{.Incident.Title}}</h2>
-            <p class="text-sm text-gray-500 mt-1">
-              #{{.Incident.ID}} · {{.Incident.Source}} · reported by
-              {{.Incident.ReportedBy}}
-            </p>
-          </div>
-          <span
-            class="px-2 py-0.5 text-xs font-medium rounded-full {{statusColor .Incident.Status}}"
-          >
-            {{.Incident.Status}}
-          </span>
-        </div>
+      <!-- Closes itself (hx-sse:close="settled", a named event the server
+           sends once the incident reaches a terminal state with nothing
+           left in progress — see incidentSettled) instead of holding the
+           connection open indefinitely on a page that will never change
+           again without a full reload (e.g. Re-run diagnosis, which swaps
+           the whole body and re-establishes a fresh connection anyway). -->
+      <div
+        hx-sse:connect="{{.BaseURL}}/incidents/{{.Incident.ID}}/events"
+        hx-sse:close="settled"
+        hx-swap="none"
+      ></div>
 
-        {{if .Incident.Details}}
-        <p class="mt-4 text-sm text-gray-700">{{.Incident.Details}}</p>
-        {{end}} {{if .Incident.Finding}}
-        <div class="mt-6">
-          <h3 class="text-sm font-semibold text-gray-700 mb-2">
-            Agent diagnosis
-          </h3>
-          <pre
-            class="bg-gray-50 border border-gray-200 rounded p-3 text-xs overflow-auto"
-          >
+      {{template "incident_card" .}} {{template "incident_actions" .}}
+      {{template "incident_transcript" .}}
+    </div>
+  </body>
+</html>
+{{end}}
+
+{{define "incident_card"}}
+<div id="incident-card" class="mt-4 bg-white border border-gray-200 rounded-lg p-6">
+  <div class="flex items-start justify-between">
+    <div>
+      <h2 class="text-xl font-bold text-gray-900">{{.Incident.Title}}</h2>
+      <p class="text-sm text-gray-500 mt-1">
+        #{{.Incident.ID}} · {{.Incident.Source}} · reported by
+        {{.Incident.ReportedBy}}
+      </p>
+    </div>
+    <span
+      class="px-2 py-0.5 text-xs font-medium rounded-full {{statusColor .Incident.Status}}"
+    >
+      {{.Incident.Status}}
+    </span>
+  </div>
+
+  {{if .Incident.Details}}
+  <p class="mt-4 text-sm text-gray-700">{{.Incident.Details}}</p>
+  {{end}}
+
+  <!-- Prefer the structured report (.Finding, typed via
+       agent.ParseDiagnosticResult) over the raw JSON dump; fall back to the
+       raw dump only if the stored finding doesn't decode into that shape. -->
+  {{if .Finding}}
+  <div class="mt-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-2">Agent diagnosis</h3>
+    <div class="bg-gray-50 border border-gray-200 rounded-sm p-4">
+      <div class="flex items-start justify-between gap-3">
+        <p class="text-sm text-gray-800">{{.Finding.RootCause}}</p>
+        <span
+          class="shrink-0 px-2 py-0.5 text-xs font-medium rounded-full {{confidenceColor .Finding.Confidence}}"
+          >{{.Finding.Confidence}} confidence</span
+        >
+      </div>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <code class="px-2 py-0.5 bg-gray-200 text-gray-800 text-xs rounded-sm"
+          >{{.Finding.PrimaryAction}}</code
+        >
+        {{if .Finding.RequiresApproval}}
+        <span class="text-xs font-medium text-amber-700"
+          >requires owner approval</span
+        >
+        {{end}}
+      </div>
+      <p class="mt-2 text-xs text-gray-600">{{.Finding.PrimaryReason}}</p>
+
+      {{if .Finding.FallbackAction}}
+      <p class="mt-2 text-xs text-gray-500">
+        Fallback: <code>{{.Finding.FallbackAction}}</code>
+      </p>
+      {{end}} {{if .Finding.EscalateAction}}
+      <p class="mt-2 text-xs text-gray-500">
+        Escalation: <code>{{.Finding.EscalateAction}}</code>
+        {{if .Finding.EscalateParams}} — {{json .Finding.EscalateParams}}{{end}}
+      </p>
+      {{end}} {{if .Finding.VerifyAfterSeconds}}
+      <p class="mt-2 text-xs text-gray-500">
+        Re-checking in ~{{.Finding.VerifyAfterSeconds}}s{{if .Finding.UserETAMinutes}}
+        (told the reporter ~{{.Finding.UserETAMinutes}} min){{end}}
+      </p>
+      {{end}} {{if .Finding.PreFix}}
+      <details class="mt-3">
+        <summary class="text-xs text-gray-500 cursor-pointer">
+          Pre-fix signature
+        </summary>
+        <pre class="mt-1 text-xs overflow-auto">{{json .Finding.PreFix}}</pre>
+      </details>
+      {{end}}
+      <details class="mt-3">
+        <summary class="text-xs text-gray-500 cursor-pointer">
+          Raw JSON
+        </summary>
+        <pre class="mt-1 text-xs overflow-auto">{{json .Incident.Finding}}</pre>
+      </details>
+    </div>
+  </div>
+  {{else if .Incident.Finding}}
+  <div class="mt-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-2">Agent diagnosis</h3>
+    <pre
+      class="bg-gray-50 border border-gray-200 rounded-sm p-3 text-xs overflow-auto"
+    >
 {{json .Incident.Finding}}</pre
-          >
-        </div>
-        {{end}}
+    >
+  </div>
+  {{end}}
 
-        {{if .Incident.AutonomousLocked}}
-        <div class="mt-4 flex items-center gap-2 text-sm text-red-600">
-          🔒 Autonomous actions locked — the agent will not act on this incident
-          until you unlock it.
-        </div>
-        {{end}}
+  {{if .Incident.AutonomousLocked}}
+  <div class="mt-4 flex items-center gap-2 text-sm text-red-600">
+    🔒 Autonomous actions locked — the agent will not act on this incident
+    until you unlock it.
+  </div>
+  {{end}}
 
-        <!-- Every status is manually transitionable. -->
-        <div class="mt-4 flex flex-wrap gap-3">
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/rerun"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700"
-          >
-            Re-run diagnosis
-          </button>
-          {{if ne .Incident.Status "resolved"}}
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/resolve"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-          >
-            Mark resolved
-          </button>
-          {{end}}
-          {{if .Incident.AutonomousLocked}}
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/unlock"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-amber-600 text-white rounded hover:bg-amber-700"
-          >
-            🔓 Unlock
-          </button>
-          {{end}}
-        </div>
+  <!-- Every status is manually transitionable. -->
+  <div class="mt-4 flex flex-wrap gap-3">
+    <button
+      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/rerun"
+      hx-swap="outerHTML"
+      hx-target="body"
+      class="px-4 py-2 text-sm bg-red-600 text-white rounded-sm hover:bg-red-700"
+    >
+      Re-run diagnosis
+    </button>
+    {{if ne .Incident.Status "resolved"}}
+    <button
+      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/resolve"
+      hx-swap="outerHTML"
+      hx-target="body"
+      class="px-4 py-2 text-sm bg-green-600 text-white rounded-sm hover:bg-green-700"
+    >
+      Mark resolved
+    </button>
+    {{end}} {{if .Incident.AutonomousLocked}}
+    <button
+      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/unlock"
+      hx-swap="outerHTML"
+      hx-target="body"
+      class="px-4 py-2 text-sm bg-amber-600 text-white rounded-sm hover:bg-amber-700"
+    >
+      🔓 Unlock
+    </button>
+    {{end}}
+  </div>
 
-        {{if and (eq .Incident.Status "manual_test_needed") (eq .Incident.Finding.escalate_action "remove_and_search")}}
-        <div class="mt-4 border-t border-gray-200 pt-4">
-          <h3 class="text-sm font-semibold text-gray-700 mb-2">
-            Recommended escalation: remove &amp; re-search
-          </h3>
-          <div class="flex flex-wrap gap-3">
-            <button
-              hx-get="{{.BaseURL}}/incidents/{{.Incident.ID}}/escalation-preview"
-              hx-target="#escalation-preview"
-              hx-swap="innerHTML"
-              class="px-4 py-2 text-sm bg-purple-600 text-white rounded hover:bg-purple-700"
-            >
-              Preview
-            </button>
-            <button
-              hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/approve-escalation"
-              hx-swap="outerHTML"
-              hx-target="body"
-              hx-confirm="This deletes the current file(s), blocklists the release, and starts a fresh search. Continue?"
-              class="px-4 py-2 text-sm bg-red-700 text-white rounded hover:bg-red-800"
-            >
-              Approve &amp; Run
-            </button>
-          </div>
-          <div id="escalation-preview" class="mt-3"></div>
-        </div>
-        {{end}}
+  {{if eq .Incident.Status "manual_test_needed"}} {{if .Finding}} {{if eq
+  .Finding.EscalateAction "remove_and_search"}}
+  <div class="mt-4 border-t border-gray-200 pt-4">
+    <h3 class="text-sm font-semibold text-gray-700 mb-2">
+      Recommended escalation: remove &amp; re-search
+    </h3>
+    <div class="flex flex-wrap gap-3">
+      <button
+        hx-get="{{.BaseURL}}/incidents/{{.Incident.ID}}/escalation-preview"
+        hx-target="#escalation-preview"
+        hx-swap="innerHTML"
+        class="px-4 py-2 text-sm bg-purple-600 text-white rounded-sm hover:bg-purple-700"
+      >
+        Preview
+      </button>
+      <button
+        hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/approve-escalation"
+        hx-swap="outerHTML"
+        hx-target="body"
+        hx-confirm="This deletes the current file(s), blocklists the release, and starts a fresh search. Continue?"
+        class="px-4 py-2 text-sm bg-red-700 text-white rounded-sm hover:bg-red-800"
+      >
+        Approve &amp; Run
+      </button>
+    </div>
+    <div id="escalation-preview" class="mt-3"></div>
+  </div>
+  {{end}} {{end}} {{end}}
 
-        {{if and (eq .Incident.Status "manual_test_needed") .PendingOutcome}}
-        <div class="mt-4 border-t border-gray-200 pt-4">
-          <h3 class="text-sm font-semibold text-gray-700 mb-2">
-            Searched for {{.PendingOutcome.Title}}{{if ge .PendingOutcome.Season 0}} season
-            {{.PendingOutcome.Season}}{{if ge .PendingOutcome.Episode 0}} episode
-            {{.PendingOutcome.Episode}}{{end}}{{end}}, but no release was found (yet)
-          </h3>
-          <p class="text-sm text-gray-600 mb-2">
-            This can just mean brand-new content with no release available
-            yet. Keep searching re-checks periodically for up to a week
-            instead of giving up now.
-          </p>
-          <button
-            hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/keep-searching"
-            hx-swap="outerHTML"
-            hx-target="body"
-            class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
-            Keep searching
-          </button>
-        </div>
-        {{end}}
+  {{if eq .Incident.Status "manual_test_needed"}} {{if .PendingOutcome}}
+  <div class="mt-4 border-t border-gray-200 pt-4">
+    <h3 class="text-sm font-semibold text-gray-700 mb-2">
+      Searched for {{.PendingOutcome.Title}}{{if ge .PendingOutcome.Season 0}} season
+      {{.PendingOutcome.Season}}{{if ge .PendingOutcome.Episode 0}} episode
+      {{.PendingOutcome.Episode}}{{end}}{{end}}, but no release was found (yet)
+    </h3>
+    <p class="text-sm text-gray-600 mb-2">
+      This can just mean brand-new content with no release available yet.
+      Keep searching re-checks periodically for up to a week instead of
+      giving up now.
+    </p>
+    <button
+      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/keep-searching"
+      hx-swap="outerHTML"
+      hx-target="body"
+      class="px-4 py-2 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700"
+    >
+      Keep searching
+    </button>
+  </div>
+  {{end}} {{end}}
+</div>
+{{end}}
+
+{{define "incident_actions"}}
+<div id="incident-actions" class="mt-6">
+  <h3 class="text-sm font-semibold text-gray-700 mb-3">Action log</h3>
+  <div class="space-y-2">
+    {{range .Actions}}
+    <div class="bg-white border border-gray-200 rounded-sm p-3 text-sm">
+      <div class="flex justify-between">
+        <span class="font-medium text-gray-800">{{.Action}}</span>
+        <span class="text-xs text-gray-400"
+          >{{.TriggeredBy}} · {{.Status}}</span
+        >
+      </div>
+      {{if .Result}}
+      <div class="mt-1 text-xs text-gray-600">{{.Result}}</div>
+      {{end}} {{if .Error}}
+      <div class="mt-1 text-xs text-red-600">{{.Error}}</div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="text-sm text-gray-400">No actions yet</div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "incident_transcript"}}
+<div id="incident-transcript" class="mt-6">
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="text-sm font-semibold text-gray-700">Thought process</h3>
+    <div class="flex items-center gap-3">
+      {{if not .Full}}
+      <a
+        href="{{.BaseURL}}/incidents/{{.Incident.ID}}/transcript"
+        class="text-xs text-blue-600 hover:underline"
+        >Full thought process →</a
+      >
+      {{end}}
+      <a
+        href="{{.BaseURL}}/incidents/{{.Incident.ID}}/export"
+        download
+        class="text-xs text-blue-600 hover:underline"
+        >Export log</a
+      >
+    </div>
+  </div>
+  <div class="space-y-2">
+    {{range .Transcript}} {{if or $.Full (ne .Role "system")}}
+    <div class="bg-white border border-gray-200 rounded-sm p-3 text-sm">
+      <div class="text-xs font-semibold text-gray-400 uppercase mb-1">
+        {{.Role}}{{if .Round}} · round {{.Round}}{{end}}
+      </div>
+      {{if .Content}}
+      <div class="text-gray-800 whitespace-pre-wrap">{{.Content}}</div>
+      {{end}} {{range .Tools}}
+      <details class="mt-2">
+        <summary class="text-xs text-blue-700 cursor-pointer">
+          {{.Name}}({{.Arguments}})
+        </summary>
+        <pre
+          class="mt-1 text-xs bg-gray-50 border border-gray-200 rounded-sm p-2 overflow-auto"
+        >
+{{.Result}}</pre
+        >
+      </details>
+      {{end}}
+    </div>
+    {{end}} {{else}}
+    <div class="text-sm text-gray-400">No conversation recorded yet</div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "transcript_page"}}
+<!doctype html>
+<html lang="en">
+  {{template "head" (dict "Title" (printf "Thought process · Incident %s · Media Fixer" .Incident.ID))}}
+  <body class="bg-gray-50 font-sans">
+    <div class="max-w-4xl mx-auto px-4 py-8">
+      <a
+        href="{{.BaseURL}}/incidents/{{.Incident.ID}}"
+        class="text-sm text-blue-600 hover:underline"
+        >← Back to incident</a
+      >
+
+      <!-- ?full=1 tells incidentEvents to send only the incident-transcript
+           partial, rendered with Full=true — this page has no
+           incident-card/incident-actions elements to target. -->
+      <div
+        hx-sse:connect="{{.BaseURL}}/incidents/{{.Incident.ID}}/events?full=1"
+        hx-sse:close="settled"
+        hx-swap="none"
+      ></div>
+
+      <div class="mt-4">
+        <h2 class="text-xl font-bold text-gray-900">{{.Incident.Title}}</h2>
+        <p class="text-sm text-gray-500 mt-1">
+          Full thought process — every message, untruncated.
+        </p>
       </div>
 
-      <div class="mt-6">
-        <h3 class="text-sm font-semibold text-gray-700 mb-3">Action log</h3>
-        <div class="space-y-2">
-          {{range .Actions}}
-          <div class="bg-white border border-gray-200 rounded p-3 text-sm">
-            <div class="flex justify-between">
-              <span class="font-medium text-gray-800">{{.Action}}</span>
-              <span class="text-xs text-gray-400"
-                >{{.TriggeredBy}} · {{.Status}}</span
-              >
-            </div>
-            {{if .Result}}
-            <div class="mt-1 text-xs text-gray-600">{{.Result}}</div>
-            {{end}} {{if .Error}}
-            <div class="mt-1 text-xs text-red-600">{{.Error}}</div>
-            {{end}}
-          </div>
-          {{else}}
-          <div class="text-sm text-gray-400">No actions yet</div>
-          {{end}}
-        </div>
-      </div>
+      {{template "incident_transcript" .}}
     </div>
   </body>
 </html>
 {{end}}
 
 {{define "escalation_preview"}}
-<div class="bg-purple-50 border border-purple-200 rounded p-3">
+<div class="bg-purple-50 border border-purple-200 rounded-sm p-3">
   {{if .Error}}
   <p class="text-xs text-red-600">{{.Error}}</p>
   {{else}}
@@ -254,13 +414,7 @@
 {{define "selftest"}}
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Live tool check · Media Fixer</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
-  </head>
+  {{template "head" (dict "Title" "Live tool check · Media Fixer")}}
   <body class="bg-gray-50 font-sans">
     <div class="max-w-5xl mx-auto px-4 py-8">
       <a href="{{.BaseURL}}/" class="text-sm text-blue-600 hover:underline"
@@ -289,7 +443,7 @@
           </label>
           <button
             type="submit"
-            class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            class="px-4 py-2 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700"
           >
             Run checks
           </button>
@@ -309,6 +463,10 @@
     </div>
   </body>
 </html>
+{{end}}
+
+{{define "selftest_error"}}
+<p class="text-sm text-red-600">{{.}}</p>
 {{end}}
 
 {{define "selftest_table"}}

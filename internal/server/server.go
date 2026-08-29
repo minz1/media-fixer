@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/livecheck"
 )
 
@@ -22,6 +23,7 @@ const readHeaderTimeout = 10 * time.Second
 
 type Server struct {
 	db      *db.DB
+	journal *journal.Journal
 	svc     *incident.Service
 	baseURL string
 	log     *slog.Logger
@@ -52,7 +54,9 @@ func (s *Server) SetChecker(disp *agent.Dispatcher) {
 	s.checker = disp
 }
 
-func New(addr, baseURL string, database *db.DB, svc *incident.Service, log *slog.Logger) (*Server, error) {
+func New(
+	addr, baseURL string, database *db.DB, jrnl *journal.Journal, svc *incident.Service, log *slog.Logger,
+) (*Server, error) {
 	tmpl, err := buildDashboardTemplate()
 	if err != nil {
 		return nil, fmt.Errorf("parse dashboard template: %w", err)
@@ -60,6 +64,7 @@ func New(addr, baseURL string, database *db.DB, svc *incident.Service, log *slog
 
 	s := &Server{
 		db:      database,
+		journal: jrnl,
 		svc:     svc,
 		baseURL: baseURL,
 		log:     log,
@@ -68,13 +73,16 @@ func New(addr, baseURL string, database *db.DB, svc *incident.Service, log *slog
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RealIP)
 
 	r.Post("/ingest/seerr", s.handleSeerrWebhook)
 
 	r.Route(baseURL, func(r chi.Router) {
 		r.Get("/", s.dashboardIndex)
+		r.Get("/events", s.dashboardEvents)
 		r.Get("/incidents/{id}", s.dashboardIncident)
+		r.Get("/incidents/{id}/events", s.incidentEvents)
+		r.Get("/incidents/{id}/transcript", s.incidentTranscript)
+		r.Get("/incidents/{id}/export", s.incidentExport)
 
 		r.Post("/incidents/{id}/resolve", s.actionResolve)
 		r.Post("/incidents/{id}/rerun", s.actionRerun)

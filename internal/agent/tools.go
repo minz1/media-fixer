@@ -13,6 +13,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 // Tool name constants used in both the registry and the system prompt.
@@ -691,6 +692,11 @@ type Dispatcher struct {
 	Loki       *client.LokiClient
 	MediaAgent *client.MediaAgentClient
 	DB         *db.DB
+	// Journal records applied actions (and, for disruptive ones, the most
+	// recent-disruption signal Agent.disruptionNote reads) to the event log —
+	// see logAction. Nil in the same contexts DB is nil (the live-check CLI
+	// has no incident to attach anything to).
+	Journal    *journal.Journal
 	IncidentID string
 	// IncidentTime anchors loki_query's default window (around_incident=true)
 	// on when the incident was reported rather than time.Now(), so
@@ -1322,27 +1328,25 @@ func isDisruptiveAction(action string) bool {
 	}
 }
 
-// logAction records a completed action to the database. A nil DB (e.g. when
-// the dispatcher is used by the live-check CLI, which has no incident to
-// attach actions to) is a silent no-op rather than a panic. Also records
-// disruptive actions to last_disruption so a concurrently-starting run's
-// prompt can be warned about them (see runManager.globalSlot and
-// Agent.disruptionNote) — this is a best-effort visibility aid, not a lock;
-// globalSlot is what actually prevents the interference.
+// logAction records a completed action via the event log: an action_applied
+// event plus its actions_log projection, atomically (see journal.LogAction).
+// A nil Journal (e.g. when the dispatcher is used by the live-check CLI,
+// which has no incident to attach actions to) is a silent no-op rather than a
+// panic. Disruptive actions are tagged as such so journal.LastDisruption can
+// find them — a concurrently-starting run's prompt is warned about them via
+// Agent.disruptionNote, a best-effort visibility aid, not a lock; globalSlot
+// is what actually prevents the interference.
 func (d *Dispatcher) logAction(ctx context.Context, action string, params map[string]any) {
-	if d.DB == nil {
+	if d.Journal == nil {
 		return
 	}
-	_ = d.DB.LogAction(ctx, &db.ActionLog{
+	_ = d.Journal.LogAction(ctx, &db.ActionLog{
 		IncidentID:  d.IncidentID,
 		Action:      action,
 		Params:      params,
 		TriggeredBy: triggeredByAgent,
 		Status:      db.ActionApplied,
-	})
-	if isDisruptiveAction(action) {
-		_ = d.DB.RecordDisruption(ctx, action, d.IncidentID)
-	}
+	}, isDisruptiveAction(action))
 }
 
 // --- helpers ---

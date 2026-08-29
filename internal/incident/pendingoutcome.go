@@ -67,6 +67,7 @@ func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incid
 		s.log.InfoContext(ctx, "not entering pending outcome tracking, incident already progressed", "incident", inc.ID)
 		return
 	}
+	s.recordStatusChanged(ctx, inc.ID, string(db.StatusVerifying))
 
 	now := time.Now()
 	po := &db.PendingOutcome{
@@ -277,5 +278,6 @@ func (s *Service) KeepSearching(ctx context.Context, id string) error {
 	if !changed {
 		return fmt.Errorf("incident %s is not awaiting a keep-searching decision", id)
 	}
+	s.recordStatusChanged(ctx, id, string(db.StatusVerifying))
 	return s.db.SetPendingOutcome(ctx, id, po, time.Now().Add(pendingOutcomeKeepSearchingInterval))
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const systematicIncidentThreshold = 5
@@ -48,6 +49,7 @@ const (
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
 	db         *db.DB
+	journal    *journal.Journal
 	agent      AgentRunner
 	control    *agent.ControlReviewer
 	summarizer *agent.Summarizer
@@ -68,6 +70,7 @@ type Notifier interface {
 func NewService(
 	base context.Context,
 	database *db.DB,
+	jrnl *journal.Journal,
 	ag AgentRunner,
 	control *agent.ControlReviewer,
 	summarizer *agent.Summarizer,
@@ -76,6 +79,7 @@ func NewService(
 ) *Service {
 	s := &Service{
 		db:         database,
+		journal:    jrnl,
 		agent:      ag,
 		control:    control,
 		summarizer: summarizer,
@@ -129,6 +133,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	case err == nil:
 		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
 		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+		s.recordReporterAdded(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 		return existing, nil
 	case !errors.Is(err, db.ErrNotFound):
 		return nil, fmt.Errorf("find open incident: %w", err)
@@ -151,11 +156,14 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	if err = s.db.CreateIncident(ctx, inc); err != nil {
 		return nil, fmt.Errorf("create incident: %w", err)
 	}
+	s.recordIncidentCreated(ctx, inc)
 	_ = s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+	s.recordReporterAdded(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
 		_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
+		s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
 		msg := fmt.Sprintf(
 			"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
 			openCount+1,
@@ -474,6 +482,7 @@ func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, acti
 		s.log.InfoContext(ctx, "fix already recorded by another run, not re-notifying", "incident", inc.ID)
 		return
 	}
+	s.recordStatusChanged(ctx, inc.ID, string(db.StatusAgentFixed))
 	s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", action)
 	s.notifyReporters(
 		ctx,
@@ -508,6 +517,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 		s.log.InfoContext(ctx, "not entering verification, incident already progressed", "incident", inc.ID)
 		return
 	}
+	s.recordStatusChanged(ctx, inc.ID, string(db.StatusVerifying))
 
 	delay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, verifyLoopDelayCap)
 
@@ -562,6 +572,7 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg str
 		s.log.InfoContext(ctx, "already escalated by another run, not re-notifying owner", "incident", inc.ID)
 		return
 	}
+	s.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
 	_ = s.notif.NotifyOwner(ctx, msg)
 }
 
@@ -601,6 +612,7 @@ func (s *Service) Resolve(ctx context.Context, id string) error {
 	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusResolved); err != nil {
 		return err
 	}
+	s.recordStatusChanged(ctx, id, string(db.StatusResolved))
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err
@@ -634,7 +646,55 @@ func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg str
 // Unlock clears an incident's autonomous lock so the agent may act on it again.
 // This is a manual owner override (e.g. for a systemic-failure "blocked" incident).
 func (s *Service) Unlock(ctx context.Context, id string) error {
-	return s.db.SetAutonomousLocked(ctx, id, false)
+	if err := s.db.SetAutonomousLocked(ctx, id, false); err != nil {
+		return err
+	}
+	// Not a status transition, but the incident card's lock banner/button
+	// depend on this flag too — reuses status_changed as a generic
+	// "something display-relevant moved" signal rather than adding a
+	// dedicated kind for one boolean.
+	s.recordStatusChanged(ctx, id, "")
+	return nil
+}
+
+// recordIncidentCreated and recordReporterAdded are best-effort: a journal
+// write failure must never fail the report-handling request that triggered
+// it, and s.journal is nil in test wiring that doesn't care about the
+// durable transcript/export.
+func (s *Service) recordIncidentCreated(ctx context.Context, inc *db.Incident) {
+	if s.journal == nil {
+		return
+	}
+	if err := s.journal.IncidentCreated(ctx, inc); err != nil {
+		s.log.WarnContext(ctx, "record incident_created", "incident", inc.ID, "error", err)
+	}
+}
+
+func (s *Service) recordReporterAdded(ctx context.Context, incidentID, reporter, source, discordUserID string) {
+	if s.journal == nil {
+		return
+	}
+	if err := s.journal.ReporterAdded(ctx, incidentID, reporter, source, discordUserID); err != nil {
+		s.log.WarnContext(ctx, "record reporter_added", "incident", incidentID, "error", err)
+	}
+}
+
+// recordStatusChanged appends a status_changed event so an incident page's
+// live SSE connection re-renders and re-checks incidentSettled instead of
+// only updating on the next event the agent loop happens to emit — every
+// status transition this service performs (Resolve, Rerun, the verification/
+// escalation lifecycle, Unlock) happens here, one layer above Agent.Run's own
+// event recording, so without this call the live page would never see its
+// own final status: Agent.Run's last event (run_finished) fires before
+// Service.handleAgentResolved/escalateToOwner ever transitions status away
+// from "investigating".
+func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status string) {
+	if s.journal == nil {
+		return
+	}
+	if err := s.journal.StatusChanged(ctx, incidentID, status); err != nil {
+		s.log.WarnContext(ctx, "record status_changed", "incident", incidentID, "error", err)
+	}
 }
 
 // Rerun re-runs diagnosis for an incident: on the dashboard's "still broken"
@@ -659,6 +719,7 @@ func (s *Service) Rerun(ctx context.Context, id string) error {
 	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
 		return err
 	}
+	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err
@@ -678,11 +739,11 @@ func (s *Service) buildReinvestigateSeed(
 	id string,
 	inc *db.Incident,
 ) []openai.ChatCompletionMessage {
-	if s.agent == nil || s.summarizer == nil {
+	if s.agent == nil || s.summarizer == nil || s.journal == nil {
 		return nil
 	}
-	rawConv, loadErr := s.db.LoadConversation(ctx, id)
-	if errors.Is(loadErr, db.ErrNotFound) || len(rawConv) == 0 {
+	conv, loadErr := s.journal.Conversation(ctx, id)
+	if errors.Is(loadErr, db.ErrNotFound) || len(conv) == 0 {
 		return nil
 	}
 	if loadErr != nil {
@@ -696,7 +757,7 @@ func (s *Service) buildReinvestigateSeed(
 		)
 		return nil
 	}
-	summary, sumErr := s.summarizer.Summarize(ctx, rawConv)
+	summary, sumErr := s.summarizer.Summarize(ctx, conv)
 	if sumErr != nil {
 		s.log.WarnContext(ctx, "summarize failed, reinvestigating from scratch", "incident", id, "error", sumErr)
 		return nil

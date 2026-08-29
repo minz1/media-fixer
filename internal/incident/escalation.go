@@ -81,12 +81,18 @@ func (s *Service) launchVerification(inc *db.Incident, result *agent.DiagnosticR
 	}()
 }
 
-// logEscalation records an owner-approved escalation to the action log,
+// logEscalation records an owner-approved escalation to the event log,
 // mirroring Dispatcher.logAction but attributed to the owner rather than the
-// agent.
+// agent. Not tagged disruptive — remove_and_search (currently the only
+// automated escalation) is item-scoped, not service-wide, so it's outside
+// what Agent.disruptionNote warns concurrent runs about (see
+// isDisruptiveAction in internal/agent/tools.go).
 func (s *Service) logEscalation(
 	ctx context.Context, incidentID string, result *agent.DiagnosticResult, execResult any, runErr error,
 ) {
+	if s.journal == nil {
+		return
+	}
 	status := db.ActionApplied
 	errMsg := ""
 	if runErr != nil {
@@ -94,7 +100,7 @@ func (s *Service) logEscalation(
 		errMsg = runErr.Error()
 	}
 	resultJSON, _ := json.Marshal(execResult)
-	if logErr := s.db.LogAction(ctx, &db.ActionLog{
+	if logErr := s.journal.LogAction(ctx, &db.ActionLog{
 		IncidentID:  incidentID,
 		Action:      result.EscalateAction,
 		Params:      result.EscalateParams,
@@ -102,7 +108,7 @@ func (s *Service) logEscalation(
 		Status:      status,
 		Result:      string(resultJSON),
 		Error:       errMsg,
-	}); logErr != nil {
+	}, false); logErr != nil {
 		s.log.ErrorContext(ctx, "log escalation action", "incident", incidentID, "error", logErr)
 	}
 }

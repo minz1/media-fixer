@@ -36,7 +36,12 @@ func TestSelftestIndex_Unconfigured(t *testing.T) {
 }
 
 // TestSelftestRun_Unconfigured verifies POSTing to run checks without a
-// configured checker fails clearly instead of panicking on a nil dispatcher.
+// configured checker fails clearly instead of panicking on a nil dispatcher,
+// and — the regression test for the htmx 2→4 migration, which made htmx swap
+// every non-204/304 response instead of only 2xx — that the 503 body is a
+// styled fragment, not the unstyled plain text [http.Error] used to produce
+// (invisible under htmx 2's old swap-only-on-2xx default, but landing
+// directly in #selftest-results verbatim under htmx 4's).
 func TestSelftestRun_Unconfigured(t *testing.T) {
 	t.Parallel()
 	srv, _ := newTestServer(t)
@@ -48,9 +53,16 @@ func TestSelftestRun_Unconfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `<p class="text-sm text-red-600">`) {
+		t.Errorf("expected a styled error fragment, got: %s", body)
+	}
+	if !strings.Contains(string(body), "not configured") {
+		t.Errorf("expected the not-configured message, got: %s", body)
 	}
 }
 

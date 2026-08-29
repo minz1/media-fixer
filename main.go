@@ -16,6 +16,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -32,12 +33,14 @@ type agentBundle struct {
 	clients *clientset.Set
 }
 
-func buildAgentComponents(cfg *config.Config, database *db.DB, log *slog.Logger) (*agentBundle, error) {
+func buildAgentComponents(
+	cfg *config.Config, database *db.DB, jrnl *journal.Journal, log *slog.Logger,
+) (*agentBundle, error) {
 	clients, err := clientset.Build(cfg, log)
 	if err != nil {
 		return nil, err
 	}
-	disp := clients.Dispatcher(database)
+	disp := clients.Dispatcher(database, jrnl)
 
 	llmCfg := openai.DefaultConfig(cfg.LLM.APIKey)
 	if cfg.LLM.BaseURL != "" {
@@ -46,7 +49,7 @@ func buildAgentComponents(cfg *config.Config, database *db.DB, log *slog.Logger)
 	llmClient := openai.NewClientWithConfig(llmCfg)
 
 	b := &agentBundle{
-		ag:      agent.New(llmClient, cfg.LLM.Model, disp, database, log),
+		ag:      agent.New(llmClient, cfg.LLM.Model, disp, database, jrnl, log),
 		summary: agent.NewSummarizer(llmClient, cfg.LLM.Model),
 		clients: clients,
 	}
@@ -80,8 +83,9 @@ func run() error {
 		return err
 	}
 	defer database.Close()
+	jrnl := journal.New(database)
 
-	bundle, err := buildAgentComponents(cfg, database, log)
+	bundle, err := buildAgentComponents(cfg, database, jrnl, log)
 	if err != nil {
 		log.Error("build agent components", "error", err)
 		return err
@@ -96,7 +100,7 @@ func run() error {
 		return err
 	}
 
-	svc := incident.NewService(ctx, database, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
+	svc := incident.NewService(ctx, database, jrnl, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
 	bot.SetService(svc)
 
 	if err = bot.Start(); err != nil {
@@ -105,15 +109,16 @@ func run() error {
 	}
 	defer bot.Close()
 
-	srv, err := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, svc, log)
+	srv, err := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, jrnl, svc, log)
 	if err != nil {
 		log.Error("init server", "error", err)
 		return err
 	}
-	// A separate dispatcher with no DB, so live-check runs triggered from the
-	// dashboard (which have no real incident to attach action-log rows to)
-	// never write actions_log entries — same as the media-fixer-check CLI.
-	srv.SetChecker(bundle.clients.Dispatcher(nil))
+	// A separate dispatcher with no DB/Journal, so live-check runs triggered
+	// from the dashboard (which have no real incident to attach action-log
+	// rows to) never write actions_log entries — same as the media-fixer-check
+	// CLI.
+	srv.SetChecker(bundle.clients.Dispatcher(nil, nil))
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 

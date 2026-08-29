@@ -12,6 +12,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -44,8 +45,9 @@ func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 
 	discard := slog.New(slog.DiscardHandler)
 	notif := &stubNotifier{}
-	svc := incident.NewService(context.Background(), database, nil, nil, nil, notif, discard)
-	srv, err := server.New(":0", "/media", database, svc, discard)
+	jrnl := journal.New(database)
+	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, notif, discard)
+	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)
 	}

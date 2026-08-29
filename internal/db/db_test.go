@@ -2,8 +2,10 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -414,11 +416,15 @@ func TestFindStaleInvestigating(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// fresh gets a heartbeat after the cutoff; stale gets none at all, so it
-	// falls back to (also pre-cutoff) updated_at.
+	// fresh gets an event (any event append counts as activity, replacing the
+	// old dedicated heartbeat write — see FindStaleInvestigating) after the
+	// cutoff; stale gets none at all, so it falls back to (also pre-cutoff)
+	// updated_at.
 	cutoff := time.Now()
 	time.Sleep(10 * time.Millisecond)
-	if err := d.TouchHeartbeat(ctx, fresh.ID); err != nil {
+	const insertEvent = `INSERT INTO incident_events (incident_id, at, kind, payload, source)
+		VALUES (?, ?, 'llm_round', '{}', 'live')`
+	if err := d.ExecForTest(ctx, insertEvent, fresh.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -543,38 +549,236 @@ func TestFindDuePendingOutcomes_ScopedToVerifying(t *testing.T) {
 	}
 }
 
-// TestLastDisruption_RecordAndFetch covers the single-row upsert behavior
-// RecordDisruption/LastDisruption relies on: no rows before anything is
-// recorded, and a second RecordDisruption call overwrites (not duplicates)
-// the row so LastDisruption always reflects only the most recent action.
-func TestLastDisruption_RecordAndFetch(t *testing.T) {
+// last_disruption (RecordDisruption/LastDisruption) no longer exists as a
+// dedicated table/method pair — LastDisruption is now a query journal.Journal
+// answers over incident_events. See internal/journal/journal_test.go for its
+// equivalent coverage (no rows before anything is recorded, and the most
+// recent disruptive action_applied event always wins).
+
+func TestOpen_EnablesWALAndForeignKeys(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
 
-	if _, err := d.LastDisruption(ctx); !errors.Is(err, db.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound before any disruption recorded, got %v", err)
-	}
-
-	if err := d.RecordDisruption(ctx, "restart_jellyfin", "inc-1"); err != nil {
-		t.Fatal(err)
-	}
-	got, err := d.LastDisruption(ctx)
+	mode, err := d.JournalModeForTest(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Action != "restart_jellyfin" || got.IncidentID != "inc-1" {
-		t.Fatalf("got %+v", got)
+	if mode != "wal" {
+		t.Errorf("journal_mode: got %q, want %q (Open's DSN previously used mattn/go-sqlite3 "+
+			"syntax that modernc.org/sqlite silently ignores)", mode, "wal")
 	}
 
-	if recordErr := d.RecordDisruption(ctx, "jellyfin_library_scan", "inc-2"); recordErr != nil {
-		t.Fatal(recordErr)
-	}
-	got, err = d.LastDisruption(ctx)
+	fkOn, err := d.ForeignKeysEnabledForTest(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Action != "jellyfin_library_scan" || got.IncidentID != "inc-2" {
-		t.Fatalf("second record did not overwrite the first: got %+v", got)
+	if !fkOn {
+		t.Error("foreign_keys: got disabled, want enabled")
+	}
+}
+
+func TestOpen_ForeignKeyCascadeDeletesChildren(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "X"}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AddReporter(ctx, inc.ID, "alice", "discord", "123"); err != nil {
+		t.Fatal(err)
+	}
+	action := &db.ActionLog{
+		IncidentID: inc.ID, Action: "clear_jellyfin_cache", TriggeredBy: "agent", Status: db.ActionApplied,
+	}
+	if err := d.LogAction(ctx, action); err != nil {
+		t.Fatal(err)
+	}
+	const insertEvent = `INSERT INTO incident_events (incident_id, at, kind, payload, source)
+		VALUES (?, ?, 'llm_round', '{}', 'live')`
+	if err := d.ExecForTest(ctx, insertEvent, inc.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// No exported DeleteIncident exists (the app never deletes incidents), so
+	// exercise the cascade directly against the write pool.
+	if err := d.ExecForTest(ctx, `DELETE FROM incidents WHERE id = ?`, inc.ID); err != nil {
+		t.Fatalf("delete incident: %v", err)
+	}
+
+	if actions, err := d.ListActions(ctx, inc.ID); err != nil || len(actions) != 0 {
+		t.Errorf("actions_log: got %d rows, err %v; want cascade-deleted", len(actions), err)
+	}
+	if reporters, err := d.ListReporters(ctx, inc.ID); err != nil || len(reporters) != 0 {
+		t.Errorf("incident_reporters: got %d rows, err %v; want cascade-deleted", len(reporters), err)
+	}
+	if events, err := d.EventsSince(ctx, inc.ID, 0); err != nil || len(events) != 0 {
+		t.Errorf("incident_events: got %d rows, err %v; want cascade-deleted", len(events), err)
+	}
+}
+
+func TestOpen_Idempotent(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/reopen.db"
+
+	first, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstVersions, err := first.SchemaVersionsForTest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr := first.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	second, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("reopening an already-migrated database should not error: %v", err)
+	}
+	t.Cleanup(func() { second.Close() })
+
+	secondVersions, err := second.SchemaVersionsForTest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstVersions) != len(secondVersions) {
+		t.Fatalf("schema_version grew on reopen: first %v, second %v", firstVersions, secondVersions)
+	}
+
+	// And the database still works normally afterward.
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "bob", What: "cant_play", Title: "Y"}
+	if createErr := second.CreateIncident(context.Background(), inc); createErr != nil {
+		t.Fatalf("db unusable after reopen: %v", createErr)
+	}
+}
+
+func TestOpen_BootstrapsLegacyDatabase(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/legacy.db"
+
+	// Build a fixture that looks exactly like what the pre-schema_version
+	// Open() produced: apply the base schema, then the four ALTER TABLE
+	// migrations, then dedup + the unique index — all unconditionally, with
+	// no schema_version bookkeeping at all. This is the real shape of the
+	// production database as it exists today.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec := func(q string) {
+		t.Helper()
+		if _, execErr := raw.Exec(q); execErr != nil {
+			t.Fatalf("legacy fixture setup: %v", execErr)
+		}
+	}
+	// discord_user_id is already part of the current incident_reporters
+	// CREATE TABLE (it was folded into the base schema at some point after
+	// the ALTER-based migration that originally added it), so only the three
+	// incidents.* columns still genuinely rely on the ALTER path here.
+	mustExec(db.LegacySchemaForTest)
+	mustExec(`ALTER TABLE incidents ADD COLUMN last_heartbeat DATETIME`)
+	mustExec(`ALTER TABLE incidents ADD COLUMN pending_outcome TEXT`)
+	mustExec(`ALTER TABLE incidents ADD COLUMN pending_outcome_next_check DATETIME`)
+	mustExec(db.LegacyDedupReportersByDiscordIDForTest)
+	mustExec(db.LegacyCreateReporterDiscordIndexForTest)
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("bootstrap against a legacy database should not error: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	versions, err := d.SchemaVersionsForTest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1-6 are the reconciled legacy migrations this fixture simulates; 7-11
+	// are the new event-log migrations, which run unconditionally on top of
+	// any database (legacy or fresh) since they postdate schema_version.
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	if len(versions) != len(want) {
+		t.Fatalf("schema_version after bootstrap: got %v, want %v", versions, want)
+	}
+	for i, v := range want {
+		if versions[i] != v {
+			t.Fatalf("schema_version after bootstrap: got %v, want %v", versions, want)
+		}
+	}
+
+	// And the database is fully usable afterward.
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "carol", What: "cant_play", Title: "Z"}
+	if createErr := d.CreateIncident(context.Background(), inc); createErr != nil {
+		t.Fatalf("db unusable after legacy bootstrap: %v", createErr)
+	}
+}
+
+func TestOpen_DetectsExistingForeignKeyViolations(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/legacy-orphan.db"
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, execErr := raw.Exec(db.LegacySchemaForTest); execErr != nil {
+		t.Fatal(execErr)
+	}
+	// Foreign keys were never enforced by the legacy Open() (see the dsn
+	// mismatch this whole migration exists to fix), so an orphaned child row
+	// like this could genuinely exist in a long-running production database.
+	const insertOrphan = `INSERT INTO actions_log (id, incident_id, action, triggered_by, status)
+		VALUES ('a1', 'does-not-exist', 'x', 'agent', 'applied')`
+	if _, execErr := raw.Exec(insertOrphan); execErr != nil {
+		t.Fatal(execErr)
+	}
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	_, err = db.Open(path)
+	if err == nil {
+		t.Fatal("expected Open to fail loudly on a pre-existing foreign key violation, got nil error")
+	}
+	if !strings.Contains(err.Error(), "foreign_key_check") {
+		t.Errorf("error should mention foreign_key_check, got: %v", err)
+	}
+}
+
+func TestOpen_ReadPoolNotBlockedByWriteTransaction(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	txn, err := d.BeginWriteTxForTest(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txn.Rollback()
+	// SQLite doesn't actually take the write lock until the first write
+	// statement in the transaction runs.
+	const touchSetting = `UPDATE settings SET value = value WHERE key = 'autonomous_paused'`
+	if _, execErr := txn.ExecContext(ctx, touchSetting); execErr != nil {
+		t.Fatal(execErr)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- d.PingReadForTest(ctx) }()
+
+	select {
+	case readErr := <-done:
+		if readErr != nil {
+			t.Fatalf("read pool query failed while a write transaction was open "+
+				"(WAL not actually enabled?): %v", readErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("read pool query did not complete while a write transaction was open — " +
+			"reads are blocking on writes, defeating the point of splitting the pools")
 	}
 }

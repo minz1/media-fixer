@@ -22,6 +22,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 type captureNotifier struct{ msgs []string }
@@ -53,7 +54,7 @@ func newTestService(t *testing.T) (*incident.Service, *db.DB, *captureNotifier) 
 	notif := &captureNotifier{}
 	// agent is nil — tests must not trigger the agent goroutine, so all
 	// incidents are created with a nil agent and the goroutine exits early.
-	svc := incident.NewService(context.Background(), database, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
+	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
 	return svc, database, notif
 }
 
@@ -258,6 +259,82 @@ func TestResolveAndRerun(t *testing.T) {
 	}
 }
 
+// TestStatusTransitions_NotifyLiveSubscribers is the regression test for a
+// gap found by manually driving the live dashboard end to end (not by any
+// unit test): Resolve/Rerun/Unlock/escalateToOwner/markFixedAndNotify all
+// mutate status one layer above Agent.Run, which is the only place that used
+// to notify the event log's subscribers (via recordRunFinished) — so a
+// status change made through any of these methods was durably written but
+// never made an open SSE connection re-render, and an already-terminal
+// incident's stream never closed. Confirmed live: resolving an incident
+// while its dashboard page was open left the page showing "investigating"
+// until manually reloaded. Each of Service's own status-mutating methods
+// must append a status_changed event (see recordStatusChanged) so
+// journal.Subscribe's channel actually fires.
+func TestStatusTransitions_NotifyLiveSubscribers(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	jrnl := journal.New(database)
+	notif := &captureNotifier{}
+	discard := slog.New(slog.DiscardHandler)
+	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, notif, discard)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "Deadwood",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sequential, not subtests: each check drives the same incident through
+	// its next state, and the point is exercising one shared subscriber
+	// channel across all three calls, the same as one open SSE connection
+	// would see them.
+	ch, unsubscribe := jrnl.Subscribe(inc.ID)
+	defer unsubscribe()
+
+	if resolveErr := svc.Resolve(ctx, inc.ID); resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	waitForStatusChanged(t, ch, "Resolve")
+
+	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+		t.Fatal(rerunErr)
+	}
+	waitForStatusChanged(t, ch, "Rerun")
+
+	if unlockErr := svc.Unlock(ctx, inc.ID); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	waitForStatusChanged(t, ch, "Unlock")
+}
+
+// waitForStatusChanged fails the test if no status_changed event arrives on
+// ch within notifyWaitTimeout.
+func waitForStatusChanged(t *testing.T, ch <-chan *db.Event, after string) {
+	t.Helper()
+	select {
+	case e := <-ch:
+		if e.Kind != string(journal.KindStatusChanged) {
+			t.Errorf("after %s: got event kind %q, want %q", after, e.Kind, journal.KindStatusChanged)
+		}
+	case <-time.After(notifyWaitTimeout):
+		t.Fatalf(
+			"after %s: timed out waiting for a status_changed event — the live page would never have updated", after,
+		)
+	}
+}
+
 func TestSetAutonomousPaused(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)
@@ -401,7 +478,7 @@ func TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
 	fakeAgent := newSequencedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(
-		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
 	ctx := context.Background()
 
@@ -550,7 +627,7 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 	fakeAgent := newAlwaysFixedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(
-		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
 	ctx := context.Background()
 
@@ -679,7 +756,7 @@ func TestConcurrentIncidents_DiagnosticRunsAreSerialized(t *testing.T) {
 	fakeAgent := newConcurrencyTrackingAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(
-		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
 	ctx := context.Background()
 
@@ -886,12 +963,14 @@ func (a *lowConfidenceOnceAgent) Run(
 	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
 ) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
 	a.runCalls <- struct{}{}
-	return &agent.DiagnosticResult{
-			RootCause: "test", Confidence: "low",
-			PrimaryAction: "clear_jellyfin_cache", PrimaryReason: "test",
-		}, []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleUser, Content: "test conversation"},
-		}, nil
+	result := &agent.DiagnosticResult{
+		RootCause: "test", Confidence: "low",
+		PrimaryAction: "clear_jellyfin_cache", PrimaryReason: "test",
+	}
+	conversation := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleUser, Content: "test conversation"},
+	}
+	return result, conversation, nil
 }
 
 func (a *lowConfidenceOnceAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -950,7 +1029,7 @@ func TestRunAgent_LowConfidence_TriggersControlReview_ApproveProceedsAutonomousl
 	fakeAgent := newLowConfidenceOnceAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(
-		context.Background(), database, fakeAgent, control, nil, notif, slog.New(slog.DiscardHandler),
+		context.Background(), database, nil, fakeAgent, control, nil, notif, slog.New(slog.DiscardHandler),
 	)
 	ctx := context.Background()
 
@@ -1002,7 +1081,7 @@ func TestNotifyReporters_FailedDMFallsBackToOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	svc := incident.NewService(context.Background(), database, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
+	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
 	ctx := context.Background()
 
 	inc, err := svc.Handle(ctx, &incident.Report{
@@ -1071,7 +1150,7 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 	fakeAgent := newAlwaysFixedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(
-		context.Background(), database, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
 
 	svc.SweepStaleRuns(ctx)
