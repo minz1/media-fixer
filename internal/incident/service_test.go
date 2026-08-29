@@ -335,6 +335,105 @@ func waitForStatusChanged(t *testing.T, ch <-chan *db.Event, after string) {
 	}
 }
 
+// blockingAgent's Run blocks until its context is cancelled, then returns
+// that cancellation as its error — for proving runManager actually cancels
+// the context it hands to Agent.Run, through the real Service→runManager→
+// Agent.Run path rather than by inspecting runManager's internals directly.
+type blockingAgent struct {
+	started chan struct{}
+	done    chan error
+}
+
+func newBlockingAgent() *blockingAgent {
+	return &blockingAgent{started: make(chan struct{}, 1), done: make(chan error, 1)}
+}
+
+func (a *blockingAgent) Run(
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	a.started <- struct{}{}
+	<-ctx.Done()
+	a.done <- ctx.Err()
+	return nil, nil, ctx.Err()
+}
+
+func (a *blockingAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
+	return false
+}
+func (a *blockingAgent) ScanRunning(_ context.Context) bool { return false }
+
+func (a *blockingAgent) BuildSummarySeed(
+	_ context.Context, _ *db.Incident, _ string,
+) []openai.ChatCompletionMessage {
+	return nil
+}
+
+func (a *blockingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *blockingAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+	return map[string]any{}, nil
+}
+
+func (a *blockingAgent) CheckPendingOutcome(
+	_ context.Context, _ *db.PendingOutcome,
+) (*agent.PendingOutcomeObservation, error) {
+	return &agent.PendingOutcomeObservation{}, nil
+}
+
+// TestShutdown_CancelsInFlightRun is the regression test for runManager's
+// redesign away from storing a base [context.Context] field (the containedctx
+// lint): cancellation on process shutdown used to come directly from
+// [context.WithCancel](m.base); it now comes from a relay goroutine watching a
+// channel that closes once instead. This proves that indirection still
+// delivers the original guarantee end to end — cancelling the context
+// NewService was constructed with actually reaches a live Agent.Run call,
+// through the real Service, not by calling runManager's unexported methods
+// directly.
+func TestShutdown_CancelsInFlightRun(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	base, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+	fakeAgent := newBlockingAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(base, database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler))
+
+	if _, handleErr := svc.Handle(context.Background(), &incident.Report{
+		Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "Halt and Catch Fire",
+	}); handleErr != nil {
+		t.Fatal(handleErr)
+	}
+
+	select {
+	case <-fakeAgent.started:
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("timed out waiting for the run to start")
+	}
+
+	cancelBase()
+
+	select {
+	case runErr := <-fakeAgent.done:
+		if !errors.Is(runErr, context.Canceled) {
+			t.Errorf("Run's context error = %v, want context.Canceled", runErr)
+		}
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("run was not cancelled by shutting down the base context")
+	}
+}
+
 func TestSetAutonomousPaused(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)

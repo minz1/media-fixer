@@ -107,6 +107,70 @@ func TestTransitionStatus_Idempotent(t *testing.T) {
 	}
 }
 
+// TestTransitionStatus_NoAllowedFrom_IsUnconditional covers TransitionStatus's
+// other query path (transitionStatusUnconditional) — no allowedFrom values at
+// all, which must transition regardless of current status.
+func TestTransitionStatus_NoAllowedFrom_IsUnconditional(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status: db.StatusBlocked, Source: "discord",
+		ReportedBy: "alice", What: "cant_play", Title: "T",
+	}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusReopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Error("no allowedFrom values should transition unconditionally")
+	}
+	got, err := d.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusReopened {
+		t.Errorf("status: got %q, want %q", got.Status, db.StatusReopened)
+	}
+}
+
+// TestTransitionStatus_SingleAllowedFrom covers the one-element case of the
+// json_each(?)-based allowedFrom match (transitionStatusRestricted) — a
+// single-element JSON array is a different shape than the multi-element one
+// TestTransitionStatus_Idempotent already exercises.
+func TestTransitionStatus_SingleAllowedFrom(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status: db.StatusOpen, Source: "discord",
+		ReportedBy: "alice", What: "cant_play", Title: "T",
+	}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	if changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusInvestigating, db.StatusVerifying); err != nil {
+		t.Fatal(err)
+	} else if changed {
+		t.Error("open is not in allowedFrom=[verifying]; must not transition")
+	}
+
+	changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusInvestigating, db.StatusOpen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Error("open IS in allowedFrom=[open]; must transition")
+	}
+}
+
 func TestFindOpenByTitle_Dedup(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)

@@ -2,6 +2,7 @@ package incident_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -378,6 +379,66 @@ func TestAdvancePendingOutcome_NoReleaseFound_EscalatesAfterGrace(t *testing.T) 
 	// KeepSearching has something to re-arm.
 	if _, getErr := database.GetPendingOutcome(ctx, inc.ID); getErr != nil {
 		t.Errorf("expected pending outcome to survive escalation for KeepSearching, got error: %v", getErr)
+	}
+}
+
+// TestAdvancePendingOutcome_CheckErrors_RescheduledNotEscalated is the
+// end-to-end regression test for the false-escalation bug CheckPendingOutcome
+// itself was fixed for (see internal/agent's
+// TestCheckPendingOutcome_QueueFetchFails_PropagatesError): a transient
+// CheckPendingOutcome error landing on exactly the poll where the grace
+// period has elapsed must reschedule and retry — the same as any other
+// transient failure — never escalate with "no release was found" just
+// because the failure happened to look like an empty observation.
+func TestAdvancePendingOutcome_CheckErrors_RescheduledNotEscalated(t *testing.T) {
+	t.Parallel()
+	ag := &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			return nil, errors.New("transient sonarr outage")
+		},
+	}
+	svc, database, notif := newPendingOutcomeTestService(t, ag)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status:     db.StatusVerifying,
+		Source:     "discord",
+		ReportedBy: "x",
+		What:       "cant_play",
+		Title:      "New Show",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	// Past pendingOutcomeGracePeriod (15m) — exactly the condition under
+	// which the pre-fix code would have escalated on a degraded observation.
+	longAgo := time.Now().Add(-30 * time.Minute)
+	po := &db.PendingOutcome{
+		MediaType:      "tv",
+		Title:          "New Show",
+		Season:         1,
+		Episode:        1,
+		StartedAt:      longAgo,
+		LastProgressAt: longAgo,
+	}
+	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.AdvancePendingOutcomes(ctx)
+
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusVerifying {
+		t.Errorf("status: got %q, want %q (a check error must not escalate)", got.Status, db.StatusVerifying)
+	}
+	if len(notif.msgs) != 0 {
+		t.Errorf("expected no owner notification on a check error, got %v", notif.msgs)
+	}
+	if _, getErr := database.GetPendingOutcome(ctx, inc.ID); getErr != nil {
+		t.Errorf("expected the pending outcome to still be scheduled for retry, got error: %v", getErr)
 	}
 }
 

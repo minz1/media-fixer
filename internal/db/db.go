@@ -765,6 +765,21 @@ func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status Inciden
 	return err
 }
 
+// transitionStatusUnconditional and transitionStatusRestricted implement
+// TransitionStatus's two cases as fixed, literal query strings — no case
+// needs to build a WHERE clause whose shape depends on how many allowedFrom
+// values were passed. The restricted case matches allowedFrom via
+// json_each(?) over one JSON-array parameter instead of a hand-built
+// "IN (?,?,?)" whose placeholder count varies with len(allowedFrom): the
+// query text itself is then identical on every call regardless of that
+// length, and the actual status values travel as ordinary bound data (a JSON
+// string), never as SQL syntax.
+const (
+	transitionStatusUnconditional = `UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?`
+	transitionStatusRestricted    = `UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?
+		AND status IN (SELECT value FROM json_each(?))`
+)
+
 // TransitionStatus atomically sets an incident's status to `to`, but only when its
 // current status is one of allowedFrom. It returns true iff this call actually
 // performed the change. Callers gate side effects (notifications) on the result so
@@ -774,18 +789,20 @@ func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status Inciden
 func (d *DB) TransitionStatus(
 	ctx context.Context, id string, to IncidentStatus, allowedFrom ...IncidentStatus,
 ) (bool, error) {
-	args := []any{to, time.Now(), id}
-	q := `UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?`
-	if len(allowedFrom) > 0 {
-		placeholders := make([]string, len(allowedFrom))
-		for i, s := range allowedFrom {
-			placeholders[i] = "?"
-			args = append(args, s)
+	now := time.Now()
+	var (
+		res sql.Result
+		err error
+	)
+	if len(allowedFrom) == 0 {
+		res, err = d.write.ExecContext(ctx, transitionStatusUnconditional, to, now, id)
+	} else {
+		allowedJSON, marshalErr := json.Marshal(allowedFrom)
+		if marshalErr != nil {
+			return false, marshalErr
 		}
-		//nolint:gosec // only literal "?" placeholders are concatenated; all status values are parameterized via args
-		q += " AND status IN (" + strings.Join(placeholders, ",") + ")"
+		res, err = d.write.ExecContext(ctx, transitionStatusRestricted, to, now, id, string(allowedJSON))
 	}
-	res, err := d.write.ExecContext(ctx, q, args...)
 	if err != nil {
 		return false, err
 	}

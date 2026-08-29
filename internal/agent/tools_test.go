@@ -182,11 +182,13 @@ func TestDispatchRestartJellyfin_WaitsForReady(t *testing.T) {
 // /api/v3/command, so a test can assert exactly which search command (and
 // with what target ID) arr_search_missing actually triggered. It also lets a
 // test control what GET /api/v3/queue returns, since CheckPendingOutcome
-// tests need to simulate a download appearing in the queue.
+// tests need to simulate a download appearing in the queue — or the queue
+// endpoint itself failing.
 type arrCommandRecorder struct {
-	mu    sync.Mutex
-	last  map[string]any
-	queue []client.QueueRecord
+	mu        sync.Mutex
+	last      map[string]any
+	queue     []client.QueueRecord
+	queueFail bool
 }
 
 func (r *arrCommandRecorder) record(body map[string]any) {
@@ -206,6 +208,20 @@ func (r *arrCommandRecorder) SetQueue(records []client.QueueRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.queue = records
+}
+
+// SetQueueFail makes GET /api/v3/queue return 500 for the rest of the test,
+// simulating a transient Sonarr/Radarr outage.
+func (r *arrCommandRecorder) SetQueueFail(fail bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.queueFail = fail
+}
+
+func (r *arrCommandRecorder) QueueFail() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.queueFail
 }
 
 func (r *arrCommandRecorder) Queue() []client.QueueRecord {
@@ -232,6 +248,10 @@ func newArrStatusFixtureServer(t *testing.T) (*httptest.Server, *arrCommandRecor
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, _ *http.Request) {
+		if rec.QueueFail() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"records": rec.Queue()})
 	})
 
@@ -564,6 +584,41 @@ func TestCheckPendingOutcome_NoMatchingQueueItem(t *testing.T) {
 	}
 	if obs.HasFile || obs.QueueStage != "" {
 		t.Errorf("got %+v", obs)
+	}
+}
+
+// TestCheckPendingOutcome_QueueFetchFails_PropagatesError is the regression
+// test for a latent false-escalation bug: CheckPendingOutcome used to
+// swallow a queue-fetch failure and report HasFile:false, QueueStage:"" —
+// indistinguishable from "genuinely nothing happening." If that hiccup landed
+// on the exact poll where an incident's grace period elapsed,
+// Service.advanceNoQueueItem would escalate with "no release was found" even
+// though a release could well have been downloading; the fetch failure just
+// couldn't say so. CheckPendingOutcome must now propagate the error so the
+// caller's own error path (reschedule and retry, advance no state) runs
+// instead.
+func TestCheckPendingOutcome_QueueFetchFails_PropagatesError(t *testing.T) {
+	t.Parallel()
+	srv, rec := newArrStatusFixtureServer(t)
+	defer srv.Close()
+	rec.SetQueueFail(true)
+
+	a := agent.New(
+		nil,
+		"",
+		&agent.Dispatcher{Sonarr: client.NewArr(srv.URL, "key")},
+		nil,
+		nil,
+		slog.New(slog.DiscardHandler),
+	)
+	obs, err := a.CheckPendingOutcome(context.Background(), &db.PendingOutcome{
+		MediaType: "tv", Title: "Rick and Morty", Season: 9, Episode: 9,
+	})
+	if err == nil {
+		t.Fatal("expected an error when the queue fetch fails, got nil")
+	}
+	if obs != nil {
+		t.Errorf("expected a nil observation alongside the error, got %+v", obs)
 	}
 }
 

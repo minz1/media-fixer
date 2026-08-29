@@ -899,11 +899,17 @@ func (a *Agent) CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) 
 
 	queue, queueErr := a.fetchQueue(ctx, po.MediaType)
 	if queueErr != nil {
-		// Best-effort: a transient queue-fetch failure shouldn't be mistaken
-		// for "nothing is happening" (which would restart the grace-period
-		// clock's reasoning in the caller) — report what we know (not yet
-		// resolved) and let the next scheduled check try again.
-		return obs, nil //nolint:nilerr // deliberate: see comment above, not a swallowed error
+		// Propagate rather than degrade to "nothing in the queue": the
+		// caller (Service.advancePendingOutcome) already treats a
+		// CheckPendingOutcome error as "reschedule and retry, don't advance
+		// any grace-period/stall state" — exactly what a transient fetch
+		// failure needs. Returning obs (HasFile:false, QueueStage:"") here
+		// instead would risk a genuinely wrong outcome, not just a missed
+		// update: if the grace period happens to elapse on the very poll
+		// where the queue fetch hiccups, advanceNoQueueItem would escalate
+		// with "no release was found" even though a release could well be
+		// downloading right now — the fetch failure just couldn't say so.
+		return nil, queueErr
 	}
 	for _, q := range queue {
 		if !queueRecordMatches(q, po.MediaType, status) {
