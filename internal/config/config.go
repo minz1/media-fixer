@@ -32,10 +32,9 @@ type DBConfig struct {
 }
 
 type DiscordConfig struct {
-	Token         string `toml:"token"`
-	GuildID       string `toml:"guild_id"`
-	OwnerID       string `toml:"owner_id"`
-	ReportChannel string `toml:"report_channel"`
+	Token   string `toml:"token"`
+	GuildID string `toml:"guild_id"`
+	OwnerID string `toml:"owner_id"`
 }
 
 type LLMConfig struct {

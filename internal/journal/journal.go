@@ -63,21 +63,6 @@ const (
 	// purely a live-update signal for incidentEvents (see StatusChanged's
 	// doc comment); no reader treats its payload as authoritative.
 	KindStatusChanged Kind = "status_changed"
-
-	// KindEscalationPreviewed is reserved for a later pass wiring up
-	// escalation preview/approval, per-attempt verification checks, and
-	// pending-outcome sweeps as events — see KindEscalationApproved,
-	// KindVerificationChecked, and KindPendingOutcomeAdvanced below, all
-	// reserved for the same reason. The live page already re-renders on
-	// KindStatusChanged/KindActionApplied whenever any of these actually
-	// change status or the action log, so none of the four are needed yet.
-	KindEscalationPreviewed Kind = "escalation_previewed"
-	// KindEscalationApproved is reserved; see KindEscalationPreviewed above.
-	KindEscalationApproved Kind = "escalation_approved"
-	// KindVerificationChecked is reserved; see KindEscalationPreviewed above.
-	KindVerificationChecked Kind = "verification_checked"
-	// KindPendingOutcomeAdvanced is reserved; see KindEscalationPreviewed above.
-	KindPendingOutcomeAdvanced Kind = "pending_outcome_advanced"
 )
 
 // Journal owns the event log: appending (with atomic projection writes) and
@@ -144,20 +129,22 @@ func applyProjection(ctx context.Context, tx *sql.Tx, e *db.Event) error {
 	})
 }
 
-// Since returns every event for incidentID after afterSeq, in order —
-// afterSeq=0 for the full history. Used for the live SSE stream's
-// reconnect/replay (afterSeq = the client's Last-Event-ID) and for reads
-// that want the whole thing (the transcript page, the JSON export).
-func (j *Journal) Since(ctx context.Context, incidentID string, afterSeq int64) ([]*db.Event, error) {
-	return j.db.EventsSince(ctx, incidentID, afterSeq)
+// Events returns every event for incidentID, in order — the transcript page
+// and the JSON export both want the whole thing.
+//
+// This used to take an afterSeq for an SSE reconnect/replay that was never
+// built: the stream re-renders current state from the database on every
+// event, so there is no delta for a reconnecting client to have missed.
+func (j *Journal) Events(ctx context.Context, incidentID string) ([]*db.Event, error) {
+	return j.db.EventsSince(ctx, incidentID, 0)
 }
 
 // Subscribe registers ch to receive every event appended for incidentID from
 // this point on. The returned func unregisters it. Sends are non-blocking —
 // a slow or wedged subscriber must never stall Append (which runs inline
 // with the agent's own writes) — so a subscriber that can't keep up misses
-// events; it recovers by calling Since with its last-seen seq, the same path
-// a fresh reconnect uses. Push for latency, replay for correctness.
+// events; the SSE handlers re-render current state on the next event they do
+// receive, so a dropped notification costs latency, never correctness.
 func (j *Journal) Subscribe(incidentID string) (<-chan *db.Event, func()) {
 	ch := make(chan *db.Event, subscriberBufferSize)
 	j.mu.Lock()
@@ -186,7 +173,7 @@ func (j *Journal) Subscribe(incidentID string) (<-chan *db.Event, func()) {
 // incident — the dashboard index page's live-update signal, where a single
 // per-incident Subscribe doesn't apply (a new incident starts with no
 // subscriber for it yet, and the index cares about all of them at once).
-// Same non-blocking-send/replay-via-Since contract as Subscribe.
+// Same non-blocking-send contract as Subscribe.
 func (j *Journal) SubscribeAll() (<-chan *db.Event, func()) {
 	ch := make(chan *db.Event, subscriberBufferSize)
 	j.mu.Lock()

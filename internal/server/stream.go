@@ -39,18 +39,17 @@ func startSSE(w http.ResponseWriter) (func(), bool) {
 	return func() { _ = rc.Flush() }, true
 }
 
-// writeSSEEvent writes one SSE message. seq, when > 0, becomes the event's
-// id: field, so a reconnecting client's Last-Event-ID (sent automatically by
-// the browser's EventSource, and by htmx 4's hx-sse) reflects how far it got.
-// data is split on newlines and each line prefixed with "data: " per the SSE
-// wire format — this is also how multiple <hx-partial> elements are packed
-// into one message: the caller joins several partials with "\n" and each
-// becomes its own data: line, which htmx concatenates back with newlines and
-// scans as one HTML fragment before swapping.
-func writeSSEEvent(w http.ResponseWriter, flush func(), seq int64, data string) {
-	if seq > 0 {
-		fmt.Fprintf(w, "id: %d\n", seq)
-	}
+// writeSSEEvent writes one SSE message. data is split on newlines and each
+// line prefixed with "data: " per the SSE wire format — this is also how
+// multiple <hx-partial> elements are packed into one message: the caller
+// joins several partials with "\n" and each becomes its own data: line, which
+// htmx concatenates back with newlines and scans as one HTML fragment before
+// swapping.
+//
+// Deliberately emits no id: field. Last-Event-ID only earns its keep with a
+// replay endpoint to resume from, and there is none: every event re-renders
+// current state, so a reconnecting client is correct immediately.
+func writeSSEEvent(w http.ResponseWriter, flush func(), data string) {
 	for line := range strings.SplitSeq(data, "\n") {
 		// data is our own server-rendered HTML, already escaped by
 		// html/template when the fragment was executed — not raw user
@@ -115,7 +114,7 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 			"Paused":      paused,
 			tplKeyBaseURL: s.baseURL,
 		})
-		writeSSEEvent(w, flush, 0, hxPartial("incidents-list", sb.String()))
+		writeSSEEvent(w, flush, hxPartial("incidents-list", sb.String()))
 	}
 	render()
 
@@ -179,7 +178,7 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 		if renderErr != nil {
 			return false
 		}
-		writeSSEEvent(w, flush, 0, combined)
+		writeSSEEvent(w, flush, combined)
 		inc, _ := data["Incident"].(*db.Incident)
 		return inc != nil && incidentSettled(inc)
 	}

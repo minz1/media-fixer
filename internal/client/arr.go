@@ -78,12 +78,6 @@ type HistoryRecord struct {
 	EventType   string `json:"eventType"`
 }
 
-// SystemStatus is the subset of Sonarr/Radarr's /system/status we care about
-// — mainly as an authenticated reachability probe for live-check tooling.
-type SystemStatus struct {
-	Version string `json:"version"`
-}
-
 // arrYearSuffixRE strips a trailing " (YYYY)" year qualifier some titles carry.
 var arrYearSuffixRE = regexp.MustCompile(`\s*\(\d{4}\)\s*$`)
 
@@ -127,15 +121,6 @@ func (c *ArrClient) ListMovies(ctx context.Context) ([]Movie, error) {
 		return nil, err
 	}
 	return movies, nil
-}
-
-// SystemStatus calls GET /system/status, a cheap authenticated reachability probe.
-func (c *ArrClient) SystemStatus(ctx context.Context) (*SystemStatus, error) {
-	var status SystemStatus
-	if err := c.get(ctx, "/api/v3/system/status", &status); err != nil {
-		return nil, err
-	}
-	return &status, nil
 }
 
 // SearchSeries finds a series by title, tolerating case, punctuation, a

@@ -61,7 +61,7 @@ func TestLogAction_WritesEventAndProjection(t *testing.T) {
 	}
 
 	// The event exists...
-	events, err := j.Since(ctx, inc.ID, 0)
+	events, err := j.Events(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestLogAction_RejectsUnknownIncident_LeavesNoTrace(t *testing.T) {
 
 	// Nothing left behind — the event and its projection are one transaction;
 	// a rejected write must not leave an orphaned event row.
-	events, evErr := j.Since(ctx, "does-not-exist", 0)
+	events, evErr := j.Events(ctx, "does-not-exist")
 	if evErr != nil {
 		t.Fatal(evErr)
 	}
@@ -279,23 +279,17 @@ func TestSince_ReturnsEventsInSeqOrderAfterCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all, err := j.Since(ctx, inc.ID, 0)
+	all, err := j.Events(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(all) != 3 {
 		t.Fatalf("got %d events, want 3", len(all))
 	}
+	// Ascending seq is the contract the transcript and export rely on to
+	// render a run in the order it happened.
 	if all[0].Seq >= all[1].Seq || all[1].Seq >= all[2].Seq {
 		t.Fatalf("events not in ascending seq order: %+v", all)
-	}
-
-	rest, err := j.Since(ctx, inc.ID, all[0].Seq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rest) != 2 || rest[0].Seq != all[1].Seq {
-		t.Fatalf("Since(afterSeq) did not resume correctly: got %+v", rest)
 	}
 }
 
