@@ -29,7 +29,7 @@ type stubOps struct {
 	diskResult *mediaagentapi.DiskResult
 }
 
-func (s *stubOps) DDTest(_ string) (*mediaagentapi.DDTestResult, error) {
+func (s *stubOps) DDTest(_ context.Context, _ string) (*mediaagentapi.DDTestResult, error) {
 	return s.ddResult, nil
 }
 

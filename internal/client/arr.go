@@ -185,17 +185,40 @@ func findExactTitle[T any](items []T, want string, title func(T) string) *T {
 	return nil
 }
 
-// findFuzzyTitle returns a pointer to the first item whose normalized title
-// contains (or is contained by) want, or nil. Used as a fallback after an
-// exact match fails.
+// minFuzzyTitleLen is the shortest normalized title that may be substring-
+// matched. Below this, containment stops meaning anything: "up" is a
+// substring of "superbad", and every string contains "".
+const minFuzzyTitleLen = 4
+
+// findFuzzyTitle returns a pointer to the one item whose normalized title
+// contains (or is contained by) want, or nil if there is no match or more
+// than one. Used as a fallback after an exact match fails.
+//
+// Both guards exist because this feeds PlanReplace/ExecuteReplace, which
+// delete files: an empty want matched the first item in the library outright
+// (strings.Contains(x, "") is always true), and taking the first of several
+// candidates silently picked an arbitrary one. Refusing is always recoverable
+// — the caller reports ErrNotFound and a human looks — where a wrong match is
+// not.
 func findFuzzyTitle[T any](items []T, want string, title func(T) string) *T {
+	if len(want) < minFuzzyTitleLen {
+		return nil
+	}
+	var match *T
 	for i := range items {
 		norm := normalizeArrTitle(title(items[i]))
-		if strings.Contains(norm, want) || strings.Contains(want, norm) {
-			return &items[i]
+		if len(norm) < minFuzzyTitleLen {
+			continue
 		}
+		if !strings.Contains(norm, want) && !strings.Contains(want, norm) {
+			continue
+		}
+		if match != nil {
+			return nil // ambiguous: two different titles both plausibly match
+		}
+		match = &items[i]
 	}
-	return nil
+	return match
 }
 
 // RescanSeries triggers Sonarr to rescan the disk for a series.

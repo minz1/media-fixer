@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1280,20 +1281,59 @@ func (d *Dispatcher) executeArrRemoveAndSearch(ctx context.Context, args map[str
 // buildReplaceRequest translates escalate_params-shaped args into a
 // client.ReplaceRequest and picks the Sonarr or Radarr client to run it
 // against based on media_type.
+// buildReplaceRequest validates the arguments for the one tool that deletes
+// media files. Everything here comes from LLM output via escalate_params, so
+// each field is checked rather than coerced: a silently-wrong value does not
+// produce a wrong answer, it produces a wrong deletion. The owner approves a
+// preview built from these same values, so a field that degrades quietly also
+// makes the approval dialog a lie.
 func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceRequest, *client.ArrClient, error) {
 	mediaType, _ := args[paramMediaType].(string)
 	title, _ := args[paramTitle].(string)
 	scope, _ := args[paramScope].(string)
 
+	if strings.TrimSpace(title) == "" {
+		// An empty title matches the first item in the library (every string
+		// contains ""), so this would delete an unrelated movie or series.
+		return client.ReplaceRequest{}, nil, errors.New("arr_remove_and_search: title is required")
+	}
+
+	season, err := intArg(args, paramSeason)
+	if err != nil {
+		return client.ReplaceRequest{}, nil, fmt.Errorf("arr_remove_and_search: %w", err)
+	}
+	episode, err := intArg(args, paramEpisode)
+	if err != nil {
+		return client.ReplaceRequest{}, nil, fmt.Errorf("arr_remove_and_search: %w", err)
+	}
+
 	req := client.ReplaceRequest{
 		MediaType: mediaType,
 		Title:     title,
 		Scope:     scope,
-		Season:    intArgOrSentinel(args, paramSeason),
-		Episode:   intArgOrSentinel(args, paramEpisode),
+		Season:    season,
+		Episode:   episode,
 	}
 	if blocklist, ok := args[paramBlocklist].(bool); ok {
 		req.SkipBlocklist = !blocklist
+	}
+
+	// A missing season/episode must never widen the blast radius by falling
+	// through to the series-wide branch: GetEpisodes and SeriesGrabHistory
+	// both treat a negative season as "no filter".
+	if mediaType == client.ReplaceMediaTV {
+		switch scope {
+		case client.ReplaceScopeEpisode:
+			if season < 0 || episode < 0 {
+				return client.ReplaceRequest{}, nil, errors.New(
+					"arr_remove_and_search: scope=episode requires both season and episode")
+			}
+		case client.ReplaceScopeSeason:
+			if season < 0 {
+				return client.ReplaceRequest{}, nil, errors.New(
+					"arr_remove_and_search: scope=season requires season")
+			}
+		}
 	}
 
 	switch mediaType {
@@ -1306,18 +1346,62 @@ func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceReq
 	}
 }
 
-// noArgValue is the sentinel intArgOrSentinel returns for an absent/non-numeric
-// season or episode argument, matching the "-1 means not applicable" convention
-// used throughout this package and internal/client for the same fields.
+// noArgValue is the sentinel intArg returns for an absent season or episode
+// argument, matching the "-1 means not applicable" convention used throughout
+// this package and internal/client for the same fields.
 const noArgValue = -1
 
-// intArgOrSentinel extracts an int from a JSON-decoded args map, where numbers
-// always decode as float64. Returns noArgValue if the key is absent or not a number.
-func intArgOrSentinel(args map[string]any, key string) int {
-	if v, ok := args[key].(float64); ok {
-		return int(v)
+// intArg extracts an int from a JSON-decoded args map. Absent means
+// noArgValue with no error; present-but-uncoercible is an error, NOT the
+// sentinel.
+//
+// Collapsing the two used to be a data-loss bug: only float64 was accepted,
+// so a quoted number — routine output from the Gemini models this runs
+// against — silently became -1, and -1 does not mean "bad input" downstream,
+// it means "not applicable". ArrClient.GetEpisodes omits seasonNumber
+// entirely when season < 0, so an owner approving a "season" delete on a
+// dialog that said season 2 got every episode of every season deleted and
+// every release blocklisted.
+func intArg(args map[string]any, key string) (int, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return noArgValue, nil
 	}
-	return noArgValue
+	switch v := raw.(type) {
+	case float64:
+		return int(v), nil
+	case int:
+		return v, nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("%s: %q is not a whole number", key, v.String())
+		}
+		return int(n), nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return noArgValue, nil
+		}
+		n, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return 0, fmt.Errorf("%s: %q is not a whole number", key, v)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("%s: expected a whole number, got %T", key, raw)
+	}
+}
+
+// intArgOrSentinel is intArg for the read-only callers, where an uncoercible
+// value can safely degrade to "not specified" — a wrong season on a status
+// lookup returns the wrong rows, it does not delete anything.
+func intArgOrSentinel(args map[string]any, key string) int {
+	n, err := intArg(args, key)
+	if err != nil {
+		return noArgValue
+	}
+	return n
 }
 
 // isDisruptiveAction reports whether action mutates service-wide state (a

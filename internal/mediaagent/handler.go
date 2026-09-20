@@ -2,6 +2,7 @@ package mediaagent
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,7 +23,7 @@ import (
 
 // Ops is the interface for OS-level operations; swapped for stubs in tests.
 type Ops interface {
-	DDTest(path string) (*mediaagentapi.DDTestResult, error)
+	DDTest(ctx context.Context, path string) (*mediaagentapi.DDTestResult, error)
 	Restart(ctx context.Context, service string) error
 	DiskUsage() (*mediaagentapi.DiskResult, error)
 	ListDir(path string) (*mediaagentapi.ListDirResult, error)
@@ -50,7 +51,7 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: "path required"})
 			return
 		}
-		result, err := ops.DDTest(body.Path)
+		result, err := ops.DDTest(req.Context(), body.Path)
 		if err != nil {
 			log.ErrorContext(req.Context(), "dd-test failed", "path", body.Path, "error", err)
 			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
@@ -91,8 +92,11 @@ func bearerAuth(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := r.Header.Get("Authorization")
-			token, _ := strings.CutPrefix(auth, "Bearer ")
-			if token != key {
+			// The ok result matters: discarding it meant a bare
+			// "Authorization: <token>" with no scheme authenticated just as
+			// well as a correctly-formed bearer header.
+			token, ok := strings.CutPrefix(auth, "Bearer ")
+			if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1 {
 				writeJSON(w, http.StatusUnauthorized, mediaagentapi.ErrorResponse{Error: "unauthorized"})
 				return
 			}
@@ -133,8 +137,16 @@ const (
 	bytesPerMiB = 1024 * 1024
 )
 
-func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
-	info, err := os.Stat(path)
+func (o *RealOps) DDTest(ctx context.Context, path string) (*mediaagentapi.DDTestResult, error) {
+	// Same allowlist as ListDir: this one had none at all, so an
+	// LLM-supplied path made it an arbitrary-file readability oracle for the
+	// whole filesystem.
+	path, mountErr := o.resolveUnderMounts(path)
+	if mountErr != nil {
+		return nil, mountErr
+	}
+
+	info, err := os.Stat(path) //nolint:gosec // G703: path is validated by resolveUnderMounts above
 	if err != nil {
 		return &mediaagentapi.DDTestResult{Error: err.Error(), NotFound: os.IsNotExist(err)}, nil
 	}
@@ -143,8 +155,15 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 			Error: "path is a directory, not a file — use list_directory to find the specific video file inside it",
 		}, nil
 	}
+	// Anything that is not a regular file (a FIFO, a device node) can block
+	// forever in os.Open itself, before any read deadline could apply.
+	if !info.Mode().IsRegular() {
+		return &mediaagentapi.DDTestResult{
+			Error: "path is not a regular file",
+		}, nil
+	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G703: path is validated by resolveUnderMounts above
 	if err != nil {
 		return &mediaagentapi.DDTestResult{Error: err.Error(), NotFound: os.IsNotExist(err)}, nil
 	}
@@ -155,6 +174,13 @@ func (o *RealOps) DDTest(path string) (*mediaagentapi.DDTestResult, error) {
 	start := time.Now()
 
 	for range ddCount {
+		// A hung FUSE mount is exactly what this tool exists to diagnose, and
+		// reads against one block in uninterruptible I/O. Checking the request
+		// context each block means a client disconnect (or the client's own
+		// timeout) ends the loop instead of parking the goroutine forever.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return &mediaagentapi.DDTestResult{BytesRead: total, Error: ctxErr.Error()}, nil
+		}
 		n, readErr := f.Read(buf)
 		total += int64(n)
 		if readErr != nil {
@@ -192,17 +218,32 @@ func (o *RealOps) Restart(ctx context.Context, service string) error {
 	}
 }
 
-func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
-	// Restrict to known media roots to avoid exposing arbitrary filesystem paths.
-	allowed := false
+// resolveUnderMounts cleans path and returns it only if it resolves inside one
+// of the configured mount roots.
+//
+// The cleaning is the whole point: the previous check ran [strings.HasPrefix] on
+// the raw request string, so "/mnt/decypharr/../../etc" carried an allowed
+// prefix, passed, and was then handed to [os.ReadDir], which resolves it — a
+// full listing of any directory on the media host. Paths here come from LLM
+// output, so this is directly model-steerable.
+//
+// Shared by every path-taking operation rather than duplicated per call site,
+// so a new one cannot be added without it.
+func (o *RealOps) resolveUnderMounts(path string) (string, error) {
+	clean := filepath.Clean(path)
 	for _, root := range o.mounts {
-		if path == root || strings.HasPrefix(path, root+"/") {
-			allowed = true
-			break
+		cleanRoot := filepath.Clean(root)
+		if clean == cleanRoot || strings.HasPrefix(clean, cleanRoot+string(filepath.Separator)) {
+			return clean, nil
 		}
 	}
-	if !allowed {
-		return nil, fmt.Errorf("path %q is outside allowed mount roots", path)
+	return "", fmt.Errorf("path %q is outside allowed mount roots", path)
+}
+
+func (o *RealOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
+	path, err := o.resolveUnderMounts(path)
+	if err != nil {
+		return nil, err
 	}
 
 	entries, err := os.ReadDir(path)
@@ -271,7 +312,11 @@ func (o *RealOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 			bsize := uint64(stat.Bsize)
 			entry.TotalBytes = stat.Blocks * bsize
 			entry.AvailableBytes = stat.Bavail * bsize
-			entry.UsedBytes = entry.TotalBytes - entry.AvailableBytes
+			// Bfree, not Bavail: Bavail excludes the root-reserved blocks
+			// (typically 5%), so using it overstated usage by the reserve —
+			// ~50 GB of phantom "used" space on a 1 TB filesystem, fed
+			// straight to an LLM asked whether the disk is full.
+			entry.UsedBytes = (stat.Blocks - stat.Bfree) * bsize
 		}
 
 		mounts = append(mounts, entry)

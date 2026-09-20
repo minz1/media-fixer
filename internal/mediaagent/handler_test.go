@@ -1,6 +1,10 @@
 package mediaagent_test
 
 import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,9 +139,9 @@ func TestRealOps_ListDir_RegularFileNotSymlink(t *testing.T) {
 // "FUSE serving stale paths" instead of checking Sonarr.
 func TestRealOps_DDTest_MissingFile_SetsNotFound(t *testing.T) {
 	t.Parallel()
-	ops := mediaagent.NewRealOps(nil)
+	ops := mediaagent.NewRealOps([]string{"/nonexistent"})
 
-	result, err := ops.DDTest("/nonexistent/path/that/cannot/exist.mkv")
+	result, err := ops.DDTest(t.Context(), "/nonexistent/path/that/cannot/exist.mkv")
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
@@ -157,9 +161,9 @@ func TestRealOps_DDTest_MissingFile_SetsNotFound(t *testing.T) {
 // production.
 func TestRealOps_DDTest_MissingParentDirectory_SetsNotFound(t *testing.T) {
 	t.Parallel()
-	ops := mediaagent.NewRealOps(nil)
+	ops := mediaagent.NewRealOps([]string{"/nonexistent"})
 
-	result, err := ops.DDTest("/nonexistent/season/folder/episode.mkv")
+	result, err := ops.DDTest(t.Context(), "/nonexistent/season/folder/episode.mkv")
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
@@ -173,10 +177,10 @@ func TestRealOps_DDTest_MissingParentDirectory_SetsNotFound(t *testing.T) {
 // not be reported as NotFound.
 func TestRealOps_DDTest_Directory_NotFoundFalse(t *testing.T) {
 	t.Parallel()
-	ops := mediaagent.NewRealOps(nil)
 	root := t.TempDir()
+	ops := mediaagent.NewRealOps([]string{root})
 
-	result, err := ops.DDTest(root)
+	result, err := ops.DDTest(t.Context(), root)
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
@@ -192,14 +196,14 @@ func TestRealOps_DDTest_Directory_NotFoundFalse(t *testing.T) {
 // path reports neither an error nor NotFound.
 func TestRealOps_DDTest_ReadableFile_NoErrorNoNotFound(t *testing.T) {
 	t.Parallel()
-	ops := mediaagent.NewRealOps(nil)
 	root := t.TempDir()
+	ops := mediaagent.NewRealOps([]string{root})
 	path := filepath.Join(root, "video.mkv")
 	if err := os.WriteFile(path, []byte("hello world"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := ops.DDTest(path)
+	result, err := ops.DDTest(t.Context(), path)
 	if err != nil {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
@@ -209,4 +213,77 @@ func TestRealOps_DDTest_ReadableFile_NoErrorNoNotFound(t *testing.T) {
 	if result.BytesRead == 0 {
 		t.Error("expected BytesRead > 0")
 	}
+}
+
+// TestRealOps_PathAllowlistRejectsTraversal is the regression test for the
+// media-agent traversal hole: the allowlist ran [strings.HasPrefix] against the
+// raw request string, so a path merely *starting* with an allowed root passed
+// and was then resolved by [os.ReadDir]. Paths reach these calls from LLM
+// output, so this was directly model-steerable.
+func TestRealOps_PathAllowlistRejectsTraversal(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	ops := mediaagent.NewRealOps([]string{root})
+
+	escapes := []string{
+		root + "/../../etc",
+		root + "/..",
+		filepath.Join(root, "..", filepath.Base(root)+"-sibling"),
+	}
+	for _, p := range escapes {
+		if _, err := ops.ListDir(p); err == nil {
+			t.Errorf("ListDir(%q) was allowed; it resolves outside the mount roots", p)
+		}
+		if _, err := ops.DDTest(t.Context(), p+"/file.mkv"); err == nil {
+			t.Errorf("DDTest(%q) was allowed; it resolves outside the mount roots", p)
+		}
+	}
+
+	// A legitimate path containing ".." that still lands inside the root is
+	// fine — the guard is about where it resolves, not the literal characters.
+	inside := filepath.Join(root, "sub", "..")
+	if _, err := ops.ListDir(inside); err != nil {
+		t.Errorf("ListDir(%q) rejected a path that resolves inside the root: %v", inside, err)
+	}
+}
+
+// TestBearerAuth_RequiresTheBearerScheme pins the CutPrefix ok check: the
+// discarded result meant a bare "Authorization: <token>" authenticated
+// identically to a correctly-formed bearer header.
+func TestBearerAuth_RequiresTheBearerScheme(t *testing.T) {
+	t.Parallel()
+	h := mediaagent.NewHandler(&allowAllOps{}, "sekrit", slog.New(slog.DiscardHandler))
+
+	cases := map[string]int{
+		"Bearer sekrit": http.StatusOK,
+		"sekrit":        http.StatusUnauthorized,
+		"Bearer wrong":  http.StatusUnauthorized,
+		"":              http.StatusUnauthorized,
+	}
+	for header, want := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/disk", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("Authorization %q: status = %d, want %d", header, rec.Code, want)
+		}
+	}
+}
+
+// allowAllOps is a do-nothing Ops so the auth middleware can be exercised
+// without touching the filesystem.
+type allowAllOps struct{}
+
+func (allowAllOps) DDTest(context.Context, string) (*mediaagentapi.DDTestResult, error) {
+	return &mediaagentapi.DDTestResult{}, nil
+}
+func (allowAllOps) Restart(context.Context, string) error { return nil }
+func (allowAllOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
+	return &mediaagentapi.DiskResult{}, nil
+}
+func (allowAllOps) ListDir(string) (*mediaagentapi.ListDirResult, error) {
+	return &mediaagentapi.ListDirResult{}, nil
 }

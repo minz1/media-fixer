@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
@@ -18,11 +19,18 @@ type MediaAgentClient struct {
 	http    *http.Client
 }
 
+// mediaAgentTimeout is deliberately longer than defaultHTTPTimeout: a
+// dd-test reads up to 100 MiB off a debrid-backed FUSE mount and can legitimately
+// take a while. It is not unbounded, though — this client used to have no
+// timeout at all, so a hung mount (the exact condition dd-test diagnoses) parked
+// the calling incident goroutine forever with nothing to recover it.
+const mediaAgentTimeout = 3 * time.Minute
+
 func NewMediaAgent(baseURL, apiKey string) *MediaAgentClient {
 	return &MediaAgentClient{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		http:    &http.Client{},
+		http:    &http.Client{Timeout: mediaAgentTimeout},
 	}
 }
 
