@@ -145,9 +145,25 @@ type DB struct {
 // drivers' DSN query keys don't overlap, and unknown keys are silently
 // ignored by modernc.org/sqlite rather than erroring, so a mismatch here
 // fails silent, not loud. See applyQueryParams in the vendored driver.
+// timeFormatParam pins how the driver writes a [time.Time].
+//
+// modernc.org/sqlite's default is [time.Time.String] — "2026-09-20 16:11:16
+// -0400 EDT" — which is both timezone-bearing and unparseable by SQLite's own
+// date functions. These columns are compared as text (`at < ?` in every
+// staleness sweep), so a value written at one offset and one written at
+// another compare by their digits rather than their instants. "sqlite" is the
+// driver's ISO-8601 layout; combined with .UTC() on every bound time, every
+// stored timestamp is then directly comparable and directly readable by
+// strftime.
+// _timezone=UTC is the load-bearing half: the driver applies it to every
+// [time.Time] it binds and every one it parses back, so a caller that passes a
+// local time still stores UTC. That makes it a single choke point rather than
+// a .UTC() every call site has to remember — which is the shape the bug had.
+const timeFormatParam = "&_time_format=sqlite&_timezone=UTC"
+
 func dsn(path string) string {
 	return path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(" +
-		strconv.Itoa(busyTimeoutMS) + ")"
+		strconv.Itoa(busyTimeoutMS) + ")" + timeFormatParam
 }
 
 // Open creates or opens the SQLite database at path, applying the schema and
@@ -250,7 +266,97 @@ const (
 	migDropLastHeartbeat                = 9
 	migDropConversationHistory          = 10
 	migDropLastDisruption               = 11
+	migUTCTimestamps                    = 12
 )
+
+// utcTimestampColumns are every DATETIME column compared or ordered as text.
+// Dropped tables (conversation_history, last_disruption) are deliberately
+// absent — migrations 10 and 11 remove them before this runs.
+func utcTimestampColumns() [][2]string {
+	const incidentsTable = "incidents"
+	return [][2]string{
+		{incidentsTable, "created_at"},
+		{incidentsTable, "updated_at"},
+		{incidentsTable, "pending_outcome_next_check"},
+		{"incident_reporters", "reported_at"},
+		{"actions_log", "applied_at"},
+		{"incident_events", "at"},
+	}
+}
+
+// rewriteTimestampsAsUTC re-reads every stored timestamp through the driver
+// and writes it straight back, normalized to UTC.
+//
+// It has to round-trip through Go rather than run as a single UPDATE: the
+// values already in the database were written in Go's [time.Time.String]
+// layout ("2026-09-20 16:11:16.382 -0400 EDT"), which SQLite's own strftime
+// cannot parse at all — a SQL rewrite would return NULL for every real row
+// and quietly change nothing. The driver, by contrast, parses that layout
+// (see parseTimeString in modernc.org/sqlite) alongside the ISO-8601 ones, so
+// reading into a [time.Time] and writing it back re-encodes it in the format
+// timeFormatParam now pins.
+//
+// Values that do not parse as a time are left exactly as they are.
+func rewriteTimestampsAsUTC(ctx context.Context, tx *sql.Tx) error {
+	for _, tc := range utcTimestampColumns() {
+		table, col := tc[0], tc[1]
+		if err := rewriteColumnAsUTC(ctx, tx, table, col); err != nil {
+			return fmt.Errorf("%s.%s: %w", table, col, err)
+		}
+	}
+	return nil
+}
+
+// utcRewrite is one row's worth of pending work, collected before any write so
+// the read cursor is closed first.
+type utcRewrite struct {
+	rowID int64
+	at    time.Time
+}
+
+// collectTimestamps reads a column's parseable timestamps, closing the cursor
+// before any write runs against the same transaction.
+func collectTimestamps(ctx context.Context, tx *sql.Tx, table, col string) ([]utcRewrite, error) {
+	//nolint:gosec // G202: table and col come from utcTimestampColumns, never from input
+	rows, err := tx.QueryContext(ctx,
+		`SELECT rowid, `+col+` FROM `+table+` WHERE `+col+` IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pending []utcRewrite
+	for rows.Next() {
+		var (
+			rowID int64
+			raw   any
+		)
+		if scanErr := rows.Scan(&rowID, &raw); scanErr != nil {
+			return nil, scanErr
+		}
+		// The driver hands back a [time.Time] for anything it recognized. A
+		// string here means it did not, so leave that row alone.
+		if t, ok := raw.(time.Time); ok {
+			pending = append(pending, utcRewrite{rowID: rowID, at: t.UTC()})
+		}
+	}
+	return pending, rows.Err()
+}
+
+func rewriteColumnAsUTC(ctx context.Context, tx *sql.Tx, table, col string) error {
+	pending, err := collectTimestamps(ctx, tx, table, col)
+	if err != nil {
+		return err
+	}
+	for _, p := range pending {
+		//nolint:gosec // G202: table and col come from utcTimestampColumns, never from input
+		stmt := `UPDATE ` + table + ` SET ` + col + ` = ? WHERE rowid = ?`
+		if _, err = tx.ExecContext(ctx, stmt, p.at, p.rowID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type migration struct {
 	version int
@@ -413,6 +519,11 @@ func eventLogMigrations() []migration {
 				_, err := tx.ExecContext(ctx, `DROP TABLE last_disruption`)
 				return err
 			},
+		},
+		{
+			version: migUTCTimestamps,
+			name:    "utc_timestamps",
+			exec:    rewriteTimestampsAsUTC,
 		},
 	}
 }
