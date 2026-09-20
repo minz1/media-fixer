@@ -129,6 +129,8 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.shutdown:
+			return
 		case _, chOK := <-ch:
 			if !chOK {
 				return
@@ -195,6 +197,8 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.shutdown:
 			return
 		case _, chOK := <-ch:
 			if !chOK {
