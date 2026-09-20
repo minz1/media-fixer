@@ -402,7 +402,22 @@ func skipIfRepairRunning(ctx context.Context, disp *agent.Dispatcher) (bool, Res
 		// entirely; the action call below will surface any real problem.
 		return false, Result{}
 	}
-	if running, _ := decypharrRepairRunning(raw); running {
+	running, recognized := decypharrRepairRunning(raw)
+	// recognized was previously discarded here, while env.go's equivalent
+	// used it. decypharrRepairStatus unmarshals into a one-field struct,
+	// which succeeds for any JSON object — so a build that renames or nests
+	// active_run decodes cleanly with the field empty and reads as "not
+	// running". That stacks a second sweep onto a live one and races
+	// decypharr's own lock: exactly the failure the comment below documents
+	// as already having happened once, re-entered through a different door.
+	if !recognized {
+		return true, Result{
+			Status: StatusDegraded,
+			Detail: "could not tell whether a decypharr repair is running (unrecognized " +
+				"/api/repair/status shape); skipping rather than risk stacking a second sweep",
+		}
+	}
+	if running {
 		detail := "a decypharr repair is already running" + decypharrActiveRunStageSuffix(raw)
 		return true, Result{Status: StatusSkipped, Detail: detail}
 	}

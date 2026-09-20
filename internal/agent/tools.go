@@ -793,9 +793,14 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (an
 	}
 
 	minutes, _ := args["minutes_back"].(float64)
-	if minutes <= 0 || minutes > maxLokiMinutes {
+	if minutes <= 0 {
 		minutes = defaultLokiMinutes
 	}
+	// Clamp rather than reset. Resetting an over-large request to the default
+	// made asking for a wider window produce a narrower one, with no way for
+	// the model to tell — so an incident whose cause fell outside the window
+	// could never be brought into view by asking for more.
+	minutes = min(minutes, maxLokiMinutes)
 
 	// Default true: an incident re-diagnosed hours or days after it was first
 	// reported should still grep logs from when the failure happened, not from

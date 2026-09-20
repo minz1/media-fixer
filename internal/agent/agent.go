@@ -308,6 +308,14 @@ type FixSignature struct {
 	// verification — it just means this signal isn't available.
 	ArrChecked bool `json:"arr_checked,omitempty"`
 	ArrHasFile bool `json:"arr_has_file,omitempty"`
+
+	// ProbeFailed records that at least one probe errored while this
+	// signature was captured, so the zeros in it mean "unknown", not
+	// "broken". Without it a baseline captured during a transient outage is
+	// indistinguishable from a genuinely broken item, and every later healthy
+	// reading looks like a fix. VerifyResolved refuses to claim an
+	// improvement against such a baseline.
+	ProbeFailed bool `json:"probe_failed,omitempty"`
 }
 
 // ParseDiagnosticResult re-decodes an incident's stored finding — persisted
@@ -416,7 +424,12 @@ func (a *Agent) Run(
 	a.recordRunStarted(ctx, inc.ID, messages)
 
 	tools := toolDefs()
-	autonomousActions := 0
+	// Seeded from what this incident has already spent, not reset to zero.
+	// A per-run budget meant runAgent's retry loop (up to 3 attempts) and any
+	// dashboard re-run each handed out a fresh 3, so an incident could burn 9
+	// or more autonomous actions while the prompt told the model its cap was
+	// 3 — potentially two Jellyfin restarts and two decypharr restarts.
+	autonomousActions := inc.ActionCount
 	seenCalls := make(map[string]int)
 
 	for round := range maxRounds {
@@ -649,9 +662,15 @@ func (a *Agent) handleCompleteDiagnosis(
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
 
-	itemID := result.VerifyItemID
+	// Deliberately ignores result.VerifyItemID when it names a different item
+	// than the one preFix was captured against: improved() compares the two
+	// signatures, so allowing the model to point verification at another item
+	// (typically the parent series) made a healthy sibling count as this
+	// item's fix. That is the exact failure the FixSignature work exists to
+	// prevent, re-entered through a parameter.
+	itemID := inc.JellyfinItemID
 	if itemID == "" {
-		itemID = inc.JellyfinItemID
+		itemID = result.VerifyItemID
 	}
 
 	// When the agent requested deferred verification (verify_after_seconds > 0),
@@ -736,9 +755,13 @@ func (a *Agent) captureSignature(ctx context.Context, itemID, title string) *Fix
 		if sig.SourceCount > 0 {
 			sig.Path = info.MediaSources[0].Path
 		}
+	} else {
+		sig.ProbeFailed = true
 	}
 	if eps, err := a.disp.Jellyfin.ListEpisodes(ctx, itemID); err == nil {
 		sig.EpisodeCount = len(eps)
+	} else {
+		sig.ProbeFailed = true
 	}
 
 	if sig.Path != "" && a.disp.MediaAgent != nil {
@@ -747,6 +770,7 @@ func (a *Agent) captureSignature(ctx context.Context, itemID, title string) *Fix
 			sig.DDError = dd.Error
 		} else {
 			sig.DDError = err.Error()
+			sig.ProbeFailed = true
 		}
 	}
 	return sig
@@ -823,6 +847,15 @@ func (a *Agent) VerifyResolved(ctx context.Context, itemID, title string, pre *F
 	}
 	if pre == nil {
 		return true
+	}
+	// A baseline whose probes errored is all zeros, which improved() reads as
+	// "it was completely broken before" — so any healthy post-state passed as
+	// a fix. That happens for real: a concurrent incident's restart_jellyfin
+	// makes this run's baseline capture fail (see disruptionNote, which exists
+	// because the codebase already knows runs overlap that way). Refuse to
+	// claim an improvement we cannot substantiate; the caller escalates.
+	if pre.ProbeFailed {
+		return false
 	}
 	return improved(pre, post)
 }
@@ -1102,6 +1135,16 @@ func identityParamsMatch(a, b map[string]any) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
 	}
+	// A parameterless action (restart_jellyfin, decypharr_repair_sweep, ...)
+	// is logged with params nil, so nothing shares an identity key with a
+	// later call that carried an unrequested extra field like
+	// {"reason": "still broken"} — which models add routinely. Falling
+	// through to matchedAny=false then reported "different action" and let
+	// the repeat run, restarting Jellyfin twice in one diagnosis. Compare on
+	// identity keys alone: if neither side has any, it is the same action.
+	if !hasAnyIdentityParam(a) && !hasAnyIdentityParam(b) {
+		return true
+	}
 	matchedAny := false
 	for _, k := range identityParamKeys() {
 		av, aok := a[k]
@@ -1115,6 +1158,17 @@ func identityParamsMatch(a, b map[string]any) bool {
 		matchedAny = true
 	}
 	return matchedAny
+}
+
+// hasAnyIdentityParam reports whether m carries any of the keys that identify
+// what an action targeted.
+func hasAnyIdentityParam(m map[string]any) bool {
+	for _, k := range identityParamKeys() {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // actionAlreadyApplied reports whether this exact action — same tool name,

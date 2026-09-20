@@ -22,9 +22,14 @@ type seerrPayload struct {
 	ReportedBy       string `json:"reported_by"`
 }
 
+// maxSeerrBodyBytes bounds the webhook body. The endpoint is reachable by
+// anything that can reach the port, and an unbounded [json.Decoder] will buffer
+// whatever it is given.
+const maxSeerrBodyBytes = 1 << 20 // 1 MiB
+
 func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 	var payload seerrPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSeerrBodyBytes)).Decode(&payload); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -74,8 +79,6 @@ func seerrIssueTypeToWhat(issueType string) string {
 	switch issueType {
 	case "VIDEO", "AUDIO", "SUBTITLES":
 		return "cant_play"
-	case "OTHER":
-		return "other"
 	default:
 		return "other"
 	}

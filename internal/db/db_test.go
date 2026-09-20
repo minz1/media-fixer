@@ -285,10 +285,6 @@ func TestLogAndListActions(t *testing.T) {
 	}
 
 	now := time.Now()
-	if err := d.UpdateAction(ctx, a.ID, db.ActionApplied, "run_id=abc", ""); err != nil {
-		t.Fatal(err)
-	}
-
 	actions, err := d.ListActions(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)

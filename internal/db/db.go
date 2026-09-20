@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS settings (
 
 INSERT OR IGNORE INTO settings (key, value) VALUES ('autonomous_paused', 'false');
 
+-- conversation_history and last_disruption below are dead in the running
+-- application: migrations 10 and 11 drop them. They must stay in this base
+-- schema anyway, because migration 8 reads both to backfill incident_events,
+-- and on a fresh database migration 8 runs before 10/11. Deleting them here
+-- would break new installs only, while every existing one kept working.
 CREATE TABLE IF NOT EXISTS conversation_history (
 	incident_id TEXT PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
 	messages    TEXT NOT NULL,
@@ -508,7 +513,7 @@ func eventLogMigrations() []migration {
 			version: migDropConversationHistory,
 			name:    "drop_conversation_history",
 			exec: func(ctx context.Context, tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `DROP TABLE conversation_history`)
+				_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS conversation_history`)
 				return err
 			},
 		},
@@ -516,7 +521,7 @@ func eventLogMigrations() []migration {
 			version: migDropLastDisruption,
 			name:    "drop_last_disruption",
 			exec: func(ctx context.Context, tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `DROP TABLE last_disruption`)
+				_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS last_disruption`)
 				return err
 			},
 		},
@@ -1109,7 +1114,7 @@ type ActionLog struct {
 // LogAction inserts an action record, generating an ID if absent. Callers
 // only log an action after the underlying operation has already succeeded,
 // so "now" is an accurate applied_at — there is no separate "pending" phase
-// in this codebase's usage, unlike the applied_at/UpdateAction pair the
+// in this codebase's usage, unlike the applied_at pair the
 // schema was originally built for. Production code now writes actions_log
 // exclusively via internal/journal (an action_applied event's projection,
 // written atomically with the event via InsertActionLog below) — this
@@ -1138,15 +1143,6 @@ func InsertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
 		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status, applied_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status, a.AppliedAt)
-	return err
-}
-
-// UpdateAction updates the status and result of an action.
-func (d *DB) UpdateAction(ctx context.Context, id string, status ActionStatus, result, errMsg string) error {
-	now := time.Now()
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE actions_log SET status = ?, applied_at = ?, result = ?, error = ? WHERE id = ?`,
-		status, now, result, errMsg, id)
 	return err
 }
 

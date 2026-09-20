@@ -63,10 +63,16 @@ func newRunManager(base context.Context) *runManager {
 		globalSlot: make(chan struct{}, 1),
 	}
 	m.globalSlot <- struct{}{}
-	go func() {
-		<-base.Done()
-		close(m.shutdown)
-	}()
+	// A context with no Done() channel (context.Background/TODO) never
+	// cancels, and receiving from its nil channel parks this goroutine
+	// forever while pinning the whole runManager. Production passes a
+	// signal.NotifyContext, but every test passes Background.
+	if done := base.Done(); done != nil {
+		go func() {
+			<-done
+			close(m.shutdown)
+		}()
+	}
 	return m
 }
 
@@ -80,13 +86,22 @@ func (m *runManager) begin(id string) (context.Context, *runToken) {
 		prev.cancel()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-m.shutdown:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	// Cancel synchronously if shutdown has already been signalled. Relying on
+	// the relay goroutine alone made cancellation eventual, so a report
+	// arriving in that window got a live context and could start a fresh
+	// diagnostic loop — tool calls and all — during shutdown.
+	select {
+	case <-m.shutdown:
+		cancel()
+	default:
+		go func() {
+			select {
+			case <-m.shutdown:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 	tok := &runToken{cancel: cancel}
 	m.active[id] = tok
 	return ctx, tok

@@ -23,6 +23,36 @@ type ControlVerdict struct {
 	AlternativeAction string `json:"alternative_action,omitempty"`
 }
 
+// extractJSONObject pulls the first {...} block out of a model reply,
+// tolerating the ```json fences and short preambles models wrap JSON in even
+// when told not to. Returns the input trimmed if no object is found, so the
+// caller's own decode produces the error.
+//
+// This matters more than it looks: on a parse failure Service.evaluateDiagnosis
+// proceeds with the action anyway, and the three conditions that route a
+// diagnosis to review in the first place (low confidence, repeating a failed
+// action, several actions already tried) are exactly the ones you least want
+// auto-approved because of a markdown fence.
+func extractJSONObject(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if fenced := strings.Index(trimmed, "```"); fenced >= 0 {
+		rest := trimmed[fenced+3:]
+		if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+			rest = rest[nl+1:]
+		}
+		if end := strings.Index(rest, "```"); end >= 0 {
+			rest = rest[:end]
+		}
+		trimmed = strings.TrimSpace(rest)
+	}
+	start := strings.IndexByte(trimmed, '{')
+	end := strings.LastIndexByte(trimmed, '}')
+	if start < 0 || end <= start {
+		return trimmed
+	}
+	return trimmed[start : end+1]
+}
+
 // ControlReviewer performs a single-shot review of a diagnostic agent run
 // before surfacing approval-required escalations to the owner.
 type ControlReviewer struct {
@@ -97,6 +127,13 @@ func (r *ControlReviewer) Review(
 	resp, err := r.llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model:    r.model,
 		Messages: messages,
+		// The prompt asks for bare JSON; this makes the provider enforce it
+		// rather than leaving it to the model's goodwill. Combined with
+		// extractJSONObject below, a fenced or prose-wrapped reply no longer
+		// fails the review outright.
+		ResponseFormat: &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("control review llm: %w", err)
@@ -105,7 +142,7 @@ func (r *ControlReviewer) Review(
 	if len(resp.Choices) == 0 {
 		return nil, errNoChoices
 	}
-	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
+	raw := extractJSONObject(resp.Choices[0].Message.Content)
 	var verdict ControlVerdict
 	if decodeErr := json.Unmarshal([]byte(raw), &verdict); decodeErr != nil {
 		r.log.WarnContext(ctx, "control reviewer returned non-JSON", "raw", raw, "error", decodeErr)
