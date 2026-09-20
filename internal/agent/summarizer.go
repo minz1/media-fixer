@@ -60,5 +60,8 @@ func (s *Summarizer) Summarize(ctx context.Context, messages []openai.ChatComple
 	if err != nil {
 		return "", fmt.Errorf("summarize: %w", err)
 	}
+	if len(resp.Choices) == 0 {
+		return "", errNoChoices
+	}
 	return resp.Choices[0].Message.Content, nil
 }

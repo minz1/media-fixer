@@ -62,7 +62,7 @@ func TestDashboardTemplates_HxSSEAttributesHaveTheirExtensionLoaded(t *testing.T
 }
 
 // TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection pins the shutdown
-// fix. http.Server.Shutdown does not cancel in-flight request contexts, and
+// fix. [http.Server.Shutdown] does not cancel in-flight request contexts, and
 // the SSE handlers block until their request context is done — so before
 // Server.shutdown existed, one open dashboard tab made Shutdown block
 // forever and systemd SIGKILLed the unit at TimeoutStopSec on every deploy.
@@ -85,7 +85,7 @@ func TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection(t *testing.T) {
 	// Open a real SSE connection and leave it open. The handler is now parked
 	// in its select loop, which is exactly the state that used to wedge
 	// Shutdown.
-	streamCtx, streamCancel := context.WithCancel(context.Background())
+	streamCtx, streamCancel := context.WithCancel(t.Context())
 	defer streamCancel()
 	req, err := http.NewRequestWithContext(streamCtx, http.MethodGet, base+"/media/events", nil)
 	if err != nil {
@@ -138,7 +138,11 @@ func waitForServer(t *testing.T, url string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(url) //nolint:noctx // short-lived readiness poll
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if reqErr != nil {
+			t.Fatal(reqErr)
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err == nil {
 			resp.Body.Close()
 			return

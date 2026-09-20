@@ -54,9 +54,22 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 	if lockErr := s.runs.acquireGlobal(ctx); lockErr != nil {
 		return lockErr
 	}
-	execResult, runErr := s.agent.RunEscalation(ctx, result)
-	s.runs.releaseGlobal()
-	s.logEscalation(ctx, inc.ID, result, execResult, runErr)
+	// Deferred, not called inline: chi's Recoverer catches a panic in
+	// RunEscalation and returns 500, so a non-deferred release leaked the
+	// single global slot permanently and every later diagnosis blocked on
+	// acquireGlobal forever.
+	defer s.runs.releaseGlobal()
+
+	// ExecuteReplace is blocklist -> delete files -> trigger search, with no
+	// compensation if it stops partway. Running it on the caller's HTTP
+	// request context meant a closed tab or a proxy idle timeout could cancel
+	// it after the files were deleted and before the re-search fired, losing
+	// the media with nothing queued to replace it. WithoutCancel keeps the
+	// request's values (and its deadline-free lifetime) while detaching the
+	// cancellation, matching what launchVerification already does below.
+	execCtx := context.WithoutCancel(ctx)
+	execResult, runErr := s.agent.RunEscalation(execCtx, result)
+	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
 	if runErr != nil {
 		return runErr
 	}

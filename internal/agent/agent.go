@@ -483,6 +483,10 @@ func (a *Agent) Run(
 // it wasn't a clean exit.
 var errLoopExhausted = errors.New("diagnostic loop exhausted without conclusion")
 
+// errNoChoices is a completion that returned HTTP 200 with an empty choices
+// array — see llmCall, where it is retried like any other transient failure.
+var errNoChoices = errors.New("llm returned no choices")
+
 // recordRunStarted, recordRound, and recordRunFinished are best-effort:
 // journal writes must never abort a diagnosis, and a.journal is nil in
 // contexts that don't care about the durable transcript (e.g. some tests
@@ -600,9 +604,14 @@ func (a *Agent) processToolCalls(
 			_, _ = a.db.IncrementActionCount(ctx, inc.ID)
 
 			if *autonomousActions > maxAutonomousActions {
+				// Lock autonomous action, but deliberately do NOT write
+				// manual_test_needed here. Service.escalateToOwner owns that
+				// transition, and its TransitionStatus allow-list does not
+				// include manual_test_needed — so setting it here made the
+				// subsequent escalation a no-op that logged "already escalated
+				// by another run" and never called NotifyOwner. Three
+				// service-wide disruptions would land and nobody was told.
 				_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
-				_ = a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-				a.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
 				return &DiagnosticResult{
 					RootCause:        "max autonomous actions reached without resolution",
 					Confidence:       "low",
@@ -648,7 +657,12 @@ func (a *Agent) handleCompleteDiagnosis(
 	// When the agent requested deferred verification (verify_after_seconds > 0),
 	// the fix needs time to take effect — skip the instant check and let the
 	// service's verification loop re-check after the requested delay.
-	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 && itemID != "" {
+	// No itemID guard: VerifyResolved now falls back to *arr file presence
+	// when there is no Jellyfin item (see its doc comment), which is the only
+	// case Discord-reported incidents ever hit. Guarding on itemID here meant
+	// a missing-media report with no deferred verification was returned as a
+	// clean success with nothing checked at all.
+	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 {
 		if !a.VerifyResolved(ctx, itemID, inc.Title, preFix) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
@@ -657,8 +671,13 @@ func (a *Agent) handleCompleteDiagnosis(
 		}
 	}
 
+	// A lost finding is not survivable: PreviewEscalation/ApproveEscalation
+	// reconstruct the DiagnosticResult from this row, so returning success
+	// here would DM the owner a recommendation that errors with "has no
+	// diagnostic finding" the moment they click Preview. Fail the run instead
+	// and let handleRunError escalate honestly.
 	if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
-		a.log.ErrorContext(ctx, "set finding", "error", err)
+		return nil, fmt.Errorf("persist diagnosis for incident %s: %w", inc.ID, err)
 	}
 	if a.journal != nil {
 		if err := a.journal.DiagnosisCompleted(ctx, inc.ID, result); err != nil {
@@ -790,7 +809,16 @@ func (a *Agent) VerifyResolved(ctx context.Context, itemID, title string, pre *F
 
 	sourceOK := post.SourceCount > 0 && post.Path != "" && post.DDBytesRead > 0 && post.DDError == ""
 	episodesOK := post.EpisodeCount > 0
-	if !sourceOK && !episodesOK {
+	// With no Jellyfin item to probe, sourceOK and episodesOK are structurally
+	// unreachable, so requiring them meant VerifyResolved could never return
+	// true — which is every Discord-reported incident, since only the Seerr
+	// path carries a Jellyfin item ID. Fall back to *arr's confirmed file
+	// presence, the one ground-truth signal available without an item. Only
+	// when there is no item at all: when there IS one, the Jellyfin/dd
+	// evidence stays mandatory, because *arr having a file says nothing about
+	// whether it is actually readable through the FUSE mount.
+	arrOnlyOK := itemID == "" && post.ArrChecked && post.ArrHasFile
+	if !sourceOK && !episodesOK && !arrOnlyOK {
 		return false
 	}
 	if pre == nil {
@@ -1141,10 +1169,23 @@ func (a *Agent) llmCall(ctx context.Context, req openai.ChatCompletionRequest) (
 			}
 		}
 		resp, err := a.llm.CreateChatCompletion(ctx, req)
-		if err == nil {
+		switch {
+		case err != nil:
+			lastErr = err
+		case len(resp.Choices) == 0:
+			// A 200 with no choices is a success as far as the HTTP client is
+			// concerned, so this used to flow straight through to
+			// resp.Choices[0] and panic — in a bare goroutine with no
+			// recover(), taking the whole process down with the dashboard,
+			// the Discord bot and every in-flight verification loop.
+			// OpenRouter returns this shape for upstream provider errors, and
+			// Gemini does on a safety block or an empty MAX_TOKENS finish.
+			// Treated as transient so it uses the existing backoff and then
+			// fails the run honestly.
+			lastErr = errNoChoices
+		default:
 			return resp, nil
 		}
-		lastErr = err
 	}
 	return openai.ChatCompletionResponse{}, fmt.Errorf("llm failed after %d attempts: %w", len(delays), lastErr)
 }

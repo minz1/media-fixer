@@ -691,21 +691,46 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 	return scanIncident(row)
 }
 
-// FindOpenByTitle returns the first open/investigating/agent_fixed incident for
-// this title so duplicate reports collapse into it. Comparison is
-// case-insensitive and ignores trailing year suffixes like " (2024)".
-// Returns ErrNotFound when no matching open incident exists.
+// activeIncidentStatuses are the statuses in which an incident is still being
+// worked on by the system itself. Deliberately excludes manual_test_needed and
+// blocked: both mean "waiting for a human", so an incident sitting in either
+// is making no progress and must not absorb new reports. It previously did —
+// FindOpenByTitle excluded only resolved/reopened — so a single escalated
+// incident silently swallowed every later report of the same title, with no
+// time bound and no new investigation. Also excludes agent_fixed, so a report
+// arriving after an autonomous fix starts fresh work rather than collapsing
+// into a closed-out incident that nothing will revisit.
+//
+// reopened is included because a reopened incident IS active; its previous
+// exclusion meant duplicate reports never collapsed into one.
+func activeIncidentStatuses() []IncidentStatus {
+	return []IncidentStatus{StatusOpen, StatusInvestigating, StatusVerifying, StatusReopened}
+}
+
+// activeStatusesJSON is activeIncidentStatuses as one JSON-array bind
+// parameter, for `status IN (SELECT value FROM json_each(?))` — the same
+// fixed-query-text pattern TransitionStatus uses, so no query below has to
+// concatenate a placeholder list into its SQL.
+func activeStatusesJSON() (string, error) {
+	b, err := json.Marshal(activeIncidentStatuses())
+	return string(b), err
+}
+
+// FindOpenByTitle returns the first actively-worked incident for this title so
+// duplicate reports collapse into it (see activeIncidentStatuses for what
+// counts as active, and why an escalated incident deliberately does not).
+// Comparison is case-insensitive and ignores trailing year suffixes like
+// " (2024)". Returns ErrNotFound when no matching active incident exists.
 func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, error) {
 	norm := d.normalizeTitle(title)
-	row := d.read.QueryRowContext(ctx, `
-		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
-		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
-		       COALESCE(finding,''), COALESCE(recommended_actions,''),
-		       action_count, autonomous_locked
-		FROM incidents
-		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)')
-		  AND status NOT IN ('resolved','reopened')
-		ORDER BY created_at DESC LIMIT 1`, norm, norm)
+	statuses, err := activeStatusesJSON()
+	if err != nil {
+		return nil, err
+	}
+	// ESCAPE '\': norm is caller-supplied, so an unescaped % or _ in a title
+	// ("50% Off") would act as a LIKE wildcard and collapse the report into an
+	// unrelated incident.
+	row := d.read.QueryRowContext(ctx, findOpenByTitleQuery, norm, likeEscape(norm), statuses)
 	inc, err := scanIncident(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -748,13 +773,46 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 	return out, rows.Err()
 }
 
-// CountOpenIncidents returns the number of non-resolved incidents.
+// CountOpenIncidents returns the number of incidents currently being worked on
+// (see activeIncidentStatuses). It backs the "several things are broken at
+// once, stop acting autonomously" guard, so it must count incidents that are
+// actively failing right now — not every incident that was ever escalated.
+// Counting all non-resolved rows made the guard latch permanently: escalated
+// incidents never self-resolve, so once five accumulated, every new incident
+// was force-blocked forever.
 func (d *DB) CountOpenIncidents(ctx context.Context) (int, error) {
+	statuses, err := activeStatusesJSON()
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	err := d.read.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM incidents WHERE status NOT IN ('resolved')`,
-	).Scan(&n)
+	err = d.read.QueryRowContext(ctx, countOpenIncidentsQuery, statuses).Scan(&n)
 	return n, err
+}
+
+// findOpenByTitleQuery and countOpenIncidentsQuery are fixed query text; the
+// active-status set travels as one JSON-array bind parameter (see
+// activeStatusesJSON).
+const (
+	findOpenByTitleQuery = `
+		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
+		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
+		       COALESCE(finding,''), COALESCE(recommended_actions,''),
+		       action_count, autonomous_locked
+		FROM incidents
+		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)' ESCAPE '\')
+		  AND status IN (SELECT value FROM json_each(?))
+		ORDER BY created_at DESC LIMIT 1`
+
+	countOpenIncidentsQuery = `
+		SELECT COUNT(*) FROM incidents WHERE status IN (SELECT value FROM json_each(?))`
+)
+
+// likeEscape escapes LIKE's wildcards so a caller-supplied string is matched
+// literally. Pairs with `ESCAPE '\'` on the query.
+func likeEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return r.Replace(s)
 }
 
 // UpdateIncidentStatus sets the status of an incident.

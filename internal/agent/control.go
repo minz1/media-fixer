@@ -102,6 +102,9 @@ func (r *ControlReviewer) Review(
 		return nil, fmt.Errorf("control review llm: %w", err)
 	}
 
+	if len(resp.Choices) == 0 {
+		return nil, errNoChoices
+	}
 	raw := strings.TrimSpace(resp.Choices[0].Message.Content)
 	var verdict ControlVerdict
 	if decodeErr := json.Unmarshal([]byte(raw), &verdict); decodeErr != nil {

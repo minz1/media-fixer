@@ -68,6 +68,13 @@ const (
 
 var errMediaAgentNotConfigured = errors.New("media-agent not configured")
 
+// errLokiNotConfigured is returned when log search is unavailable — either no
+// Loki URL is set or its mTLS material failed to load at startup. Surfaced to
+// the model as a normal tool error so it diagnoses from the other 25 tools,
+// rather than taking the whole service down at boot (which a hard failure in
+// clientset.Build used to do).
+var errLokiNotConfigured = errors.New("loki not configured; log search unavailable")
+
 // diskInfoDesc documents the two independent per-path signals the tool returns.
 const diskInfoDesc = "Get disk usage for the media host paths: /mnt/decypharr (FUSE media files), " +
 	"/var/cache/decypharr (cache), and /data. Each entry has two independent booleans plus byte counts. " +
@@ -807,6 +814,9 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (an
 	from, to := anchor.Add(-half), anchor.Add(half)
 	if now := time.Now(); to.After(now) {
 		to = now
+	}
+	if d.Loki == nil {
+		return nil, errLokiNotConfigured
 	}
 	return d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
 }

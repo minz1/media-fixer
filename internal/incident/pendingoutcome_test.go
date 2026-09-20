@@ -531,3 +531,98 @@ func TestKeepSearching_RequiresManualTestNeeded(t *testing.T) {
 		t.Error("expected an error keep-searching an incident not in manual_test_needed")
 	}
 }
+
+// TestAdvancePendingOutcome_PersistentCheckFailureEventuallyEscalates pins the
+// bound on the error path. Propagating a queue-fetch error (rather than
+// degrading it into "no release found") is correct, but the error branch
+// returned before the stall and overall-cap checks in advanceDownloading /
+// advanceNoQueueItem ever ran — so a persistent failure (a rotated Sonarr API
+// key, Sonarr moved) left the incident re-polling every five minutes forever,
+// escalating never, with the reporters' last message still "downloading now".
+func TestAdvancePendingOutcome_PersistentCheckFailureEventuallyEscalates(t *testing.T) {
+	t.Parallel()
+	ag := &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			return nil, errors.New("sonarr: 401 unauthorized")
+		},
+	}
+	svc, database, notif := newPendingOutcomeTestService(t, ag)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status:     db.StatusVerifying,
+		Source:     "discord",
+		ReportedBy: "x",
+		What:       "cant_play",
+		Title:      "Lanterns",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Well past the absolute give-up point for one tracking attempt.
+	po := &db.PendingOutcome{
+		MediaType: "tv", Title: "Lanterns", Season: 1, Episode: 3,
+		StartedAt: time.Now().Add(-24 * time.Hour),
+	}
+	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.AdvancePendingOutcomes(ctx)
+
+	notif.mu.Lock()
+	msgs := strings.Join(notif.msgs, "\n")
+	notif.mu.Unlock()
+	if !strings.Contains(msgs, "Lanterns") {
+		t.Errorf("owner was never told the pending outcome gave up; messages: %q", msgs)
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusManualTestNeeded {
+		t.Errorf("status = %q, want manual_test_needed: a pending outcome whose state can "+
+			"no longer be checked must reach a human, not retry forever", got.Status)
+	}
+}
+
+// TestAdvancePendingOutcome_TransientCheckFailureStillRetries is the other
+// half of the bound above: a failure inside the cap must NOT escalate, or a
+// blip in the *arr API would page the owner on every sweep.
+func TestAdvancePendingOutcome_TransientCheckFailureStillRetries(t *testing.T) {
+	t.Parallel()
+	ag := &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			return nil, errors.New("sonarr: connection refused")
+		},
+	}
+	svc, database, _ := newPendingOutcomeTestService(t, ag)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status: db.StatusVerifying, Source: "discord", ReportedBy: "x",
+		What: "cant_play", Title: "Lanterns",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	po := &db.PendingOutcome{
+		MediaType: "tv", Title: "Lanterns", Season: 1, Episode: 3,
+		StartedAt: time.Now().Add(-2 * time.Minute),
+	}
+	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.AdvancePendingOutcomes(ctx)
+
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusVerifying {
+		t.Errorf("status = %q, want verifying: a transient check failure well inside the "+
+			"cap must keep retrying rather than escalate", got.Status)
+	}
+}

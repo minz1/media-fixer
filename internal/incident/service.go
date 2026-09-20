@@ -132,8 +132,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	switch {
 	case err == nil:
 		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
-		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
-		s.recordReporterAdded(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+		s.addReporter(ctx, existing.ID, r)
 		return existing, nil
 	case !errors.Is(err, db.ErrNotFound):
 		return nil, fmt.Errorf("find open incident: %w", err)
@@ -157,8 +156,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		return nil, fmt.Errorf("create incident: %w", err)
 	}
 	s.recordIncidentCreated(ctx, inc)
-	_ = s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
-	s.recordReporterAdded(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+	s.addReporter(ctx, inc.ID, r)
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
@@ -179,6 +177,19 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	s.launch(inc, nil)
 
 	return inc, nil
+}
+
+// addReporter records a reporter against an incident, logging rather than
+// discarding a failure. A dropped reporter row is invisible and permanent:
+// ListDiscordReporterIDs then returns an empty set, so when the incident
+// resolves nobody is notified — and on the dedup path the second reporter is
+// silently lost entirely.
+func (s *Service) addReporter(ctx context.Context, incidentID string, r *Report) {
+	if err := s.db.AddReporter(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID); err != nil {
+		s.log.ErrorContext(ctx, "add reporter",
+			"incident", incidentID, "reporter", r.ReportedBy, "error", err)
+	}
+	s.recordReporterAdded(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 }
 
 func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) {
@@ -527,7 +538,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 		case <-ctx.Done():
 			return
 		}
-		if itemID != "" && s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix) {
+		if s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix) {
 			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
 			return
 		}

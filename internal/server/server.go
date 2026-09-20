@@ -21,8 +21,8 @@ import (
 
 const readHeaderTimeout = 10 * time.Second
 
-// shutdownGrace bounds how long Shutdown waits for connections to drain.
-// http.Server.Shutdown does NOT cancel in-flight request contexts, and an SSE
+// shutdownGrace bounds how long [http.Server.Shutdown] waits for connections to drain.
+// [http.Server.Shutdown] does NOT cancel in-flight request contexts, and an SSE
 // handler only returns when its request context is done — so without a bound
 // here, a single open dashboard tab makes Shutdown block forever and systemd
 // SIGKILLs the unit at TimeoutStopSec. The streaming handlers also select on
