@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +43,7 @@ const (
 	toolGetDiskInfo          = "get_disk_info"
 	toolCompleteDiagnosis    = "complete_diagnosis"
 	toolArrRemoveAndSearch   = "arr_remove_and_search"
+	toolDecypharrDeleteReadd = "decypharr_delete_readd"
 	toolArrMediaStatus       = "arr_media_status"
 	toolArrGrabHistory       = "arr_grab_history"
 	toolArrSearchMissing     = "arr_search_missing"
@@ -68,6 +71,13 @@ const (
 
 var errMediaAgentNotConfigured = errors.New("media-agent not configured")
 
+// errLokiNotConfigured is returned when log search is unavailable — either no
+// Loki URL is set or its mTLS material failed to load at startup. Surfaced to
+// the model as a normal tool error so it diagnoses from the other 25 tools,
+// rather than taking the whole service down at boot (which a hard failure in
+// clientset.Build used to do).
+var errLokiNotConfigured = errors.New("loki not configured; log search unavailable")
+
 // diskInfoDesc documents the two independent per-path signals the tool returns.
 const diskInfoDesc = "Get disk usage for the media host paths: /mnt/decypharr (FUSE media files), " +
 	"/var/cache/decypharr (cache), and /data. Each entry has two independent booleans plus byte counts. " +
@@ -90,6 +100,7 @@ const (
 const (
 	EscalateNone                = "none"
 	EscalateRemoveAndSearch     = "remove_and_search"
+	EscalateDeleteTorrentReadd  = "delete_torrent_readd"
 	EscalateManualInvestigation = "manual_investigation"
 )
 
@@ -102,7 +113,9 @@ const ToolArrSearchMissing = toolArrSearchMissing
 
 // escalateActionEnum lists every value the escalate_action schema accepts.
 func escalateActionEnum() []string {
-	return []string{EscalateNone, EscalateRemoveAndSearch, EscalateManualInvestigation}
+	return []string{
+		EscalateNone, EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateManualInvestigation,
+	}
 }
 
 // Field names inside complete_diagnosis.escalate_params, used when
@@ -141,29 +154,29 @@ type toolSpec struct {
 	Handler func(*Dispatcher, context.Context, map[string]any) (any, error)
 }
 
-const toolRegistryCapacity = 26
-
 // toolRegistry is the single source of truth for every tool the agent knows
 // about: its schema, its risk class, and how to execute it. toolDefs (what the
 // LLM sees), Dispatch/Call (how a call is executed), and isAutonomousAction
 // all derive from this table instead of maintaining parallel lists that can
 // drift out of sync.
+//
+// One flat concat of the real groups. It used to be a three-deep tree of
+// functions whose only job was to concatenate each other, plus a
+// hand-maintained capacity constant that had to be kept in step with the
+// number of tools by hand. Left as a function rather than a package-level
+// slice because .golangci.yml enables gochecknoglobals; rebuilding it per
+// call is a handful of struct copies against a handful of incidents a day.
 func toolRegistry() []toolSpec {
-	specs := make([]toolSpec, 0, toolRegistryCapacity)
-	specs = append(specs, readToolSpecs()...)
-	specs = append(specs, repairReadToolSpecs()...)
-	specs = append(specs, actionToolSpecs()...)
-	specs = append(specs, approvalToolSpecs()...)
-	specs = append(specs, completionSpec())
-	return specs
-}
-
-// readToolSpecs returns the Jellyfin, host-diagnostic, and *arr read-only tools.
-func readToolSpecs() []toolSpec {
-	specs := jellyfinReadToolSpecs()
-	specs = append(specs, hostReadToolSpecs()...)
-	specs = append(specs, arrReadToolSpecs()...)
-	return specs
+	return slices.Concat(
+		jellyfinReadToolSpecs(),
+		hostReadToolSpecs(),
+		arrReadToolSpecs(),
+		repairReadToolSpecs(),
+		decypharrActionToolSpecs(),
+		jellyfinAndArrActionToolSpecs(),
+		approvalToolSpecs(),
+		[]toolSpec{completionSpec()},
+	)
 }
 
 // arrReadToolSpecs returns the Sonarr/Radarr read-only diagnostic tools:
@@ -386,13 +399,6 @@ func repairReadToolSpecs() []toolSpec {
 	}
 }
 
-// actionToolSpecs returns the autonomous (write) action tools.
-func actionToolSpecs() []toolSpec {
-	specs := decypharrActionToolSpecs()
-	specs = append(specs, jellyfinAndArrActionToolSpecs()...)
-	return specs
-}
-
 // decypharrActionToolSpecs returns the decypharr-side autonomous actions.
 func decypharrActionToolSpecs() []toolSpec {
 	return []toolSpec{
@@ -545,7 +551,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 // offered to the LLM as a callable tool (see toolDefs). The handler here is a
 // read-only PlanReplace preview — never a delete — which is what makes it
 // safe for live-check tooling to exercise unconditionally. Actually deleting
-// files and searching only happens via Agent.RunEscalation, invoked by the
+// files and searching only happens via Agent.ExecuteApprovedPlan, invoked by the
 // dashboard's approve-escalation flow after an owner reviews this same plan.
 func approvalToolSpecs() []toolSpec {
 	return []toolSpec{
@@ -562,6 +568,30 @@ func approvalToolSpecs() []toolSpec {
 			Risk:    riskApproval,
 			Handler: (*Dispatcher).readArrRemoveAndSearchPlan,
 		},
+		{
+			Name: toolDecypharrDeleteReadd,
+			Def: &openai.FunctionDefinition{
+				Name: toolDecypharrDeleteReadd,
+				Description: "Preview removing a torrent from decypharr and the debrid provider and adding it " +
+					"straight back from its magnet, so the provider re-fetches it. For content whose debrid " +
+					"links are broken in a way refresh_decypharr_links and decypharr_repair_sweep have already " +
+					"failed to fix — not a first resort. Owner-approval-only: recommend it via " +
+					"complete_diagnosis.escalate_action, never call it directly.",
+				Parameters: jsonSchema(decypharrReaddProps(), []string{paramName}),
+			},
+			Risk:    riskApproval,
+			Handler: (*Dispatcher).readDecypharrReaddPlan,
+		},
+	}
+}
+
+// decypharrReaddProps is the parameter schema shared by the
+// decypharr_delete_readd tool and complete_diagnosis's escalate_params.
+func decypharrReaddProps() map[string]any {
+	return map[string]any{
+		paramName: param("string",
+			"Exact torrent name as shown by get_torrent_state. Must match one torrent exactly — "+
+				"this resolves to something that gets deleted."),
 	}
 }
 
@@ -785,9 +815,14 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (an
 	}
 
 	minutes, _ := args["minutes_back"].(float64)
-	if minutes <= 0 || minutes > maxLokiMinutes {
+	if minutes <= 0 {
 		minutes = defaultLokiMinutes
 	}
+	// Clamp rather than reset. Resetting an over-large request to the default
+	// made asking for a wider window produce a narrower one, with no way for
+	// the model to tell — so an incident whose cause fell outside the window
+	// could never be brought into view by asking for more.
+	minutes = min(minutes, maxLokiMinutes)
 
 	// Default true: an incident re-diagnosed hours or days after it was first
 	// reported should still grep logs from when the failure happened, not from
@@ -807,6 +842,9 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (an
 	from, to := anchor.Add(-half), anchor.Add(half)
 	if now := time.Now(); to.After(now) {
 		to = now
+	}
+	if d.Loki == nil {
+		return nil, errLokiNotConfigured
 	}
 	return d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
 }
@@ -1246,44 +1284,122 @@ func (d *Dispatcher) readArrRemoveAndSearchPlan(ctx context.Context, args map[st
 	return arrClient.PlanReplace(ctx, req)
 }
 
-// executeArrRemoveAndSearch re-resolves and then executes a remove-and-search
-// (blocklist grabs, delete files, trigger a search). It is never reachable
-// from Dispatcher.Call under the tool's own name — only Agent.RunEscalation,
-// invoked after owner approval, calls it directly.
-func (d *Dispatcher) executeArrRemoveAndSearch(ctx context.Context, args map[string]any) (any, error) {
-	req, arrClient, err := d.buildReplaceRequest(args)
-	if err != nil {
-		return nil, err
-	}
-	plan, err := arrClient.PlanReplace(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	result, err := arrClient.ExecuteReplace(ctx, plan)
-	if err != nil {
-		return nil, err
-	}
-	d.logAction(ctx, toolArrRemoveAndSearch, args)
-	return result, nil
-}
-
 // buildReplaceRequest translates escalate_params-shaped args into a
 // client.ReplaceRequest and picks the Sonarr or Radarr client to run it
 // against based on media_type.
+// readDecypharrReaddPlan builds a read-only preview of a delete-and-re-add,
+// including whether the torrent even has a magnet to be restored from. Never
+// deletes anything.
+func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, args map[string]any) (any, error) {
+	if d.Decypharr == nil {
+		return nil, errors.New("decypharr not configured")
+	}
+	name, _ := args[paramName].(string)
+	return d.Decypharr.PlanTorrentReadd(ctx, name)
+}
+
+// executeApprovedReaddPlan runs a ReaddPlan exactly as stored, with no
+// re-resolution — same contract as executeApprovedReplacePlan below.
+func (d *Dispatcher) executeApprovedReaddPlan(ctx context.Context, planJSON []byte) (any, error) {
+	if d.Decypharr == nil {
+		return nil, errors.New("decypharr not configured")
+	}
+	var plan client.ReaddPlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return nil, fmt.Errorf("decode approved readd plan: %w", err)
+	}
+	result, err := d.Decypharr.ExecuteTorrentReadd(ctx, &plan)
+	// Logged even on failure: a partial run has already deleted the torrent,
+	// and that has to appear in the action log either way.
+	d.logAction(ctx, toolDecypharrDeleteReadd, map[string]any{paramName: plan.Name})
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// executeApprovedReplacePlan runs a ReplacePlan exactly as stored, with no
+// re-resolution. The plan was rendered to the owner at preview time; this is
+// the same bytes coming back.
+func (d *Dispatcher) executeApprovedReplacePlan(ctx context.Context, planJSON []byte) (any, error) {
+	var plan client.ReplacePlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return nil, fmt.Errorf("decode approved escalation plan: %w", err)
+	}
+	arrClient := d.Sonarr
+	if plan.MediaType == client.ReplaceMediaMovie {
+		arrClient = d.Radarr
+	}
+	if arrClient == nil {
+		return nil, fmt.Errorf("no client configured for media_type %q", plan.MediaType)
+	}
+	result, err := arrClient.ExecuteReplace(ctx, &plan)
+	if err != nil {
+		return nil, err
+	}
+	d.logAction(ctx, toolArrRemoveAndSearch, map[string]any{
+		paramMediaType: plan.MediaType,
+		paramTitle:     plan.Title,
+		paramScope:     plan.Scope,
+		paramSeason:    plan.SeasonNumber,
+		paramEpisode:   plan.EpisodeNumber,
+	})
+	return result, nil
+}
+
+// buildReplaceRequest validates the arguments for the one tool that deletes
+// media files. Everything here comes from LLM output via escalate_params, so
+// each field is checked rather than coerced: a silently-wrong value does not
+// produce a wrong answer, it produces a wrong deletion. The owner approves a
+// preview built from these same values, so a field that degrades quietly also
+// makes the approval dialog a lie.
 func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceRequest, *client.ArrClient, error) {
 	mediaType, _ := args[paramMediaType].(string)
 	title, _ := args[paramTitle].(string)
 	scope, _ := args[paramScope].(string)
 
+	if strings.TrimSpace(title) == "" {
+		// An empty title matches the first item in the library (every string
+		// contains ""), so this would delete an unrelated movie or series.
+		return client.ReplaceRequest{}, nil, errors.New("arr_remove_and_search: title is required")
+	}
+
+	season, err := intArg(args, paramSeason)
+	if err != nil {
+		return client.ReplaceRequest{}, nil, fmt.Errorf("arr_remove_and_search: %w", err)
+	}
+	episode, err := intArg(args, paramEpisode)
+	if err != nil {
+		return client.ReplaceRequest{}, nil, fmt.Errorf("arr_remove_and_search: %w", err)
+	}
+
 	req := client.ReplaceRequest{
 		MediaType: mediaType,
 		Title:     title,
 		Scope:     scope,
-		Season:    intArgOrSentinel(args, paramSeason),
-		Episode:   intArgOrSentinel(args, paramEpisode),
+		Season:    season,
+		Episode:   episode,
 	}
 	if blocklist, ok := args[paramBlocklist].(bool); ok {
 		req.SkipBlocklist = !blocklist
+	}
+
+	// A missing season/episode must never widen the blast radius by falling
+	// through to the series-wide branch: GetEpisodes and SeriesGrabHistory
+	// both treat a negative season as "no filter".
+	if mediaType == client.ReplaceMediaTV {
+		switch scope {
+		case client.ReplaceScopeEpisode:
+			if season < 0 || episode < 0 {
+				return client.ReplaceRequest{}, nil, errors.New(
+					"arr_remove_and_search: scope=episode requires both season and episode")
+			}
+		case client.ReplaceScopeSeason:
+			if season < 0 {
+				return client.ReplaceRequest{}, nil, errors.New(
+					"arr_remove_and_search: scope=season requires season")
+			}
+		}
 	}
 
 	switch mediaType {
@@ -1296,18 +1412,62 @@ func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceReq
 	}
 }
 
-// noArgValue is the sentinel intArgOrSentinel returns for an absent/non-numeric
-// season or episode argument, matching the "-1 means not applicable" convention
-// used throughout this package and internal/client for the same fields.
+// noArgValue is the sentinel intArg returns for an absent season or episode
+// argument, matching the "-1 means not applicable" convention used throughout
+// this package and internal/client for the same fields.
 const noArgValue = -1
 
-// intArgOrSentinel extracts an int from a JSON-decoded args map, where numbers
-// always decode as float64. Returns noArgValue if the key is absent or not a number.
-func intArgOrSentinel(args map[string]any, key string) int {
-	if v, ok := args[key].(float64); ok {
-		return int(v)
+// intArg extracts an int from a JSON-decoded args map. Absent means
+// noArgValue with no error; present-but-uncoercible is an error, NOT the
+// sentinel.
+//
+// Collapsing the two used to be a data-loss bug: only float64 was accepted,
+// so a quoted number — routine output from the Gemini models this runs
+// against — silently became -1, and -1 does not mean "bad input" downstream,
+// it means "not applicable". ArrClient.GetEpisodes omits seasonNumber
+// entirely when season < 0, so an owner approving a "season" delete on a
+// dialog that said season 2 got every episode of every season deleted and
+// every release blocklisted.
+func intArg(args map[string]any, key string) (int, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		return noArgValue, nil
 	}
-	return noArgValue
+	switch v := raw.(type) {
+	case float64:
+		return int(v), nil
+	case int:
+		return v, nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("%s: %q is not a whole number", key, v.String())
+		}
+		return int(n), nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return noArgValue, nil
+		}
+		n, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return 0, fmt.Errorf("%s: %q is not a whole number", key, v)
+		}
+		return n, nil
+	default:
+		return 0, fmt.Errorf("%s: expected a whole number, got %T", key, raw)
+	}
+}
+
+// intArgOrSentinel is intArg for the read-only callers, where an uncoercible
+// value can safely degrade to "not specified" — a wrong season on a status
+// lookup returns the wrong rows, it does not delete anything.
+func intArgOrSentinel(args map[string]any, key string) int {
+	n, err := intArg(args, key)
+	if err != nil {
+		return noArgValue
+	}
+	return n
 }
 
 // isDisruptiveAction reports whether action mutates service-wide state (a

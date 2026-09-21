@@ -203,7 +203,8 @@ Action priority (least destructive first):
 You may call autonomous actions directly. Approval-required actions must only appear in
 complete_diagnosis.escalate_action, never called as a tool yourself.
 
-escalate_action must be one of: none | remove_and_search | manual_investigation.
+escalate_action must be one of: none | remove_and_search | delete_torrent_readd |
+manual_investigation.
   - remove_and_search: the file(s) on disk are wrong/corrupt and Sonarr/Radarr should delete
     them, blocklist the release that produced them, and search for a replacement. Use this
     when dd_readability_test or get_torrent_state points at a specific bad file/release
@@ -213,6 +214,14 @@ escalate_action must be one of: none | remove_and_search | manual_investigation.
     and episode (ints, when scope needs them), blocklist (bool, default true). Be as specific
     as the evidence allows — prefer scope=episode over season or series when you know which
     episode is bad.
+  - delete_torrent_readd: decypharr has the torrent but its debrid links are broken in a way
+    the repair tools cannot fix — you have ALREADY tried refresh_decypharr_links and
+    decypharr_repair_sweep this incident and dd_readability_test still fails with an I/O error
+    (not not_found: missing content is arr_search_missing, not this). Removes the torrent from
+    decypharr and the debrid provider and re-adds it from its magnet so the provider re-fetches
+    it. Set escalate_params: name (the exact torrent name from get_torrent_state). The preview
+    refuses if the torrent has no stored magnet, because the delete would then be
+    unrecoverable — if that happens, use manual_investigation.
   - manual_investigation: you cannot form a confident diagnosis or fix; the owner needs to look.
   - none: no escalation needed (requires_approval should be false in this case).
 
@@ -260,7 +269,7 @@ type DiagnosticResult struct {
 	EscalateAction string `json:"escalate_action,omitempty"`
 	// EscalateParams carries the target for EscalateAction (e.g. media_type,
 	// title, scope, season, episode, blocklist for remove_and_search). Passed
-	// straight through to Agent.PlanEscalation/RunEscalation.
+	// straight through to Agent.PlanEscalation/ExecuteApprovedPlan.
 	EscalateParams   map[string]any `json:"escalate_params,omitempty"`
 	RequiresApproval bool           `json:"requires_approval"`
 	// VerifyAfterSeconds, when > 0, tells the system a non-destructive fix was
@@ -308,6 +317,14 @@ type FixSignature struct {
 	// verification — it just means this signal isn't available.
 	ArrChecked bool `json:"arr_checked,omitempty"`
 	ArrHasFile bool `json:"arr_has_file,omitempty"`
+
+	// ProbeFailed records that at least one probe errored while this
+	// signature was captured, so the zeros in it mean "unknown", not
+	// "broken". Without it a baseline captured during a transient outage is
+	// indistinguishable from a genuinely broken item, and every later healthy
+	// reading looks like a fix. VerifyResolved refuses to claim an
+	// improvement against such a baseline.
+	ProbeFailed bool `json:"probe_failed,omitempty"`
 }
 
 // ParseDiagnosticResult re-decodes an incident's stored finding — persisted
@@ -341,6 +358,8 @@ func escalationLabel(action string) string {
 		return "no action"
 	case EscalateRemoveAndSearch:
 		return "remove file(s) and re-search"
+	case EscalateDeleteTorrentReadd:
+		return "delete the torrent and re-add it to the debrid provider"
 	case EscalateManualInvestigation:
 		return "manual investigation needed"
 	default:
@@ -416,7 +435,12 @@ func (a *Agent) Run(
 	a.recordRunStarted(ctx, inc.ID, messages)
 
 	tools := toolDefs()
-	autonomousActions := 0
+	// Seeded from what this incident has already spent, not reset to zero.
+	// A per-run budget meant runAgent's retry loop (up to 3 attempts) and any
+	// dashboard re-run each handed out a fresh 3, so an incident could burn 9
+	// or more autonomous actions while the prompt told the model its cap was
+	// 3 — potentially two Jellyfin restarts and two decypharr restarts.
+	autonomousActions := inc.ActionCount
 	seenCalls := make(map[string]int)
 
 	for round := range maxRounds {
@@ -482,6 +506,10 @@ func (a *Agent) Run(
 // or tool error, but still worth recording as non-nil so the transcript shows
 // it wasn't a clean exit.
 var errLoopExhausted = errors.New("diagnostic loop exhausted without conclusion")
+
+// errNoChoices is a completion that returned HTTP 200 with an empty choices
+// array — see llmCall, where it is retried like any other transient failure.
+var errNoChoices = errors.New("llm returned no choices")
 
 // recordRunStarted, recordRound, and recordRunFinished are best-effort:
 // journal writes must never abort a diagnosis, and a.journal is nil in
@@ -600,9 +628,14 @@ func (a *Agent) processToolCalls(
 			_, _ = a.db.IncrementActionCount(ctx, inc.ID)
 
 			if *autonomousActions > maxAutonomousActions {
+				// Lock autonomous action, but deliberately do NOT write
+				// manual_test_needed here. Service.escalateToOwner owns that
+				// transition, and its TransitionStatus allow-list does not
+				// include manual_test_needed — so setting it here made the
+				// subsequent escalation a no-op that logged "already escalated
+				// by another run" and never called NotifyOwner. Three
+				// service-wide disruptions would land and nobody was told.
 				_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
-				_ = a.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded)
-				a.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
 				return &DiagnosticResult{
 					RootCause:        "max autonomous actions reached without resolution",
 					Confidence:       "low",
@@ -640,15 +673,26 @@ func (a *Agent) handleCompleteDiagnosis(
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
 
-	itemID := result.VerifyItemID
+	// Deliberately ignores result.VerifyItemID when it names a different item
+	// than the one preFix was captured against: improved() compares the two
+	// signatures, so allowing the model to point verification at another item
+	// (typically the parent series) made a healthy sibling count as this
+	// item's fix. That is the exact failure the FixSignature work exists to
+	// prevent, re-entered through a parameter.
+	itemID := inc.JellyfinItemID
 	if itemID == "" {
-		itemID = inc.JellyfinItemID
+		itemID = result.VerifyItemID
 	}
 
 	// When the agent requested deferred verification (verify_after_seconds > 0),
 	// the fix needs time to take effect — skip the instant check and let the
 	// service's verification loop re-check after the requested delay.
-	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 && itemID != "" {
+	// No itemID guard: VerifyResolved now falls back to *arr file presence
+	// when there is no Jellyfin item (see its doc comment), which is the only
+	// case Discord-reported incidents ever hit. Guarding on itemID here meant
+	// a missing-media report with no deferred verification was returned as a
+	// clean success with nothing checked at all.
+	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 {
 		if !a.VerifyResolved(ctx, itemID, inc.Title, preFix) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
@@ -657,8 +701,13 @@ func (a *Agent) handleCompleteDiagnosis(
 		}
 	}
 
+	// A lost finding is not survivable: PreviewEscalation/ApproveEscalation
+	// reconstruct the DiagnosticResult from this row, so returning success
+	// here would DM the owner a recommendation that errors with "has no
+	// diagnostic finding" the moment they click Preview. Fail the run instead
+	// and let handleRunError escalate honestly.
 	if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
-		a.log.ErrorContext(ctx, "set finding", "error", err)
+		return nil, fmt.Errorf("persist diagnosis for incident %s: %w", inc.ID, err)
 	}
 	if a.journal != nil {
 		if err := a.journal.DiagnosisCompleted(ctx, inc.ID, result); err != nil {
@@ -717,9 +766,13 @@ func (a *Agent) captureSignature(ctx context.Context, itemID, title string) *Fix
 		if sig.SourceCount > 0 {
 			sig.Path = info.MediaSources[0].Path
 		}
+	} else {
+		sig.ProbeFailed = true
 	}
 	if eps, err := a.disp.Jellyfin.ListEpisodes(ctx, itemID); err == nil {
 		sig.EpisodeCount = len(eps)
+	} else {
+		sig.ProbeFailed = true
 	}
 
 	if sig.Path != "" && a.disp.MediaAgent != nil {
@@ -728,6 +781,7 @@ func (a *Agent) captureSignature(ctx context.Context, itemID, title string) *Fix
 			sig.DDError = dd.Error
 		} else {
 			sig.DDError = err.Error()
+			sig.ProbeFailed = true
 		}
 	}
 	return sig
@@ -790,11 +844,29 @@ func (a *Agent) VerifyResolved(ctx context.Context, itemID, title string, pre *F
 
 	sourceOK := post.SourceCount > 0 && post.Path != "" && post.DDBytesRead > 0 && post.DDError == ""
 	episodesOK := post.EpisodeCount > 0
-	if !sourceOK && !episodesOK {
+	// With no Jellyfin item to probe, sourceOK and episodesOK are structurally
+	// unreachable, so requiring them meant VerifyResolved could never return
+	// true — which is every Discord-reported incident, since only the Seerr
+	// path carries a Jellyfin item ID. Fall back to *arr's confirmed file
+	// presence, the one ground-truth signal available without an item. Only
+	// when there is no item at all: when there IS one, the Jellyfin/dd
+	// evidence stays mandatory, because *arr having a file says nothing about
+	// whether it is actually readable through the FUSE mount.
+	arrOnlyOK := itemID == "" && post.ArrChecked && post.ArrHasFile
+	if !sourceOK && !episodesOK && !arrOnlyOK {
 		return false
 	}
 	if pre == nil {
 		return true
+	}
+	// A baseline whose probes errored is all zeros, which improved() reads as
+	// "it was completely broken before" — so any healthy post-state passed as
+	// a fix. That happens for real: a concurrent incident's restart_jellyfin
+	// makes this run's baseline capture fail (see disruptionNote, which exists
+	// because the codebase already knows runs overlap that way). Refuse to
+	// claim an improvement we cannot substantiate; the caller escalates.
+	if pre.ProbeFailed {
+		return false
 	}
 	return improved(pre, post)
 }
@@ -830,30 +902,39 @@ func improved(pre, post *FixSignature) bool {
 // do not escalate to the owner.
 var ErrIncidentNotInvestigatable = errors.New("incident not in an investigatable status")
 
-// errNoEscalationPlan is returned by PlanEscalation/RunEscalation for
+// errNoEscalationPlan is returned by PlanEscalation/ExecuteApprovedPlan for
 // escalate_action values that have no automated preview or execution — the
 // owner must act on them manually from the diagnosis alone.
 var errNoEscalationPlan = errors.New("escalate_action has no automated plan; act manually")
 
-// PlanEscalation resolves what RunEscalation would do for a diagnostic
+// PlanEscalation resolves what an approved escalation would do for a diagnostic
 // result's recommended escalation, without making any changes. Used by the
 // dashboard's Preview button and by live-check tooling.
 func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
 		return a.disp.readArrRemoveAndSearchPlan(ctx, result.EscalateParams)
+	case EscalateDeleteTorrentReadd:
+		return a.disp.readDecypharrReaddPlan(ctx, result.EscalateParams)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
 }
 
-// RunEscalation executes a diagnostic result's recommended escalation after
-// owner approval. It re-resolves the plan against current state rather than
-// trusting a possibly-stale preview.
-func (a *Agent) RunEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
+// ExecuteApprovedPlan executes exactly the plan an owner approved, decoded
+// from what PreviewEscalation stored, instead of re-resolving it against
+// current state.
+//
+// Re-resolving was a TOCTOU on a destructive operation: the owner approves a
+// preview listing one file, and anything that changed in between (a new grab
+// landing, a season expanding) silently widens what actually gets deleted.
+// There is no second confirmation, so the preview has to be the contract.
+func (a *Agent) ExecuteApprovedPlan(ctx context.Context, result *DiagnosticResult, planJSON []byte) (any, error) {
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
-		return a.disp.executeArrRemoveAndSearch(ctx, result.EscalateParams)
+		return a.disp.executeApprovedReplacePlan(ctx, planJSON)
+	case EscalateDeleteTorrentReadd:
+		return a.disp.executeApprovedReaddPlan(ctx, planJSON)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
@@ -1074,6 +1155,16 @@ func identityParamsMatch(a, b map[string]any) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
 	}
+	// A parameterless action (restart_jellyfin, decypharr_repair_sweep, ...)
+	// is logged with params nil, so nothing shares an identity key with a
+	// later call that carried an unrequested extra field like
+	// {"reason": "still broken"} — which models add routinely. Falling
+	// through to matchedAny=false then reported "different action" and let
+	// the repeat run, restarting Jellyfin twice in one diagnosis. Compare on
+	// identity keys alone: if neither side has any, it is the same action.
+	if !hasAnyIdentityParam(a) && !hasAnyIdentityParam(b) {
+		return true
+	}
 	matchedAny := false
 	for _, k := range identityParamKeys() {
 		av, aok := a[k]
@@ -1087,6 +1178,17 @@ func identityParamsMatch(a, b map[string]any) bool {
 		matchedAny = true
 	}
 	return matchedAny
+}
+
+// hasAnyIdentityParam reports whether m carries any of the keys that identify
+// what an action targeted.
+func hasAnyIdentityParam(m map[string]any) bool {
+	for _, k := range identityParamKeys() {
+		if _, ok := m[k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // actionAlreadyApplied reports whether this exact action — same tool name,
@@ -1141,10 +1243,23 @@ func (a *Agent) llmCall(ctx context.Context, req openai.ChatCompletionRequest) (
 			}
 		}
 		resp, err := a.llm.CreateChatCompletion(ctx, req)
-		if err == nil {
+		switch {
+		case err != nil:
+			lastErr = err
+		case len(resp.Choices) == 0:
+			// A 200 with no choices is a success as far as the HTTP client is
+			// concerned, so this used to flow straight through to
+			// resp.Choices[0] and panic — in a bare goroutine with no
+			// recover(), taking the whole process down with the dashboard,
+			// the Discord bot and every in-flight verification loop.
+			// OpenRouter returns this shape for upstream provider errors, and
+			// Gemini does on a safety block or an empty MAX_TOKENS finish.
+			// Treated as transient so it uses the existing backoff and then
+			// fails the run honestly.
+			lastErr = errNoChoices
+		default:
 			return resp, nil
 		}
-		lastErr = err
 	}
 	return openai.ChatCompletionResponse{}, fmt.Errorf("llm failed after %d attempts: %w", len(delays), lastErr)
 }

@@ -32,7 +32,12 @@ in {
     diskMounts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = ["/mnt/decypharr" "/var/cache/decypharr" "/data"];
-      description = "Mount points to report in GET /disk responses.";
+      description = ''
+        Mount points reported in GET /disk responses, and the allowlist every
+        path-taking operation (/ls, /dd-test) is restricted to. A path that
+        does not resolve inside one of these roots is refused, so removing a
+        root here disables agent access to it.
+      '';
     };
   };
 

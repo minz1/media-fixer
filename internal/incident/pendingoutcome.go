@@ -162,6 +162,18 @@ func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident) {
 
 	obs, err := s.agent.CheckPendingOutcome(ctx, po)
 	if err != nil {
+		// Retrying is right — a transient *arr failure must not be read as
+		// "no release found" — but it cannot be unbounded. Both the stall and
+		// overall-cap checks live further down in advanceDownloading /
+		// advanceNoQueueItem, which this early return skips, so a persistent
+		// failure (rotated API key, Sonarr moved) left the incident polling
+		// every 5 minutes forever with nobody ever told. The reporters' last
+		// message would still be "downloading now".
+		if time.Since(po.StartedAt) > pendingOutcomeOverallCap {
+			s.escalatePendingOutcome(ctx, inc, po,
+				"we lost track of the download and could not re-check its state: "+err.Error())
+			return
+		}
 		s.log.WarnContext(ctx, "pending outcome check failed, will retry", "incident", inc.ID, "error", err)
 		_ = s.db.SetPendingOutcome(ctx, inc.ID, po, time.Now().Add(pendingOutcomeCheckInterval))
 		return

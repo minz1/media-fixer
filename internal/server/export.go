@@ -48,7 +48,7 @@ func (s *Server) incidentExport(w http.ResponseWriter, r *http.Request) {
 	}
 	var events []*db.Event
 	if s.journal != nil {
-		events, _ = s.journal.Since(ctx, id, 0)
+		events, _ = s.journal.Events(ctx, id)
 	}
 
 	now := time.Now()

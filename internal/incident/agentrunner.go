@@ -31,9 +31,9 @@ type AgentRunner interface {
 	// PlanEscalation previews a diagnostic result's recommended escalation
 	// without making any changes.
 	PlanEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)
-	// RunEscalation executes a diagnostic result's recommended escalation
-	// after owner approval.
-	RunEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)
+	// ExecuteApprovedPlan executes exactly the plan PreviewEscalation stored,
+	// so an owner's approval applies to the files they were shown.
+	ExecuteApprovedPlan(ctx context.Context, result *agent.DiagnosticResult, planJSON []byte) (any, error)
 	// CheckPendingOutcome polls live state for one pending arr_search_missing
 	// outcome — see Service.advancePendingOutcome, the sweeper that drives it.
 	CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)

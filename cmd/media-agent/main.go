@@ -11,7 +11,15 @@ import (
 	"github.com/minz1/mediafixer/internal/mediaagent"
 )
 
-const agentReadHeaderTimeout = 10 * time.Second
+const (
+	agentReadHeaderTimeout = 10 * time.Second
+	// agentWriteTimeout bounds a single request's total service time. Longer
+	// than the read-header timeout because a dd-test legitimately reads up to
+	// 100 MiB, but bounded: with no write timeout at all, a handler blocked on
+	// a hung FUSE mount held its connection and goroutine indefinitely.
+	agentWriteTimeout = 4 * time.Minute
+	agentIdleTimeout  = 2 * time.Minute
+)
 
 type mountsFlag []string
 
@@ -53,6 +61,8 @@ func run() error {
 		Addr:              *addr,
 		Handler:           h,
 		ReadHeaderTimeout: agentReadHeaderTimeout,
+		WriteTimeout:      agentWriteTimeout,
+		IdleTimeout:       agentIdleTimeout,
 	}
 
 	log.Info("media-agent listening", "addr", *addr)

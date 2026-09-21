@@ -25,12 +25,20 @@ type Set struct {
 	MediaAgent *client.MediaAgentClient
 }
 
-// Build constructs a Set from config. It only fails if the Loki client's TLS
-// material can't be loaded; every other client is dialed lazily on first use.
+// Build constructs a Set from config. It does not fail: every client is dialed
+// lazily on first use, and a client whose configuration is unusable is left nil
+// and reported as unavailable by its tools.
+//
+// Loki used to be the one hard failure here, which meant a missing mTLS
+// certificate took down Discord reporting, the dashboard and every one of the
+// other 25 tools along with log search — observed in production on 2026-09-19,
+// where an ACME cert that hadn't been issued yet put the unit in a restart
+// loop. Log search is one diagnostic signal, not a precondition for running.
 func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
 	loki, err := client.NewLoki(cfg.Loki.URL, cfg.Loki.TLSCert, cfg.Loki.TLSKey)
 	if err != nil {
-		return nil, err
+		log.Warn("loki unavailable — log search disabled, continuing without it", "error", err)
+		loki = nil
 	}
 
 	var mediaAgent *client.MediaAgentClient

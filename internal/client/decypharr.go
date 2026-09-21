@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -26,10 +25,14 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 }
 
 type TorrentEntry struct {
-	Name     string    `json:"name"`
-	InfoHash string    `json:"info_hash"`
-	Category string    `json:"category"`
-	State    string    `json:"state"`
+	Name     string `json:"name"`
+	InfoHash string `json:"info_hash"`
+	Category string `json:"category"`
+	State    string `json:"state"`
+	// Magnet is what a delete-and-re-add puts back; decypharr omits it for
+	// entries that did not arrive as a magnet (storage.Entry.Magnet is
+	// `json:"magnet,omitempty"`), which PlanTorrentReadd treats as a refusal.
+	Magnet   string    `json:"magnet,omitempty"`
 	Size     int64     `json:"size"`
 	Progress float64   `json:"progress"`
 	AddedOn  time.Time `json:"added_on"`
@@ -55,12 +58,14 @@ func (c *DecypharrClient) ListTorrents(ctx context.Context, search, state string
 
 	var resp TorrentListResponse
 	if err := c.get(ctx, u.String(), &resp); err != nil {
-		// A 404 here means decypharr has no matching torrents — that is a valid
-		// "no results" answer, not a diagnostic failure. Return an empty list so
-		// the agent keeps investigating instead of aborting on the error.
-		if errors.Is(err, ErrNotFound) {
-			return []*TorrentEntry{}, nil
-		}
+		// Deliberately does NOT swallow a 404 into an empty list. A search
+		// that matches nothing returns 200 with an empty array; a 404 means
+		// the route itself is absent (a decypharr upgrade that moved or
+		// renamed it). Reporting that as "no torrents exist" led the agent to
+		// conclude the debrid content was gone and recommend remove_and_search
+		// on files that were fine — and it also hid the condition from
+		// livecheck's classifyDecypharr, which exists specifically to flag a
+		// missing endpoint.
 		return nil, err
 	}
 	return resp.Torrents, nil
@@ -120,17 +125,6 @@ func (c *DecypharrClient) RepairHealth(ctx context.Context) (json.RawMessage, er
 // serving stale cached paths.
 func (c *DecypharrClient) MountCacheCleanup(ctx context.Context) error {
 	return c.post(ctx, "/api/mount/cache/cleanup", nil, nil)
-}
-
-// RecheckMedia asks decypharr to recheck a specific arr media item and
-// optionally apply fixes.
-func (c *DecypharrClient) RecheckMedia(ctx context.Context, arrName, mediaID string, fix bool) error {
-	body := map[string]any{
-		"arr":      arrName,
-		"media_id": mediaID,
-		"fix":      fix,
-	}
-	return c.post(ctx, "/api/repair/recheck/media", body, nil)
 }
 
 // RecheckEntry rechecks a specific named entry.

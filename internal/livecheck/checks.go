@@ -106,6 +106,7 @@ func disruptiveCheckSpecs() []checkSpec {
 func approvalCheckSpecs() []checkSpec {
 	return []checkSpec{
 		{Tool: "arr_remove_and_search", Tier: tierDryRun, Run: checkArrRemoveAndSearch},
+		{Tool: "decypharr_delete_readd", Tier: tierDryRun, Run: checkDecypharrDeleteReadd},
 	}
 }
 
@@ -369,6 +370,26 @@ func checkArrRemoveAndSearch(ctx context.Context, disp *agent.Dispatcher, fx *Fi
 	return classify(result, err)
 }
 
+// checkDecypharrDeleteReadd exercises the delete-and-re-add preview. Like
+// checkArrRemoveAndSearch this calls the tool's Handler, which is
+// PlanTorrentReadd — a read-only resolve that deletes nothing, so it is safe
+// at every tier.
+//
+// A torrent with no stored magnet is a legitimate refusal, not a failure:
+// that refusal is the guard that stops an unrecoverable delete, so surface it
+// as degraded rather than fail.
+func checkDecypharrDeleteReadd(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.TorrentName == "" {
+		return degraded("no fixture: no torrent discovered")
+	}
+	result, err := disp.Call(ctx, "decypharr_delete_readd", map[string]any{argName: fx.TorrentName})
+	if err != nil && errors.Is(err, client.ErrNoMagnet) {
+		return degraded("fixture torrent has no stored magnet, so a re-add would be " +
+			"unrecoverable — the plan correctly refuses")
+	}
+	return classify(result, err)
+}
+
 // arrRemoveAndSearchArgs prefers a TV fixture (more scope options to
 // exercise) and falls back to a movie fixture.
 func arrRemoveAndSearchArgs(fx *Fixtures) (map[string]any, string, bool) {
@@ -402,7 +423,22 @@ func skipIfRepairRunning(ctx context.Context, disp *agent.Dispatcher) (bool, Res
 		// entirely; the action call below will surface any real problem.
 		return false, Result{}
 	}
-	if running, _ := decypharrRepairRunning(raw); running {
+	running, recognized := decypharrRepairRunning(raw)
+	// recognized was previously discarded here, while env.go's equivalent
+	// used it. decypharrRepairStatus unmarshals into a one-field struct,
+	// which succeeds for any JSON object — so a build that renames or nests
+	// active_run decodes cleanly with the field empty and reads as "not
+	// running". That stacks a second sweep onto a live one and races
+	// decypharr's own lock: exactly the failure the comment below documents
+	// as already having happened once, re-entered through a different door.
+	if !recognized {
+		return true, Result{
+			Status: StatusDegraded,
+			Detail: "could not tell whether a decypharr repair is running (unrecognized " +
+				"/api/repair/status shape); skipping rather than risk stacking a second sweep",
+		}
+	}
+	if running {
 		detail := "a decypharr repair is already running" + decypharrActiveRunStageSuffix(raw)
 		return true, Result{Status: StatusSkipped, Detail: detail}
 	}

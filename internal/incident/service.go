@@ -26,9 +26,16 @@ const (
 	// maxVerifyLoops bounds how many times a deferred fix is re-checked before
 	// the system gives up and either reports an ETA or escalates.
 	maxVerifyLoops = 5
-	// verifyLoopDelayCap caps each verification wait so the goroutine can't sleep
-	// for an unbounded agent-supplied duration.
+	// verifyLoopDelayCap caps each verification wait after the first, so the
+	// goroutine can't sleep for an unbounded agent-supplied duration.
 	verifyLoopDelayCap = 2 * time.Minute
+	// firstVerifyDelayCap caps the FIRST wait only, which is the one the
+	// agent's verify_after_seconds is actually an estimate for. Capping every
+	// wait at verifyLoopDelayCap gave a total budget of 10 minutes while the
+	// systemPrompt told the model to prefer 1800+ for a library scan — so a
+	// scan that was working fine routinely exhausted verification and
+	// escalated as "could not be verified".
+	firstVerifyDelayCap = 30 * time.Minute
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
 	defaultUserETAMinutes = 10
 )
@@ -132,8 +139,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	switch {
 	case err == nil:
 		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
-		_ = s.db.AddReporter(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
-		s.recordReporterAdded(ctx, existing.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+		s.addReporter(ctx, existing.ID, r)
 		return existing, nil
 	case !errors.Is(err, db.ErrNotFound):
 		return nil, fmt.Errorf("find open incident: %w", err)
@@ -157,8 +163,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		return nil, fmt.Errorf("create incident: %w", err)
 	}
 	s.recordIncidentCreated(ctx, inc)
-	_ = s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
-	s.recordReporterAdded(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+	s.addReporter(ctx, inc.ID, r)
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
@@ -179,6 +184,19 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	s.launch(inc, nil)
 
 	return inc, nil
+}
+
+// addReporter records a reporter against an incident, logging rather than
+// discarding a failure. A dropped reporter row is invisible and permanent:
+// ListDiscordReporterIDs then returns an empty set, so when the incident
+// resolves nobody is notified — and on the dedup path the second reporter is
+// silently lost entirely.
+func (s *Service) addReporter(ctx context.Context, incidentID string, r *Report) {
+	if err := s.db.AddReporter(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID); err != nil {
+		s.log.ErrorContext(ctx, "add reporter",
+			"incident", incidentID, "reporter", r.ReportedBy, "error", err)
+	}
+	s.recordReporterAdded(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 }
 
 func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) {
@@ -281,11 +299,19 @@ func (s *Service) evaluateDiagnosis(
 	proposal := controlProposal(result, riskReason, s.actionHistorySummary(ctx, inc.ID))
 	verdict, verdictErr := s.control.Review(ctx, conversation, proposal)
 	if verdictErr != nil {
+		// Fail closed. This branch used to apply the fix anyway when the model
+		// hadn't itself asked for approval — but the only reason review was
+		// running is that reviewRiskReason flagged it (low confidence, a
+		// repeat of something that already failed, or several actions already
+		// tried). Those are precisely the proposals that must not be
+		// auto-approved because the reviewer was unreachable or returned
+		// something unparseable.
 		s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
 		if result.RequiresApproval {
 			s.surfaceToOwner(ctx, inc, result, " (control review failed)")
 		} else {
-			s.handleAgentResolved(ctx, inc, result)
+			s.surfaceToOwner(ctx, inc, result, fmt.Sprintf(
+				" (control review failed — flagged because %s)", riskReason))
 		}
 		return diagnosisOutcome{done: true}
 	}
@@ -498,9 +524,12 @@ func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, acti
 // friendly ETA and the incident stays in "verifying" — it is NOT escalated. Only
 // when nothing is in progress and it is still broken do we escalate to the owner.
 func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
-	itemID := result.VerifyItemID
+	// Same precedence as handleCompleteDiagnosis: the incident's own item
+	// wins, so verification can't be pointed at a different item than the
+	// pre-fix baseline was captured against.
+	itemID := inc.JellyfinItemID
 	if itemID == "" {
-		itemID = inc.JellyfinItemID
+		itemID = result.VerifyItemID
 	}
 
 	// Gate entry the same way as every other transition: if a concurrent run has
@@ -519,15 +548,19 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 	}
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusVerifying))
 
-	delay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, verifyLoopDelayCap)
+	firstDelay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, firstVerifyDelayCap)
 
-	for range maxVerifyLoops {
+	for i := range maxVerifyLoops {
+		delay := verifyLoopDelayCap
+		if i == 0 {
+			delay = firstDelay
+		}
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
 			return
 		}
-		if itemID != "" && s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix) {
+		if s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix) {
 			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
 			return
 		}

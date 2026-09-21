@@ -3,7 +3,9 @@ package incident
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
@@ -16,6 +18,11 @@ import (
 const (
 	escalationVerifySeconds    = 600
 	escalationVerifyETAMinutes = 15
+	// escalationPlanTTL bounds how long an owner's approval stays valid. The
+	// plan names specific file IDs, so approving one from days ago would
+	// delete whatever those IDs point at now. Long enough for a human to
+	// think it over, short enough that the library hasn't moved on.
+	escalationPlanTTL = time.Hour
 )
 
 // PreviewEscalation resolves an incident's recommended escalation action into
@@ -30,7 +37,20 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return s.agent.PlanEscalation(ctx, result)
+	plan, err := s.agent.PlanEscalation(ctx, result)
+	if err != nil {
+		return nil, err
+	}
+	// Persist exactly what the owner is about to see. ApproveEscalation
+	// executes this, not a re-resolution — see its comment.
+	planJSON, marshalErr := json.Marshal(plan)
+	if marshalErr != nil {
+		return nil, fmt.Errorf("encode escalation plan: %w", marshalErr)
+	}
+	if setErr := s.db.SetEscalationPlan(ctx, id, planJSON); setErr != nil {
+		return nil, fmt.Errorf("store escalation plan: %w", setErr)
+	}
+	return plan, nil
 }
 
 // ApproveEscalation executes an incident's recommended escalation after
@@ -47,6 +67,24 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Execute the plan the owner was actually shown. Re-resolving it at this
+	// point is a TOCTOU on a destructive operation: the
+	// preview lists specific files, and anything that changed in between
+	// silently widens the delete, with no second confirmation.
+	planJSON, previewedAt, planErr := s.db.GetEscalationPlan(ctx, id)
+	if planErr != nil {
+		if errors.Is(planErr, db.ErrNoEscalationPlan) {
+			return errors.New("preview this escalation before approving it, so the plan " +
+				"that runs is the one you saw")
+		}
+		return planErr
+	}
+	if time.Since(previewedAt) > escalationPlanTTL {
+		_ = s.db.ClearEscalationPlan(ctx, id)
+		return fmt.Errorf("this plan was previewed %s ago and may no longer describe the "+
+			"same files; preview it again", time.Since(previewedAt).Round(time.Minute))
+	}
+
 	// Escalation execution deletes files and triggers a re-search — as
 	// disruptive as anything the autonomous loop does — so it shares the same
 	// global diagnostic lock a concurrent incident's Agent.Run holds (see
@@ -54,9 +92,27 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 	if lockErr := s.runs.acquireGlobal(ctx); lockErr != nil {
 		return lockErr
 	}
-	execResult, runErr := s.agent.RunEscalation(ctx, result)
-	s.runs.releaseGlobal()
-	s.logEscalation(ctx, inc.ID, result, execResult, runErr)
+	// Deferred, not called inline: chi's Recoverer catches a panic in
+	// the escalation and returns 500, so a non-deferred release leaked the
+	// single global slot permanently and every later diagnosis blocked on
+	// acquireGlobal forever.
+	defer s.runs.releaseGlobal()
+
+	// ExecuteReplace is blocklist -> delete files -> trigger search, with no
+	// compensation if it stops partway. Running it on the caller's HTTP
+	// request context meant a closed tab or a proxy idle timeout could cancel
+	// it after the files were deleted and before the re-search fired, losing
+	// the media with nothing queued to replace it. WithoutCancel keeps the
+	// request's values (and its deadline-free lifetime) while detaching the
+	// cancellation, matching what launchVerification already does below.
+	execCtx := context.WithoutCancel(ctx)
+	execResult, runErr := s.agent.ExecuteApprovedPlan(execCtx, result, planJSON)
+	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
+	// Consumed either way: a failed run leaves the library in a state the
+	// stored plan no longer describes, so it must be re-previewed too.
+	if clearErr := s.db.ClearEscalationPlan(execCtx, id); clearErr != nil {
+		s.log.ErrorContext(execCtx, "clear escalation plan", "incident", id, "error", clearErr)
+	}
 	if runErr != nil {
 		return runErr
 	}

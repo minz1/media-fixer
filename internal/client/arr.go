@@ -78,12 +78,6 @@ type HistoryRecord struct {
 	EventType   string `json:"eventType"`
 }
 
-// SystemStatus is the subset of Sonarr/Radarr's /system/status we care about
-// — mainly as an authenticated reachability probe for live-check tooling.
-type SystemStatus struct {
-	Version string `json:"version"`
-}
-
 // arrYearSuffixRE strips a trailing " (YYYY)" year qualifier some titles carry.
 var arrYearSuffixRE = regexp.MustCompile(`\s*\(\d{4}\)\s*$`)
 
@@ -127,15 +121,6 @@ func (c *ArrClient) ListMovies(ctx context.Context) ([]Movie, error) {
 		return nil, err
 	}
 	return movies, nil
-}
-
-// SystemStatus calls GET /system/status, a cheap authenticated reachability probe.
-func (c *ArrClient) SystemStatus(ctx context.Context) (*SystemStatus, error) {
-	var status SystemStatus
-	if err := c.get(ctx, "/api/v3/system/status", &status); err != nil {
-		return nil, err
-	}
-	return &status, nil
 }
 
 // SearchSeries finds a series by title, tolerating case, punctuation, a
@@ -185,17 +170,40 @@ func findExactTitle[T any](items []T, want string, title func(T) string) *T {
 	return nil
 }
 
-// findFuzzyTitle returns a pointer to the first item whose normalized title
-// contains (or is contained by) want, or nil. Used as a fallback after an
-// exact match fails.
+// minFuzzyTitleLen is the shortest normalized title that may be substring-
+// matched. Below this, containment stops meaning anything: "up" is a
+// substring of "superbad", and every string contains "".
+const minFuzzyTitleLen = 4
+
+// findFuzzyTitle returns a pointer to the one item whose normalized title
+// contains (or is contained by) want, or nil if there is no match or more
+// than one. Used as a fallback after an exact match fails.
+//
+// Both guards exist because this feeds PlanReplace/ExecuteReplace, which
+// delete files: an empty want matched the first item in the library outright
+// (strings.Contains(x, "") is always true), and taking the first of several
+// candidates silently picked an arbitrary one. Refusing is always recoverable
+// — the caller reports ErrNotFound and a human looks — where a wrong match is
+// not.
 func findFuzzyTitle[T any](items []T, want string, title func(T) string) *T {
+	if len(want) < minFuzzyTitleLen {
+		return nil
+	}
+	var match *T
 	for i := range items {
 		norm := normalizeArrTitle(title(items[i]))
-		if strings.Contains(norm, want) || strings.Contains(want, norm) {
-			return &items[i]
+		if len(norm) < minFuzzyTitleLen {
+			continue
 		}
+		if !strings.Contains(norm, want) && !strings.Contains(want, norm) {
+			continue
+		}
+		if match != nil {
+			return nil // ambiguous: two different titles both plausibly match
+		}
+		match = &items[i]
 	}
-	return nil
+	return match
 }
 
 // RescanSeries triggers Sonarr to rescan the disk for a series.

@@ -41,35 +41,40 @@ type ReplaceRequest struct {
 
 // ReplaceFile is one file ExecuteReplace will delete.
 type ReplaceFile struct {
-	ID   int
-	Path string
-	Size int64
+	ID   int    `json:"id"`
+	Path string `json:"path"`
+	Size int64  `json:"size"`
 }
 
 // ReplacePlan is the fully-resolved, read-only preview of a ReplaceRequest:
 // exactly which files would be deleted, which grabs would be blocklisted,
 // and what search would follow. Building a plan makes no changes —
 // ExecuteReplace does.
+//
+// Tagged explicitly because a plan is now persisted between the owner's
+// preview and their approval (see db.SetEscalationPlan), so its stored shape
+// is a format that has to survive field renames, not an incidental rendering
+// of Go identifiers.
 type ReplacePlan struct {
-	MediaType     string
-	Title         string
-	Scope         string
-	MediaID       int // seriesID (tv) or movieID (movie)
-	SeasonNumber  int // noScope if not applicable
-	EpisodeNumber int // noScope if not applicable (human-facing episode number)
-	EpisodeID     int // noScope if not applicable (Sonarr's internal episode ID)
+	MediaType     string `json:"media_type"`
+	Title         string `json:"title"`
+	Scope         string `json:"scope"`
+	MediaID       int    `json:"media_id"`       // seriesID (tv) or movieID (movie)
+	SeasonNumber  int    `json:"season_number"`  // noScope if not applicable
+	EpisodeNumber int    `json:"episode_number"` // noScope if not applicable (human-facing)
+	EpisodeID     int    `json:"episode_id"`     // noScope if not applicable (Sonarr's internal ID)
 
-	Files            []ReplaceFile
-	GrabsToBlocklist []HistoryRecord
-	SkipBlocklist    bool
+	Files            []ReplaceFile   `json:"files"`
+	GrabsToBlocklist []HistoryRecord `json:"grabs_to_blocklist"`
+	SkipBlocklist    bool            `json:"skip_blocklist"`
 }
 
 // ReplaceResult reports what ExecuteReplace actually did. On a partial
 // failure it reflects everything completed before the error occurred.
 type ReplaceResult struct {
-	DeletedFiles     []ReplaceFile
-	BlocklistedGrabs []int
-	SearchTriggered  string
+	DeletedFiles     []ReplaceFile `json:"deleted_files"`
+	BlocklistedGrabs []int         `json:"blocklisted_grabs"`
+	SearchTriggered  string        `json:"search_triggered"`
 }
 
 // PlanReplace resolves a ReplaceRequest against live Sonarr/Radarr state

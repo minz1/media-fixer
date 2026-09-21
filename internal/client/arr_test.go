@@ -324,29 +324,6 @@ func TestArr_SeriesSearch(t *testing.T) {
 	}
 }
 
-func TestArr_SystemStatus(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v3/system/status" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-		if r.Header.Get("X-Api-Key") != "key" {
-			t.Errorf("missing api key header")
-		}
-		_ = json.NewEncoder(w).Encode(client.SystemStatus{Version: "4.0.0"})
-	}))
-	defer srv.Close()
-
-	c := client.NewArr(srv.URL, "key")
-	status, err := c.SystemStatus(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.Version != "4.0.0" {
-		t.Errorf("got %+v", status)
-	}
-}
-
 // TestArr_GetQueue confirms the response envelope's "records" field is
 // unwrapped correctly and progress math (size - sizeleft) is available to
 // the caller via the raw Size/SizeLeft fields — the pending-outcome sweeper

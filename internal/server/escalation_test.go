@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,12 @@ type stubEscalationAgent struct {
 	planErr    error
 	runResult  any
 	runErr     error
+
+	// gotPlanJSON records the bytes ExecuteApprovedPlan was handed, so a test
+	// can assert the approval ran the stored preview rather than a
+	// re-resolution.
+	mu          sync.Mutex
+	gotPlanJSON []byte
 }
 
 func (a *stubEscalationAgent) Run(
@@ -55,8 +62,19 @@ func (a *stubEscalationAgent) PlanEscalation(_ context.Context, _ *agent.Diagnos
 	return a.planResult, a.planErr
 }
 
-func (a *stubEscalationAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *stubEscalationAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, planJSON []byte,
+) (any, error) {
+	a.mu.Lock()
+	a.gotPlanJSON = planJSON
+	a.mu.Unlock()
 	return a.runResult, a.runErr
+}
+
+func (a *stubEscalationAgent) approvedPlanJSON() []byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.gotPlanJSON
 }
 
 func (a *stubEscalationAgent) CheckPendingOutcome(
@@ -213,12 +231,22 @@ func TestEscalationPreview_NoFinding(t *testing.T) {
 
 func TestApproveEscalation_Success(t *testing.T) {
 	t.Parallel()
-	ag := &stubEscalationAgent{runResult: map[string]any{"deleted_files": []string{"ep01.mkv"}}}
+	ag := &stubEscalationAgent{
+		planResult: map[string]any{"MediaType": "tv", "Title": "T"},
+		runResult:  map[string]any{"deleted_files": []string{"ep01.mkv"}},
+	}
 	srv, database := newEscalationTestServer(t, ag)
 	inc := newManualTestNeededIncident(t, database)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+
+	// Approval executes the stored preview, so take one first.
+	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResp.Body.Close()
 
 	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
 	if err != nil {
@@ -256,6 +284,14 @@ func TestApproveEscalation_RunFails(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
+	// Approval now requires a stored preview, so take one first — this test
+	// is about the run failing, not about the missing-plan guard.
+	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResp.Body.Close()
+
 	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -280,5 +316,72 @@ func TestApproveEscalation_RunFails(t *testing.T) {
 	}
 	if len(actions) != 1 || actions[0].Status != db.ActionFailed {
 		t.Errorf("actions = %+v", actions)
+	}
+}
+
+// TestApproveEscalation_RequiresAPreview pins the approval contract: a
+// remove-and-search deletes files, and the only confirmation is the preview,
+// so approving without one has nothing to be a confirmation of.
+func TestApproveEscalation_RequiresAPreview(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{planResult: map[string]any{"Files": []any{}}}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncident(t, database)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusSeeOther {
+		t.Error("approval succeeded with no previewed plan; the owner confirmed nothing")
+	}
+	if ag.approvedPlanJSON() != nil {
+		t.Error("an escalation was executed without a stored plan")
+	}
+}
+
+// TestApproveEscalation_RunsThePreviewedPlan is the TOCTOU regression test:
+// approval must execute the bytes the preview stored, not whatever a fresh
+// resolution would return afterwards. The stub deliberately changes what
+// PlanEscalation returns between the preview and the approval, standing in
+// for the library moving underneath.
+func TestApproveEscalation_RunsThePreviewedPlan(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{
+		planResult: map[string]any{"MediaType": "tv", "Title": "Previewed"},
+		runResult:  map[string]any{"ok": true},
+	}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncident(t, database)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResp.Body.Close()
+
+	// The world moves on between preview and approval.
+	ag.planResult = map[string]any{"MediaType": "tv", "Title": "SomethingElse"}
+
+	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	got := string(ag.approvedPlanJSON())
+	if !strings.Contains(got, "Previewed") {
+		t.Errorf("executed plan = %s; want the plan the owner was shown", got)
+	}
+	if strings.Contains(got, "SomethingElse") {
+		t.Error("executed a re-resolved plan instead of the approved one")
 	}
 }

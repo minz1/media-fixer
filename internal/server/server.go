@@ -21,6 +21,14 @@ import (
 
 const readHeaderTimeout = 10 * time.Second
 
+// shutdownGrace bounds how long [http.Server.Shutdown] waits for connections to drain.
+// [http.Server.Shutdown] does NOT cancel in-flight request contexts, and an SSE
+// handler only returns when its request context is done — so without a bound
+// here, a single open dashboard tab makes Shutdown block forever and systemd
+// SIGKILLs the unit at TimeoutStopSec. The streaming handlers also select on
+// Server.shutdown so they exit promptly rather than riding this timeout out.
+const shutdownGrace = 5 * time.Second
+
 type Server struct {
 	db      *db.DB
 	journal *journal.Journal
@@ -45,6 +53,11 @@ type Server struct {
 	// double-fire. Confirmed live via decypharr's persisted run history
 	// showing two runs 5s apart from the same source.
 	checkRunning atomic.Bool
+
+	// shutdown is closed once Start begins shutting down, telling the
+	// long-lived SSE handlers to return so Shutdown can drain. Closed exactly
+	// once, by Start.
+	shutdown chan struct{}
 }
 
 // SetChecker wires the dispatcher the /selftest page runs checks against.
@@ -63,12 +76,13 @@ func New(
 	}
 
 	s := &Server{
-		db:      database,
-		journal: jrnl,
-		svc:     svc,
-		baseURL: baseURL,
-		log:     log,
-		tmpl:    tmpl,
+		db:       database,
+		journal:  jrnl,
+		svc:      svc,
+		baseURL:  baseURL,
+		log:      log,
+		tmpl:     tmpl,
+		shutdown: make(chan struct{}),
 	}
 
 	r := chi.NewRouter()
@@ -77,6 +91,11 @@ func New(
 	r.Post("/ingest/seerr", s.handleSeerrWebhook)
 
 	r.Route(baseURL, func(r chi.Router) {
+		// Every mutating route below is an unauthenticated-from-this-service's
+		// point of view form POST; auth lives in Caddy's Authentik
+		// forward_auth, which is cookie-based. See requireSameOrigin.
+		r.Use(requireSameOrigin)
+
 		r.Get("/", s.dashboardIndex)
 		r.Get("/events", s.dashboardEvents)
 		r.Get("/incidents/{id}", s.dashboardIncident)
@@ -121,6 +140,9 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errCh:
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
-		return s.http.Shutdown(context.Background())
+		close(s.shutdown)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		return s.http.Shutdown(shutdownCtx)
 	}
 }

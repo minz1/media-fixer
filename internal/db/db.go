@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS settings (
 
 INSERT OR IGNORE INTO settings (key, value) VALUES ('autonomous_paused', 'false');
 
+-- conversation_history and last_disruption below are dead in the running
+-- application: migrations 10 and 11 drop them. They must stay in this base
+-- schema anyway, because migration 8 reads both to backfill incident_events,
+-- and on a fresh database migration 8 runs before 10/11. Deleting them here
+-- would break new installs only, while every existing one kept working.
 CREATE TABLE IF NOT EXISTS conversation_history (
 	incident_id TEXT PRIMARY KEY REFERENCES incidents(id) ON DELETE CASCADE,
 	messages    TEXT NOT NULL,
@@ -145,9 +150,25 @@ type DB struct {
 // drivers' DSN query keys don't overlap, and unknown keys are silently
 // ignored by modernc.org/sqlite rather than erroring, so a mismatch here
 // fails silent, not loud. See applyQueryParams in the vendored driver.
+// timeFormatParam pins how the driver writes a [time.Time].
+//
+// modernc.org/sqlite's default is [time.Time.String] — "2026-09-20 16:11:16
+// -0400 EDT" — which is both timezone-bearing and unparseable by SQLite's own
+// date functions. These columns are compared as text (`at < ?` in every
+// staleness sweep), so a value written at one offset and one written at
+// another compare by their digits rather than their instants. "sqlite" is the
+// driver's ISO-8601 layout; combined with .UTC() on every bound time, every
+// stored timestamp is then directly comparable and directly readable by
+// strftime.
+// _timezone=UTC is the load-bearing half: the driver applies it to every
+// [time.Time] it binds and every one it parses back, so a caller that passes a
+// local time still stores UTC. That makes it a single choke point rather than
+// a .UTC() every call site has to remember — which is the shape the bug had.
+const timeFormatParam = "&_time_format=sqlite&_timezone=UTC"
+
 func dsn(path string) string {
 	return path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(" +
-		strconv.Itoa(busyTimeoutMS) + ")"
+		strconv.Itoa(busyTimeoutMS) + ")" + timeFormatParam
 }
 
 // Open creates or opens the SQLite database at path, applying the schema and
@@ -250,7 +271,98 @@ const (
 	migDropLastHeartbeat                = 9
 	migDropConversationHistory          = 10
 	migDropLastDisruption               = 11
+	migUTCTimestamps                    = 12
+	migIncidentsEscalationPlan          = 13
 )
+
+// utcTimestampColumns are every DATETIME column compared or ordered as text.
+// Dropped tables (conversation_history, last_disruption) are deliberately
+// absent — migrations 10 and 11 remove them before this runs.
+func utcTimestampColumns() [][2]string {
+	const incidentsTable = "incidents"
+	return [][2]string{
+		{incidentsTable, "created_at"},
+		{incidentsTable, "updated_at"},
+		{incidentsTable, "pending_outcome_next_check"},
+		{"incident_reporters", "reported_at"},
+		{"actions_log", "applied_at"},
+		{"incident_events", "at"},
+	}
+}
+
+// rewriteTimestampsAsUTC re-reads every stored timestamp through the driver
+// and writes it straight back, normalized to UTC.
+//
+// It has to round-trip through Go rather than run as a single UPDATE: the
+// values already in the database were written in Go's [time.Time.String]
+// layout ("2026-09-20 16:11:16.382 -0400 EDT"), which SQLite's own strftime
+// cannot parse at all — a SQL rewrite would return NULL for every real row
+// and quietly change nothing. The driver, by contrast, parses that layout
+// (see parseTimeString in modernc.org/sqlite) alongside the ISO-8601 ones, so
+// reading into a [time.Time] and writing it back re-encodes it in the format
+// timeFormatParam now pins.
+//
+// Values that do not parse as a time are left exactly as they are.
+func rewriteTimestampsAsUTC(ctx context.Context, tx *sql.Tx) error {
+	for _, tc := range utcTimestampColumns() {
+		table, col := tc[0], tc[1]
+		if err := rewriteColumnAsUTC(ctx, tx, table, col); err != nil {
+			return fmt.Errorf("%s.%s: %w", table, col, err)
+		}
+	}
+	return nil
+}
+
+// utcRewrite is one row's worth of pending work, collected before any write so
+// the read cursor is closed first.
+type utcRewrite struct {
+	rowID int64
+	at    time.Time
+}
+
+// collectTimestamps reads a column's parseable timestamps, closing the cursor
+// before any write runs against the same transaction.
+func collectTimestamps(ctx context.Context, tx *sql.Tx, table, col string) ([]utcRewrite, error) {
+	//nolint:gosec // G202: table and col come from utcTimestampColumns, never from input
+	rows, err := tx.QueryContext(ctx,
+		`SELECT rowid, `+col+` FROM `+table+` WHERE `+col+` IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var pending []utcRewrite
+	for rows.Next() {
+		var (
+			rowID int64
+			raw   any
+		)
+		if scanErr := rows.Scan(&rowID, &raw); scanErr != nil {
+			return nil, scanErr
+		}
+		// The driver hands back a [time.Time] for anything it recognized. A
+		// string here means it did not, so leave that row alone.
+		if t, ok := raw.(time.Time); ok {
+			pending = append(pending, utcRewrite{rowID: rowID, at: t.UTC()})
+		}
+	}
+	return pending, rows.Err()
+}
+
+func rewriteColumnAsUTC(ctx context.Context, tx *sql.Tx, table, col string) error {
+	pending, err := collectTimestamps(ctx, tx, table, col)
+	if err != nil {
+		return err
+	}
+	for _, p := range pending {
+		//nolint:gosec // G202: table and col come from utcTimestampColumns, never from input
+		stmt := `UPDATE ` + table + ` SET ` + col + ` = ? WHERE rowid = ?`
+		if _, err = tx.ExecContext(ctx, stmt, p.at, p.rowID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type migration struct {
 	version int
@@ -402,7 +514,7 @@ func eventLogMigrations() []migration {
 			version: migDropConversationHistory,
 			name:    "drop_conversation_history",
 			exec: func(ctx context.Context, tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `DROP TABLE conversation_history`)
+				_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS conversation_history`)
 				return err
 			},
 		},
@@ -410,8 +522,28 @@ func eventLogMigrations() []migration {
 			version: migDropLastDisruption,
 			name:    "drop_last_disruption",
 			exec: func(ctx context.Context, tx *sql.Tx) error {
-				_, err := tx.ExecContext(ctx, `DROP TABLE last_disruption`)
+				_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS last_disruption`)
 				return err
+			},
+		},
+		{
+			version: migUTCTimestamps,
+			name:    "utc_timestamps",
+			exec:    rewriteTimestampsAsUTC,
+		},
+		{
+			version: migIncidentsEscalationPlan,
+			name:    "incidents_escalation_plan",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				for _, stmt := range []string{
+					`ALTER TABLE incidents ADD COLUMN escalation_plan TEXT`,
+					`ALTER TABLE incidents ADD COLUMN escalation_plan_at DATETIME`,
+				} {
+					if _, err := tx.ExecContext(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 		},
 	}
@@ -691,21 +823,46 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 	return scanIncident(row)
 }
 
-// FindOpenByTitle returns the first open/investigating/agent_fixed incident for
-// this title so duplicate reports collapse into it. Comparison is
-// case-insensitive and ignores trailing year suffixes like " (2024)".
-// Returns ErrNotFound when no matching open incident exists.
+// activeIncidentStatuses are the statuses in which an incident is still being
+// worked on by the system itself. Deliberately excludes manual_test_needed and
+// blocked: both mean "waiting for a human", so an incident sitting in either
+// is making no progress and must not absorb new reports. It previously did —
+// FindOpenByTitle excluded only resolved/reopened — so a single escalated
+// incident silently swallowed every later report of the same title, with no
+// time bound and no new investigation. Also excludes agent_fixed, so a report
+// arriving after an autonomous fix starts fresh work rather than collapsing
+// into a closed-out incident that nothing will revisit.
+//
+// reopened is included because a reopened incident IS active; its previous
+// exclusion meant duplicate reports never collapsed into one.
+func activeIncidentStatuses() []IncidentStatus {
+	return []IncidentStatus{StatusOpen, StatusInvestigating, StatusVerifying, StatusReopened}
+}
+
+// activeStatusesJSON is activeIncidentStatuses as one JSON-array bind
+// parameter, for `status IN (SELECT value FROM json_each(?))` — the same
+// fixed-query-text pattern TransitionStatus uses, so no query below has to
+// concatenate a placeholder list into its SQL.
+func activeStatusesJSON() (string, error) {
+	b, err := json.Marshal(activeIncidentStatuses())
+	return string(b), err
+}
+
+// FindOpenByTitle returns the first actively-worked incident for this title so
+// duplicate reports collapse into it (see activeIncidentStatuses for what
+// counts as active, and why an escalated incident deliberately does not).
+// Comparison is case-insensitive and ignores trailing year suffixes like
+// " (2024)". Returns ErrNotFound when no matching active incident exists.
 func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, error) {
 	norm := d.normalizeTitle(title)
-	row := d.read.QueryRowContext(ctx, `
-		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
-		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
-		       COALESCE(finding,''), COALESCE(recommended_actions,''),
-		       action_count, autonomous_locked
-		FROM incidents
-		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)')
-		  AND status NOT IN ('resolved','reopened')
-		ORDER BY created_at DESC LIMIT 1`, norm, norm)
+	statuses, err := activeStatusesJSON()
+	if err != nil {
+		return nil, err
+	}
+	// ESCAPE '\': norm is caller-supplied, so an unescaped % or _ in a title
+	// ("50% Off") would act as a LIKE wildcard and collapse the report into an
+	// unrelated incident.
+	row := d.read.QueryRowContext(ctx, findOpenByTitleQuery, norm, likeEscape(norm), statuses)
 	inc, err := scanIncident(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -748,13 +905,46 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 	return out, rows.Err()
 }
 
-// CountOpenIncidents returns the number of non-resolved incidents.
+// CountOpenIncidents returns the number of incidents currently being worked on
+// (see activeIncidentStatuses). It backs the "several things are broken at
+// once, stop acting autonomously" guard, so it must count incidents that are
+// actively failing right now — not every incident that was ever escalated.
+// Counting all non-resolved rows made the guard latch permanently: escalated
+// incidents never self-resolve, so once five accumulated, every new incident
+// was force-blocked forever.
 func (d *DB) CountOpenIncidents(ctx context.Context) (int, error) {
+	statuses, err := activeStatusesJSON()
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	err := d.read.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM incidents WHERE status NOT IN ('resolved')`,
-	).Scan(&n)
+	err = d.read.QueryRowContext(ctx, countOpenIncidentsQuery, statuses).Scan(&n)
 	return n, err
+}
+
+// findOpenByTitleQuery and countOpenIncidentsQuery are fixed query text; the
+// active-status set travels as one JSON-array bind parameter (see
+// activeStatusesJSON).
+const (
+	findOpenByTitleQuery = `
+		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
+		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
+		       COALESCE(finding,''), COALESCE(recommended_actions,''),
+		       action_count, autonomous_locked
+		FROM incidents
+		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)' ESCAPE '\')
+		  AND status IN (SELECT value FROM json_each(?))
+		ORDER BY created_at DESC LIMIT 1`
+
+	countOpenIncidentsQuery = `
+		SELECT COUNT(*) FROM incidents WHERE status IN (SELECT value FROM json_each(?))`
+)
+
+// likeEscape escapes LIKE's wildcards so a caller-supplied string is matched
+// literally. Pairs with `ESCAPE '\'` on the query.
+func likeEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return r.Replace(s)
 }
 
 // UpdateIncidentStatus sets the status of an incident.
@@ -940,7 +1130,7 @@ type ActionLog struct {
 // LogAction inserts an action record, generating an ID if absent. Callers
 // only log an action after the underlying operation has already succeeded,
 // so "now" is an accurate applied_at — there is no separate "pending" phase
-// in this codebase's usage, unlike the applied_at/UpdateAction pair the
+// in this codebase's usage, unlike the applied_at pair the
 // schema was originally built for. Production code now writes actions_log
 // exclusively via internal/journal (an action_applied event's projection,
 // written atomically with the event via InsertActionLog below) — this
@@ -969,15 +1159,6 @@ func InsertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
 		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status, applied_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status, a.AppliedAt)
-	return err
-}
-
-// UpdateAction updates the status and result of an action.
-func (d *DB) UpdateAction(ctx context.Context, id string, status ActionStatus, result, errMsg string) error {
-	now := time.Now()
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE actions_log SET status = ?, applied_at = ?, result = ?, error = ? WHERE id = ?`,
-		status, now, result, errMsg, id)
 	return err
 }
 
@@ -1187,6 +1368,54 @@ func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*I
 		out = append(out, inc)
 	}
 	return out, rows.Err()
+}
+
+// --- Escalation plans ---
+
+// ErrNoEscalationPlan is returned when an incident has no previewed plan
+// stored (or it was already consumed).
+var ErrNoEscalationPlan = errors.New("no previewed escalation plan")
+
+// SetEscalationPlan stores the exact plan an owner is being shown, so
+// approving it executes that plan rather than whatever a re-resolution would
+// produce later. See Service.ApproveEscalation for why re-resolving is unsafe
+// for an operation that deletes files.
+func (d *DB) SetEscalationPlan(ctx context.Context, id string, planJSON []byte) error {
+	now := time.Now()
+	_, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET escalation_plan = ?, escalation_plan_at = ?, updated_at = ? WHERE id = ?`,
+		string(planJSON), now, now, id)
+	return err
+}
+
+// GetEscalationPlan returns the stored plan and when it was previewed, or
+// ErrNoEscalationPlan if none is stored.
+func (d *DB) GetEscalationPlan(ctx context.Context, id string) ([]byte, time.Time, error) {
+	var (
+		plan sql.NullString
+		at   sql.NullTime
+	)
+	err := d.read.QueryRowContext(ctx,
+		`SELECT escalation_plan, escalation_plan_at FROM incidents WHERE id = ?`, id).Scan(&plan, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if !plan.Valid || plan.String == "" {
+		return nil, time.Time{}, ErrNoEscalationPlan
+	}
+	return []byte(plan.String), at.Time, nil
+}
+
+// ClearEscalationPlan drops a stored plan once it has been executed, so one
+// approval cannot be replayed against state it no longer describes.
+func (d *DB) ClearEscalationPlan(ctx context.Context, id string) error {
+	_, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET escalation_plan = NULL, escalation_plan_at = NULL, updated_at = ? WHERE id = ?`,
+		time.Now(), id)
+	return err
 }
 
 // --- Events (append-only incident_events log; see internal/journal) ---

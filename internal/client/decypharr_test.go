@@ -147,7 +147,16 @@ func TestDecypharr_DeleteTorrent(t *testing.T) {
 	}
 }
 
-func TestDecypharr_ListTorrents_NotFoundIsEmpty(t *testing.T) {
+// TestDecypharr_ListTorrents_NotFoundIsAnError replaces an earlier test that
+// asserted the opposite ("404 should be treated as no results"). That
+// expectation was wrong: decypharr answers a search matching nothing with 200
+// and an empty array, so a 404 means the /api/torrents route itself is gone —
+// an upgrade moved or renamed it. Reporting that as "no torrents exist" told
+// the agent the debrid content was missing, which points it at
+// remove_and_search on files that are fine, and it also hid the condition
+// from livecheck's classifyDecypharr, whose whole job is to flag a missing
+// endpoint.
+func TestDecypharr_ListTorrents_NotFoundIsAnError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -155,9 +164,26 @@ func TestDecypharr_ListTorrents_NotFoundIsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	c := client.NewDecypharr(srv.URL, "")
+	if _, err := c.ListTorrents(context.Background(), "Nonexistent", ""); err == nil {
+		t.Error("a 404 on /api/torrents must surface as an error: the route is missing, " +
+			"which is not the same as the search matching nothing")
+	}
+}
+
+// TestDecypharr_ListTorrents_EmptyResultIsEmpty is the case the old test
+// meant to cover: a genuine no-match, which decypharr returns as 200.
+func TestDecypharr_ListTorrents_EmptyResultIsEmpty(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"torrents":[]}`))
+	}))
+	defer srv.Close()
+
+	c := client.NewDecypharr(srv.URL, "")
 	torrents, err := c.ListTorrents(context.Background(), "Nonexistent", "")
 	if err != nil {
-		t.Fatalf("404 should be treated as no results, got error: %v", err)
+		t.Fatalf("a 200 with an empty array is a valid no-results answer: %v", err)
 	}
 	if len(torrents) != 0 {
 		t.Errorf("expected empty list, got %d", len(torrents))
