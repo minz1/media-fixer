@@ -25,10 +25,16 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 }
 
 type TorrentEntry struct {
-	Name     string `json:"name"`
-	InfoHash string `json:"info_hash"`
-	Category string `json:"category"`
-	State    string `json:"state"`
+	Name string `json:"name"`
+	// OriginalFilename is the release name the debrid provider stored, and is
+	// what decypharr names the on-disk folder under /mnt/decypharr/. It differs
+	// from Name whenever the *arr renamed the grab (~1 in 5 entries here,
+	// renamed anime releases especially), so a path built from Name ENOENTs on
+	// content that is actually present.
+	OriginalFilename string `json:"original_filename,omitempty"`
+	InfoHash         string `json:"info_hash"`
+	Category         string `json:"category"`
+	State            string `json:"state"`
 	// Magnet is what a delete-and-re-add puts back; decypharr omits it for
 	// entries that did not arrive as a magnet (storage.Entry.Magnet is
 	// `json:"magnet,omitempty"`), which PlanTorrentReadd treats as a refusal.
@@ -36,7 +42,12 @@ type TorrentEntry struct {
 	Size     int64     `json:"size"`
 	Progress float64   `json:"progress"`
 	AddedOn  time.Time `json:"added_on"`
-	Debrid   string    `json:"debrid"`
+
+	// ActiveProvider is which debrid backend currently holds the torrent
+	// ("torbox", "usenet", ...). Named `debrid` in an earlier decypharr
+	// version; that key is absent from every entry this stack returns today,
+	// so a Debrid field bound to it was always the empty string.
+	ActiveProvider string `json:"active_provider,omitempty"`
 }
 
 type TorrentListResponse struct {

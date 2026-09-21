@@ -194,7 +194,7 @@ func checkListDirectory(ctx context.Context, disp *agent.Dispatcher, fx *Fixture
 		return degraded("no fixture: no torrent discovered")
 	}
 	var lastErr error
-	for _, dir := range decypharrCandidateDirs(fx.TorrentName) {
+	for _, dir := range decypharrCandidateDirs(fx.TorrentFolder, fx.TorrentName) {
 		result, err := disp.Call(ctx, "list_directory", map[string]any{argPath: dir})
 		if err == nil {
 			return classify(result, nil)

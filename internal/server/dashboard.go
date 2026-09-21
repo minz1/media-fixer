@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/livecheck"
 )
@@ -298,6 +299,15 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 		data["Error"] = err.Error()
 	} else {
 		data["Plan"] = plan
+		// Surfaced out of the plan rather than reached into from the template:
+		// the preview renders several plan types and only one of them has a
+		// readability probe, so a template field access would error on the
+		// others.
+		if rp, isReplace := plan.(*client.ReplacePlan); isReplace && rp.Readability != nil {
+			data["ReadableFile"] = rp.Readability.ReadableFile
+			data["ReadabilityUnknown"] = !rp.Readability.Checked
+			data["Reason"] = rp.Reason
+		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "escalation_preview", data)

@@ -262,3 +262,76 @@ func TestDiscoverFixtures_PlaybackItem_NonSeriesPassesThrough(t *testing.T) {
 		t.Errorf("JellyfinPlaybackItemID = %q, want movie-1", report.Fixtures.JellyfinPlaybackItemID)
 	}
 }
+
+// TestDiscoverJellyfinItem_PrefersASeriesThatActuallyHasEpisodes pins the
+// fixture-discovery fix. Preferring the first Series regardless of whether
+// Jellyfin had indexed it left jellyfin_playback_info permanently degraded on
+// "no playback-safe item discovered" — so the one check that most needs a
+// real playable file was the one check never exercised. Observed on a live
+// sweep, where discovery settled on a series with no indexed episodes.
+func TestDiscoverJellyfinItem_PrefersASeriesThatActuallyHasEpisodes(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Users", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": "u1"}})
+	})
+	mux.HandleFunc("/Items", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]any{
+			{"Id": "empty-series", "Name": "Unindexed", "Type": "Series"},
+			{"Id": "good-series", "Name": "Indexed", "Type": "Series"},
+		}})
+	})
+	mux.HandleFunc("/Shows/empty-series/Episodes", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]any{}})
+	})
+	mux.HandleFunc("/Shows/good-series/Episodes", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]any{
+			{"Id": "ep1", "Name": "S01E01", "Type": "Episode"},
+		}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	disp := &agent.Dispatcher{Jellyfin: client.NewJellyfin(srv.URL, "key")}
+	fx := livecheck.Fixtures{SeriesTitle: "Whatever"}
+	livecheck.DiscoverJellyfinItemForTest(context.Background(), disp, &fx)
+
+	if fx.JellyfinItemID != "good-series" {
+		t.Errorf("JellyfinItemID = %q, want good-series: an unindexed series makes "+
+			"playback_info undiagnosable", fx.JellyfinItemID)
+	}
+	if fx.JellyfinPlaybackItemID != "ep1" {
+		t.Errorf("JellyfinPlaybackItemID = %q, want ep1", fx.JellyfinPlaybackItemID)
+	}
+}
+
+// TestDiscoverJellyfinItem_EmptySearchDegradesWithANote pins the contract
+// pickJellyfinFixtureItem relies on: a search matching nothing must leave the
+// fixture unset and record why, not set a bogus one. It holds because
+// SearchItem returns ErrNotFound rather than an empty slice, which is the
+// reason pickJellyfinFixtureItem can end in items[0] without a length check.
+func TestDiscoverJellyfinItem_EmptySearchDegradesWithANote(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Users", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": "u1"}})
+	})
+	mux.HandleFunc("/Items", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]any{}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	disp := &agent.Dispatcher{Jellyfin: client.NewJellyfin(srv.URL, "key")}
+	fx := livecheck.Fixtures{SeriesTitle: "Nothing Matches This"}
+	livecheck.DiscoverJellyfinItemForTest(context.Background(), disp, &fx)
+
+	if fx.JellyfinItemID != "" {
+		t.Errorf("JellyfinItemID = %q, want empty", fx.JellyfinItemID)
+	}
+	if len(fx.Notes) == 0 {
+		t.Error("no note recorded explaining why no fixture was found")
+	}
+}

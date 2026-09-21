@@ -6,6 +6,7 @@ package clientset
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
@@ -39,6 +40,20 @@ func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
 	if err != nil {
 		log.Warn("loki unavailable — log search disabled, continuing without it", "error", err)
 		loki = nil
+	}
+
+	// An https Loki with no client certificate configured is a silent trap:
+	// NewLoki succeeds (there is nothing to load), and every query then fails
+	// at the TLS handshake with "certificate required". That is easy to hit
+	// running media-fixer-check by hand, because the cert paths come from the
+	// unit's Environment= rather than the TOML, so a shell that sourced only
+	// the secrets file has the token but not the certificate. Now that a
+	// broken Loki is non-fatal, nothing else would say so.
+	if loki != nil && strings.HasPrefix(cfg.Loki.URL, "https://") &&
+		(cfg.Loki.TLSCert == "" || cfg.Loki.TLSKey == "") {
+		log.Warn("loki url is https but no client certificate is configured — "+
+			"log search will fail at the TLS handshake",
+			"hint", "set MEDIA_FIXER_LOKI_TLS_CERT and MEDIA_FIXER_LOKI_TLS_KEY")
 	}
 
 	var mediaAgent *client.MediaAgentClient

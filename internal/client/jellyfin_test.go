@@ -34,7 +34,7 @@ func TestJellyfin_PlaybackInfo_HasSources(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method: %s", r.Method)
 		}
-		if r.Header.Get("X-Emby-Token") != "key" {
+		if r.Header.Get("Authorization") != `MediaBrowser Token="key"` {
 			t.Error("missing auth")
 		}
 		_ = json.NewEncoder(w).Encode(client.PlaybackInfoResult{

@@ -33,6 +33,14 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 	}
 }
 
+// authorize sets the API-key auth header. Jellyfin 12 dropped the legacy
+// X-Emby-Token header and the api_key query parameter — both now 401 — and
+// only accepts the Authorization: MediaBrowser scheme, which 10.x accepted
+// too, so this is the one form that works across both.
+func (c *JellyfinClient) authorize(req *http.Request) {
+	req.Header.Set("Authorization", `MediaBrowser Token="`+c.apiKey+`"`)
+}
+
 // jellyfinUser is the subset of GET /Users we need.
 type jellyfinUser struct {
 	ID string `json:"Id"`
@@ -55,7 +63,7 @@ func (c *JellyfinClient) resolveUserID(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -138,7 +146,7 @@ func (c *JellyfinClient) PlaybackInfo(ctx context.Context, itemID string) (*Play
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -186,7 +194,7 @@ func (c *JellyfinClient) SearchItem(ctx context.Context, name string) ([]Jellyfi
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -219,7 +227,7 @@ func (c *JellyfinClient) ListEpisodes(ctx context.Context, seriesID string) ([]J
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -243,7 +251,7 @@ func (c *JellyfinClient) LibraryScan(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -268,6 +276,12 @@ func (c *JellyfinClient) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Authorized like every other call even though /System/Ping is normally
+	// public: this is the readiness probe restart_jellyfin polls, and a probe
+	// that can fail for an auth reason the rest of the client has already hit
+	// would report the service as never coming back.
+	c.authorize(req)
+
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("jellyfin ping: %w", err)
@@ -300,7 +314,7 @@ func (c *JellyfinClient) ScanStatus(ctx context.Context) (*ScanStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	c.authorize(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -343,7 +357,7 @@ func (c *JellyfinClient) DeleteCache(ctx context.Context, itemID string) error {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Emby-Token", c.apiKey)
+		c.authorize(req)
 
 		resp, err := c.http.Do(req)
 		if err != nil {

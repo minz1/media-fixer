@@ -3,8 +3,10 @@ package livecheck
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
@@ -26,6 +28,7 @@ type Fixtures struct {
 	SeriesTitle            string `json:"series_title,omitempty"`
 	MovieTitle             string `json:"movie_title,omitempty"`
 	TorrentName            string `json:"torrent_name,omitempty"`
+	TorrentFolder          string `json:"torrent_folder,omitempty"`
 	SamplePath             string `json:"sample_path,omitempty"`
 	RepairEntryName        string `json:"repair_entry_name,omitempty"`
 
@@ -95,13 +98,7 @@ func discoverJellyfinItem(ctx context.Context, disp *agent.Dispatcher, fx *Fixtu
 			fx.missing("jellyfin item discovery: " + err.Error())
 			return
 		}
-		best := items[0]
-		for _, item := range items {
-			if item.Type == "Series" {
-				best = item
-				break
-			}
-		}
+		best := pickJellyfinFixtureItem(ctx, disp, items)
 		fx.JellyfinItemID = best.ID
 		fx.JellyfinItemType = best.Type
 	}
@@ -111,6 +108,42 @@ func discoverJellyfinItem(ctx context.Context, disp *agent.Dispatcher, fx *Fixtu
 // discoverJellyfinPlaybackItem resolves the item ID jellyfin_playback_info is
 // actually safe to call: itself if it's not a Series, otherwise its first
 // indexed episode.
+// pickJellyfinFixtureItem chooses the item the Jellyfin checks run against.
+//
+// A Series is preferred because it exercises the most surface (list_episodes
+// as well as playback_info), but only one with indexed episodes: picking a
+// Series with none left jellyfin_playback_info permanently degraded on "no
+// playback-safe item discovered", so the check that most needs a real
+// playable file was the one check never actually exercised. Observed live —
+// discovery picked a series Jellyfin had not indexed and Sonarr had no file
+// for.
+//
+// Falls back to the first item of any type, which is what the old code always
+// did, so a library with no episode-bearing series is no worse off. items is
+// never empty: SearchItem returns ErrNotFound rather than an empty slice, and
+// the caller returns on that error.
+func pickJellyfinFixtureItem(
+	ctx context.Context, disp *agent.Dispatcher, items []client.JellyfinItem,
+) client.JellyfinItem {
+	for _, item := range items {
+		if item.Type != "Series" {
+			continue
+		}
+		episodes, err := disp.Jellyfin.ListEpisodes(ctx, item.ID)
+		if err == nil && len(episodes) > 0 {
+			return item
+		}
+	}
+	// No series with episodes; an Episode or Movie is directly playable and
+	// is a better fixture than an empty series.
+	for _, item := range items {
+		if item.Type == "Episode" || item.Type == "Movie" {
+			return item
+		}
+	}
+	return items[0]
+}
+
 func discoverJellyfinPlaybackItem(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	if fx.JellyfinPlaybackItemID != "" {
 		return
@@ -155,16 +188,24 @@ func discoverTorrentName(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 		return
 	}
 	fx.TorrentName = torrents[0].Name
+	fx.TorrentFolder = torrents[0].OriginalFilename
 }
 
 // decypharrCandidateDirs are the directory layouts this stack has used for a
 // torrent's files, tried in order (see systemPrompt's note that
 // /data/library entries are symlinks into /mnt/decypharr/__all__/<torrent>/).
-func decypharrCandidateDirs(torrentName string) []string {
-	return []string{
-		"/mnt/decypharr/" + torrentName,
-		"/mnt/decypharr/__all__/" + torrentName,
+// folder is the torrent's original_filename, which is what decypharr actually
+// names the directory; name is its display name, tried only as a fallback for
+// a fixture supplied by config with no original_filename to go on.
+func decypharrCandidateDirs(folder, name string) []string {
+	var dirs []string
+	for _, n := range []string{folder, name} {
+		if n == "" || slices.Contains(dirs, "/mnt/decypharr/__all__/"+n) {
+			continue
+		}
+		dirs = append(dirs, "/mnt/decypharr/__all__/"+n, "/mnt/decypharr/"+n)
 	}
+	return dirs
 }
 
 func discoverSamplePath(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
@@ -172,7 +213,7 @@ func discoverSamplePath(ctx context.Context, disp *agent.Dispatcher, fx *Fixture
 		fx.missing("media-agent not configured, cannot discover sample file")
 		return
 	}
-	for _, dir := range decypharrCandidateDirs(fx.TorrentName) {
+	for _, dir := range decypharrCandidateDirs(fx.TorrentFolder, fx.TorrentName) {
 		result, err := disp.MediaAgent.ListDirectory(ctx, dir)
 		if err != nil || result == nil {
 			continue
