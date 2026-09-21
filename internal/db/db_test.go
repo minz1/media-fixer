@@ -759,10 +759,10 @@ func TestOpen_BootstrapsLegacyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 1-6 are the reconciled legacy migrations this fixture simulates; 7-12
+	// 1-6 are the reconciled legacy migrations this fixture simulates; 7-13
 	// are the new ones, which run unconditionally on top of any database
 	// (legacy or fresh) since they postdate schema_version.
-	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 	if len(versions) != len(want) {
 		t.Fatalf("schema_version after bootstrap: got %v, want %v", versions, want)
 	}

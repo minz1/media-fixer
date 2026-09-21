@@ -372,7 +372,9 @@ func (a *blockingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticRes
 	return map[string]any{}, nil
 }
 
-func (a *blockingAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *blockingAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
+) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -513,7 +515,9 @@ func (a *sequencedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticRe
 	return map[string]any{}, nil
 }
 
-func (a *sequencedAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *sequencedAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
+) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -681,7 +685,9 @@ func (a *alwaysFixedAgent) PlanEscalation(_ context.Context, _ *agent.Diagnostic
 	return map[string]any{}, nil
 }
 
-func (a *alwaysFixedAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *alwaysFixedAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
+) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -823,7 +829,9 @@ func (a *concurrencyTrackingAgent) PlanEscalation(_ context.Context, _ *agent.Di
 	return map[string]any{}, nil
 }
 
-func (a *concurrencyTrackingAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *concurrencyTrackingAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
+) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -1087,7 +1095,9 @@ func (a *lowConfidenceOnceAgent) PlanEscalation(_ context.Context, _ *agent.Diag
 	return map[string]any{}, nil
 }
 
-func (a *lowConfidenceOnceAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *lowConfidenceOnceAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
+) (any, error) {
 	return map[string]any{}, nil
 }
 

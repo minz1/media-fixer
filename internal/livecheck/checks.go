@@ -106,6 +106,7 @@ func disruptiveCheckSpecs() []checkSpec {
 func approvalCheckSpecs() []checkSpec {
 	return []checkSpec{
 		{Tool: "arr_remove_and_search", Tier: tierDryRun, Run: checkArrRemoveAndSearch},
+		{Tool: "decypharr_delete_readd", Tier: tierDryRun, Run: checkDecypharrDeleteReadd},
 	}
 }
 
@@ -366,6 +367,26 @@ func checkArrRemoveAndSearch(ctx context.Context, disp *agent.Dispatcher, fx *Fi
 	// PlanReplace preview — it never deletes anything, so it is always safe
 	// to run regardless of -write/-disruptive.
 	result, err := disp.Call(ctx, "arr_remove_and_search", args)
+	return classify(result, err)
+}
+
+// checkDecypharrDeleteReadd exercises the delete-and-re-add preview. Like
+// checkArrRemoveAndSearch this calls the tool's Handler, which is
+// PlanTorrentReadd — a read-only resolve that deletes nothing, so it is safe
+// at every tier.
+//
+// A torrent with no stored magnet is a legitimate refusal, not a failure:
+// that refusal is the guard that stops an unrecoverable delete, so surface it
+// as degraded rather than fail.
+func checkDecypharrDeleteReadd(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.TorrentName == "" {
+		return degraded("no fixture: no torrent discovered")
+	}
+	result, err := disp.Call(ctx, "decypharr_delete_readd", map[string]any{argName: fx.TorrentName})
+	if err != nil && errors.Is(err, client.ErrNoMagnet) {
+		return degraded("fixture torrent has no stored magnet, so a re-add would be " +
+			"unrecoverable — the plan correctly refuses")
+	}
 	return classify(result, err)
 }
 

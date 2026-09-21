@@ -27,7 +27,7 @@ type runManager struct {
 
 	// globalSlot serializes the disruptive part of concurrent incident work: the
 	// LLM tool-calling diagnostic loop (Agent.Run) and owner-approved escalation
-	// execution (RunEscalation) — the two places that actually call service-wide
+	// execution (ExecuteApprovedPlan) — the two places that actually call service-wide
 	// autonomous actions (restart_jellyfin, jellyfin_library_scan,
 	// decypharr_cache_cleanup, ...) or delete/re-search files. Without this, two
 	// incidents diagnosing at once could have one's restart or scan corrupt the

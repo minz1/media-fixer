@@ -203,7 +203,8 @@ Action priority (least destructive first):
 You may call autonomous actions directly. Approval-required actions must only appear in
 complete_diagnosis.escalate_action, never called as a tool yourself.
 
-escalate_action must be one of: none | remove_and_search | manual_investigation.
+escalate_action must be one of: none | remove_and_search | delete_torrent_readd |
+manual_investigation.
   - remove_and_search: the file(s) on disk are wrong/corrupt and Sonarr/Radarr should delete
     them, blocklist the release that produced them, and search for a replacement. Use this
     when dd_readability_test or get_torrent_state points at a specific bad file/release
@@ -213,6 +214,14 @@ escalate_action must be one of: none | remove_and_search | manual_investigation.
     and episode (ints, when scope needs them), blocklist (bool, default true). Be as specific
     as the evidence allows — prefer scope=episode over season or series when you know which
     episode is bad.
+  - delete_torrent_readd: decypharr has the torrent but its debrid links are broken in a way
+    the repair tools cannot fix — you have ALREADY tried refresh_decypharr_links and
+    decypharr_repair_sweep this incident and dd_readability_test still fails with an I/O error
+    (not not_found: missing content is arr_search_missing, not this). Removes the torrent from
+    decypharr and the debrid provider and re-adds it from its magnet so the provider re-fetches
+    it. Set escalate_params: name (the exact torrent name from get_torrent_state). The preview
+    refuses if the torrent has no stored magnet, because the delete would then be
+    unrecoverable — if that happens, use manual_investigation.
   - manual_investigation: you cannot form a confident diagnosis or fix; the owner needs to look.
   - none: no escalation needed (requires_approval should be false in this case).
 
@@ -260,7 +269,7 @@ type DiagnosticResult struct {
 	EscalateAction string `json:"escalate_action,omitempty"`
 	// EscalateParams carries the target for EscalateAction (e.g. media_type,
 	// title, scope, season, episode, blocklist for remove_and_search). Passed
-	// straight through to Agent.PlanEscalation/RunEscalation.
+	// straight through to Agent.PlanEscalation/ExecuteApprovedPlan.
 	EscalateParams   map[string]any `json:"escalate_params,omitempty"`
 	RequiresApproval bool           `json:"requires_approval"`
 	// VerifyAfterSeconds, when > 0, tells the system a non-destructive fix was
@@ -349,6 +358,8 @@ func escalationLabel(action string) string {
 		return "no action"
 	case EscalateRemoveAndSearch:
 		return "remove file(s) and re-search"
+	case EscalateDeleteTorrentReadd:
+		return "delete the torrent and re-add it to the debrid provider"
 	case EscalateManualInvestigation:
 		return "manual investigation needed"
 	default:
@@ -891,30 +902,39 @@ func improved(pre, post *FixSignature) bool {
 // do not escalate to the owner.
 var ErrIncidentNotInvestigatable = errors.New("incident not in an investigatable status")
 
-// errNoEscalationPlan is returned by PlanEscalation/RunEscalation for
+// errNoEscalationPlan is returned by PlanEscalation/ExecuteApprovedPlan for
 // escalate_action values that have no automated preview or execution — the
 // owner must act on them manually from the diagnosis alone.
 var errNoEscalationPlan = errors.New("escalate_action has no automated plan; act manually")
 
-// PlanEscalation resolves what RunEscalation would do for a diagnostic
+// PlanEscalation resolves what an approved escalation would do for a diagnostic
 // result's recommended escalation, without making any changes. Used by the
 // dashboard's Preview button and by live-check tooling.
 func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
 		return a.disp.readArrRemoveAndSearchPlan(ctx, result.EscalateParams)
+	case EscalateDeleteTorrentReadd:
+		return a.disp.readDecypharrReaddPlan(ctx, result.EscalateParams)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
 }
 
-// RunEscalation executes a diagnostic result's recommended escalation after
-// owner approval. It re-resolves the plan against current state rather than
-// trusting a possibly-stale preview.
-func (a *Agent) RunEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
+// ExecuteApprovedPlan executes exactly the plan an owner approved, decoded
+// from what PreviewEscalation stored, instead of re-resolving it against
+// current state.
+//
+// Re-resolving was a TOCTOU on a destructive operation: the owner approves a
+// preview listing one file, and anything that changed in between (a new grab
+// landing, a season expanding) silently widens what actually gets deleted.
+// There is no second confirmation, so the preview has to be the contract.
+func (a *Agent) ExecuteApprovedPlan(ctx context.Context, result *DiagnosticResult, planJSON []byte) (any, error) {
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
-		return a.disp.executeArrRemoveAndSearch(ctx, result.EscalateParams)
+		return a.disp.executeApprovedReplacePlan(ctx, planJSON)
+	case EscalateDeleteTorrentReadd:
+		return a.disp.executeApprovedReaddPlan(ctx, planJSON)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}

@@ -91,6 +91,11 @@ func New(
 	r.Post("/ingest/seerr", s.handleSeerrWebhook)
 
 	r.Route(baseURL, func(r chi.Router) {
+		// Every mutating route below is an unauthenticated-from-this-service's
+		// point of view form POST; auth lives in Caddy's Authentik
+		// forward_auth, which is cookie-based. See requireSameOrigin.
+		r.Use(requireSameOrigin)
+
 		r.Get("/", s.dashboardIndex)
 		r.Get("/events", s.dashboardEvents)
 		r.Get("/incidents/{id}", s.dashboardIncident)

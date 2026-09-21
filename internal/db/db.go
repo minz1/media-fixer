@@ -272,6 +272,7 @@ const (
 	migDropConversationHistory          = 10
 	migDropLastDisruption               = 11
 	migUTCTimestamps                    = 12
+	migIncidentsEscalationPlan          = 13
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -529,6 +530,21 @@ func eventLogMigrations() []migration {
 			version: migUTCTimestamps,
 			name:    "utc_timestamps",
 			exec:    rewriteTimestampsAsUTC,
+		},
+		{
+			version: migIncidentsEscalationPlan,
+			name:    "incidents_escalation_plan",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				for _, stmt := range []string{
+					`ALTER TABLE incidents ADD COLUMN escalation_plan TEXT`,
+					`ALTER TABLE incidents ADD COLUMN escalation_plan_at DATETIME`,
+				} {
+					if _, err := tx.ExecContext(ctx, stmt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
 		},
 	}
 }
@@ -1352,6 +1368,54 @@ func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*I
 		out = append(out, inc)
 	}
 	return out, rows.Err()
+}
+
+// --- Escalation plans ---
+
+// ErrNoEscalationPlan is returned when an incident has no previewed plan
+// stored (or it was already consumed).
+var ErrNoEscalationPlan = errors.New("no previewed escalation plan")
+
+// SetEscalationPlan stores the exact plan an owner is being shown, so
+// approving it executes that plan rather than whatever a re-resolution would
+// produce later. See Service.ApproveEscalation for why re-resolving is unsafe
+// for an operation that deletes files.
+func (d *DB) SetEscalationPlan(ctx context.Context, id string, planJSON []byte) error {
+	now := time.Now()
+	_, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET escalation_plan = ?, escalation_plan_at = ?, updated_at = ? WHERE id = ?`,
+		string(planJSON), now, now, id)
+	return err
+}
+
+// GetEscalationPlan returns the stored plan and when it was previewed, or
+// ErrNoEscalationPlan if none is stored.
+func (d *DB) GetEscalationPlan(ctx context.Context, id string) ([]byte, time.Time, error) {
+	var (
+		plan sql.NullString
+		at   sql.NullTime
+	)
+	err := d.read.QueryRowContext(ctx,
+		`SELECT escalation_plan, escalation_plan_at FROM incidents WHERE id = ?`, id).Scan(&plan, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if !plan.Valid || plan.String == "" {
+		return nil, time.Time{}, ErrNoEscalationPlan
+	}
+	return []byte(plan.String), at.Time, nil
+}
+
+// ClearEscalationPlan drops a stored plan once it has been executed, so one
+// approval cannot be replayed against state it no longer describes.
+func (d *DB) ClearEscalationPlan(ctx context.Context, id string) error {
+	_, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET escalation_plan = NULL, escalation_plan_at = NULL, updated_at = ? WHERE id = ?`,
+		time.Now(), id)
+	return err
 }
 
 // --- Events (append-only incident_events log; see internal/journal) ---

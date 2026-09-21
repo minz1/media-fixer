@@ -65,7 +65,9 @@ func (a *scriptedPendingOutcomeAgent) PlanEscalation(_ context.Context, _ *agent
 	return map[string]any{}, nil
 }
 
-func (a *scriptedPendingOutcomeAgent) RunEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *scriptedPendingOutcomeAgent) ExecuteApprovedPlan(
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
+) (any, error) {
 	return map[string]any{}, nil
 }
 

@@ -25,10 +25,14 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 }
 
 type TorrentEntry struct {
-	Name     string    `json:"name"`
-	InfoHash string    `json:"info_hash"`
-	Category string    `json:"category"`
-	State    string    `json:"state"`
+	Name     string `json:"name"`
+	InfoHash string `json:"info_hash"`
+	Category string `json:"category"`
+	State    string `json:"state"`
+	// Magnet is what a delete-and-re-add puts back; decypharr omits it for
+	// entries that did not arrive as a magnet (storage.Entry.Magnet is
+	// `json:"magnet,omitempty"`), which PlanTorrentReadd treats as a refusal.
+	Magnet   string    `json:"magnet,omitempty"`
 	Size     int64     `json:"size"`
 	Progress float64   `json:"progress"`
 	AddedOn  time.Time `json:"added_on"`
