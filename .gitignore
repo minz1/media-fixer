@@ -1,2 +1,11 @@
 vendor
 result
+
+# Local dev files and captured production logs. dev.toml and dev-run.sh carry
+# Discord IDs and a sops secrets path; the log exports carry usernames.
+# ROADMAP.md is deliberately left out of this list: it was untracked before,
+# but it is a doc you may well want committed one day, and ignoring it would
+# make that need a -f.
+Logs-*.json
+dev.toml
+dev-run.sh
