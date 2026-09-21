@@ -137,20 +137,37 @@ func TestWaitUntilReady(t *testing.T) {
 }
 
 // TestDispatchRestartJellyfin_WaitsForReady verifies restart_jellyfin only
-// reports success once Jellyfin is actually responding, not as soon as
-// systemctl's restart call returns.
+// reports success once Jellyfin will actually serve an application request,
+// not as soon as systemctl's restart call returns and not as soon as it
+// merely accepts connections.
+//
+// The ScheduledTasks arm is the part worth keeping: a live -disruptive sweep
+// hit a 503 on a library scan fired straight after a restart, while Ping was
+// already answering 200. Ping proves the process is listening; it does not
+// prove the app finished initialising. A probe that only pinged would pass
+// this test at readyAfter=1 and still ship that bug.
 func TestDispatchRestartJellyfin_WaitsForReady(t *testing.T) {
 	t.Parallel()
-	var pingCalls atomic.Int32
+	const readyAfter = 3
+	var (
+		pingCalls  atomic.Int32
+		tasksCalls atomic.Int32
+	)
 	jellyfin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/System/Ping" {
+		switch r.URL.Path {
+		case "/System/Ping":
+			// Listening immediately, like the real thing.
+			pingCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case "/ScheduledTasks":
+			if tasksCalls.Add(1) < readyAfter {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		if pingCalls.Add(1) < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
 	}))
 	defer jellyfin.Close()
 
@@ -170,8 +187,9 @@ func TestDispatchRestartJellyfin_WaitsForReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if pingCalls.Load() != 3 {
-		t.Errorf("Ping called %d times, want 3 (waited for readiness)", pingCalls.Load())
+	if got := tasksCalls.Load(); got != readyAfter {
+		t.Errorf("ScheduledTasks probed %d times, want %d: the restart must keep waiting "+
+			"while the app is listening but not yet serving", got, readyAfter)
 	}
 	if m, ok := result.(map[string]string); !ok || m["status"] != "restarted" {
 		t.Errorf("result = %+v, want status=restarted", result)

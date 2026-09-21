@@ -90,6 +90,7 @@ const (
 	paramTitle    = "title"
 	paramItemID   = "item_id"
 	paramName     = "name"
+	paramReason   = "reason"
 	paramSeriesID = "series_id"
 	paramMovieID  = "movie_id"
 )
@@ -563,7 +564,8 @@ func approvalToolSpecs() []toolSpec {
 					"which grabs would be blocklisted, and what search would follow. Owner-approval-only — " +
 					"never called by the agent directly; recommend it via complete_diagnosis.escalate_action " +
 					"instead.",
-				Parameters: jsonSchema(arrRemoveAndSearchProps(), []string{paramMediaType, paramTitle}),
+				Parameters: jsonSchema(arrRemoveAndSearchProps(),
+					[]string{paramMediaType, paramTitle, paramReason}),
 			},
 			Risk:    riskApproval,
 			Handler: (*Dispatcher).readArrRemoveAndSearchPlan,
@@ -608,6 +610,11 @@ func arrRemoveAndSearchProps() map[string]any {
 			"boolean",
 			"Whether to blocklist the bad release so it isn't grabbed again (default true)",
 		),
+		paramReason: enumParam("string",
+			"Why these files must be deleted. State the real premise: 'unreadable' is checked "+
+				"against the files and the plan is REFUSED if any of them reads fine, so do not "+
+				"claim it for content that is merely wrong.",
+			client.ReplaceReasons()),
 	}
 }
 
@@ -1120,6 +1127,28 @@ func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, _ map[string]
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
+// jellyfinServing reports whether Jellyfin will actually serve an
+// application request, not merely accept a connection.
+//
+// Ping alone was too weak a readiness signal: a library scan triggered
+// immediately after a restart returned 503 while Ping was already answering
+// 200 — observed on a live -disruptive sweep. This is the same failure the
+// Ping probe was itself introduced to fix (a restart reporting success before
+// Jellyfin was up), one layer in: the process is listening, but the app has
+// not finished initialising.
+//
+// ScanStatus is used as the second probe because it is authenticated and
+// library-scoped, so it exercises roughly what the callers that follow a
+// restart need. It can only ever make readiness later, never earlier, so a
+// slightly conservative verdict costs a few seconds of a 30s budget.
+func (d *Dispatcher) jellyfinServing(ctx context.Context) error {
+	if err := d.Jellyfin.Ping(ctx); err != nil {
+		return err
+	}
+	_, err := d.Jellyfin.ScanStatus(ctx)
+	return err
+}
+
 func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
@@ -1127,7 +1156,7 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, _ map[string]a
 	if err := d.MediaAgent.RestartService(ctx, "jellyfin"); err != nil {
 		return nil, err
 	}
-	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, d.Jellyfin.Ping); err != nil {
+	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, d.jellyfinServing); err != nil {
 		return nil, fmt.Errorf("jellyfin restarted but did not become ready: %w", err)
 	}
 	d.logAction(ctx, toolRestartJellyfin, nil)
@@ -1281,7 +1310,52 @@ func (d *Dispatcher) readArrRemoveAndSearchPlan(ctx context.Context, args map[st
 	if err != nil {
 		return nil, err
 	}
-	return arrClient.PlanReplace(ctx, req)
+	plan, err := arrClient.PlanReplace(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	plan.Readability = d.probeReplaceReadability(ctx, plan)
+	return plan, nil
+}
+
+// maxReadabilityProbes bounds how many of a plan's files get read. Each probe
+// pulls up to 100MiB through the FUSE mount, and a series-scope plan can list
+// far more files than that is worth spending on.
+const maxReadabilityProbes = 10
+
+// probeReplaceReadability tests whether any file this plan would delete can
+// actually be read, so executeApprovedReplacePlan can check the agent's
+// stated premise against reality.
+//
+// Stops at the first readable file: one is enough to contradict an
+// "unreadable" claim, and if a plan contains both readable and unreadable
+// files then its scope is too wide, which is equally a reason not to run it.
+// A missing media-agent yields Checked:false — an absent signal must never
+// read as either healthy or broken.
+func (d *Dispatcher) probeReplaceReadability(ctx context.Context, plan *client.ReplacePlan) *client.ReadabilityProbe {
+	probe := &client.ReadabilityProbe{}
+	if d.MediaAgent == nil {
+		return probe
+	}
+	probe.Checked = true
+	for _, f := range plan.Files {
+		if probe.Probed >= maxReadabilityProbes {
+			break
+		}
+		if f.Path == "" {
+			continue
+		}
+		probe.Probed++
+		result, err := d.MediaAgent.DDReadabilityTest(ctx, f.Path)
+		if err != nil || result == nil {
+			continue
+		}
+		if result.Error == "" && result.BytesRead > 0 {
+			probe.ReadableFile, probe.BytesRead = f.Path, result.BytesRead
+			return probe
+		}
+	}
+	return probe
 }
 
 // buildReplaceRequest translates escalate_params-shaped args into a
@@ -1318,6 +1392,29 @@ func (d *Dispatcher) executeApprovedReaddPlan(ctx context.Context, planJSON []by
 	return result, nil
 }
 
+// checkReplacePremise refuses a plan whose stated reason is contradicted by
+// what probing its targets found.
+//
+// Only the "unreadable" premise is mechanically checkable, so only it is
+// enforced: wrong_content and wrong_quality are claims about what the file
+// contains, which a successful read says nothing about. Those still reach the
+// owner with the readability result rendered in the preview, which is where
+// the judgement belongs.
+func checkReplacePremise(plan *client.ReplacePlan) error {
+	if plan.Reason != client.ReplaceReasonUnreadable {
+		return nil
+	}
+	probe := plan.Readability
+	if probe == nil || !probe.Checked || probe.ReadableFile == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to delete: this plan claims %q but %s read back fine (%d bytes). "+
+			"Either the diagnosis is wrong or the scope is too wide — re-diagnose, or "+
+			"state the real reason",
+		client.ReplaceReasonUnreadable, probe.ReadableFile, probe.BytesRead)
+}
+
 // executeApprovedReplacePlan runs a ReplacePlan exactly as stored, with no
 // re-resolution. The plan was rendered to the owner at preview time; this is
 // the same bytes coming back.
@@ -1326,6 +1423,10 @@ func (d *Dispatcher) executeApprovedReplacePlan(ctx context.Context, planJSON []
 	if err := json.Unmarshal(planJSON, &plan); err != nil {
 		return nil, fmt.Errorf("decode approved escalation plan: %w", err)
 	}
+	if err := checkReplacePremise(&plan); err != nil {
+		return nil, err
+	}
+
 	arrClient := d.Sonarr
 	if plan.MediaType == client.ReplaceMediaMovie {
 		arrClient = d.Radarr
@@ -1337,12 +1438,23 @@ func (d *Dispatcher) executeApprovedReplacePlan(ctx context.Context, planJSON []
 	if err != nil {
 		return nil, err
 	}
+	// reason and readable_file are logged together on purpose: the enum is
+	// trusted rather than enforced for the non-readability cases, so the only
+	// way to find a model routinely claiming wrong_content over files that
+	// read fine is to have both recorded on every run.
 	d.logAction(ctx, toolArrRemoveAndSearch, map[string]any{
 		paramMediaType: plan.MediaType,
 		paramTitle:     plan.Title,
 		paramScope:     plan.Scope,
 		paramSeason:    plan.SeasonNumber,
 		paramEpisode:   plan.EpisodeNumber,
+		paramReason:    plan.Reason,
+		"readable_file": func() string {
+			if plan.Readability == nil {
+				return ""
+			}
+			return plan.Readability.ReadableFile
+		}(),
 	})
 	return result, nil
 }
@@ -1373,12 +1485,20 @@ func (d *Dispatcher) buildReplaceRequest(args map[string]any) (client.ReplaceReq
 		return client.ReplaceRequest{}, nil, fmt.Errorf("arr_remove_and_search: %w", err)
 	}
 
+	reason, _ := args[paramReason].(string)
+	if !slices.Contains(client.ReplaceReasons(), reason) {
+		return client.ReplaceRequest{}, nil, fmt.Errorf(
+			"arr_remove_and_search: reason must be one of %v, got %q",
+			client.ReplaceReasons(), reason)
+	}
+
 	req := client.ReplaceRequest{
 		MediaType: mediaType,
 		Title:     title,
 		Scope:     scope,
 		Season:    season,
 		Episode:   episode,
+		Reason:    reason,
 	}
 	if blocklist, ok := args[paramBlocklist].(bool); ok {
 		req.SkipBlocklist = !blocklist

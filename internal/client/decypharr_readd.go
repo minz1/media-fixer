@@ -28,9 +28,9 @@ type ReaddPlan struct {
 	Category string `json:"category"`
 	// Magnet is what the torrent will be re-added from. PlanTorrentReadd
 	// refuses to produce a plan without it — see its doc comment.
-	Magnet string `json:"magnet"`
-	State  string `json:"state"`
-	Debrid string `json:"debrid"`
+	Magnet   string `json:"magnet"`
+	State    string `json:"state"`
+	Provider string `json:"provider"`
 }
 
 // ReaddResult reports what ExecuteTorrentReadd actually did. On a partial
@@ -92,7 +92,7 @@ func (c *DecypharrClient) PlanTorrentReadd(ctx context.Context, name string) (*R
 		Category: match.Category,
 		Magnet:   match.Magnet,
 		State:    match.State,
-		Debrid:   match.Debrid,
+		Provider: match.ActiveProvider,
 	}, nil
 }
 

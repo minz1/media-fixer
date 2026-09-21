@@ -24,6 +24,54 @@ const (
 // noScope is the season/episode-number sentinel meaning "not applicable".
 const noScope = -1
 
+// Reasons a remove-and-search can be justified by. The agent must state one,
+// because it is the premise the plan gets checked against — see
+// ReadabilityProbe.
+const (
+	// ReplaceReasonUnreadable claims the file cannot be read (EIO, near-zero
+	// bytes). This is the one premise that is mechanically checkable, and a
+	// plan claiming it is refused if any target file reads fine.
+	ReplaceReasonUnreadable = "unreadable"
+	// ReplaceReasonWrongContent claims the file is the wrong material
+	// entirely; ReplaceReasonWrongQuality claims it is the right material at
+	// an unusable quality. Neither is a readability claim, so neither is
+	// contradicted by a file that reads.
+	ReplaceReasonWrongContent = "wrong_content"
+	ReplaceReasonWrongQuality = "wrong_quality"
+	ReplaceReasonOther        = "other"
+)
+
+// ReplaceReasons is the full set, for schema generation and validation.
+func ReplaceReasons() []string {
+	return []string{
+		ReplaceReasonUnreadable, ReplaceReasonWrongContent,
+		ReplaceReasonWrongQuality, ReplaceReasonOther,
+	}
+}
+
+// ReadabilityProbe records whether any file this plan would delete could
+// actually be read, captured when the plan was built.
+//
+// It exists because remove_and_search had no premise check at all, unlike
+// arr_search_missing, which verifies its own ("the file is missing") by
+// calling resolveMediaStatus and refusing when *arr already has the file.
+// "A file exists" cannot be the refusal condition here — that is the normal
+// case for this tool — so the check has to be against the stated Reason.
+type ReadabilityProbe struct {
+	// Checked is false when no media-agent was available. An absent signal is
+	// never treated as either healthy or broken.
+	Checked bool `json:"checked"`
+	// Probed counts files actually tested (bounded; a series-scope plan can
+	// list far more files than is worth reading 100MiB from).
+	Probed int `json:"probed"`
+	// ReadableFile is the first target file that read back fine, if any. One
+	// is enough: if a plan claiming "unreadable" contains a file that reads,
+	// either the premise is wrong or the scope is too wide, and both are
+	// reasons not to delete.
+	ReadableFile string `json:"readable_file,omitempty"`
+	BytesRead    int64  `json:"bytes_read,omitempty"`
+}
+
 // ReplaceRequest describes a remove-and-re-search action: delete the file(s)
 // backing a piece of media, blocklist the grabs that produced them, and
 // trigger a fresh search.
@@ -31,6 +79,7 @@ type ReplaceRequest struct {
 	MediaType string // ReplaceMediaTV | ReplaceMediaMovie
 	Title     string
 	Scope     string // ReplaceScopeEpisode | ReplaceScopeSeason | ReplaceScopeSeries; ignored for movie
+	Reason    string // one of ReplaceReasons(); the premise the plan is checked against
 	Season    int    // season number; required when Scope is episode or season
 	Episode   int    // episode number; required when Scope is episode
 	// SkipBlocklist, if true, still deletes files and searches but does not
@@ -67,6 +116,13 @@ type ReplacePlan struct {
 	Files            []ReplaceFile   `json:"files"`
 	GrabsToBlocklist []HistoryRecord `json:"grabs_to_blocklist"`
 	SkipBlocklist    bool            `json:"skip_blocklist"`
+
+	// Reason is the premise the agent stated, and Readability is what probing
+	// the targets found. Both are carried on the plan (not recomputed at
+	// execute time) because the plan is what the owner approved — the
+	// evidence they saw has to be the evidence the refusal uses.
+	Reason      string            `json:"reason,omitempty"`
+	Readability *ReadabilityProbe `json:"readability,omitempty"`
 }
 
 // ReplaceResult reports what ExecuteReplace actually did. On a partial
@@ -113,6 +169,7 @@ func (c *ArrClient) planMovieReplace(ctx context.Context, req ReplaceRequest) (*
 		EpisodeID:        noScope,
 		GrabsToBlocklist: grabs,
 		SkipBlocklist:    req.SkipBlocklist,
+		Reason:           req.Reason,
 	}
 	for _, f := range files {
 		plan.Files = append(plan.Files, ReplaceFile{ID: f.ID, Path: f.Path, Size: f.Size})
@@ -158,6 +215,7 @@ func (c *ArrClient) planEpisodeReplace(ctx context.Context, series *Series, req 
 		EpisodeNumber: req.Episode,
 		EpisodeID:     ep.ID,
 		SkipBlocklist: req.SkipBlocklist,
+		Reason:        req.Reason,
 	}
 	if ep.HasFile {
 		files, filesErr := c.GetEpisodeFiles(ctx, series.ID)
@@ -213,6 +271,7 @@ func (c *ArrClient) planSeasonReplace(ctx context.Context, series *Series, req R
 		EpisodeID:        noScope,
 		GrabsToBlocklist: grabs,
 		SkipBlocklist:    req.SkipBlocklist,
+		Reason:           req.Reason,
 	}
 	for _, f := range files {
 		if seasonFileIDs[f.ID] {
@@ -242,6 +301,7 @@ func (c *ArrClient) planSeriesReplace(ctx context.Context, series *Series, req R
 		EpisodeID:        noScope,
 		GrabsToBlocklist: grabs,
 		SkipBlocklist:    req.SkipBlocklist,
+		Reason:           req.Reason,
 	}
 	for _, f := range files {
 		plan.Files = append(plan.Files, ReplaceFile{ID: f.ID, Path: f.Path, Size: f.Size})

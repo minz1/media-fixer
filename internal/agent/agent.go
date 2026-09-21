@@ -73,13 +73,25 @@ Step 2 — Disk check (always required).
 
 Step 3 — Torrent state (always required).
   Call get_torrent_state with the show/movie name. Records decypharr's view of the torrent
-  and gives you the torrent folder name for step 4.
+  and gives you the torrent folder name for step 4: that is the entry's original_filename,
+  NOT its name — decypharr names the on-disk folder after original_filename, and the two
+  differ whenever the *arr renamed the grab. Fall back to name only if original_filename
+  is absent.
 
 Step 4 — File readability (always required).
   Determine the file path, then call dd_readability_test on it. Never pass a directory.
   - If jellyfin_playback_info returned MediaSources[].Path, use that path.
   - If MediaSources was empty or step 1 was skipped: call list_directory on
-    /mnt/decypharr/<torrent-folder-from-step-3> to find the video file, then use that path.
+    /mnt/decypharr/__all__/<torrent-folder-from-step-3> to find the video file, then use that
+    path. If that ENOENTs, retry once against /mnt/decypharr/<torrent-folder-from-step-3>
+    before treating the content as absent.
+  - A missing directory does NOT by itself mean the media is missing. If decypharr reports
+    the entry complete (state/status downloaded, bad=false) and no directory for it exists
+    on the mount, it is most likely a SUPERSEDED entry: the grab was replaced and decypharr
+    never dropped the old record. Confirm by listing the /data/library path for the title —
+    if it resolves (via is_symlink/target) to a DIFFERENT torrent directory that reads fine,
+    the media is HEALTHY and there is nothing to fix. Say so and stop; do not report it as
+    missing and do not search for a replacement.
   - If a path under /data/library is a symlink (is_symlink=true), dd-test its target
     (the /mnt/decypharr/__all__/... path), not the link itself.
   EIO errors or near-zero bytes-read on a file that DOES exist confirm a FUSE/debrid link
@@ -211,9 +223,13 @@ manual_investigation.
     (not a FUSE/mount/service problem — those are refresh_decypharr_links, restart_decypharr,
     etc., which you call directly). When you set this, you MUST also set escalate_params:
     media_type ("tv"|"movie"), title, scope ("episode"|"season"|"series", tv only), season
-    and episode (ints, when scope needs them), blocklist (bool, default true). Be as specific
-    as the evidence allows — prefer scope=episode over season or series when you know which
-    episode is bad.
+    and episode (ints, when scope needs them), blocklist (bool, default true), and reason.
+    reason is one of: unreadable | wrong_content | wrong_quality | other — state the real
+    premise. "unreadable" is CHECKED: the files are read before anything is deleted, and the
+    whole plan is refused if any of them reads back fine. Do not claim it for content that is
+    merely wrong; say wrong_content or wrong_quality instead, which are not contradicted by a
+    file that reads. Be as specific as the evidence allows — prefer scope=episode over season
+    or series when you know which episode is bad.
   - delete_torrent_readd: decypharr has the torrent but its debrid links are broken in a way
     the repair tools cannot fix — you have ALREADY tried refresh_decypharr_links and
     decypharr_repair_sweep this incident and dd_readability_test still fails with an I/O error
