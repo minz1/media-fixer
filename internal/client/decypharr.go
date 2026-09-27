@@ -25,12 +25,7 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 }
 
 type TorrentEntry struct {
-	Name string `json:"name"`
-	// OriginalFilename is the release name the debrid provider stored, and is
-	// what decypharr names the on-disk folder under /mnt/decypharr/. It differs
-	// from Name whenever the *arr renamed the grab (~1 in 5 entries here,
-	// renamed anime releases especially), so a path built from Name ENOENTs on
-	// content that is actually present.
+	Name             string `json:"name"`
 	OriginalFilename string `json:"original_filename,omitempty"`
 	InfoHash         string `json:"info_hash"`
 	Category         string `json:"category"`

@@ -28,12 +28,6 @@ func findCheck(
 	return nil
 }
 
-// TestCheckListDirectory_TriesAllCandidateDirs is a regression test for two
-// layout facts. Real torrent files live under /mnt/decypharr/__all__/<dir>/
-// rather than /mnt/decypharr/<dir> directly, and <dir> is the torrent's
-// original_filename, not the name decypharr reports to the *arrs — they
-// differ whenever the *arr renamed the grab. A version of this check that
-// tried only /mnt/decypharr/<name> ENOENT'd even when the file was there.
 func TestCheckListDirectory_TriesAllCandidateDirs(t *testing.T) {
 	t.Parallel()
 	const (

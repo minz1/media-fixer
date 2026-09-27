@@ -85,13 +85,23 @@ Step 4 — File readability (always required).
     /mnt/decypharr/__all__/<torrent-folder-from-step-3> to find the video file, then use that
     path. If that ENOENTs, retry once against /mnt/decypharr/<torrent-folder-from-step-3>
     before treating the content as absent.
-  - A missing directory does NOT by itself mean the media is missing. If decypharr reports
-    the entry complete (state/status downloaded, bad=false) and no directory for it exists
-    on the mount, it is most likely a SUPERSEDED entry: the grab was replaced and decypharr
-    never dropped the old record. Confirm by listing the /data/library path for the title —
-    if it resolves (via is_symlink/target) to a DIFFERENT torrent directory that reads fine,
-    the media is HEALTHY and there is nothing to fix. Say so and stop; do not report it as
-    missing and do not search for a replacement.
+  - A missing directory does NOT by itself mean the media was never downloaded, and it does
+    NOT mean everything is fine either. get_torrent_state is OPTIMISTIC: entries routinely
+    report status=downloaded, is_complete=true, bad=false while no directory for them exists
+    on the mount. That combination means the debrid link is BROKEN, not that the record is
+    stale. The authoritative view is the repair subsystem, not the torrent list, so call
+    get_repair_status (and get_repair_health for the fleet-wide counts) before concluding.
+    decypharr runs repair sweeps with auto_repair on: it probes every link, and for a broken
+    one it queues an Arr reacquisition itself. If repair is running or already counted this
+    entry, the fix is UNDERWAY — report that and stop. Do NOT call arr_search_missing and do
+    NOT escalate remove_and_search; both duplicate what repair is already doing.
+    Two things change the answer:
+    - If the /data/library path for this title resolves (via is_symlink/target) to a DIFFERENT
+      torrent directory that reads fine, then THIS incident's media is playable even though
+      the probed link is broken. Say the media plays, and still attribute the broken link to
+      repair rather than calling it healthy.
+    - If get_torrent_state has NO entry for the release at all, repair will never probe it.
+      That is a true orphan link, and it needs the Arr to re-acquire.
   - If a path under /data/library is a symlink (is_symlink=true), dd-test its target
     (the /mnt/decypharr/__all__/... path), not the link itself.
   EIO errors or near-zero bytes-read on a file that DOES exist confirm a FUSE/debrid link

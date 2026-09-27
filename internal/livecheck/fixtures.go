@@ -194,9 +194,6 @@ func discoverTorrentName(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 // decypharrCandidateDirs are the directory layouts this stack has used for a
 // torrent's files, tried in order (see systemPrompt's note that
 // /data/library entries are symlinks into /mnt/decypharr/__all__/<torrent>/).
-// folder is the torrent's original_filename, which is what decypharr actually
-// names the directory; name is its display name, tried only as a fallback for
-// a fixture supplied by config with no original_filename to go on.
 func decypharrCandidateDirs(folder, name string) []string {
 	var dirs []string
 	for _, n := range []string{folder, name} {

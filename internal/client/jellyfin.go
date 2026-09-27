@@ -33,10 +33,6 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 	}
 }
 
-// authorize sets the API-key auth header. Jellyfin 12 dropped the legacy
-// X-Emby-Token header and the api_key query parameter — both now 401 — and
-// only accepts the Authorization: MediaBrowser scheme, which 10.x accepted
-// too, so this is the one form that works across both.
 func (c *JellyfinClient) authorize(req *http.Request) {
 	req.Header.Set("Authorization", `MediaBrowser Token="`+c.apiKey+`"`)
 }
