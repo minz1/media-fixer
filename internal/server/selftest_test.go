@@ -231,7 +231,7 @@ func TestSelftestRun_ShowsReaddFixture(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "readd=&#34;Unique.Movie&#34;") {
-		t.Errorf("expected readd fixture in report, got: %s", body)
+	if !strings.Contains(string(body), `readd="Unique.Movie"`) {
+		t.Errorf("status %d: expected readd fixture in report, got: %s", resp.StatusCode, body)
 	}
 }
