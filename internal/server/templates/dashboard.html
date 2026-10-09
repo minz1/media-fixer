@@ -544,6 +544,7 @@
     fixtures: {{if .Fixtures.SeriesTitle}}sonarr="{{.Fixtures.SeriesTitle}}"
     {{end}} {{if .Fixtures.MovieTitle}}radarr="{{.Fixtures.MovieTitle}}"
     {{end}} {{if .Fixtures.TorrentName}}torrent="{{.Fixtures.TorrentName}}"
+    {{end}} {{if .Fixtures.ReaddTorrentName}}readd="{{.Fixtures.ReaddTorrentName}}"
     {{end}} {{if .Fixtures.SamplePath}}file={{.Fixtures.SamplePath}}{{end}}
   </p>
   {{end}} {{range .Fixtures.Notes}}
