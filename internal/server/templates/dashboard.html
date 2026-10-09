@@ -10,6 +10,42 @@
        opened by any browser. -->
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@4.0.0/dist/ext/hx-sse.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --color-gray-50: oklch(16% 0.02 262);
+        --color-gray-100: oklch(28% 0.03 257);
+        --color-gray-200: oklch(34% 0.03 260);
+        --color-gray-400: oklch(60% 0.02 261);
+        --color-gray-500: oklch(71% 0.02 261);
+        --color-gray-600: oklch(80% 0.015 260);
+        --color-gray-700: oklch(87% 0.01 258);
+        --color-gray-800: oklch(92% 0.006 264);
+        --color-gray-900: oklch(97% 0.003 264);
+        --color-red-100: oklch(30% 0.09 25);
+        --color-orange-100: oklch(31% 0.08 47);
+        --color-amber-50: oklch(25% 0.05 70);
+        --color-yellow-100: oklch(32% 0.07 86);
+        --color-green-100: oklch(30% 0.07 150);
+        --color-blue-100: oklch(30% 0.08 260);
+        --color-purple-50: oklch(24% 0.05 305);
+        --color-purple-100: oklch(30% 0.09 305);
+        --color-purple-200: oklch(38% 0.1 305);
+      }
+      .bg-white { background-color: oklch(21% 0.025 262); }
+      .text-red-600 { color: oklch(72% 0.17 25); }
+      .text-blue-600, .text-blue-700 { color: oklch(74% 0.13 255); }
+      .text-amber-600, .text-amber-700 { color: oklch(80% 0.14 75); }
+      .text-amber-800, .text-amber-900 { color: oklch(88% 0.1 80); }
+      .text-red-800 { color: oklch(85% 0.09 20); }
+      .text-orange-800 { color: oklch(86% 0.09 50); }
+      .text-yellow-800 { color: oklch(90% 0.1 95); }
+      .text-green-800 { color: oklch(87% 0.11 150); }
+      .text-blue-800 { color: oklch(86% 0.08 255); }
+      .text-purple-800 { color: oklch(85% 0.09 305); }
+    }
+  </style>
 </head>
 {{end}}
 
