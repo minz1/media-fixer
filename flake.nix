@@ -23,7 +23,7 @@
           commonArgs = {
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-poi3xB2+kRpiSgh5Mwm5U8tUBV3gToG3ci2nWFuYlXA=";
+            vendorHash = "sha256-9ZYqRj0H+teq4fj3GCn6M8DuNBX45fd8v8QsyQeO7FY=";
             env.CGO_ENABLED = "0";
             ldflags = [
               "-s"
