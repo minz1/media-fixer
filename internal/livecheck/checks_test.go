@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -68,5 +69,25 @@ func TestCheckListDirectory_TriesAllCandidateDirs(t *testing.T) {
 
 	if result.Status != livecheck.StatusOK {
 		t.Errorf("status = %s, detail = %s, err = %s", result.Status, result.Detail, result.Error)
+	}
+}
+
+func TestCheckArrRemoveAndSearch_PassesArgValidation(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	disp := &agent.Dispatcher{Sonarr: client.NewArr(srv.URL, "key")}
+	fx := livecheck.Fixtures{SeriesTitle: "The Legend of Korra"}
+
+	run := findCheck(t, "arr_remove_and_search")
+	result := run(context.Background(), disp, &fx, livecheck.Options{})
+
+	if hits.Load() == 0 {
+		t.Errorf("arr never contacted: status = %s, detail = %s, err = %s", result.Status, result.Detail, result.Error)
 	}
 }

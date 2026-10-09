@@ -36,6 +36,7 @@ const (
 	argMinutesBack = "minutes_back"
 	argMediaType   = "media_type"
 	argScope       = "scope"
+	argReason      = "reason"
 )
 
 // defaultLokiMinutesBack is how far back the loki_query check looks.
@@ -399,11 +400,13 @@ func arrRemoveAndSearchArgs(fx *Fixtures) (map[string]any, string, bool) {
 			argMediaType: "tv",
 			argTitle:     fx.SeriesTitle,
 			argScope:     "series",
+			argReason:    client.ReplaceReasonOther,
 		}, "", true
 	case fx.MovieTitle != "":
 		return map[string]any{
 			argMediaType: "movie",
 			argTitle:     fx.MovieTitle,
+			argReason:    client.ReplaceReasonOther,
 		}, "", true
 	default:
 		return nil, "no series or movie title discovered", false
