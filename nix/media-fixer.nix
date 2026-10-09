@@ -42,6 +42,9 @@
     media_agent = {
       url = cfg.mediaAgent.url;
     };
+    seerr = {
+      url = cfg.seerr.url;
+    };
   } // lib.optionalAttrs (cfg.controlLlm.model != "") {
     control_llm = {
       base_url = cfg.controlLlm.baseURL;
@@ -80,6 +83,8 @@ in {
           MEDIA_FIXER_RADARR_API_KEY
           MEDIA_FIXER_MEDIA_AGENT_API_KEY
           MEDIA_FIXER_CONTROL_LLM_API_KEY  # optional
+          MEDIA_FIXER_SEERR_API_KEY  # optional, with seerr.url
+          MEDIA_FIXER_SEERR_WEBHOOK_SECRET  # /ingest/seerr returns 503 without it
 
         With sops-nix, set this to config.sops.secrets."media-fixer-env".path.
       '';
@@ -181,6 +186,15 @@ in {
         type = lib.types.str;
         description = "Base URL of the media-agent sidecar on minz-media-0.";
         example = "http://10.100.0.2:9191";
+      };
+    };
+
+    seerr = {
+      url = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Base URL of Seerr, for commenting on and resolving reported issues. Empty disables it.";
+        example = "https://10.10.0.7:5055";
       };
     };
   };

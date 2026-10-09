@@ -61,8 +61,14 @@ type Service struct {
 	control    *agent.ControlReviewer
 	summarizer *agent.Summarizer
 	notif      Notifier
+	seerr      SeerrIssues
 	log        *slog.Logger
 	runs       *runManager
+}
+
+type SeerrIssues interface {
+	Comment(ctx context.Context, issueID, message string) error
+	Resolve(ctx context.Context, issueID string) error
 }
 
 // Notifier is implemented by the Discord bot to send DMs.
@@ -98,6 +104,10 @@ func NewService(
 	return s
 }
 
+func (s *Service) SetSeerr(seerr SeerrIssues) {
+	s.seerr = seerr
+}
+
 // launch starts a background agent run for an incident with a fixed seed (nil
 // for a fresh run). Thin wrapper over launchWithSeed for callers that already
 // have a fully-built seed in hand.
@@ -126,6 +136,7 @@ type Report struct {
 	Source            string // "discord" | "seerr"
 	ReportedBy        string
 	ReporterDiscordID string // empty for non-Discord sources
+	SeerrIssueID      string
 	What              string // "cant_play" | "login_failed" | "missing_media" | "other"
 	Title             string
 	JellyfinItemID    string
@@ -197,6 +208,13 @@ func (s *Service) addReporter(ctx context.Context, incidentID string, r *Report)
 			"incident", incidentID, "reporter", r.ReportedBy, "error", err)
 	}
 	s.recordReporterAdded(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+	if r.SeerrIssueID == "" {
+		return
+	}
+	if err := s.db.AddSeerrIssue(ctx, incidentID, r.SeerrIssueID); err != nil {
+		s.log.ErrorContext(ctx, "add seerr issue",
+			"incident", incidentID, "issue", r.SeerrIssueID, "error", err)
+	}
 }
 
 func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) {
@@ -515,6 +533,7 @@ func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, acti
 		inc,
 		fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
 	)
+	s.resolveSeerrIssues(ctx, inc)
 }
 
 // runVerification re-checks, up to maxVerifyLoops times, whether a deferred
@@ -651,10 +670,16 @@ func (s *Service) Resolve(ctx context.Context, id string) error {
 		return err
 	}
 	s.notifyReporters(ctx, inc, fmt.Sprintf("✅ Your report for **%s** has been resolved. Give it a try!", inc.Title))
+	s.resolveSeerrIssues(ctx, inc)
 	return nil
 }
 
 func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg string) {
+	s.notifyDiscordReporters(ctx, inc, msg)
+	s.notifySeerrIssues(ctx, inc, "comment on", func(id string) error { return s.seerr.Comment(ctx, id, msg) })
+}
+
+func (s *Service) notifyDiscordReporters(ctx context.Context, inc *db.Incident, msg string) {
 	ids, err := s.db.ListDiscordReporterIDs(ctx, inc.ID)
 	if err != nil {
 		s.log.ErrorContext(ctx, "list discord reporter IDs", "incident", inc.ID, "error", err)
@@ -674,6 +699,29 @@ func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg str
 			))
 		}
 	}
+}
+
+func (s *Service) notifySeerrIssues(ctx context.Context, inc *db.Incident, verb string, call func(string) error) {
+	if s.seerr == nil {
+		return
+	}
+	ids, err := s.db.ListSeerrIssueIDs(ctx, inc.ID)
+	if err != nil {
+		s.log.ErrorContext(ctx, "list seerr issue IDs", "incident", inc.ID, "error", err)
+		return
+	}
+	for _, id := range ids {
+		if callErr := call(id); callErr != nil {
+			s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", callErr)
+			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+				"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v", verb, id, inc.Title, inc.ID[:8], callErr,
+			))
+		}
+	}
+}
+
+func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
+	s.notifySeerrIssues(ctx, inc, "resolve", func(id string) error { return s.seerr.Resolve(ctx, id) })
 }
 
 // Unlock clears an incident's autonomous lock so the agent may act on it again.

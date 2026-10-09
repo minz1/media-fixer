@@ -58,6 +58,8 @@ type Server struct {
 	// long-lived SSE handlers to return so Shutdown can drain. Closed exactly
 	// once, by Start.
 	shutdown chan struct{}
+
+	seerrWebhookSecret string
 }
 
 // SetChecker wires the dispatcher the /selftest page runs checks against.
@@ -65,6 +67,10 @@ type Server struct {
 // zero value before this is called) is handled gracefully by the handlers.
 func (s *Server) SetChecker(disp *agent.Dispatcher) {
 	s.checker = disp
+}
+
+func (s *Server) SetSeerrWebhookSecret(secret string) {
+	s.seerrWebhookSecret = secret
 }
 
 func New(

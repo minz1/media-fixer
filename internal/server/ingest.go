@@ -1,8 +1,10 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/minz1/mediafixer/internal/incident"
 )
@@ -28,6 +30,16 @@ type seerrPayload struct {
 const maxSeerrBodyBytes = 1 << 20 // 1 MiB
 
 func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
+	if s.seerrWebhookSecret == "" {
+		http.Error(w, "seerr webhook not configured", http.StatusServiceUnavailable)
+		return
+	}
+	want := []byte("Bearer " + s.seerrWebhookSecret)
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	var payload seerrPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSeerrBodyBytes)).Decode(&payload); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -35,7 +47,7 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only act on new issues; ignore comments/resolves (those come from us).
-	if payload.NotificationType != "ISSUE_CREATED" {
+	if payload.NotificationType != "ISSUE_CREATED" && payload.NotificationType != "ISSUE_REOPENED" {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -51,6 +63,11 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 		details = "[media_type:" + payload.MediaType + "] " + details
 	}
 
+	issueID := payload.IssueID
+	if _, err := strconv.ParseUint(issueID, 10, 64); err != nil {
+		issueID = ""
+	}
+
 	rep := &incident.Report{
 		Source:         "seerr",
 		ReportedBy:     payload.ReportedBy,
@@ -58,6 +75,7 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 		Title:          title,
 		JellyfinItemID: payload.MediaJellyfinID,
 		Details:        details,
+		SeerrIssueID:   issueID,
 	}
 
 	inc, err := s.svc.Handle(r.Context(), rep)

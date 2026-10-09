@@ -11,6 +11,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/clientset"
 	"github.com/minz1/mediafixer/internal/config"
 	"github.com/minz1/mediafixer/internal/db"
@@ -101,6 +102,11 @@ func run() error {
 	}
 
 	svc := incident.NewService(ctx, database, jrnl, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
+	if cfg.Seerr.URL != "" {
+		svc.SetSeerr(client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey))
+	} else {
+		log.Warn("seerr not configured — seerr reporters get no issue updates")
+	}
 	bot.SetService(svc)
 
 	if err = bot.Start(); err != nil {
@@ -119,6 +125,7 @@ func run() error {
 	// rows to) never write actions_log entries — same as the media-fixer-check
 	// CLI.
 	srv.SetChecker(bundle.clients.Dispatcher(nil, nil))
+	srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 

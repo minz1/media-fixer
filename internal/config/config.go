@@ -19,6 +19,7 @@ type Config struct {
 	Radarr     ArrConfig        `toml:"radarr"`
 	Loki       LokiConfig       `toml:"loki"`
 	MediaAgent MediaAgentConfig `toml:"media_agent"`
+	Seerr      SeerrConfig      `toml:"seerr"`
 	SelfTest   SelfTestConfig   `toml:"selftest"`
 }
 
@@ -70,6 +71,12 @@ type MediaAgentConfig struct {
 	APIKey string `toml:"api_key"`
 }
 
+type SeerrConfig struct {
+	URL           string `toml:"url"`
+	APIKey        string `toml:"api_key"`
+	WebhookSecret string `toml:"webhook_secret"`
+}
+
 // SelfTestConfig optionally seeds or overrides the live-check suite's
 // auto-discovered fixtures (see internal/livecheck). Every field is
 // optional; discovery fills in whatever is left blank.
@@ -115,6 +122,8 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("MEDIA_FIXER_MEDIA_AGENT_API_KEY", &cfg.MediaAgent.APIKey)
 	envOverride("MEDIA_FIXER_LOKI_TLS_CERT", &cfg.Loki.TLSCert)
 	envOverride("MEDIA_FIXER_LOKI_TLS_KEY", &cfg.Loki.TLSKey)
+	envOverride("MEDIA_FIXER_SEERR_API_KEY", &cfg.Seerr.APIKey)
+	envOverride("MEDIA_FIXER_SEERR_WEBHOOK_SECRET", &cfg.Seerr.WebhookSecret)
 
 	if v := os.Getenv("MEDIA_FIXER_CONTROL_LLM_API_KEY"); v != "" {
 		if cfg.ControlLLM == nil {

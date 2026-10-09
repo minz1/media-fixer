@@ -1270,3 +1270,56 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 		t.Fatal("timed out waiting for the stale run to be rerun")
 	}
 }
+
+type fakeSeerr struct {
+	mu       sync.Mutex
+	comments map[string][]string
+	resolved []string
+}
+
+func (f *fakeSeerr) Comment(_ context.Context, issueID, msg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.comments == nil {
+		f.comments = map[string][]string{}
+	}
+	f.comments[issueID] = append(f.comments[issueID], msg)
+	return nil
+}
+
+func (f *fakeSeerr) Resolve(_ context.Context, issueID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolved = append(f.resolved, issueID)
+	return nil
+}
+
+func TestResolve_UpdatesLinkedSeerrIssues(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newTestService(t)
+	seerr := &fakeSeerr{}
+	svc.SetSeerr(seerr)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Andor", SeerrIssueID: "42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Handle(ctx, &incident.Report{
+		Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Andor", SeerrIssueID: "43",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Resolve(ctx, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seerr.comments["42"]) != 1 || len(seerr.comments["43"]) != 1 {
+		t.Errorf("comments = %v, want one on each issue", seerr.comments)
+	}
+	if strings.Join(seerr.resolved, ",") != "42,43" {
+		t.Errorf("resolved = %v, want [42 43]", seerr.resolved)
+	}
+}

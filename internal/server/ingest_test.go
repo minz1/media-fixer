@@ -51,10 +51,18 @@ func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.SetSeerrWebhookSecret(testWebhookSecret)
 	return srv, database
 }
 
+const testWebhookSecret = "s3cret"
+
 func postSeerr(t *testing.T, ts *httptest.Server, payload map[string]any) *http.Response {
+	t.Helper()
+	return postSeerrAuth(t, ts, payload, "Bearer "+testWebhookSecret)
+}
+
+func postSeerrAuth(t *testing.T, ts *httptest.Server, payload map[string]any, auth string) *http.Response {
 	t.Helper()
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(
@@ -67,6 +75,9 @@ func postSeerr(t *testing.T, ts *httptest.Server, payload map[string]any) *http.
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +201,7 @@ func TestSeerrWebhook_BadJSON(t *testing.T) {
 		ts.URL+"/ingest/seerr",
 		bytes.NewReader([]byte("not json{")),
 	)
+	req.Header.Set("Authorization", "Bearer "+testWebhookSecret)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -218,5 +230,100 @@ func TestSeerrIssueTypeMapping(t *testing.T) {
 		if got != c.want {
 			t.Errorf("SeerrIssueTypeToWhat(%q) = %q want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestSeerrWebhook_RejectsBadAuth(t *testing.T) {
+	t.Parallel()
+	srv, database := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	payload := map[string]any{"notification_type": "ISSUE_CREATED", "subject": "Andor"}
+	for _, auth := range []string{"", "Bearer wrong", testWebhookSecret} {
+		resp := postSeerrAuth(t, ts, payload, auth)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("auth %q: got %d want 401", auth, resp.StatusCode)
+		}
+	}
+	incidents, err := database.ListIncidents(context.Background(), "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incidents) != 0 {
+		t.Errorf("got %d incidents want 0", len(incidents))
+	}
+}
+
+func TestSeerrWebhook_UnconfiguredSecretFailsClosed(t *testing.T) {
+	t.Parallel()
+	srv, _ := newTestServer(t)
+	srv.SetSeerrWebhookSecret("")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp := postSeerrAuth(t, ts, map[string]any{"notification_type": "ISSUE_CREATED", "subject": "Andor"}, "Bearer ")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("got %d want 503", resp.StatusCode)
+	}
+}
+
+func TestSeerrWebhook_ReopenedLinksIssue(t *testing.T) {
+	t.Parallel()
+	srv, database := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp := postSeerr(t, ts, map[string]any{
+		"notification_type": "ISSUE_REOPENED",
+		"subject":           "Andor",
+		"issue_id":          "42",
+		"issue_type":        "VIDEO",
+		"reported_by":       "alice",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status: got %d want 201", resp.StatusCode)
+	}
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := database.ListSeerrIssueIDs(context.Background(), result["incident_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "42" {
+		t.Errorf("seerr issue ids = %v, want [42]", ids)
+	}
+}
+
+func TestSeerrWebhook_IgnoresNonNumericIssueID(t *testing.T) {
+	t.Parallel()
+	srv, database := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp := postSeerr(t, ts, map[string]any{
+		"notification_type": "ISSUE_CREATED",
+		"subject":           "Andor",
+		"issue_id":          "{{issue_id}}",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status: got %d want 201", resp.StatusCode)
+	}
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := database.ListSeerrIssueIDs(context.Background(), result["incident_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("seerr issue ids = %v, want none", ids)
 	}
 }

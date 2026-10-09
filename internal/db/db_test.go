@@ -762,7 +762,7 @@ func TestOpen_BootstrapsLegacyDatabase(t *testing.T) {
 	// 1-6 are the reconciled legacy migrations this fixture simulates; 7-13
 	// are the new ones, which run unconditionally on top of any database
 	// (legacy or fresh) since they postdate schema_version.
-	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
 	if len(versions) != len(want) {
 		t.Fatalf("schema_version after bootstrap: got %v, want %v", versions, want)
 	}
@@ -840,5 +840,48 @@ func TestOpen_ReadPoolNotBlockedByWriteTransaction(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("read pool query did not complete while a write transaction was open — " +
 			"reads are blocking on writes, defeating the point of splitting the pools")
+	}
+}
+
+func TestSeerrIssues(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{Status: db.StatusOpen, Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Andor"}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"12", "13", "12"} {
+		if err := d.AddSeerrIssue(ctx, inc.ID, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := d.ListSeerrIssueIDs(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "12,13" {
+		t.Errorf("issue ids = %v, want [12 13]", got)
+	}
+}
+
+func TestSeerrIssuesMigration_CreatesTableOnExistingDB(t *testing.T) {
+	t.Parallel()
+	path := tempDBPath(t)
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	rawExec(t, path, `DROP TABLE incident_seerr_issues`, `DELETE FROM schema_version WHERE version = 14`)
+
+	d2, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Close()
+	if _, err = d2.ListSeerrIssueIDs(context.Background(), "missing"); err != nil {
+		t.Errorf("table not recreated on an existing db: %v", err)
 	}
 }

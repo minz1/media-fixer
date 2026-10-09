@@ -273,6 +273,7 @@ const (
 	migDropLastDisruption               = 11
 	migUTCTimestamps                    = 12
 	migIncidentsEscalationPlan          = 13
+	migIncidentSeerrIssues              = 14
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -544,6 +545,19 @@ func eventLogMigrations() []migration {
 					}
 				}
 				return nil
+			},
+		},
+		{
+			version: migIncidentSeerrIssues,
+			name:    "incident_seerr_issues",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS incident_seerr_issues (
+	incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+	issue_id    TEXT NOT NULL,
+	added_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (incident_id, issue_id)
+)`)
+				return err
 			},
 		},
 	}
@@ -1094,6 +1108,35 @@ func (d *DB) ListDiscordReporterIDs(ctx context.Context, incidentID string) ([]s
 	for rows.Next() {
 		err = rows.Scan(&id)
 		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) AddSeerrIssue(ctx context.Context, incidentID, issueID string) error {
+	_, err := d.write.ExecContext(ctx,
+		`INSERT OR IGNORE INTO incident_seerr_issues (incident_id, issue_id, added_at) VALUES (?, ?, ?)`,
+		incidentID, issueID, time.Now())
+	return err
+}
+
+func (d *DB) ListSeerrIssueIDs(ctx context.Context, incidentID string) ([]string, error) {
+	rows, err := d.read.QueryContext(ctx,
+		`SELECT issue_id FROM incident_seerr_issues WHERE incident_id = ? ORDER BY added_at, rowid`,
+		incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var (
+		out []string
+		id  string
+	)
+	for rows.Next() {
+		if err = rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		out = append(out, id)
