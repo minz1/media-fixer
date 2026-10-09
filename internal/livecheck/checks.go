@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
@@ -415,37 +416,57 @@ func arrRemoveAndSearchArgs(fx *Fixtures) (map[string]any, string, bool) {
 
 // --- shared helpers ---
 
+const (
+	repairIdlePoll = 2 * time.Second
+	repairIdleWait = 2 * time.Minute
+)
+
 // skipIfRepairRunning consults get_repair_status before a decypharr repair
 // action, so the live-check suite never stacks a second repair sweep on top
 // of one already in progress (the same rule the systemPrompt gives the
 // agent, enforced here for real since the write tools don't self-check it).
+// Waits up to repairIdleWait first: refresh_decypharr_links is itself a repair run.
 func skipIfRepairRunning(ctx context.Context, disp *agent.Dispatcher) (bool, Result) {
-	raw, err := disp.Decypharr.RepairStatus(ctx)
-	if err != nil {
-		// Can't determine status — proceed rather than block the check
-		// entirely; the action call below will surface any real problem.
-		return false, Result{}
-	}
-	running, recognized := decypharrRepairRunning(raw)
-	// recognized was previously discarded here, while env.go's equivalent
-	// used it. decypharrRepairStatus unmarshals into a one-field struct,
-	// which succeeds for any JSON object — so a build that renames or nests
-	// active_run decodes cleanly with the field empty and reads as "not
-	// running". That stacks a second sweep onto a live one and races
-	// decypharr's own lock: exactly the failure the comment below documents
-	// as already having happened once, re-entered through a different door.
-	if !recognized {
-		return true, Result{
-			Status: StatusDegraded,
-			Detail: "could not tell whether a decypharr repair is running (unrecognized " +
-				"/api/repair/status shape); skipping rather than risk stacking a second sweep",
+	deadline := time.Now().Add(repairIdleWait)
+	for {
+		raw, err := disp.Decypharr.RepairStatus(ctx)
+		if err != nil {
+			// Can't determine status — proceed rather than block the check
+			// entirely; the action call below will surface any real problem.
+			return false, Result{}
+		}
+		running, recognized := decypharrRepairRunning(raw)
+		// recognized was previously discarded here, while env.go's equivalent
+		// used it. decypharrRepairStatus unmarshals into a one-field struct,
+		// which succeeds for any JSON object — so a build that renames or nests
+		// active_run decodes cleanly with the field empty and reads as "not
+		// running". That stacks a second sweep onto a live one and races
+		// decypharr's own lock: exactly the failure the comment below documents
+		// as already having happened once, re-entered through a different door.
+		if !recognized {
+			return true, Result{
+				Status: StatusDegraded,
+				Detail: "could not tell whether a decypharr repair is running (unrecognized " +
+					"/api/repair/status shape); skipping rather than risk stacking a second sweep",
+			}
+		}
+		if !running {
+			return false, Result{}
+		}
+		if time.Now().After(deadline) {
+			detail := fmt.Sprintf("a decypharr repair is still running after waiting %s", repairIdleWait) +
+				decypharrActiveRunStageSuffix(raw)
+			return true, Result{Status: StatusSkipped, Detail: detail}
+		}
+		select {
+		case <-ctx.Done():
+			return true, Result{
+				Status: StatusSkipped,
+				Detail: "cancelled while waiting for a decypharr repair to finish",
+			}
+		case <-time.After(repairIdlePoll):
 		}
 	}
-	if running {
-		detail := "a decypharr repair is already running" + decypharrActiveRunStageSuffix(raw)
-		return true, Result{Status: StatusSkipped, Detail: detail}
-	}
-	return false, Result{}
 }
 
 // decypharrActiveRunStageSuffix best-effort appends the active run's stage

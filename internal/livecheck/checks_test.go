@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
@@ -89,5 +90,60 @@ func TestCheckArrRemoveAndSearch_PassesArgValidation(t *testing.T) {
 
 	if hits.Load() == 0 {
 		t.Errorf("arr never contacted: status = %s, detail = %s, err = %s", result.Status, result.Detail, result.Error)
+	}
+}
+
+func TestCheckRepairSweep_WaitsForActiveRunToFinish(t *testing.T) {
+	t.Parallel()
+
+	var statusCalls, runCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/repair/status", func(w http.ResponseWriter, _ *http.Request) {
+		if statusCalls.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"enabled":true,"active_run":{"status":"running","stage":"probing"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"enabled":true,"active_run":null}`))
+	})
+	mux.HandleFunc("/api/repair/run", func(w http.ResponseWriter, _ *http.Request) {
+		runCalls.Add(1)
+		_, _ = w.Write([]byte(`{"run_id":"r1"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	disp := &agent.Dispatcher{Decypharr: client.NewDecypharr(srv.URL, "token")}
+	run := findCheck(t, "decypharr_repair_sweep")
+	result := run(context.Background(), disp, &livecheck.Fixtures{}, livecheck.Options{AllowWrite: true})
+
+	if result.Status != livecheck.StatusOK || runCalls.Load() != 1 {
+		t.Errorf("status = %s, runs = %d, detail = %s, err = %s",
+			result.Status, runCalls.Load(), result.Detail, result.Error)
+	}
+}
+
+func TestCheckRepairSweep_CancelledWhileWaiting(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	var runCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/repair/status", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"enabled":true,"active_run":{"status":"running","stage":"probing"}}`))
+	})
+	mux.HandleFunc("/api/repair/run", func(w http.ResponseWriter, _ *http.Request) {
+		runCalls.Add(1)
+		_, _ = w.Write([]byte(`{"run_id":"r1"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	disp := &agent.Dispatcher{Decypharr: client.NewDecypharr(srv.URL, "token")}
+	run := findCheck(t, "decypharr_repair_sweep")
+	result := run(ctx, disp, &livecheck.Fixtures{}, livecheck.Options{AllowWrite: true})
+
+	if result.Status != livecheck.StatusSkipped || runCalls.Load() != 0 {
+		t.Errorf("status = %s, runs = %d, detail = %s", result.Status, runCalls.Load(), result.Detail)
 	}
 }
