@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
@@ -28,6 +29,7 @@ type Fixtures struct {
 	SeriesTitle            string `json:"series_title,omitempty"`
 	MovieTitle             string `json:"movie_title,omitempty"`
 	TorrentName            string `json:"torrent_name,omitempty"`
+	ReaddTorrentName       string `json:"readd_torrent_name,omitempty"`
 	TorrentFolder          string `json:"torrent_folder,omitempty"`
 	SamplePath             string `json:"sample_path,omitempty"`
 	RepairEntryName        string `json:"repair_entry_name,omitempty"`
@@ -169,15 +171,15 @@ func discoverJellyfinPlaybackItem(ctx context.Context, disp *agent.Dispatcher, f
 // this stack has used (see systemPrompt's note that /data/library entries
 // are symlinks into /mnt/decypharr/__all__/<torrent>/).
 func discoverTorrentAndSample(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
-	if fx.TorrentName == "" {
-		discoverTorrentName(ctx, disp, fx)
+	if fx.TorrentName == "" || fx.ReaddTorrentName == "" {
+		discoverTorrentNames(ctx, disp, fx)
 	}
 	if fx.SamplePath == "" && fx.TorrentName != "" {
 		discoverSamplePath(ctx, disp, fx)
 	}
 }
 
-func discoverTorrentName(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
+func discoverTorrentNames(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	torrents, err := disp.Decypharr.ListTorrents(ctx, "", "")
 	if err != nil {
 		fx.missing("decypharr torrent discovery: " + err.Error())
@@ -187,8 +189,42 @@ func discoverTorrentName(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 		fx.missing("decypharr has no torrents")
 		return
 	}
-	fx.TorrentName = torrents[0].Name
-	fx.TorrentFolder = torrents[0].OriginalFilename
+	if fx.TorrentName == "" {
+		fx.TorrentName = torrents[0].Name
+		fx.TorrentFolder = torrents[0].OriginalFilename
+	}
+	if fx.ReaddTorrentName == "" {
+		discoverReaddTorrentName(ctx, disp, fx, torrents)
+	}
+}
+
+func discoverReaddTorrentName(
+	ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, torrents []*client.TorrentEntry,
+) {
+	searched := map[string]bool{}
+	for _, t := range torrents {
+		name := strings.TrimSpace(t.Name)
+		if name == "" || strings.TrimSpace(t.Magnet) == "" || searched[strings.ToLower(name)] {
+			continue
+		}
+		searched[strings.ToLower(name)] = true
+		matches, err := disp.Decypharr.ListTorrents(ctx, name, "")
+		if err != nil {
+			fx.missing("decypharr readd fixture discovery: " + err.Error())
+			return
+		}
+		count := 0
+		for _, m := range matches {
+			if strings.EqualFold(strings.TrimSpace(m.Name), name) {
+				count++
+			}
+		}
+		if count == 1 {
+			fx.ReaddTorrentName = name
+			return
+		}
+	}
+	fx.missing("no decypharr torrent with a stored magnet and a unique name among the newest entries")
 }
 
 // decypharrCandidateDirs are the directory layouts this stack has used for a

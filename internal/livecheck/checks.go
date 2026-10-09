@@ -381,10 +381,10 @@ func checkArrRemoveAndSearch(ctx context.Context, disp *agent.Dispatcher, fx *Fi
 // that refusal is the guard that stops an unrecoverable delete, so surface it
 // as degraded rather than fail.
 func checkDecypharrDeleteReadd(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if fx.TorrentName == "" {
-		return degraded("no fixture: no torrent discovered")
+	if fx.ReaddTorrentName == "" {
+		return degraded("no fixture: no torrent with a stored magnet and a unique name discovered")
 	}
-	result, err := disp.Call(ctx, "decypharr_delete_readd", map[string]any{argName: fx.TorrentName})
+	result, err := disp.Call(ctx, "decypharr_delete_readd", map[string]any{argName: fx.ReaddTorrentName})
 	if err != nil && errors.Is(err, client.ErrNoMagnet) {
 		return degraded("fixture torrent has no stored magnet, so a re-add would be " +
 			"unrecoverable — the plan correctly refuses")

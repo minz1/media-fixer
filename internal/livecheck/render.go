@@ -65,6 +65,9 @@ func renderFixtures(w io.Writer, fx Fixtures) {
 	if fx.TorrentName != "" {
 		parts = append(parts, fmt.Sprintf("torrent=%q", fx.TorrentName))
 	}
+	if fx.ReaddTorrentName != "" {
+		parts = append(parts, fmt.Sprintf("readd=%q", fx.ReaddTorrentName))
+	}
 	if fx.SamplePath != "" {
 		parts = append(parts, "file="+fx.SamplePath)
 	}
