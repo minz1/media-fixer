@@ -9,3 +9,5 @@ result
 Logs-*.json
 dev.toml
 dev-run.sh
+
+docs/
