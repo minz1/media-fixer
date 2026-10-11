@@ -35,7 +35,7 @@ path seen right now could be a transient side effect of that disruption, not a f
 incident. Prefer re-checking (a fresh dd_readability_test, disk check, etc.) over concluding.
 
 Media files live under /mnt/decypharr. Cache is at /var/cache/decypharr. Other data is at /data.
-Library files under /data/library/{tv,movies}/ are SYMLINKS into /mnt/decypharr/__all__/<torrent>/.
+Library files under /data/library/{tv,anime,movies}/ are SYMLINKS into /mnt/decypharr/__all__/<torrent>/.
 list_directory reports each entry's is_symlink flag and its target — follow the target to find
 the real file on the FUSE mount.
 

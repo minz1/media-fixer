@@ -7,7 +7,7 @@ import (
 
 // Media types and scopes accepted by ReplaceRequest.
 //
-// A file deleted here under /data/library/{tv,movies} is a SYMLINK into
+// A file deleted here under /data/library/{tv,anime,movies} is a SYMLINK into
 // /mnt/decypharr/__all__/<torrent>/ — deleting it only removes the symlink
 // and Sonarr/Radarr's bookkeeping of it, not the underlying debrid content.
 // That is exactly what we want: the stale/bad entry stops being referenced
