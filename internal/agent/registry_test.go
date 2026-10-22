@@ -138,3 +138,43 @@ func TestEscalateActionEnum_RemoveAndSearchHasApprovalTool(t *testing.T) {
 		t.Errorf("escalateActionEnum() missing %q", agent.EscalateRemoveAndSearch)
 	}
 }
+
+func TestRegistry_EveryWriteToolHasUserPhrase(t *testing.T) {
+	t.Parallel()
+	for _, spec := range agent.ToolRegistry() {
+		if (spec.Risk == agent.RiskWrite || spec.Risk == agent.RiskApproval) && spec.UserPhrase == "" {
+			t.Errorf("%s: empty UserPhrase", spec.Name)
+		}
+	}
+}
+
+func TestUserPhrase_Values(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{
+		"refresh_decypharr_links": "fixing the media storage",
+		"decypharr_repair_sweep":  "fixing the media storage",
+		"decypharr_cache_cleanup": "fixing the media storage",
+		"decypharr_recheck":       "fixing the media storage",
+		"restart_decypharr":       "fixing the media storage",
+		"decypharr_delete_readd":  "fixing the media storage",
+		"clear_jellyfin_cache":    "reloading the app",
+		"restart_jellyfin":        "reloading the app",
+		"jellyfin_library_scan":   "updating the library",
+		"sonarr_rescan":           "updating the library",
+		"radarr_rescan":           "updating the library",
+		"arr_search_missing":      "looking for a new copy",
+		"arr_remove_and_search":   "looking for a new copy",
+		"nope":                    "",
+	}
+	for _, spec := range agent.ToolRegistry() {
+		if spec.Risk == agent.RiskRead {
+			want[spec.Name] = ""
+			break
+		}
+	}
+	for tool, phrase := range want {
+		if got := agent.UserPhrase(tool); got != phrase {
+			t.Errorf("UserPhrase(%q) = %q, want %q", tool, got, phrase)
+		}
+	}
+}

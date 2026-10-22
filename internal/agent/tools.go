@@ -18,6 +18,13 @@ import (
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
+const (
+	phraseStorage = "fixing the media storage"
+	phraseReload  = "reloading the app"
+	phraseLibrary = "updating the library"
+	phraseNewCopy = "looking for a new copy"
+)
+
 // Tool name constants used in both the registry and the system prompt.
 const (
 	toolJellyfinSearch       = "jellyfin_search"
@@ -149,10 +156,11 @@ const (
 // toolSpec is one entry in the tool registry: its LLM-facing definition, its
 // risk class, and the dispatcher method that executes it.
 type toolSpec struct {
-	Name    string
-	Def     *openai.FunctionDefinition
-	Risk    toolRisk
-	Handler func(*Dispatcher, context.Context, map[string]any) (any, error)
+	Name       string
+	Def        *openai.FunctionDefinition
+	Risk       toolRisk
+	Handler    func(*Dispatcher, context.Context, map[string]any) (any, error)
+	UserPhrase string
 }
 
 // toolRegistry is the single source of truth for every tool the agent knows
@@ -410,8 +418,9 @@ func decypharrActionToolSpecs() []toolSpec {
 				Description: "Trigger decypharr to re-unrestrict download URLs for broken entries (link refresh repair sweep). Use when dd shows EIO errors.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchRefreshLinks,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchRefreshLinks,
+			UserPhrase: phraseStorage,
 		},
 		{
 			Name: toolRepairSweep,
@@ -420,8 +429,9 @@ func decypharrActionToolSpecs() []toolSpec {
 				Description: "Trigger a general decypharr repair sweep without link refresh. Use after link refresh fails or to check for other broken entries.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchRepairSweep,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchRepairSweep,
+			UserPhrase: phraseStorage,
 		},
 		{
 			Name: toolCacheCleanup,
@@ -432,8 +442,9 @@ func decypharrActionToolSpecs() []toolSpec {
 					"restart_decypharr.",
 				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchCacheCleanup,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchCacheCleanup,
+			UserPhrase: phraseStorage,
 		},
 		{
 			Name: toolDecypharrRecheck,
@@ -446,8 +457,9 @@ func decypharrActionToolSpecs() []toolSpec {
 					"fix":     param("boolean", "Whether to apply a fix (default true)"),
 				}, []string{paramName}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchDecypharrRecheck,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchDecypharrRecheck,
+			UserPhrase: phraseStorage,
 		},
 	}
 }
@@ -465,8 +477,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 					"already running, do NOT call this — wait for it instead. Returns status started or already_running.",
 				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchLibraryScan,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchLibraryScan,
+			UserPhrase: phraseLibrary,
 		},
 		{
 			Name: toolRestartDecypharr,
@@ -475,8 +488,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				Description: "Restart the decypharr service. Use when decypharr appears stuck or the repair sweep hangs.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchRestartDecypharr,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchRestartDecypharr,
+			UserPhrase: phraseStorage,
 		},
 		{
 			Name: toolRestartJellyfin,
@@ -485,8 +499,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				Description: "Restart the Jellyfin service on the media host.",
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchRestartJellyfin,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchRestartJellyfin,
+			UserPhrase: phraseReload,
 		},
 		{
 			Name: toolSonarrRescan,
@@ -497,8 +512,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 					paramTitle: param("string", "Series title as known in Sonarr"),
 				}, []string{paramTitle}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchSonarrRescan,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchSonarrRescan,
+			UserPhrase: phraseLibrary,
 		},
 		{
 			Name: toolRadarrRescan,
@@ -509,8 +525,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 					paramTitle: param("string", "Movie title as known in Radarr"),
 				}, []string{paramTitle}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchRadarrRescan,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchRadarrRescan,
+			UserPhrase: phraseLibrary,
 		},
 		{
 			Name: toolClearJellyfinCache,
@@ -521,8 +538,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 					paramItemID: param("string", "Jellyfin item ID"),
 				}, []string{paramItemID}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchClearJellyfinCache,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchClearJellyfinCache,
+			UserPhrase: phraseReload,
 		},
 		{
 			Name: toolArrSearchMissing,
@@ -542,8 +560,9 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 					paramEpisode:   param("integer", "Episode number (tv only; requires season)"),
 				}, []string{paramMediaType, paramTitle}),
 			},
-			Risk:    riskWrite,
-			Handler: (*Dispatcher).dispatchArrSearchMissing,
+			Risk:       riskWrite,
+			Handler:    (*Dispatcher).dispatchArrSearchMissing,
+			UserPhrase: phraseNewCopy,
 		},
 	}
 }
@@ -567,8 +586,9 @@ func approvalToolSpecs() []toolSpec {
 				Parameters: jsonSchema(arrRemoveAndSearchProps(),
 					[]string{paramMediaType, paramTitle, paramReason}),
 			},
-			Risk:    riskApproval,
-			Handler: (*Dispatcher).readArrRemoveAndSearchPlan,
+			Risk:       riskApproval,
+			Handler:    (*Dispatcher).readArrRemoveAndSearchPlan,
+			UserPhrase: phraseNewCopy,
 		},
 		{
 			Name: toolDecypharrDeleteReadd,
@@ -581,8 +601,9 @@ func approvalToolSpecs() []toolSpec {
 					"complete_diagnosis.escalate_action, never call it directly.",
 				Parameters: jsonSchema(decypharrReaddProps(), []string{paramName}),
 			},
-			Risk:    riskApproval,
-			Handler: (*Dispatcher).readDecypharrReaddPlan,
+			Risk:       riskApproval,
+			Handler:    (*Dispatcher).readDecypharrReaddPlan,
+			UserPhrase: phraseStorage,
 		},
 	}
 }
@@ -713,6 +734,11 @@ func specByName(name string) (toolSpec, bool) {
 		}
 	}
 	return toolSpec{}, false
+}
+
+func UserPhrase(tool string) string {
+	spec, _ := specByName(tool)
+	return spec.UserPhrase
 }
 
 func isAutonomousAction(toolName string) bool {
