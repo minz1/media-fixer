@@ -1257,7 +1257,8 @@ func (d *DB) ListActions(ctx context.Context, incidentID string) ([]*ActionLog, 
 			_ = json.Unmarshal([]byte(paramsStr), &a.Params)
 		}
 		if appliedAt.Valid {
-			a.AppliedAt = &appliedAt.Time
+			at := appliedAt.Time
+			a.AppliedAt = &at
 		}
 		out = append(out, a)
 	}

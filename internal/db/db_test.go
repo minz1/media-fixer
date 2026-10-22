@@ -982,3 +982,34 @@ func TestAddSeerrIssue_ReportsInsert(t *testing.T) {
 		}
 	}
 }
+
+func TestListActions_DistinctAppliedAt(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	first := time.Now().Add(-time.Hour).UTC()
+	for _, at := range []time.Time{first, time.Now().UTC()} {
+		if err := d.LogAction(ctx, &db.ActionLog{
+			IncidentID:  inc.ID,
+			Action:      "restart_jellyfin",
+			TriggeredBy: "agent",
+			Status:      db.ActionApplied,
+			AppliedAt:   &at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	actions, err := d.ListActions(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 2 || !actions[0].AppliedAt.Equal(first) {
+		t.Errorf("first applied_at = %v, want %v", actions[0].AppliedAt, first)
+	}
+}
