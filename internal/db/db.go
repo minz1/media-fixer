@@ -1139,6 +1139,12 @@ func (d *DB) ClaimReporterNote(ctx context.Context, id string, now time.Time, mi
 	return rowChanged(res, err)
 }
 
+func (d *DB) LastReporterNoteAt(ctx context.Context, id string) (time.Time, error) {
+	var t sql.NullTime
+	err := d.read.QueryRowContext(ctx, `SELECT last_reporter_note_at FROM incidents WHERE id = ?`, id).Scan(&t)
+	return t.Time, err
+}
+
 func rowChanged(res sql.Result, err error) (bool, error) {
 	if err != nil {
 		return false, err

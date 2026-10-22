@@ -2,6 +2,7 @@ package incident
 
 import (
 	"context"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
@@ -37,4 +38,9 @@ func (s *Service) NotifyReportersForTest(ctx context.Context, inc *db.Incident, 
 // EscalateToOwnerForTest exposes Service.escalateToOwner for reporternotes_test.go.
 func (s *Service) EscalateToOwnerForTest(ctx context.Context, inc *db.Incident, msg string) {
 	s.escalateToOwner(ctx, inc, msg)
+}
+
+// ProgressPhrasesForTest exposes progressPhrases for progress_test.go.
+func ProgressPhrasesForTest(actions []*db.ActionLog, since time.Time, po *db.PendingOutcome) []string {
+	return progressPhrases(actions, since, po)
 }

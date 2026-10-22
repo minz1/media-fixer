@@ -18,9 +18,10 @@ import (
 const systematicIncidentThreshold = 5
 
 const (
-	retryDelay1  = 2 * time.Minute
-	retryDelay2  = 6 * time.Minute
-	rerunNoteGap = 30 * time.Minute
+	retryDelay1     = 2 * time.Minute
+	retryDelay2     = 6 * time.Minute
+	rerunNoteGap    = 30 * time.Minute
+	progressNoteGap = 60 * time.Minute
 )
 
 const (
@@ -698,13 +699,15 @@ func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg str
 }
 
 func (s *Service) noteReporters(
-	ctx context.Context, inc *db.Incident, msg string, now time.Time, minGap time.Duration,
-) bool {
-	if !s.claimReporterNote(ctx, inc.ID, now, minGap) {
-		return false
+	ctx context.Context,
+	inc *db.Incident,
+	msg string,
+	now time.Time,
+	minGap time.Duration,
+) {
+	if s.claimReporterNote(ctx, inc.ID, now, minGap) {
+		s.deliverToReporters(ctx, inc, msg)
 	}
-	s.deliverToReporters(ctx, inc, msg)
-	return true
 }
 
 func (s *Service) claimReporterNote(ctx context.Context, id string, now time.Time, minGap time.Duration) bool {
@@ -949,6 +952,7 @@ func (s *Service) backgroundSweepLoop(base context.Context) {
 		case <-ticker.C:
 			s.SweepStaleRuns(base)
 			s.AdvancePendingOutcomes(base)
+			s.AdvanceReporterProgress(base, time.Now())
 		}
 	}
 }
