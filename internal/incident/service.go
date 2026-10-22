@@ -211,7 +211,7 @@ func (s *Service) addReporter(ctx context.Context, incidentID string, r *Report)
 	if r.SeerrIssueID == "" {
 		return
 	}
-	if err := s.db.AddSeerrIssue(ctx, incidentID, r.SeerrIssueID); err != nil {
+	if _, err := s.db.AddSeerrIssue(ctx, incidentID, r.SeerrIssueID); err != nil {
 		s.log.ErrorContext(ctx, "add seerr issue",
 			"incident", incidentID, "issue", r.SeerrIssueID, "error", err)
 	}

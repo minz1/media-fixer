@@ -274,6 +274,7 @@ const (
 	migUTCTimestamps                    = 12
 	migIncidentsEscalationPlan          = 13
 	migIncidentSeerrIssues              = 14
+	migReporterNote                     = 15
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -557,6 +558,14 @@ func eventLogMigrations() []migration {
 	added_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY (incident_id, issue_id)
 )`)
+				return err
+			},
+		},
+		{
+			version: migReporterNote,
+			name:    "reporter_note",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `ALTER TABLE incidents ADD COLUMN last_reporter_note_at DATETIME`)
 				return err
 			},
 		},
@@ -1115,11 +1124,27 @@ func (d *DB) ListDiscordReporterIDs(ctx context.Context, incidentID string) ([]s
 	return out, rows.Err()
 }
 
-func (d *DB) AddSeerrIssue(ctx context.Context, incidentID, issueID string) error {
-	_, err := d.write.ExecContext(ctx,
+func (d *DB) AddSeerrIssue(ctx context.Context, incidentID, issueID string) (bool, error) {
+	res, err := d.write.ExecContext(ctx,
 		`INSERT OR IGNORE INTO incident_seerr_issues (incident_id, issue_id, added_at) VALUES (?, ?, ?)`,
 		incidentID, issueID, time.Now())
-	return err
+	return rowChanged(res, err)
+}
+
+func (d *DB) ClaimReporterNote(ctx context.Context, id string, now time.Time, minGap time.Duration) (bool, error) {
+	res, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET last_reporter_note_at = ?
+		 WHERE id = ? AND (last_reporter_note_at IS NULL OR last_reporter_note_at <= ?)`,
+		now, id, now.Add(-minGap))
+	return rowChanged(res, err)
+}
+
+func rowChanged(res sql.Result, err error) (bool, error) {
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (d *DB) ListSeerrIssueIDs(ctx context.Context, incidentID string) ([]string, error) {

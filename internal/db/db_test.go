@@ -762,7 +762,7 @@ func TestOpen_BootstrapsLegacyDatabase(t *testing.T) {
 	// 1-6 are the reconciled legacy migrations this fixture simulates; 7-13
 	// are the new ones, which run unconditionally on top of any database
 	// (legacy or fresh) since they postdate schema_version.
-	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+	want := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 	if len(versions) != len(want) {
 		t.Fatalf("schema_version after bootstrap: got %v, want %v", versions, want)
 	}
@@ -853,7 +853,7 @@ func TestSeerrIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"12", "13", "12"} {
-		if err := d.AddSeerrIssue(ctx, inc.ID, id); err != nil {
+		if _, err := d.AddSeerrIssue(ctx, inc.ID, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -883,5 +883,102 @@ func TestSeerrIssuesMigration_CreatesTableOnExistingDB(t *testing.T) {
 	defer d2.Close()
 	if _, err = d2.ListSeerrIssueIDs(context.Background(), "missing"); err != nil {
 		t.Errorf("table not recreated on an existing db: %v", err)
+	}
+}
+
+func TestMigration15_AddsLastReporterNoteAt(t *testing.T) {
+	t.Parallel()
+	path := tempDBPath(t)
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	got := rawQuery(t, path, `SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name = 'last_reporter_note_at'`)
+	if got != "1" {
+		t.Errorf("last_reporter_note_at columns = %s, want 1", got)
+	}
+}
+
+func newClaimIncident(t *testing.T, d *db.DB) string {
+	t.Helper()
+	inc := &db.Incident{Status: db.StatusOpen, Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Andor"}
+	if err := d.CreateIncident(context.Background(), inc); err != nil {
+		t.Fatal(err)
+	}
+	return inc.ID
+}
+
+func TestClaimReporterNote_Gap(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	id := newClaimIncident(t, d)
+	t0 := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+
+	for _, c := range []struct {
+		at   time.Time
+		gap  time.Duration
+		want bool
+	}{
+		{t0, 30 * time.Minute, true},
+		{t0.Add(10 * time.Minute), 30 * time.Minute, false},
+		{t0.Add(31 * time.Minute), 30 * time.Minute, true},
+		{t0.Add(31 * time.Minute), 0, true},
+	} {
+		got, err := d.ClaimReporterNote(ctx, id, c.at, c.gap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("claim at %s gap %s = %v, want %v", c.at.Sub(t0), c.gap, got, c.want)
+		}
+	}
+}
+
+func TestClaimReporterNote_Race(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	id := newClaimIncident(t, d)
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+
+	results := make(chan bool, 10)
+	errs := make(chan error, 10)
+	for range 10 {
+		go func() {
+			ok, err := d.ClaimReporterNote(ctx, id, now, 30*time.Minute)
+			errs <- err
+			results <- ok
+		}()
+	}
+	wins := 0
+	for range 10 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		if <-results {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Errorf("claims won = %d, want 1", wins)
+	}
+}
+
+func TestAddSeerrIssue_ReportsInsert(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	id := newClaimIncident(t, d)
+
+	for i, want := range []bool{true, false} {
+		got, err := d.AddSeerrIssue(ctx, id, "12")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("call %d inserted = %v, want %v", i+1, got, want)
+		}
 	}
 }
