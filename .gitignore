@@ -11,3 +11,4 @@ dev.toml
 dev-run.sh
 
 docs/
+.autopilot/runs/
