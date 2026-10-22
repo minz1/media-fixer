@@ -33,3 +33,8 @@ func (s *Service) DistinctAppliedActionCountForTest(ctx context.Context, inciden
 func (s *Service) NotifyReportersForTest(ctx context.Context, inc *db.Incident, msg string) {
 	s.notifyReporters(ctx, inc, msg)
 }
+
+// EscalateToOwnerForTest exposes Service.escalateToOwner for reporternotes_test.go.
+func (s *Service) EscalateToOwnerForTest(ctx context.Context, inc *db.Incident, msg string) {
+	s.escalateToOwner(ctx, inc, msg)
+}

@@ -617,6 +617,15 @@ func TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
 		t.Fatal("timed out waiting for run B to start")
 	}
 
+	select {
+	case note := <-notif.userMsgs:
+		if !strings.HasPrefix(note, "🔁 Taking another look") {
+			t.Errorf("first DM = %q, want the rerun note", note)
+		}
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("timed out waiting for the rerun note")
+	}
+
 	// Exactly one "fixed" DM should reach the reporter, from run B.
 	var dm string
 	select {
@@ -1275,11 +1284,15 @@ type fakeSeerr struct {
 	mu       sync.Mutex
 	comments map[string][]string
 	resolved []string
+	err      error
 }
 
 func (f *fakeSeerr) Comment(_ context.Context, issueID, msg string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
 	if f.comments == nil {
 		f.comments = map[string][]string{}
 	}
@@ -1316,8 +1329,10 @@ func TestResolve_UpdatesLinkedSeerrIssues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(seerr.comments["42"]) != 1 || len(seerr.comments["43"]) != 1 {
-		t.Errorf("comments = %v, want one on each issue", seerr.comments)
+	for _, id := range []string{"42", "43"} {
+		if c := seerr.comments[id]; len(c) != 2 || !strings.HasPrefix(c[1], "✅") {
+			t.Errorf("comments on %s = %v, want intake then resolved", id, c)
+		}
 	}
 	if strings.Join(seerr.resolved, ",") != "42,43" {
 		t.Errorf("resolved = %v, want [42 43]", seerr.resolved)

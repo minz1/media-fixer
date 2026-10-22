@@ -18,8 +18,9 @@ import (
 const systematicIncidentThreshold = 5
 
 const (
-	retryDelay1 = 2 * time.Minute
-	retryDelay2 = 6 * time.Minute
+	retryDelay1  = 2 * time.Minute
+	retryDelay2  = 6 * time.Minute
+	rerunNoteGap = 30 * time.Minute
 )
 
 const (
@@ -150,7 +151,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	switch {
 	case err == nil:
 		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
-		s.addReporter(ctx, existing.ID, r)
+		s.addReporter(ctx, existing, r)
 		return existing, nil
 	case !errors.Is(err, db.ErrNotFound):
 		return nil, fmt.Errorf("find open incident: %w", err)
@@ -174,7 +175,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		return nil, fmt.Errorf("create incident: %w", err)
 	}
 	s.recordIncidentCreated(ctx, inc)
-	s.addReporter(ctx, inc.ID, r)
+	s.addReporter(ctx, inc, r)
 
 	if openCount >= systematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
@@ -202,19 +203,29 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 // ListDiscordReporterIDs then returns an empty set, so when the incident
 // resolves nobody is notified — and on the dedup path the second reporter is
 // silently lost entirely.
-func (s *Service) addReporter(ctx context.Context, incidentID string, r *Report) {
-	if err := s.db.AddReporter(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID); err != nil {
+func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) {
+	if err := s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID); err != nil {
 		s.log.ErrorContext(ctx, "add reporter",
-			"incident", incidentID, "reporter", r.ReportedBy, "error", err)
+			"incident", inc.ID, "reporter", r.ReportedBy, "error", err)
 	}
-	s.recordReporterAdded(ctx, incidentID, r.ReportedBy, r.Source, r.ReporterDiscordID)
+	s.recordReporterAdded(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
 	if r.SeerrIssueID == "" {
 		return
 	}
-	if _, err := s.db.AddSeerrIssue(ctx, incidentID, r.SeerrIssueID); err != nil {
+	inserted, err := s.db.AddSeerrIssue(ctx, inc.ID, r.SeerrIssueID)
+	if err != nil {
 		s.log.ErrorContext(ctx, "add seerr issue",
-			"incident", incidentID, "issue", r.SeerrIssueID, "error", err)
+			"incident", inc.ID, "issue", r.SeerrIssueID, "error", err)
+		return
 	}
+	if !inserted || s.seerr == nil {
+		return
+	}
+	msg := fmt.Sprintf("👀 Thanks, we're looking into **%s**.", inc.Title)
+	s.callSeerrIssue(ctx, inc, "comment on", r.SeerrIssueID, func(id string) error {
+		return s.seerr.Comment(ctx, id, msg)
+	})
+	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
 }
 
 func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) {
@@ -613,6 +624,10 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 // under concurrent/superseded runs — the same TransitionStatus pattern used for
 // the "fixed" notification, applied once structurally instead of per call site.
 func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg string) {
+	prior, getErr := s.db.GetIncident(ctx, inc.ID)
+	if getErr != nil {
+		s.log.ErrorContext(ctx, "read status before escalation", "incident", inc.ID, "error", getErr)
+	}
 	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusManualTestNeeded,
 		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
 		db.StatusBlocked, db.StatusAgentFixed)
@@ -626,6 +641,9 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg str
 	}
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
 	_ = s.notif.NotifyOwner(ctx, msg)
+	if getErr == nil && prior.Status != db.StatusAgentFixed {
+		s.notifyReporters(ctx, inc, fmt.Sprintf("🧑‍🔧 Handed **%s** to minz1. You'll hear back here.", inc.Title))
+	}
 }
 
 // handleRunError distinguishes a superseded run from a genuine diagnostic
@@ -675,6 +693,29 @@ func (s *Service) Resolve(ctx context.Context, id string) error {
 }
 
 func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg string) {
+	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
+	s.deliverToReporters(ctx, inc, msg)
+}
+
+func (s *Service) noteReporters(
+	ctx context.Context, inc *db.Incident, msg string, now time.Time, minGap time.Duration,
+) bool {
+	if !s.claimReporterNote(ctx, inc.ID, now, minGap) {
+		return false
+	}
+	s.deliverToReporters(ctx, inc, msg)
+	return true
+}
+
+func (s *Service) claimReporterNote(ctx context.Context, id string, now time.Time, minGap time.Duration) bool {
+	claimed, err := s.db.ClaimReporterNote(ctx, id, now, minGap)
+	if err != nil {
+		s.log.ErrorContext(ctx, "claim reporter note", "incident", id, "error", err)
+	}
+	return claimed
+}
+
+func (s *Service) deliverToReporters(ctx context.Context, inc *db.Incident, msg string) {
 	s.notifyDiscordReporters(ctx, inc, msg)
 	s.notifySeerrIssues(ctx, inc, "comment on", func(id string) error { return s.seerr.Comment(ctx, id, msg) })
 }
@@ -711,12 +752,16 @@ func (s *Service) notifySeerrIssues(ctx context.Context, inc *db.Incident, verb 
 		return
 	}
 	for _, id := range ids {
-		if callErr := call(id); callErr != nil {
-			s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", callErr)
-			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-				"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v", verb, id, inc.Title, inc.ID[:8], callErr,
-			))
-		}
+		s.callSeerrIssue(ctx, inc, verb, id, call)
+	}
+}
+
+func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id string, call func(string) error) {
+	if err := call(id); err != nil {
+		s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", err)
+		_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v", verb, id, inc.Title, inc.ID[:8], err,
+		))
 	}
 }
 
@@ -808,6 +853,7 @@ func (s *Service) Rerun(ctx context.Context, id string) error {
 	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
 		return s.buildReinvestigateSeed(seedCtx, id, inc)
 	})
+	s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
 	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
 		"🔁 Incident **%s** (#%s) is being re-run.",
 		inc.Title, inc.ID[:8],
