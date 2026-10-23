@@ -167,10 +167,20 @@ func TestPruneSweepRuns_CascadesItems(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err = d.PruneSweepRuns(ctx, 50); err != nil {
+	if err = d.PruneSweepRuns(ctx, 50, sweepT0().Add(5*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	runs, err := d.ListSweepRuns(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 55 {
+		t.Fatalf("runs = %d, want 55: rows started after the cutoff stay", len(runs))
+	}
+	if err = d.PruneSweepRuns(ctx, 50, sweepT0().Add(100*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	runs, err = d.ListSweepRuns(ctx, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

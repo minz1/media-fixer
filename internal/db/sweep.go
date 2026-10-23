@@ -210,9 +210,10 @@ func (d *DB) LastSweepRunStart(ctx context.Context, excludeStatus []string) (*ti
 	return &at, nil
 }
 
-func (d *DB) PruneSweepRuns(ctx context.Context, keep int) error {
+func (d *DB) PruneSweepRuns(ctx context.Context, keep int, before time.Time) error {
 	_, err := d.write.ExecContext(ctx,
-		`DELETE FROM sweep_runs WHERE id NOT IN (SELECT id FROM sweep_runs ORDER BY id DESC LIMIT ?)`, keep)
+		`DELETE FROM sweep_runs WHERE started_at < ?
+		 AND id NOT IN (SELECT id FROM sweep_runs ORDER BY id DESC LIMIT ?)`, before, keep)
 	return err
 }
 

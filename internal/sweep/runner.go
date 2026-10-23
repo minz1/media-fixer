@@ -119,7 +119,7 @@ type searchBatch struct {
 }
 
 func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) (int64, error) {
-	if err := r.DB.PruneSweepRuns(ctx, keepRuns); err != nil {
+	if err := r.DB.PruneSweepRuns(ctx, keepRuns, r.Now().AddDate(0, 0, -8)); err != nil {
 		return 0, err
 	}
 	start := r.Now()

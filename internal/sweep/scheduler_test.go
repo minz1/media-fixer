@@ -439,3 +439,21 @@ func TestScheduler_FailedRunRetriesTwicePerSlot(t *testing.T) {
 		t.Errorf("NextRun after the retries = %v, want %v", next, t0().AddDate(0, 0, 7))
 	}
 }
+
+func TestScheduler_PruningDryRunsKeepsSlotRun(t *testing.T) {
+	t.Parallel()
+	h, sch := newScheduled(t, settings())
+	h.tick(sch, t0())
+	h.clock.mu.Lock()
+	h.clock.t = t0().Add(time.Hour)
+	h.clock.mu.Unlock()
+	for range 51 {
+		h.run(t, true, settings())
+	}
+	h.tick(sch, t0().Add(2*time.Hour))
+	for _, r := range h.runs(t) {
+		if !r.Dry && r.StartedAt.After(t0()) {
+			t.Errorf("live run %d at %v, want none after the slot's run", r.ID, r.StartedAt)
+		}
+	}
+}
