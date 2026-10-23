@@ -275,6 +275,7 @@ const (
 	migIncidentsEscalationPlan          = 13
 	migIncidentSeerrIssues              = 14
 	migReporterNote                     = 15
+	migSweep                            = 16
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -566,6 +567,14 @@ func eventLogMigrations() []migration {
 			name:    "reporter_note",
 			exec: func(ctx context.Context, tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, `ALTER TABLE incidents ADD COLUMN last_reporter_note_at DATETIME`)
+				return err
+			},
+		},
+		{
+			version: migSweep,
+			name:    "sweep",
+			exec: func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, sweepSchema)
 				return err
 			},
 		},
