@@ -101,6 +101,12 @@ func (s *Scheduler) NextRun(now time.Time) *time.Time {
 	next := slot(set, now)
 	if due, derr := s.due(set, now); derr != nil || !due {
 		next = next.AddDate(0, 0, week)
+	} else {
+		s.stateMu.Lock()
+		if now.Before(s.retryAt) {
+			next = s.retryAt
+		}
+		s.stateMu.Unlock()
 	}
 	return &next
 }
@@ -139,9 +145,11 @@ func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
 		defer s.mu.Unlock()
 		if _, rerr := s.r.Run(s.base, trigger, dry, set); rerr != nil {
 			s.r.logger().ErrorContext(s.base, "pack sweep run", "trigger", trigger, "err", rerr)
-			s.stateMu.Lock()
-			s.retryAt = s.r.Now().Add(time.Hour)
-			s.stateMu.Unlock()
+			if !dry {
+				s.stateMu.Lock()
+				s.retryAt = s.r.Now().Add(time.Hour)
+				s.stateMu.Unlock()
+			}
 		}
 	})
 	return nil

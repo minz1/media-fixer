@@ -270,12 +270,17 @@ func TestScheduler_FailedRunRetriesAfterAnHour(t *testing.T) {
 	h, sch := newScheduled(t, settings())
 	h.fake.seriesDownTil = t0().AddDate(0, 0, 1)
 	h.tick(sch, t0())
-	if runs := h.runs(t); len(runs) != 1 || runs[0].Status != "failed" {
-		t.Fatalf("runs = %+v, want one failed run", runs)
+	failed := h.runs(t)
+	if len(failed) != 1 || failed[0].Status != "failed" {
+		t.Fatalf("runs = %+v, want one failed run", failed)
 	}
 	h.tick(sch, t0().Add(30*time.Minute))
 	if n := len(h.runs(t)); n != 1 {
 		t.Fatalf("runs 30 min after a failure = %d, want 1", n)
+	}
+	retry := failed[0].FinishedAt.Add(time.Hour)
+	if next := sch.NextRun(t0().Add(30 * time.Minute)); next == nil || !next.Equal(retry) {
+		t.Errorf("NextRun during the backoff = %v, want %v", next, retry)
 	}
 	h.fake.mu.Lock()
 	h.fake.seriesDownTil = time.Time{}
@@ -284,5 +289,21 @@ func TestScheduler_FailedRunRetriesAfterAnHour(t *testing.T) {
 	runs := h.runs(t)
 	if len(runs) != 2 || runs[0].Status != "done" {
 		t.Errorf("runs = %+v, want a done retry after the failed run", runs)
+	}
+}
+
+func TestScheduler_FailedDryRunDoesNotDelaySlot(t *testing.T) {
+	t.Parallel()
+	h, sch := scheduledAt(t, t0().Add(-time.Hour), settings())
+	h.fake.seriesDownTil = t0().Add(-time.Minute)
+	h.clock.t = t0().Add(-30 * time.Minute)
+	if err := sch.RunNow("manual", true); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	h.tick(sch, t0())
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Trigger != "schedule" || runs[0].Status != "done" {
+		t.Errorf("runs = %+v, want the failed dry run then a done scheduled run", runs)
 	}
 }
