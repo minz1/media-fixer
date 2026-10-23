@@ -36,7 +36,17 @@ func TestProgressPhrases(t *testing.T) {
 		t.Errorf("phrases while searching = %q, want %q", got, want)
 	}
 
-	po := &db.PendingOutcome{LastStage: "downloading", LastProgressPct: 43.4}
+	stale := &db.PendingOutcome{LastStage: "downloading", LastProgressPct: 37, LastProgressAt: since.Add(-time.Hour)}
+	if got := strings.Join(incident.ProgressPhrasesForTest(actions, since, stale), "|"); got != want {
+		t.Errorf("phrases with stalled download = %q, want %q", got, want)
+	}
+
+	failed := &db.PendingOutcome{LastStage: "failed", LastProgressPct: 12, LastProgressAt: after}
+	if got := strings.Join(incident.ProgressPhrasesForTest(actions, since, failed), "|"); got != want {
+		t.Errorf("phrases with failed download = %q, want %q", got, want)
+	}
+
+	po := &db.PendingOutcome{LastStage: "downloading", LastProgressPct: 43.4, LastProgressAt: after}
 	want += "|downloading a new copy (43%)"
 	if got := strings.Join(incident.ProgressPhrasesForTest(actions, since, po), "|"); got != want {
 		t.Errorf("phrases with download = %q, want %q", got, want)

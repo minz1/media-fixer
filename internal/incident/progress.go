@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -62,8 +61,8 @@ func progressPhrases(actions []*db.ActionLog, since time.Time, po *db.PendingOut
 			out = append(out, p)
 		}
 	}
-	if po != nil && po.LastStage != "" && po.LastStage != "searching" {
-		out = append(out, fmt.Sprintf("downloading a new copy (%d%%)", int(math.Floor(po.LastProgressPct))))
+	if po != nil && po.LastStage == "downloading" && po.LastProgressAt.After(since) {
+		out = append(out, fmt.Sprintf("downloading a new copy (%d%%)", int(po.LastProgressPct)))
 	}
 	return out
 }
