@@ -45,6 +45,7 @@ type grabPlan struct {
 	outcome  string
 	after    int
 	imported bool
+	leftover []string
 }
 
 type pendingOutcome struct {
@@ -74,7 +75,11 @@ type fakeSonarr struct {
 	grabTimes     []time.Time
 	seriesDownTil time.Time
 	releaseDelay  map[string]time.Duration
-	commandStatus map[int]string
+	commandPolls  map[int]int
+	commandNeeds  int
+	commandTimes  []time.Time
+	completedAt   map[int]time.Time
+	deleteStatus  int
 	nextID        int
 	beforePost    func()
 }
@@ -82,15 +87,16 @@ type fakeSonarr struct {
 func newFakeSonarr(t *testing.T, clock *fakeClock) *fakeSonarr {
 	t.Helper()
 	f := &fakeSonarr{
-		t:             t,
-		clock:         clock,
-		episodes:      map[int][]client.Episode{},
-		releases:      map[string][]client.Release{},
-		plans:         map[string]grabPlan{},
-		lookups:       map[string]int{},
-		releaseDelay:  map[string]time.Duration{},
-		commandStatus: map[int]string{},
-		nextID:        100,
+		t:            t,
+		clock:        clock,
+		episodes:     map[int][]client.Episode{},
+		releases:     map[string][]client.Release{},
+		plans:        map[string]grabPlan{},
+		lookups:      map[string]int{},
+		releaseDelay: map[string]time.Duration{},
+		commandPolls: map[int]int{},
+		completedAt:  map[int]time.Time{},
+		nextID:       100,
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -106,6 +112,13 @@ func (f *fakeSonarr) addSeries(id int, title string, eps ...client.Episode) {
 	defer f.mu.Unlock()
 	f.series = append(f.series, client.Series{ID: id, Title: title, Monitored: true, SeriesType: "standard"})
 	f.episodes[id] = append(f.episodes[id], eps...)
+}
+
+func (f *fakeSonarr) addAnime(id int, title string, eps ...client.Episode) {
+	f.addSeries(id, title, eps...)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.series[len(f.series)-1].SeriesType = "anime"
 }
 
 func (f *fakeSonarr) setReleases(key string, rels ...client.Release) {
@@ -161,6 +174,35 @@ func seasonRel(guid, title, indexer string, weight int) client.Release {
 	}
 }
 
+func animeRel(title string, ids ...int) client.Release {
+	r := client.Release{GUID: title, IndexerID: 1, Title: title, Indexer: "Nyaa", Protocol: "torrent"}
+	for _, id := range ids {
+		r.MappedEpisodeInfo = append(r.MappedEpisodeInfo, struct {
+			ID int `json:"id"`
+		}{ID: id})
+	}
+	return r
+}
+
+func (f *fakeSonarr) commands() [][]int {
+	var out [][]int
+	for _, w := range f.writeLog() {
+		raw, ok := strings.CutPrefix(w, "POST /command ")
+		if !ok {
+			continue
+		}
+		var body struct {
+			Name       string `json:"name"`
+			EpisodeIDs []int  `json:"episodeIds"`
+		}
+		if err := json.Unmarshal([]byte(raw), &body); err != nil || body.Name != "EpisodeSearch" {
+			f.t.Errorf("command %s: %v", raw, err)
+		}
+		out = append(out, body.EpisodeIDs)
+	}
+	return out
+}
+
 func seasonKey(seriesID, season int) string {
 	return fmt.Sprintf("s%d:%d", seriesID, season)
 }
@@ -204,7 +246,11 @@ func (f *fakeSonarr) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/queue/"):
 		f.mu.Lock()
 		f.writes = append(f.writes, "DELETE "+path+"?"+r.URL.RawQuery)
+		status := f.deleteStatus
 		f.mu.Unlock()
+		if status != 0 {
+			http.Error(w, "gone", status)
+		}
 	case r.Method == http.MethodPost && path == "/command":
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -213,16 +259,21 @@ func (f *fakeSonarr) serve(w http.ResponseWriter, r *http.Request) {
 		f.nextID++
 		id := f.nextID
 		f.writes = append(f.writes, "POST /command "+string(b))
+		f.commandTimes = append(f.commandTimes, f.clock.Now())
 		f.mu.Unlock()
 		writeJSON(w, map[string]int{"id": id})
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/command/"):
 		id, _ := strconv.Atoi(strings.TrimPrefix(path, "/command/"))
 		f.mu.Lock()
-		status := f.commandStatus[id]
-		f.mu.Unlock()
-		if status == "" {
+		f.commandPolls[id]++
+		status := "started"
+		if f.commandPolls[id] >= f.commandNeeds {
 			status = "completed"
+			if _, ok := f.completedAt[id]; !ok {
+				f.completedAt[id] = f.clock.Now()
+			}
 		}
+		f.mu.Unlock()
 		writeJSON(w, map[string]string{"status": status})
 	default:
 		http.NotFound(w, r)
@@ -277,6 +328,14 @@ func (f *fakeSonarr) applyOutcome(p *pendingOutcome) {
 		f.history = append(f.history, client.HistoryRecord{
 			SourceTitle: p.title, DownloadID: p.dlID, EventType: p.plan.outcome, Date: now,
 		})
+		for i, msg := range p.plan.leftover {
+			rec := client.QueueDetail{ID: 30 + i, DownloadID: p.dlID, TrackedDownloadState: "importPending"}
+			rec.StatusMessages = append(rec.StatusMessages, struct {
+				Title    string   `json:"title"`
+				Messages []string `json:"messages"`
+			}{Title: p.title, Messages: []string{msg}})
+			f.queue = append(f.queue, rec)
+		}
 	}
 }
 

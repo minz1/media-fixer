@@ -2,6 +2,7 @@ package sweep_test
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -437,5 +438,200 @@ func TestRun_HistoryQueriedFromFiveMinutesBefore(t *testing.T) {
 		if d.After(h.fake.grabTimes[0].Add(-5 * time.Minute)) {
 			t.Errorf("history since %v, grab at %v", d, h.fake.grabTimes[0])
 		}
+	}
+}
+
+func searchSettings() sweep.Settings {
+	s := settings()
+	s.MaxSearches = 50
+	return s
+}
+
+func TestRun_AnimeUsesEpisodeLookupsOnly(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addAnime(1, "Anime", missingEps(1, 1, 1, 2, 3)...)
+	h.fake.setReleases("e1", animeRel("Anime 01-03", 1, 2, 3))
+	h.fake.plan("Anime 01-03", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+	run := h.run(t, false, searchSettings())
+	h.fake.mu.Lock()
+	lookups := maps.Clone(h.fake.lookups)
+	h.fake.mu.Unlock()
+	if !maps.Equal(lookups, map[string]int{"e1": 1}) {
+		t.Errorf("lookups = %v, want only e1", lookups)
+	}
+	for _, w := range h.fake.writeLog() {
+		if strings.Contains(w, "SeasonSearch") {
+			t.Errorf("anime got a season search: %s", w)
+		}
+	}
+	if got := itemResults(run); !slices.Equal(got, []string{"imported"}) || run.Items[0].Target != "e:1" {
+		t.Errorf("items = %+v", run.Items)
+	}
+}
+
+func TestRun_AnimeBatchMarksCovered(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addAnime(1, "Anime", missingEps(1, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)...)
+	h.fake.setReleases("e1", animeRel("Anime 02-10", 2, 3, 4, 5, 6, 7, 8, 9, 10))
+	h.fake.plan("Anime 02-10", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+	run := h.run(t, false, settings())
+	for id := 2; id <= 10; id++ {
+		if n := h.fake.lookupCount("e" + strconv.Itoa(id)); n != 0 {
+			t.Errorf("episode %d looked up %d times after the batch covered it", id, n)
+		}
+	}
+	if got := itemResults(run); !slices.Equal(got, []string{"imported"}) {
+		t.Errorf("results = %v", got)
+	}
+}
+
+func TestRun_AnimeOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addAnime(1, "Anime", missingEps(1, 1, 1, 2, 3)...)
+	h.fake.setReleases("e1", animeRel("Anime 01-03", 1, 2, 3))
+	s := searchSettings()
+	s.Anime = false
+	h.run(t, false, s)
+	h.fake.mu.Lock()
+	lookups := len(h.fake.lookups)
+	h.fake.mu.Unlock()
+	if lookups != 0 || len(h.fake.writeLog()) != 0 {
+		t.Errorf("anime off: lookups %d, writes %v", lookups, h.fake.writeLog())
+	}
+}
+
+func TestRun_EpisodePassWaitsForCommand(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", append(missingEps(1, 1, 11, 12), missingEps(1, 2, 21, 22)...)...)
+	h.fake.addAnime(2, "Anime", missingEps(2, 1, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112)...)
+	h.fake.commandNeeds = 3
+	run := h.run(t, false, searchSettings())
+	want := [][]int{{11, 12}, {21, 22}, {101, 102, 103, 104, 105, 106, 107, 108, 109, 110}, {111, 112}}
+	if got := h.fake.commands(); !slices.EqualFunc(got, want, slices.Equal) {
+		t.Fatalf("commands = %v, want %v", got, want)
+	}
+	h.fake.mu.Lock()
+	times, done := h.fake.commandTimes, maps.Clone(h.fake.completedAt)
+	h.fake.mu.Unlock()
+	for i := 1; i < len(times); i++ {
+		prev, ok := done[100+i]
+		if !ok || times[i].Sub(prev) < time.Minute {
+			t.Errorf("command %d sent at %v, previous completed at %v (seen %v)", i, times[i], prev, ok)
+		}
+	}
+	if run.Counts.Searched != 16 || run.Status != "done" {
+		t.Errorf("status %s counts %+v", run.Status, run.Counts)
+	}
+	if got := itemResults(run); slices.Index(got, "searched") < 0 {
+		t.Errorf("results = %v, want searched items", got)
+	}
+}
+
+func TestRun_MaxSearchesCountsEpisodes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ids := make([]int, 0, 25)
+	for i := 1; i <= 25; i++ {
+		ids = append(ids, i)
+	}
+	h.fake.addSeries(1, "Show", append(missingEps(1, 1, ids[:15]...), missingEps(1, 2, ids[15:]...)...)...)
+	s := settings()
+	s.MaxSearches = 20
+	run := h.run(t, false, s)
+	total := 0
+	for _, c := range h.fake.commands() {
+		total += len(c)
+	}
+	if total != 20 || run.Counts.Searched != 20 {
+		t.Errorf("ids sent %d, searched %d, want 20", total, run.Counts.Searched)
+	}
+}
+
+func TestRun_LeftoverCleanupAllMatch(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1, leftover: []string{
+		"Not an upgrade for existing episode file(s). Existing quality: WEBDL-1080p.",
+		"Not a Custom Format upgrade for existing episode file(s). New: [] do not improve on Existing: []",
+	}})
+	h.fake.deleteStatus = http.StatusNotFound
+	run := h.run(t, false, settings())
+	var deletes []string
+	for _, w := range h.fake.writeLog() {
+		if strings.HasPrefix(w, "DELETE") {
+			deletes = append(deletes, w)
+		}
+	}
+	if len(deletes) != 1 || !strings.HasPrefix(deletes[0], "DELETE /queue/3") ||
+		!strings.HasSuffix(deletes[0], "?blocklist=false&removeFromClient=false&skipRedownload=false") {
+		t.Errorf("deletes = %v", deletes)
+	}
+	if run.Status != "done" {
+		t.Errorf("status = %s (%s), 404 should be tolerated", run.Status, run.Reason)
+	}
+}
+
+func TestRun_LeftoverCleanupMixedSkipped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1, leftover: []string{
+		"Not an upgrade for existing episode file(s). Existing quality: WEBDL-1080p.",
+		"No files found are eligible for import",
+	}})
+	h.run(t, false, settings())
+	if n := h.fake.countWrites("DELETE"); n != 0 {
+		t.Errorf("writes = %v, want no DELETE", h.fake.writeLog())
+	}
+}
+
+func TestRun_ExcludedSeriesUntouched(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Excluded", missingEps(1, 1, 11, 12)...)
+	h.fake.addAnime(2, "Excluded anime", missingEps(2, 1, 21, 22)...)
+	h.fake.addSeries(3, "Kept", missingEps(3, 1, 31, 32)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Excluded S01", "Zilean", 10))
+	h.fake.setReleases("e21", animeRel("Excluded anime 01-02", 21, 22))
+	s := searchSettings()
+	s.ExcludedSeries = []int{1, 2}
+	h.run(t, false, s)
+	h.fake.mu.Lock()
+	lookups := maps.Clone(h.fake.lookups)
+	h.fake.mu.Unlock()
+	if !maps.Equal(lookups, map[string]int{seasonKey(3, 1): 1}) {
+		t.Errorf("lookups = %v, want only the kept series", lookups)
+	}
+	if n := h.fake.countWrites("POST /release"); n != 0 {
+		t.Errorf("grabs = %d", n)
+	}
+	if got := h.fake.commands(); !slices.EqualFunc(got, [][]int{{31, 32}}, slices.Equal) {
+		t.Errorf("commands = %v, want only the kept series", got)
+	}
+}
+
+func TestRun_DryRunEpisodePass(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.addAnime(2, "Anime", missingEps(2, 1, 1, 2, 3, 4)...)
+	h.fake.setReleases("e1", animeRel("Anime 01-03", 1, 2, 3))
+	run := h.run(t, true, searchSettings())
+	if len(h.fake.writeLog()) != 0 {
+		t.Errorf("dry run wrote %v", h.fake.writeLog())
+	}
+	want := []string{"no_pack", "would_grab", "no_pack", "would_search", "would_search"}
+	if got := itemResults(run); !slices.Equal(got, want) {
+		t.Fatalf("results = %v, want %v", got, want)
+	}
+	if run.Items[4].Episodes != "4" || run.Counts.Searched != 3 {
+		t.Errorf("anime search item %+v, counts %+v", run.Items[4], run.Counts)
 	}
 }

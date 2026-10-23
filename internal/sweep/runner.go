@@ -22,6 +22,8 @@ import (
 const (
 	keepRuns       = 50
 	seasonAttempts = 4
+	animeAttempts  = 3
+	animeBatch     = 10
 	grabGap        = 60 * time.Second
 	grabPoll       = 30 * time.Second
 	grabWait       = 7 * time.Minute
@@ -31,6 +33,11 @@ const (
 	getRetryFor    = 10 * time.Minute
 	refusedMemory  = 7 * 24 * time.Hour
 	noPackMemory   = 30 * 24 * time.Hour
+	searchGap      = 60 * time.Second
+	commandPoll    = 15 * time.Second
+	commandWait    = 15 * time.Minute
+
+	seriesAnime = "anime"
 
 	statusDone        = "done"
 	statusFailed      = "failed"
@@ -46,6 +53,8 @@ const (
 	resultDownloading = "downloading"
 	resultNoPack      = "no_pack"
 	resultWouldGrab   = "would_grab"
+	resultSearched    = "searched"
+	resultWouldSearch = "would_search"
 )
 
 var (
@@ -83,22 +92,30 @@ func (r *Runner) Progress() (Progress, bool) {
 type run struct {
 	*Runner
 
-	id       int64
-	dry      bool
-	s        Settings
-	c        db.SweepCounts
-	refused  map[string]bool
-	skip     map[string]bool
-	queued   map[int]bool
-	tried    map[string]bool
-	imported []string
-	lastGrab time.Time
+	id         int64
+	dry        bool
+	s          Settings
+	c          db.SweepCounts
+	refused    map[string]bool
+	skip       map[string]bool
+	queued     map[int]bool
+	tried      map[string]bool
+	handled    map[int]bool
+	imported   []string
+	lastGrab   time.Time
+	lastSearch time.Time
 }
 
 type seasonTarget struct {
 	series client.Series
 	season int
 	eps    []client.Episode
+}
+
+type searchBatch struct {
+	item  db.SweepItem
+	eps   []client.Episode
+	anime bool
 }
 
 func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) (int64, error) {
@@ -111,7 +128,7 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 		return 0, err
 	}
 	x := &run{
-		Runner: r, id: id, dry: dry, s: s, tried: map[string]bool{},
+		Runner: r, id: id, dry: dry, s: s, tried: map[string]bool{}, handled: map[int]bool{},
 		c: db.SweepCounts{MaxGrabs: s.MaxGrabs, MaxLookups: s.MaxLookups, MaxSearches: s.MaxSearches},
 	}
 	x.report("preflight", "")
@@ -164,27 +181,60 @@ func (x *run) sweep(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = x.seasonPass(ctx, series); err != nil && !errors.Is(err, errCapReached) {
+	var eligible []client.Series
+	for _, s := range series {
+		if s.Monitored && !slices.Contains(x.s.ExcludedSeries, s.ID) && (s.SeriesType != seriesAnime || x.s.Anime) {
+			eligible = append(eligible, s)
+		}
+	}
+	if err = x.packPasses(ctx, eligible); err != nil && !errors.Is(err, errCapReached) {
 		return err
 	}
+	if err = x.episodePass(ctx, eligible); err != nil {
+		return err
+	}
+	return x.cleanup(ctx)
+}
+
+func (x *run) packPasses(ctx context.Context, series []client.Series) error {
+	if err := x.seasonPass(ctx, series); err != nil {
+		return err
+	}
+	for _, s := range series {
+		if s.SeriesType != seriesAnime {
+			continue
+		}
+		if err := x.animeSeries(ctx, s); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (x *run) missing(ctx context.Context, s client.Series) ([]client.Episode, error) {
+	eps, err := retry(ctx, x, false, func() ([]client.Episode, error) {
+		return x.Sonarr.GetEpisodes(ctx, s.ID, -1)
+	})
+	if err != nil {
+		return nil, err
+	}
+	missing := Missing(eps, x.queued, x.Now())
+	return slices.DeleteFunc(missing, func(e client.Episode) bool { return x.handled[e.ID] }), nil
 }
 
 func (x *run) seasonPass(ctx context.Context, series []client.Series) error {
 	x.report("season pass", "")
 	var targets []seasonTarget
 	for _, s := range series {
-		if !s.Monitored || s.SeriesType == "anime" || slices.Contains(x.s.ExcludedSeries, s.ID) {
+		if s.SeriesType == seriesAnime {
 			continue
 		}
-		eps, err := retry(ctx, x, false, func() ([]client.Episode, error) {
-			return x.Sonarr.GetEpisodes(ctx, s.ID, -1)
-		})
+		missing, err := x.missing(ctx, s)
 		if err != nil {
 			return err
 		}
 		bySeason := map[int][]client.Episode{}
-		for _, e := range Missing(eps, x.queued, x.Now()) {
+		for _, e := range missing {
 			bySeason[e.SeasonNumber] = append(bySeason[e.SeasonNumber], e)
 		}
 		for season, missing := range bySeason {
@@ -205,44 +255,253 @@ func (x *run) seasonPass(ctx context.Context, series []client.Series) error {
 }
 
 func (x *run) season(ctx context.Context, t seasonTarget) error {
+	season := t.season
+	item := db.SweepItem{
+		RunID: x.id, Target: seasonTargetKey(t.series.ID, t.season), SeriesID: t.series.ID,
+		SeriesTitle: t.series.Title, Season: &season, Episodes: numbers(t.eps, false),
+	}
+	rels, ok, err := x.lookup(ctx, &item, "season pass", fmt.Sprintf("%s S%02d", t.series.Title, t.season),
+		func() ([]client.Release, error) { return x.Sonarr.Releases(ctx, t.series.ID, t.season) })
+	if !ok {
+		return err
+	}
+	cands := SeasonCandidates(rels, x.refused)
+	Rank(cands)
+	_, handled, err := x.attempts(ctx, item, cands, seasonAttempts)
+	if handled {
+		for _, e := range t.eps {
+			x.handled[e.ID] = true
+		}
+	}
+	return err
+}
+
+func (x *run) animeSeries(ctx context.Context, s client.Series) error {
+	missing, err := x.missing(ctx, s)
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(missing, byAbsolute)
+	uncovered := map[int]bool{}
+	for _, e := range missing {
+		uncovered[e.ID] = true
+	}
+	for _, e := range missing {
+		if !uncovered[e.ID] || x.skip[episodeTargetKey(e.ID)] {
+			continue
+		}
+		item := db.SweepItem{
+			RunID: x.id, Target: episodeTargetKey(e.ID), SeriesID: s.ID, SeriesTitle: s.Title,
+			Episodes: strconv.Itoa(e.AbsoluteEpisodeNumber),
+		}
+		rels, ok, lerr := x.lookup(ctx, &item, "anime pass", s.Title+" "+item.Episodes,
+			func() ([]client.Release, error) { return x.Sonarr.EpisodeReleases(ctx, e.ID) })
+		if !ok {
+			if lerr != nil {
+				return lerr
+			}
+			continue
+		}
+		cands := AnimeCandidates(rels, uncovered, x.refused)
+		Rank(cands)
+		rel, handled, aerr := x.attempts(ctx, item, cands, animeAttempts)
+		if handled {
+			for _, id := range Covers(rel, uncovered) {
+				delete(uncovered, id)
+				x.handled[id] = true
+			}
+		}
+		if aerr != nil {
+			return aerr
+		}
+	}
+	return nil
+}
+
+func (x *run) lookup(
+	ctx context.Context,
+	item *db.SweepItem,
+	phase, current string,
+	f func() ([]client.Release, error),
+) ([]client.Release, bool, error) {
 	if x.c.Lookups >= x.s.MaxLookups || x.c.Grabs >= x.s.MaxGrabs {
-		return errCapReached
+		return nil, false, errCapReached
+	}
+	if err := x.guard(ctx); err != nil {
+		return nil, false, err
+	}
+	x.report(phase, current)
+	x.c.Lookups++
+	began := x.Now()
+	rels, err := retry(ctx, x, true, f)
+	n, ms := len(rels), int(x.Now().Sub(began).Milliseconds())
+	item.LookupResults, item.LookupMS = &n, &ms
+	if err == nil {
+		return rels, true, nil
+	}
+	if ctx.Err() != nil {
+		return nil, false, err
+	}
+	x.logger().WarnContext(ctx, "sweep lookup failed", "target", item.Target, "err", err)
+	item.Result = resultFailed
+	return nil, false, x.addItem(ctx, item)
+}
+
+func (x *run) episodePass(ctx context.Context, series []client.Series) error {
+	if x.s.MaxSearches == 0 {
+		return nil
+	}
+	x.report("episode pass", "")
+	queue, err := retry(ctx, x, false, func() ([]client.QueueDetail, error) { return x.Sonarr.QueueDetails(ctx) })
+	if err != nil {
+		return err
+	}
+	x.queued = QueuedEpisodes(queue)
+	var batches []searchBatch
+	for _, s := range series {
+		missing, merr := x.missing(ctx, s)
+		if merr != nil {
+			return merr
+		}
+		batches = append(batches, searchBatches(x.id, s, missing)...)
+	}
+	for _, b := range batches {
+		if x.c.Searched >= x.s.MaxSearches {
+			return nil
+		}
+		if err = x.search(ctx, b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func searchBatches(runID int64, s client.Series, missing []client.Episode) []searchBatch {
+	base := db.SweepItem{RunID: runID, SeriesID: s.ID, SeriesTitle: s.Title}
+	var out []searchBatch
+	if s.SeriesType == seriesAnime {
+		slices.SortFunc(missing, byAbsolute)
+		for chunk := range slices.Chunk(missing, animeBatch) {
+			b := searchBatch{item: base, eps: chunk, anime: true}
+			b.item.Target = episodeTargetKey(chunk[0].ID)
+			out = append(out, b)
+		}
+		return out
+	}
+	slices.SortFunc(missing, func(a, b client.Episode) int {
+		return cmp.Or(a.SeasonNumber-b.SeasonNumber, a.EpisodeNumber-b.EpisodeNumber)
+	})
+	for i := 0; i < len(missing); {
+		j := i
+		for j < len(missing) && missing[j].SeasonNumber == missing[i].SeasonNumber {
+			j++
+		}
+		season := missing[i].SeasonNumber
+		b := searchBatch{item: base, eps: missing[i:j]}
+		b.item.Target, b.item.Season = seasonTargetKey(s.ID, season), &season
+		out = append(out, b)
+		i = j
+	}
+	return out
+}
+
+func (x *run) search(ctx context.Context, b searchBatch) error {
+	eps := b.eps[:min(len(b.eps), x.s.MaxSearches-x.c.Searched)]
+	ids := make([]int, 0, len(eps))
+	for _, e := range eps {
+		ids = append(ids, e.ID)
+	}
+	item := b.item
+	item.Episodes = numbers(eps, b.anime)
+	x.report("episode pass", item.SeriesTitle+" "+item.Episodes)
+	x.c.Searched += len(ids)
+	if x.dry {
+		item.Result = resultWouldSearch
+		return x.addItem(ctx, &item)
+	}
+	if !x.lastSearch.IsZero() {
+		if wait := searchGap - x.Now().Sub(x.lastSearch); wait > 0 {
+			if err := x.Sleep(ctx, wait); err != nil {
+				return err
+			}
+		}
 	}
 	if err := x.guard(ctx); err != nil {
 		return err
 	}
-	x.report("season pass", fmt.Sprintf("%s S%02d", t.series.Title, t.season))
-	nums := make([]string, 0, len(t.eps))
-	for _, e := range t.eps {
-		nums = append(nums, strconv.Itoa(e.EpisodeNumber))
+	item.Result = resultSearched
+	if err := x.addItem(ctx, &item); err != nil {
+		return err
 	}
-	season := t.season
-	item := db.SweepItem{
-		RunID: x.id, Target: seasonTargetKey(t.series.ID, t.season), SeriesID: t.series.ID,
-		SeriesTitle: t.series.Title, Season: &season, Episodes: strings.Join(nums, ","),
-	}
-	x.c.Lookups++
-	began := x.Now()
-	rels, err := retry(ctx, x, true, func() ([]client.Release, error) {
-		return x.Sonarr.Releases(ctx, t.series.ID, t.season)
-	})
-	n, ms := len(rels), int(x.Now().Sub(began).Milliseconds())
-	item.LookupResults, item.LookupMS = &n, &ms
+	cmdID, err := x.Sonarr.SearchEpisodes(ctx, ids)
 	if err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
-		x.logger().WarnContext(ctx, "sweep lookup failed", "target", item.Target, "err", err)
-		item.Result = resultFailed
-		return x.addItem(ctx, &item)
+		x.lastSearch = x.Now()
+		x.logger().WarnContext(ctx, "sweep episode search failed", "target", item.Target, "err", err)
+		return x.DB.UpdateSweepItem(ctx, item.ID, resultFailed, "")
 	}
-	cands := SeasonCandidates(rels, x.refused)
-	Rank(cands)
-	_, err = x.attempts(ctx, item, cands, seasonAttempts)
+	err = x.waitCommand(ctx, cmdID)
+	x.lastSearch = x.Now()
 	return err
 }
 
-func (x *run) attempts(ctx context.Context, base db.SweepItem, cands []client.Release, maxTries int) (bool, error) {
+func (x *run) waitCommand(ctx context.Context, id int) error {
+	for range int(commandWait / commandPoll) {
+		if err := x.Sleep(ctx, commandPoll); err != nil {
+			return err
+		}
+		status, err := retry(ctx, x, false, func() (string, error) { return x.Sonarr.Command(ctx, id) })
+		if err != nil {
+			return err
+		}
+		if status != "queued" && status != "started" {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (x *run) cleanup(ctx context.Context) error {
+	if len(x.imported) == 0 {
+		return nil
+	}
+	x.report("leftover cleanup", "")
+	queue, err := retry(ctx, x, false, func() ([]client.QueueDetail, error) { return x.Sonarr.QueueDetails(ctx) })
+	if err != nil {
+		return err
+	}
+	for _, dlID := range x.imported {
+		var recs []client.QueueDetail
+		for _, q := range queue {
+			if strings.EqualFold(q.DownloadID, dlID) {
+				recs = append(recs, q)
+			}
+		}
+		if len(recs) == 0 || slices.ContainsFunc(recs, func(q client.QueueDetail) bool { return !IsLeftover(q) }) {
+			continue
+		}
+		if err = x.guard(ctx); err != nil {
+			return err
+		}
+		err = x.Sonarr.RemoveQueueItem(ctx, recs[0].ID, false, false, false)
+		if err != nil && !errors.Is(err, client.ErrNotFound) {
+			if ctx.Err() != nil {
+				return err
+			}
+			x.logger().WarnContext(ctx, "sweep leftover cleanup failed", "download", dlID, "err", err)
+		}
+	}
+	return nil
+}
+
+func (x *run) attempts(
+	ctx context.Context,
+	base db.SweepItem,
+	cands []client.Release,
+	maxTries int,
+) (client.Release, bool, error) {
 	tries := 0
 	for _, rel := range cands {
 		if tries == maxTries {
@@ -260,15 +519,15 @@ func (x *run) attempts(ctx context.Context, base db.SweepItem, cands []client.Re
 		tries++
 		handled, err := x.grab(ctx, item, rel)
 		if err != nil || handled {
-			return handled, err
+			return rel, handled, err
 		}
 	}
 	if tries > 0 {
-		return false, nil
+		return client.Release{}, false, nil
 	}
 	base.Result = resultNoPack
 	x.c.NoPack++
-	return false, x.addItem(ctx, &base)
+	return client.Release{}, false, x.addItem(ctx, &base)
 }
 
 func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (bool, error) {
@@ -447,6 +706,26 @@ func (r *Runner) logger() *slog.Logger {
 
 func seasonTargetKey(seriesID, season int) string {
 	return fmt.Sprintf("s:%d:%d", seriesID, season)
+}
+
+func episodeTargetKey(episodeID int) string {
+	return fmt.Sprintf("e:%d", episodeID)
+}
+
+func byAbsolute(a, b client.Episode) int {
+	return a.AbsoluteEpisodeNumber - b.AbsoluteEpisodeNumber
+}
+
+func numbers(eps []client.Episode, absolute bool) string {
+	nums := make([]string, 0, len(eps))
+	for _, e := range eps {
+		n := e.EpisodeNumber
+		if absolute {
+			n = e.AbsoluteEpisodeNumber
+		}
+		nums = append(nums, strconv.Itoa(n))
+	}
+	return strings.Join(nums, ",")
 }
 
 func retry[T any](ctx context.Context, x *run, release bool, f func() (T, error)) (T, error) {
