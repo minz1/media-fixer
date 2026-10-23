@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
 )
@@ -19,15 +20,16 @@ const (
 )
 
 type Settings struct {
-	Enabled        bool  `json:"enabled"`
-	Weekday        int   `json:"weekday"`
-	HourUTC        int   `json:"hour_utc"`
-	MinMissing     int   `json:"min_missing"`
-	MaxGrabs       int   `json:"max_grabs"`
-	MaxLookups     int   `json:"max_lookups"`
-	MaxSearches    int   `json:"max_searches"`
-	Anime          bool  `json:"anime"`
-	ExcludedSeries []int `json:"excluded_series"`
+	Enabled        bool       `json:"enabled"`
+	Weekday        int        `json:"weekday"`
+	HourUTC        int        `json:"hour_utc"`
+	MinMissing     int        `json:"min_missing"`
+	MaxGrabs       int        `json:"max_grabs"`
+	MaxLookups     int        `json:"max_lookups"`
+	MaxSearches    int        `json:"max_searches"`
+	Anime          bool       `json:"anime"`
+	ExcludedSeries []int      `json:"excluded_series"`
+	EnabledAt      *time.Time `json:"enabled_at,omitempty"`
 }
 
 func DefaultSettings() Settings {
@@ -70,7 +72,20 @@ func LoadSettings(ctx context.Context, d *db.DB) (Settings, error) {
 	return s, err
 }
 
-func SaveSettings(ctx context.Context, d *db.DB, s Settings) error {
+func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) error {
+	prev, err := LoadSettings(ctx, d)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !s.Enabled:
+		s.EnabledAt = nil
+	case prev.Enabled:
+		s.EnabledAt = prev.EnabledAt
+	default:
+		now = now.UTC()
+		s.EnabledAt = &now
+	}
 	if s.ExcludedSeries == nil {
 		s.ExcludedSeries = []int{}
 	}

@@ -177,6 +177,7 @@ func TestMaintenanceSettings_SaveValid(t *testing.T) {
 	t.Parallel()
 	env := newMaintenanceTestServer(t)
 
+	before := time.Now()
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", validSettingsForm())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
@@ -185,6 +186,10 @@ func TestMaintenanceSettings_SaveValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got.EnabledAt == nil || got.EnabledAt.Before(before) || got.EnabledAt.After(time.Now()) {
+		t.Errorf("enabled_at = %v, want the save time", got.EnabledAt)
+	}
+	got.EnabledAt = nil
 	want := sweep.Settings{
 		Enabled: true, Weekday: 3, HourUTC: 7, MinMissing: 2, MaxGrabs: 4, MaxLookups: 40, MaxSearches: 10,
 		Anime: true, ExcludedSeries: []int{2},
@@ -249,7 +254,7 @@ func TestMaintenanceRun_Refusals(t *testing.T) {
 		env := newMaintenanceTestServer(t)
 		enabled := sweep.DefaultSettings()
 		enabled.Enabled = true
-		if err := sweep.SaveSettings(context.Background(), env.db, enabled); err != nil {
+		if err := sweep.SaveSettings(context.Background(), env.db, enabled, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if err := env.db.SetSetting(context.Background(), "autonomous_paused", "true"); err != nil {
@@ -307,7 +312,7 @@ func TestMaintenanceStatus_Fragment(t *testing.T) {
 		env := newMaintenanceTestServer(t)
 		set := sweep.DefaultSettings()
 		set.Enabled, set.Weekday, set.HourUTC = true, 2, 9
-		if err := sweep.SaveSettings(context.Background(), env.db, set); err != nil {
+		if err := sweep.SaveSettings(context.Background(), env.db, set, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		body := do(t, env.srv, http.MethodGet, "/media/maintenance/pack-sweep/status", nil).Body.String()

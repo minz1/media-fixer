@@ -2,6 +2,7 @@ package sweep_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 func newScheduled(t *testing.T, s sweep.Settings) (*harness, *sweep.Scheduler) {
 	t.Helper()
 	h := newHarness(t)
-	if err := sweep.SaveSettings(context.Background(), h.db, s); err != nil {
+	if err := sweep.SaveSettings(context.Background(), h.db, s, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return h, sweep.NewScheduler(context.Background(), h.runner, h.db)
@@ -26,6 +27,13 @@ func (h *harness) runs(t *testing.T) []db.SweepRun {
 		t.Fatal(err)
 	}
 	return runs
+}
+
+func (h *harness) restart(at time.Time) *sweep.Scheduler {
+	h.clock.mu.Lock()
+	h.clock.t = at
+	h.clock.mu.Unlock()
+	return sweep.NewScheduler(context.Background(), h.runner, h.db)
 }
 
 func (h *harness) tick(sch *sweep.Scheduler, at time.Time) {
@@ -90,9 +98,9 @@ func TestScheduler_RefusedCountsAsSlotRun(t *testing.T) {
 	}
 }
 
-func TestScheduler_InterruptedRunDoesNotConsumeSlot(t *testing.T) {
+func TestScheduler_InterruptedRunReRunsAfterRestart(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), settings())
 	ctx := context.Background()
 	if _, err := h.db.CreateSweepRun(ctx, "schedule", false, t0().Add(time.Minute)); err != nil {
 		t.Fatal(err)
@@ -100,10 +108,98 @@ func TestScheduler_InterruptedRunDoesNotConsumeSlot(t *testing.T) {
 	if n, err := h.db.InterruptRunningSweeps(ctx); err != nil || n != 1 {
 		t.Fatalf("InterruptRunningSweeps = %d, %v", n, err)
 	}
-	h.tick(sch, t0().Add(10*time.Minute))
+	sch := h.restart(t0().Add(20 * time.Minute))
+	h.tick(sch, t0().Add(21*time.Minute))
 	runs := h.runs(t)
 	if len(runs) != 2 || runs[0].Status != "done" || runs[1].Status != "interrupted" {
 		t.Errorf("runs = %+v, want a fresh done run after the interrupted one", runs)
+	}
+}
+
+func TestScheduler_MissedSlotRunsOnceAfterRestart(t *testing.T) {
+	t.Parallel()
+	h, _ := scheduledAt(t, t0().AddDate(0, 0, -1), settings())
+	tuesday := t0().AddDate(0, 0, 2)
+	sch := h.restart(tuesday)
+	for m := range 90 {
+		h.tick(sch, tuesday.Add(time.Duration(m)*time.Minute))
+	}
+	runs := h.runs(t)
+	if len(runs) != 1 || runs[0].Trigger != "schedule" || runs[0].Status != "done" {
+		t.Errorf("runs = %+v, want one scheduled run for the missed slot", runs)
+	}
+}
+
+func TestScheduler_LegacyEnabledRowRunsMissedSlot(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	raw, err := json.Marshal(settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.db.SetSetting(context.Background(), sweep.SettingsKey, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	sch := h.restart(t0().AddDate(0, 0, 1))
+	h.tick(sch, t0().AddDate(0, 0, 1))
+	if n := len(h.runs(t)); n != 1 {
+		t.Errorf("runs = %d, want 1 for a row saved before enabled_at existed", n)
+	}
+}
+
+func TestScheduler_DryRunAfterSlotDoesNotUseIt(t *testing.T) {
+	t.Parallel()
+	h, sch := scheduledAt(t, t0().Add(-time.Hour), settings())
+	h.clock.mu.Lock()
+	h.clock.t = t0().Add(time.Minute)
+	h.clock.mu.Unlock()
+	if err := sch.RunNow("manual", true); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	h.tick(sch, t0().Add(30*time.Minute))
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Trigger != "schedule" || runs[1].Trigger != "manual" || !runs[1].Dry {
+		t.Errorf("runs = %+v, want the dry run then a scheduled run", runs)
+	}
+}
+
+func TestSaveSettings_EnabledAt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	save := func(s sweep.Settings, at time.Time) *time.Time {
+		t.Helper()
+		if err := sweep.SaveSettings(ctx, h.db, s, at); err != nil {
+			t.Fatal(err)
+		}
+		got, err := sweep.LoadSettings(ctx, h.db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.EnabledAt
+	}
+	if at := save(sweep.DefaultSettings(), t0()); at != nil {
+		t.Errorf("disabled save: enabled_at = %v, want none", at)
+	}
+	if at := save(settings(), t0().Add(time.Hour)); at == nil || !at.Equal(t0().Add(time.Hour)) {
+		t.Errorf("enabling save: enabled_at = %v, want %v", at, t0().Add(time.Hour))
+	}
+	if at := save(settings(), t0().Add(2*time.Hour)); at == nil || !at.Equal(t0().Add(time.Hour)) {
+		t.Errorf("re-save while enabled: enabled_at = %v, want %v kept", at, t0().Add(time.Hour))
+	}
+	if at := save(sweep.DefaultSettings(), t0().Add(3*time.Hour)); at != nil {
+		t.Errorf("disabling save: enabled_at = %v, want cleared", at)
+	}
+	raw, err := json.Marshal(settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.db.SetSetting(ctx, sweep.SettingsKey, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if at := save(settings(), t0().Add(4*time.Hour)); at != nil {
+		t.Errorf("re-save of a legacy enabled row: enabled_at = %v, want none", at)
 	}
 }
 
@@ -168,7 +264,7 @@ func TestSettingsChangeDoesNotAffectActiveRun(t *testing.T) {
 		saved = true
 		s := sweep.DefaultSettings()
 		s.MaxGrabs = 1
-		if err := sweep.SaveSettings(context.Background(), h.db, s); err != nil {
+		if err := sweep.SaveSettings(context.Background(), h.db, s, h.clock.Now()); err != nil {
 			t.Error(err)
 		}
 	}
@@ -209,7 +305,7 @@ func scheduledAt(t *testing.T, at time.Time, s sweep.Settings) (*harness, *sweep
 	t.Helper()
 	h := newHarness(t)
 	h.clock.t = at
-	if err := sweep.SaveSettings(context.Background(), h.db, s); err != nil {
+	if err := sweep.SaveSettings(context.Background(), h.db, s, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return h, sweep.NewScheduler(context.Background(), h.runner, h.db)
@@ -224,6 +320,13 @@ func TestScheduler_FirstEnableWaitsForSlot(t *testing.T) {
 	}
 	if n := len(h.runs(t)); n != 0 {
 		t.Fatalf("enabling mid-week with no prior run started %d runs", n)
+	}
+	sch = h.restart(wednesday.Add(2 * time.Hour))
+	for m := range 60 {
+		h.tick(sch, wednesday.Add(2*time.Hour+time.Duration(m)*time.Minute))
+	}
+	if n := len(h.runs(t)); n != 0 {
+		t.Fatalf("a restart after enabling mid-week started %d runs", n)
 	}
 	if next := sch.NextRun(wednesday); next == nil || !next.Equal(t0().AddDate(0, 0, 7)) {
 		t.Errorf("NextRun = %v, want %v", next, t0().AddDate(0, 0, 7))
@@ -256,7 +359,7 @@ func TestScheduler_EnabledJustBeforeSlotFires(t *testing.T) {
 	t.Parallel()
 	h, sch := scheduledAt(t, t0().Add(-time.Hour), sweep.DefaultSettings())
 	h.tick(sch, t0().Add(-time.Minute))
-	if err := sweep.SaveSettings(context.Background(), h.db, settings()); err != nil {
+	if err := sweep.SaveSettings(context.Background(), h.db, settings(), h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	h.tick(sch, t0())
@@ -274,9 +377,10 @@ func TestScheduler_FailedRunRetriesAfterAnHour(t *testing.T) {
 	if len(failed) != 1 || failed[0].Status != "failed" {
 		t.Fatalf("runs = %+v, want one failed run", failed)
 	}
+	sch = h.restart(t0().Add(30 * time.Minute))
 	h.tick(sch, t0().Add(30*time.Minute))
 	if n := len(h.runs(t)); n != 1 {
-		t.Fatalf("runs 30 min after a failure = %d, want 1", n)
+		t.Fatalf("runs 30 min after a failure and a restart = %d, want 1", n)
 	}
 	retry := failed[0].FinishedAt.Add(time.Hour)
 	if next := sch.NextRun(t0().Add(30 * time.Minute)); next == nil || !next.Equal(retry) {
@@ -305,5 +409,33 @@ func TestScheduler_FailedDryRunDoesNotDelaySlot(t *testing.T) {
 	runs := h.runs(t)
 	if len(runs) != 2 || runs[0].Trigger != "schedule" || runs[0].Status != "done" {
 		t.Errorf("runs = %+v, want the failed dry run then a done scheduled run", runs)
+	}
+}
+
+func TestScheduler_FailedRunRetriesTwicePerSlot(t *testing.T) {
+	t.Parallel()
+	h, sch := newScheduled(t, settings())
+	h.fake.seriesDownTil = t0().AddDate(0, 0, 3)
+	for m := 0; m <= 8*60; m += 10 {
+		if m == 100 {
+			sch = h.restart(t0().Add(time.Duration(m) * time.Minute))
+		}
+		h.tick(sch, t0().Add(time.Duration(m)*time.Minute))
+	}
+	runs := h.runs(t)
+	if len(runs) != 3 {
+		t.Fatalf("runs = %+v, want the failed run and two retries", runs)
+	}
+	for i, r := range runs {
+		if r.Status != "failed" {
+			t.Errorf("run %d status = %s, want failed", i, r.Status)
+		}
+		if i < len(runs)-1 && runs[i].StartedAt.Sub(*runs[i+1].FinishedAt) < time.Hour {
+			t.Errorf("retry %d started %v after the previous failure, want at least 1h",
+				i, runs[i].StartedAt.Sub(*runs[i+1].FinishedAt))
+		}
+	}
+	if next := sch.NextRun(t0().Add(8 * time.Hour)); next == nil || !next.Equal(t0().AddDate(0, 0, 7)) {
+		t.Errorf("NextRun after the retries = %v, want %v", next, t0().AddDate(0, 0, 7))
 	}
 }

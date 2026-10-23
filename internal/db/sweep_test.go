@@ -253,7 +253,7 @@ func TestRefusedKeys_Window(t *testing.T) {
 	}
 }
 
-func TestLastSweepRunStart_ExcludesStatuses(t *testing.T) {
+func TestLastSweepRunStart_ExcludesStatusesAndDryRuns(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
@@ -278,6 +278,9 @@ func TestLastSweepRunStart_ExcludesStatuses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := d.CreateSweepRun(ctx, "manual", true, sweepT0().Add(4*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	got, err := d.LastSweepRunStart(ctx, exclude)
 	if err != nil || got == nil || !got.Equal(sweepT0().Add(time.Hour)) {
 		t.Errorf("LastSweepRunStart = %v, %v; want %v", got, err, sweepT0().Add(time.Hour))
@@ -285,5 +288,30 @@ func TestLastSweepRunStart_ExcludesStatuses(t *testing.T) {
 	got, err = d.LastSweepRunStart(ctx, nil)
 	if err != nil || got == nil || !got.Equal(sweepT0().Add(3*time.Hour)) {
 		t.Errorf("LastSweepRunStart(nil) = %v, %v", got, err)
+	}
+}
+
+func TestFailedSweepRunsSince(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	for _, r := range []struct {
+		hours  int
+		dry    bool
+		status string
+	}{{-1, false, "failed"}, {1, false, "failed"}, {2, true, "failed"}, {3, false, "done"}, {4, false, "failed"}} {
+		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
+		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = d.FinishSweepRun(ctx, id, r.status, "", db.SweepCounts{}, at.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := d.FailedSweepRunsSince(ctx, sweepT0())
+	want := []time.Time{sweepT0().Add(4*time.Hour + time.Minute), sweepT0().Add(time.Hour + time.Minute)}
+	if err != nil || len(got) != 2 || !got[0].Equal(want[0]) || !got[1].Equal(want[1]) {
+		t.Errorf("FailedSweepRunsSince = %v, %v; want %v", got, err, want)
 	}
 }

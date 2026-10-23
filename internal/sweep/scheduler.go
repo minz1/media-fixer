@@ -12,6 +12,7 @@ import (
 const (
 	triggerSchedule = "schedule"
 	week            = 7
+	maxRetries      = 2
 )
 
 var (
@@ -26,14 +27,10 @@ type Scheduler struct {
 
 	mu sync.Mutex
 	wg sync.WaitGroup
-
-	stateMu    sync.Mutex
-	disabledAt time.Time
-	retryAt    time.Time
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
-	return &Scheduler{r: r, d: d, base: base, disabledAt: r.Now()}
+	return &Scheduler{r: r, d: d, base: base}
 }
 
 func (s *Scheduler) Runner() *Runner { return s.r }
@@ -63,20 +60,11 @@ func (s *Scheduler) Tick(now time.Time) {
 
 func (s *Scheduler) tick(now time.Time) error {
 	set, err := LoadSettings(s.base, s.d)
-	if err != nil {
+	if err != nil || !set.Enabled {
 		return err
 	}
-	s.stateMu.Lock()
-	if !set.Enabled {
-		s.disabledAt = now
-	}
-	retryAt := s.retryAt
-	s.stateMu.Unlock()
-	if !set.Enabled || now.Before(retryAt) {
-		return nil
-	}
-	due, err := s.due(set, now)
-	if err != nil || !due {
+	next, err := s.next(set, now)
+	if err != nil || now.Before(next) {
 		return err
 	}
 	return s.start(triggerSchedule, false, set)
@@ -98,35 +86,37 @@ func (s *Scheduler) NextRun(now time.Time) *time.Time {
 	if err != nil || !set.Enabled {
 		return nil
 	}
-	next := slot(set, now)
-	if due, derr := s.due(set, now); derr != nil || !due {
-		next = next.AddDate(0, 0, week)
-	} else {
-		s.stateMu.Lock()
-		if now.Before(s.retryAt) {
-			next = s.retryAt
-		}
-		s.stateMu.Unlock()
+	next, err := s.next(set, now)
+	if err != nil {
+		next = slot(set, now).AddDate(0, 0, week)
 	}
 	return &next
 }
 
-func (s *Scheduler) due(set Settings, now time.Time) (bool, error) {
+func (s *Scheduler) next(set Settings, now time.Time) (time.Time, error) {
 	at := slot(set, now)
-	s.stateMu.Lock()
-	seen := !at.Before(s.disabledAt)
-	s.stateMu.Unlock()
-	if !seen {
-		return false, nil
+	following := at.AddDate(0, 0, week)
+	if set.EnabledAt != nil && at.Before(*set.EnabledAt) {
+		return following, nil
 	}
 	last, err := s.d.LastSweepRunStart(s.base, []string{statusPaused, statusInterrupted, statusFailed})
-	if errors.Is(err, db.ErrNotFound) {
-		return true, nil
+	if err == nil && !last.Before(at) {
+		return following, nil
 	}
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return time.Time{}, err
+	}
+	failed, err := s.d.FailedSweepRunsSince(s.base, at)
 	if err != nil {
-		return false, err
+		return time.Time{}, err
 	}
-	return last.Before(at), nil
+	if len(failed) > 0 {
+		at = failed[0].Add(time.Hour)
+	}
+	if len(failed) > maxRetries || at.After(following) {
+		return following, nil
+	}
+	return at, nil
 }
 
 func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
@@ -145,11 +135,6 @@ func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
 		defer s.mu.Unlock()
 		if _, rerr := s.r.Run(s.base, trigger, dry, set); rerr != nil {
 			s.r.logger().ErrorContext(s.base, "pack sweep run", "trigger", trigger, "err", rerr)
-			if !dry {
-				s.stateMu.Lock()
-				s.retryAt = s.r.Now().Add(time.Hour)
-				s.stateMu.Unlock()
-			}
 		}
 	})
 	return nil

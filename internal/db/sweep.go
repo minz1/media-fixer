@@ -199,7 +199,7 @@ func (d *DB) LastSweepRunStart(ctx context.Context, excludeStatus []string) (*ti
 	}
 	var at time.Time
 	err = d.read.QueryRowContext(ctx,
-		`SELECT started_at FROM sweep_runs WHERE status NOT IN (SELECT value FROM json_each(?))
+		`SELECT started_at FROM sweep_runs WHERE dry = 0 AND status NOT IN (SELECT value FROM json_each(?))
 		 ORDER BY id DESC LIMIT 1`, string(exclude)).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -297,6 +297,26 @@ func (d *DB) stringSet(ctx context.Context, query string, args ...any) (map[stri
 			return nil, err
 		}
 		out[s] = true
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) FailedSweepRunsSince(ctx context.Context, since time.Time) ([]time.Time, error) {
+	rows, err := d.read.QueryContext(ctx,
+		`SELECT finished_at FROM sweep_runs
+		 WHERE dry = 0 AND status = 'failed' AND finished_at IS NOT NULL AND started_at >= ?
+		 ORDER BY id DESC`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []time.Time
+	for rows.Next() {
+		var at time.Time
+		if err = rows.Scan(&at); err != nil {
+			return nil, err
+		}
+		out = append(out, at)
 	}
 	return out, rows.Err()
 }

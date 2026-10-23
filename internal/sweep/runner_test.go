@@ -57,7 +57,7 @@ func TestSettings_LoadSaveRoundTrip(t *testing.T) {
 	}
 	got.MaxGrabs = 2
 	got.ExcludedSeries = []int{7}
-	if err = sweep.SaveSettings(ctx, h.db, got); err != nil {
+	if err = sweep.SaveSettings(ctx, h.db, got, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := h.db.GetSetting(ctx, sweep.SettingsKey)
