@@ -134,10 +134,12 @@ func run() error {
 		return err
 	}
 	if cfg.Sonarr.URL != "" {
-		sweep.NewScheduler(ctx, &sweep.Runner{
+		sch := sweep.NewScheduler(ctx, &sweep.Runner{
 			Sonarr: bundle.clients.Sonarr, DB: database, Notify: bot.NotifyOwner,
 			Now: time.Now, Sleep: sweep.Sleep, Log: log,
-		}, database).Start()
+		}, database)
+		srv.SetSweep(sch)
+		sch.Start()
 	} else {
 		log.Warn("sonarr not configured — pack sweep unavailable")
 	}

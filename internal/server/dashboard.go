@@ -102,6 +102,9 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 				return badgeGray
 			}
 		},
+		"sweepColor": sweepColor,
+		"season":     seasonLabel,
+		"ms":         lookupDuration,
 		"confidenceColor": func(confidence string) string {
 			switch strings.ToLower(confidence) {
 			case "high":

@@ -54,14 +54,9 @@
   {{template "head" (dict "Title" "Media Fixer")}}
   <body class="bg-gray-50 font-sans">
     <div class="max-w-5xl mx-auto px-4 py-8">
-      <div class="flex items-center justify-between mb-8">
+      <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-bold text-gray-900">Media Fixer</h1>
         <div class="flex items-center gap-3">
-          <a
-            href="{{.BaseURL}}/selftest"
-            class="text-sm text-blue-600 hover:underline"
-            >Live tool check</a
-          >
           {{if .Paused}}
           <span class="text-sm font-medium text-red-600"
             >⏸ Autonomous actions paused</span
@@ -86,6 +81,8 @@
           {{end}}
         </div>
       </div>
+
+      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "issues")}}
 
       <!-- Connects but never itself swaps (hx-swap="none"); incoming
            <hx-partial> elements target #incidents-list by id instead. -->
@@ -603,6 +600,273 @@
       {{end}}
     </tbody>
   </table>
+  {{end}}
+</div>
+{{end}}
+
+{{define "tabs"}}
+<nav class="flex gap-6 border-b border-gray-200 mb-6 text-sm">
+  <a
+    href="{{.BaseURL}}/"
+    class="pb-2 {{if eq .Active "issues"}}border-b-2 border-blue-600 font-medium text-gray-900{{else}}text-gray-500 hover:text-gray-800{{end}}"
+    >Issues</a
+  >
+  <a
+    href="{{.BaseURL}}/maintenance"
+    class="pb-2 {{if eq .Active "maintenance"}}border-b-2 border-blue-600 font-medium text-gray-900{{else}}text-gray-500 hover:text-gray-800{{end}}"
+    >Maintenance</a
+  >
+  <a href="{{.BaseURL}}/selftest" class="pb-2 text-gray-500 hover:text-gray-800"
+    >Live tool check</a
+  >
+</nav>
+{{end}}
+
+{{define "maintenance"}}
+<!doctype html>
+<html lang="en">
+  {{template "head" (dict "Title" "Maintenance · Media Fixer")}}
+  <body class="bg-gray-50 font-sans">
+    <div class="max-w-5xl mx-auto px-4 py-8">
+      <h1 class="text-2xl font-bold text-gray-900 mb-6">Media Fixer</h1>
+      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "maintenance")}}
+      {{with .Card}}{{template "sweep_card" .}}{{else}}
+      <div class="bg-white border border-gray-200 rounded-lg p-6">
+        <h2 class="text-xl font-bold text-gray-900 mb-1">Pack sweep</h2>
+        <p class="text-sm text-red-600">sweep unavailable (Sonarr not configured)</p>
+      </div>
+      {{end}}
+    </div>
+  </body>
+</html>
+{{end}}
+
+{{define "sweep_num"}}
+<label class="block text-sm text-gray-700">
+  {{.Label}}
+  <input type="number" name="{{.Name}}" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}"
+    class="mt-1 block w-28 bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900"
+  />
+  {{with .Note}}<span class="block text-xs text-gray-500 mt-0.5">{{.}}</span>{{end}}
+  {{with .Err}}<span class="block text-xs text-red-600 mt-0.5">{{.}}</span>{{end}}
+</label>
+{{end}}
+
+{{define "sweep_card"}}
+<div id="pack-sweep" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+  <div>
+    <h2 class="text-xl font-bold text-gray-900 mb-1">Pack sweep</h2>
+    <p class="text-sm text-gray-500">
+      Weekly: grabs season packs for Sonarr seasons with missing episodes, then
+      searches the episodes still missing.
+    </p>
+  </div>
+
+  {{with .Notice}}
+  <p class="text-sm text-green-800 bg-green-100 rounded-sm px-3 py-2">{{.}}</p>
+  {{end}} {{with .Failure}}
+  <p class="text-sm text-red-800 bg-red-100 rounded-sm px-3 py-2">{{.}}</p>
+  {{end}}
+
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    {{template "sweep_status" .Status}}
+    <div class="flex gap-2">
+      <form
+        hx-post="{{.BaseURL}}/maintenance/pack-sweep/run"
+        hx-target="#pack-sweep"
+        hx-swap="outerHTML"
+        hx-confirm="Start a live pack sweep now? It grabs up to {{.Settings.MaxGrabs}} releases."
+      >
+        <button
+          type="submit"
+          class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700"
+        >
+          Run now
+        </button>
+      </form>
+      <form
+        hx-post="{{.BaseURL}}/maintenance/pack-sweep/run"
+        hx-target="#pack-sweep"
+        hx-swap="outerHTML"
+      >
+        <input type="hidden" name="dry" value="1" />
+        <button
+          type="submit"
+          class="px-3 py-1.5 text-sm border border-gray-200 text-gray-700 rounded-sm hover:bg-gray-100"
+        >
+          Dry run
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="text-sm text-gray-600">
+    {{with .Flags}} Sonarr: autoRedownloadFailed: {{if .AutoRedownloadFailed}}on{{else}}off{{end}} ·
+    autoRedownloadFailedFromInteractiveSearch: {{if .AutoRedownloadFailedFromInteractiveSearch}}on{{else}}off{{end}}
+    {{if and .AutoRedownloadFailed .AutoRedownloadFailedFromInteractiveSearch}}
+    <p class="mt-1 font-medium text-red-600">
+      Both are on, so the sweep refuses to run: a failed sweep grab would
+      re-search the whole season. Turn off "Redownload failed from interactive
+      search" in Sonarr.
+    </p>
+    {{end}} {{else}}
+    <span class="text-amber-700">Sonarr redownload flags unknown: {{.FlagsError}}</span>
+    {{end}}
+  </div>
+
+  <form
+    hx-post="{{.BaseURL}}/maintenance/pack-sweep/settings"
+    hx-target="#pack-sweep"
+    hx-swap="outerHTML"
+    class="space-y-4"
+  >
+    <h3 class="text-sm font-semibold text-gray-800">Settings</h3>
+    <div class="flex flex-wrap gap-6 text-sm text-gray-700">
+      <label class="flex items-center gap-2">
+        <input type="checkbox" name="enabled" {{if .Settings.Enabled}}checked{{end}} />
+        Enabled (weekly schedule)
+      </label>
+      <label class="flex items-center gap-2">
+        <input type="checkbox" name="anime" {{if .Settings.Anime}}checked{{end}} />
+        Include anime series
+      </label>
+    </div>
+    <div class="flex flex-wrap gap-6">
+      <label class="block text-sm text-gray-700">
+        Weekday
+        <select
+          name="weekday"
+          class="mt-1 block bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900"
+        >
+          {{range $i, $d := .Weekdays}}
+          <option value="{{$i}}" {{if eq $i $.Settings.Weekday}}selected{{end}}>{{$d}}</option>
+          {{end}}
+        </select>
+        {{with index .Errors "weekday"}}<span class="block text-xs text-red-600 mt-0.5">{{.}}</span>{{end}}
+      </label>
+      {{template "sweep_num" (dict "Label" "Hour (UTC)" "Name" "hour_utc" "Value" .Settings.HourUTC "Min" 0 "Max" 23 "Note" "" "Err" (index .Errors "hour_utc"))}}
+      {{template "sweep_num" (dict "Label" "Min missing per season" "Name" "min_missing" "Value" .Settings.MinMissing "Min" 1 "Max" 100 "Note" "" "Err" (index .Errors "min_missing"))}}
+      {{template "sweep_num" (dict "Label" "Max grabs" "Name" "max_grabs" "Value" .Settings.MaxGrabs "Min" 1 "Max" 50 "Note" "" "Err" (index .Errors "max_grabs"))}}
+      {{template "sweep_num" (dict "Label" "Max lookups" "Name" "max_lookups" "Value" .Settings.MaxLookups "Min" 1 "Max" 500 "Note" "" "Err" (index .Errors "max_lookups"))}}
+      {{template "sweep_num" (dict "Label" "Max searched episodes" "Name" "max_searches" "Value" .Settings.MaxSearches "Min" 0 "Max" 500 "Note" "Sonarr may grab from these searches; not counted in max grabs" "Err" (index .Errors "max_searches"))}}
+    </div>
+    <fieldset>
+      <legend class="text-sm text-gray-700 mb-1">Excluded series</legend>
+      {{with .SeriesError}}
+      <p class="text-xs text-amber-700 mb-1">Sonarr series list unavailable: {{.}}</p>
+      {{range $.Settings.ExcludedSeries}}<input type="hidden" name="excluded_series" value="{{.}}" />{{end}}
+      {{else}}
+      <div
+        class="max-h-56 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 border border-gray-200 rounded-sm p-2"
+      >
+        {{range .Series}}
+        <label class="flex items-center gap-2 text-sm text-gray-700">
+          <input type="checkbox" name="excluded_series" value="{{.ID}}" {{if .Excluded}}checked{{end}} />
+          {{.Title}}
+        </label>
+        {{end}}
+      </div>
+      {{end}}
+    </fieldset>
+    <button
+      type="submit"
+      class="px-4 py-2 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700"
+    >
+      Save settings
+    </button>
+  </form>
+
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Last runs</h3>
+    {{with .RunsError}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+    {{range .Runs}}
+    <details class="border-b border-gray-100 py-2">
+      <summary class="text-sm text-gray-800 cursor-pointer">
+        #{{.ID}} {{.StartedAt.UTC.Format "Mon Jan 2 15:04 UTC"}} · {{.Trigger}}{{if .Dry}} · dry{{end}} ·
+        <span class="px-2 py-0.5 text-xs font-medium rounded-full {{sweepColor .Status}}">{{.Status}}</span>
+        {{with .Reason}}<span class="text-gray-500">({{.}})</span>{{end}}
+        <span class="text-gray-500"
+          >· grabs {{.Counts.Grabs}}/{{.Counts.MaxGrabs}} · lookups {{.Counts.Lookups}}/{{.Counts.MaxLookups}} · searches {{.Counts.Searched}}/{{.Counts.MaxSearches}}</span
+        >
+      </summary>
+      {{if .Items}}
+      <table class="w-full mt-2 text-xs border-collapse">
+        <thead>
+          <tr class="text-left text-gray-400 border-b border-gray-200">
+            <th class="py-1 pr-3">Series</th>
+            <th class="py-1 pr-3">Episodes</th>
+            <th class="py-1 pr-3">Release</th>
+            <th class="py-1 pr-3">Indexer</th>
+            <th class="py-1 pr-3">Result</th>
+            <th class="py-1">Lookup</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Items}}
+          <tr class="border-b border-gray-100 text-gray-700">
+            <td class="py-1 pr-3">{{.SeriesTitle}}</td>
+            <td class="py-1 pr-3">{{season .Season}} {{.Episodes}}</td>
+            <td class="py-1 pr-3 break-all">{{.ReleaseTitle}}</td>
+            <td class="py-1 pr-3">{{.Indexer}}</td>
+            <td class="py-1 pr-3">{{.Result}}</td>
+            <td class="py-1 whitespace-nowrap">
+              {{with .LookupResults}}{{.}} results{{end}} {{ms .LookupMS}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="mt-1 text-xs text-gray-400">No items.</p>
+      {{end}}
+    </details>
+    {{else}}
+    <p class="text-sm text-gray-400">No runs yet.</p>
+    {{end}}
+  </div>
+
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Refused releases (last 7 days)</h3>
+    {{with .RefusedError}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+    <ul class="space-y-1">
+      {{range .Refused}}
+      <li class="flex items-start justify-between gap-4 text-sm text-gray-700">
+        <span class="break-all"
+          >{{.ReleaseTitle}} <span class="text-gray-500">· {{.Indexer}} · {{.Reason}} ·
+            {{timeAgo .RefusedAt}}</span></span
+        >
+        <button
+          hx-post="{{$.BaseURL}}/maintenance/pack-sweep/refused/{{.ID}}/forget"
+          hx-target="#pack-sweep"
+          hx-swap="outerHTML"
+          class="shrink-0 text-xs text-blue-600 hover:underline"
+        >
+          Forget
+        </button>
+      </li>
+      {{else}}
+      <li class="text-sm text-gray-400">None.</li>
+      {{end}}
+    </ul>
+  </div>
+</div>
+{{end}}
+
+{{define "sweep_status"}}
+<div
+  id="sweep-status"
+  class="text-sm text-gray-700"
+  {{if .Active}}hx-get="{{.BaseURL}}/maintenance/pack-sweep/status" hx-trigger="every 10s" hx-swap="outerHTML"{{end}}
+>
+  {{if .Active}}
+  <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Running</span>
+  {{with .Progress.Phase}}{{.}}{{else}}starting{{end}}{{with .Progress.Current}} · {{.}}{{end}}
+  <div class="text-gray-500 mt-1">
+    grabs {{.Progress.Counts.Grabs}}/{{.Progress.Counts.MaxGrabs}} · lookups {{.Progress.Counts.Lookups}}/{{.Progress.Counts.MaxLookups}} · searches {{.Progress.Counts.Searched}}/{{.Progress.Counts.MaxSearches}}
+  </div>
+  {{else}}
+  <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Idle</span>
+  Next run: {{with .Next}}{{.UTC.Format "Mon Jan 2 15:04 UTC"}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}
   {{end}}
 </div>
 {{end}}

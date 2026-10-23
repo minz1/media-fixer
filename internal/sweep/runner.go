@@ -31,7 +31,7 @@ const (
 	historySkew    = 5 * time.Minute
 	getRetryEvery  = 20 * time.Second
 	getRetryFor    = 10 * time.Minute
-	refusedMemory  = 7 * 24 * time.Hour
+	RefusedMemory  = 7 * 24 * time.Hour
 	noPackMemory   = 30 * 24 * time.Hour
 	searchGap      = 60 * time.Second
 	commandPoll    = 15 * time.Second
@@ -166,7 +166,7 @@ func (x *run) sweep(ctx context.Context) error {
 	}
 	now := x.Now()
 	var err error
-	if x.refused, err = x.DB.RefusedKeys(ctx, now.Add(-refusedMemory)); err != nil {
+	if x.refused, err = x.DB.RefusedKeys(ctx, now.Add(-RefusedMemory)); err != nil {
 		return err
 	}
 	if x.skip, err = x.DB.NoPackTargets(ctx, now.Add(-noPackMemory)); err != nil {
@@ -330,8 +330,8 @@ func (x *run) lookup(
 	if err := x.guard(ctx); err != nil {
 		return nil, false, err
 	}
-	x.report(phase, current)
 	x.c.Lookups++
+	x.report(phase, current)
 	began := x.Now()
 	rels, err := retry(ctx, x, true, f)
 	n, ms := len(rels), int(x.Now().Sub(began).Milliseconds())

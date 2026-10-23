@@ -17,6 +17,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/livecheck"
+	"github.com/minz1/mediafixer/internal/sweep"
 )
 
 const readHeaderTimeout = 10 * time.Second
@@ -60,6 +61,8 @@ type Server struct {
 	shutdown chan struct{}
 
 	seerrWebhookSecret string
+
+	sweep *sweep.Scheduler
 }
 
 // SetChecker wires the dispatcher the /selftest page runs checks against.
@@ -119,6 +122,11 @@ func New(
 		r.Post("/selftest/run", s.selftestRun)
 		r.Post("/pause", s.actionPause)
 		r.Post("/resume", s.actionResume)
+		r.Get("/maintenance", s.maintenanceIndex)
+		r.Post("/maintenance/pack-sweep/settings", s.sweepSettingsSave)
+		r.Post("/maintenance/pack-sweep/run", s.sweepRun)
+		r.Get("/maintenance/pack-sweep/status", s.sweepStatusFragment)
+		r.Post("/maintenance/pack-sweep/refused/{id}/forget", s.sweepForget)
 	})
 
 	s.http = &http.Server{
