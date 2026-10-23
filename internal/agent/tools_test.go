@@ -263,7 +263,7 @@ func newArrStatusFixtureServer(t *testing.T) (*httptest.Server, *arrCommandRecor
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		rec.record(body)
-		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":1}`))
 	})
 	mux.HandleFunc("/api/v3/queue", func(w http.ResponseWriter, _ *http.Request) {
 		if rec.QueueFail() {

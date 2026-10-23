@@ -247,6 +247,11 @@ func TestMaintenanceRun_Refusals(t *testing.T) {
 	t.Run("paused", func(t *testing.T) {
 		t.Parallel()
 		env := newMaintenanceTestServer(t)
+		enabled := sweep.DefaultSettings()
+		enabled.Enabled = true
+		if err := sweep.SaveSettings(context.Background(), env.db, enabled); err != nil {
+			t.Fatal(err)
+		}
 		if err := env.db.SetSetting(context.Background(), "autonomous_paused", "true"); err != nil {
 			t.Fatal(err)
 		}
@@ -254,6 +259,16 @@ func TestMaintenanceRun_Refusals(t *testing.T) {
 		mustContain(t, rec.Body.String(), "paused")
 		if runs, _ := env.db.ListSweepRuns(context.Background(), 10); len(runs) != 0 {
 			t.Errorf("paused Run now created %d runs", len(runs))
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+		env := newMaintenanceTestServer(t)
+		rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/run", url.Values{})
+		mustContain(t, rec.Body.String(), "disabled")
+		if runs, _ := env.db.ListSweepRuns(context.Background(), 10); len(runs) != 0 {
+			t.Errorf("disabled Run now created %d runs", len(runs))
 		}
 	})
 }

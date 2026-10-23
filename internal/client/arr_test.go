@@ -292,12 +292,13 @@ func TestArr_MarkHistoryFailed(t *testing.T) {
 
 func TestArr_SeasonSearch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["name"] != "SeasonSearch" || body["seriesId"] != float64(7) || body["seasonNumber"] != float64(1) {
 			t.Errorf("unexpected body: %v", body)
 		}
+		_, _ = w.Write([]byte(`{"id":1}`))
 	}))
 	defer srv.Close()
 
@@ -309,12 +310,13 @@ func TestArr_SeasonSearch(t *testing.T) {
 
 func TestArr_SeriesSearch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["name"] != "SeriesSearch" || body["seriesId"] != float64(7) {
 			t.Errorf("unexpected body: %v", body)
 		}
+		_, _ = w.Write([]byte(`{"id":1}`))
 	}))
 	defer srv.Close()
 

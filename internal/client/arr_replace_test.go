@@ -198,10 +198,11 @@ func TestArr_ExecuteReplace_Order(t *testing.T) {
 	mux.HandleFunc("/api/v3/moviefile/99", func(_ http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 	})
-	mux.HandleFunc("/api/v3/command", func(_ http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		calls = append(calls, "POST /api/v3/command "+body["name"].(string))
+		_, _ = w.Write([]byte(`{"id":1}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -254,12 +255,13 @@ func TestArr_ExecuteReplace_SkipBlocklist(t *testing.T) {
 		blocklistCalled = true
 	})
 	mux.HandleFunc("/api/v3/episodefile/900", func(_ http.ResponseWriter, _ *http.Request) {})
-	mux.HandleFunc("/api/v3/command", func(_ http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v3/command", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["name"] != "EpisodeSearch" {
 			t.Errorf("unexpected command body: %v", body)
 		}
+		_, _ = w.Write([]byte(`{"id":1}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

@@ -9,11 +9,12 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 )
 
+const seasonAlts = `Existing file on disk (is of equal or higher preference|has a equal or higher Custom Format score)` +
+	`|Release in queue is of equal or higher preference`
+
 var (
-	seasonOK = regexp.MustCompile(
-		`^(Existing file on disk (is of equal or higher preference|has a equal or higher Custom Format score)|Release in queue is of equal or higher preference)`,
-	)
-	animeOK    = regexp.MustCompile(seasonOK.String() + `|Episode wasn't requested|Full season pack`)
+	seasonOK   = regexp.MustCompile(`^(?:` + seasonAlts + `)`)
+	animeOK    = regexp.MustCompile(`^(?:` + seasonAlts + `|Episode wasn't requested|Full season pack)`)
 	movieRE    = regexp.MustCompile(`(?i)\b(movies?|film|gekijouban)\b`)
 	nonAlnum   = regexp.MustCompile(`[^a-z0-9]+`)
 	archiveRE  = regexp.MustCompile(`Found archive file, might need to be extracted`)

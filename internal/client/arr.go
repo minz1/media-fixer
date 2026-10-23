@@ -457,7 +457,9 @@ func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
 	var cmd struct {
 		ID int `json:"id"`
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&cmd)
+	if err = json.NewDecoder(resp.Body).Decode(&cmd); err != nil {
+		return 0, fmt.Errorf("arr command: decode reply: %w", err)
+	}
 	return cmd.ID, nil
 }
 

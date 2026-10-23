@@ -123,7 +123,7 @@ func TestScheduler_DisabledNeverFires(t *testing.T) {
 
 func TestRunNow_ActiveAndPaused(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, sweep.DefaultSettings())
+	h, sch := newScheduled(t, settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
 	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
@@ -153,7 +153,7 @@ func TestRunNow_ActiveAndPaused(t *testing.T) {
 
 func TestSettingsChangeDoesNotAffectActiveRun(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, sweep.DefaultSettings())
+	h, sch := newScheduled(t, settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12, 13)...)
 	h.fake.addSeries(2, "Other", missingEps(2, 1, 31, 32)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
@@ -183,5 +183,106 @@ func TestSettingsChangeDoesNotAffectActiveRun(t *testing.T) {
 	next, err := sweep.LoadSettings(context.Background(), h.db)
 	if err != nil || next.MaxGrabs != 1 {
 		t.Errorf("stored settings = %+v, %v; the next run should use MaxGrabs 1", next, err)
+	}
+}
+
+func TestRunNow_LiveRefusedWhileDisabled(t *testing.T) {
+	t.Parallel()
+	h, sch := newScheduled(t, sweep.DefaultSettings())
+	if err := sch.RunNow("manual", false); !errors.Is(err, sweep.ErrDisabled) {
+		t.Fatalf("live RunNow while disabled = %v, want ErrDisabled", err)
+	}
+	sch.Wait()
+	if n := len(h.runs(t)); n != 0 {
+		t.Fatalf("refused live run created %d runs", n)
+	}
+	if err := sch.RunNow("manual", true); err != nil {
+		t.Fatalf("dry RunNow while disabled = %v", err)
+	}
+	sch.Wait()
+	if runs := h.runs(t); len(runs) != 1 || !runs[0].Dry {
+		t.Errorf("runs = %+v, want one dry run", runs)
+	}
+}
+
+func scheduledAt(t *testing.T, at time.Time, s sweep.Settings) (*harness, *sweep.Scheduler) {
+	t.Helper()
+	h := newHarness(t)
+	h.clock.t = at
+	if err := sweep.SaveSettings(context.Background(), h.db, s); err != nil {
+		t.Fatal(err)
+	}
+	return h, sweep.NewScheduler(context.Background(), h.runner, h.db)
+}
+
+func TestScheduler_FirstEnableWaitsForSlot(t *testing.T) {
+	t.Parallel()
+	wednesday := t0().AddDate(0, 0, 3)
+	h, sch := scheduledAt(t, wednesday, settings())
+	for m := range 90 {
+		h.tick(sch, wednesday.Add(time.Duration(m)*time.Minute))
+	}
+	if n := len(h.runs(t)); n != 0 {
+		t.Fatalf("enabling mid-week with no prior run started %d runs", n)
+	}
+	if next := sch.NextRun(wednesday); next == nil || !next.Equal(t0().AddDate(0, 0, 7)) {
+		t.Errorf("NextRun = %v, want %v", next, t0().AddDate(0, 0, 7))
+	}
+	h.tick(sch, t0().AddDate(0, 0, 7))
+	if n := len(h.runs(t)); n != 1 {
+		t.Errorf("runs at the slot = %d, want 1", n)
+	}
+}
+
+func TestScheduler_EnableAfterOldDryRunWaitsForSlot(t *testing.T) {
+	t.Parallel()
+	wednesday := t0().AddDate(0, 0, 3)
+	h, sch := scheduledAt(t, wednesday, settings())
+	ctx := context.Background()
+	id, err := h.db.CreateSweepRun(ctx, "manual", true, t0().AddDate(0, 0, -2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.db.FinishSweepRun(ctx, id, "done", "", db.SweepCounts{}, t0().AddDate(0, 0, -2)); err != nil {
+		t.Fatal(err)
+	}
+	h.tick(sch, wednesday.Add(time.Minute))
+	if n := len(h.runs(t)); n != 1 {
+		t.Errorf("runs = %d, want only the old dry run", n)
+	}
+}
+
+func TestScheduler_EnabledJustBeforeSlotFires(t *testing.T) {
+	t.Parallel()
+	h, sch := scheduledAt(t, t0().Add(-time.Hour), sweep.DefaultSettings())
+	h.tick(sch, t0().Add(-time.Minute))
+	if err := sweep.SaveSettings(context.Background(), h.db, settings()); err != nil {
+		t.Fatal(err)
+	}
+	h.tick(sch, t0())
+	if n := len(h.runs(t)); n != 1 {
+		t.Errorf("runs at the slot = %d, want 1", n)
+	}
+}
+
+func TestScheduler_FailedRunRetriesAfterAnHour(t *testing.T) {
+	t.Parallel()
+	h, sch := newScheduled(t, settings())
+	h.fake.seriesDownTil = t0().AddDate(0, 0, 1)
+	h.tick(sch, t0())
+	if runs := h.runs(t); len(runs) != 1 || runs[0].Status != "failed" {
+		t.Fatalf("runs = %+v, want one failed run", runs)
+	}
+	h.tick(sch, t0().Add(30*time.Minute))
+	if n := len(h.runs(t)); n != 1 {
+		t.Fatalf("runs 30 min after a failure = %d, want 1", n)
+	}
+	h.fake.mu.Lock()
+	h.fake.seriesDownTil = time.Time{}
+	h.fake.mu.Unlock()
+	h.tick(sch, t0().Add(2*time.Hour))
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Status != "done" {
+		t.Errorf("runs = %+v, want a done retry after the failed run", runs)
 	}
 }

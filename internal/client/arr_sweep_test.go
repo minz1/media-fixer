@@ -306,3 +306,13 @@ func TestArr_SearchSeries_HTTP404IsNotErrNotFound(t *testing.T) {
 		t.Errorf("err = %v, want a status error that is not ErrNotFound", err)
 	}
 }
+
+func TestArr_SearchEpisodes_UndecodableReply(t *testing.T) {
+	t.Parallel()
+	for _, reply := range []string{"", "<html>proxy</html>"} {
+		c, _ := sweepServer(t, http.StatusCreated, reply)
+		if id, err := c.SearchEpisodes(context.Background(), []int{1}); err == nil {
+			t.Errorf("reply %q: id %d, nil error; want the decode error", reply, id)
+		}
+	}
+}

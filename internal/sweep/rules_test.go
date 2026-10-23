@@ -320,3 +320,22 @@ func TestIsLeftover(t *testing.T) {
 		t.Error("archive counted as leftover")
 	}
 }
+
+func TestAnimeCandidates_AnchorsEveryAlternative(t *testing.T) {
+	t.Parallel()
+	rels := loadReleases(t, "synthetic.json")
+	batch := byTitle(t, rels, "701~800")
+	ids := mappedIDs([]client.Release{batch})
+	for rej, want := range map[string]int{
+		"Full season pack":                  1,
+		"Episode wasn't requested":          1,
+		"Not a Full season pack":            0,
+		"Unknown: Episode wasn't requested": 0,
+	} {
+		r := batch
+		r.Rejections = []string{rej}
+		if n := len(sweep.AnimeCandidates([]client.Release{r}, ids, nil)); n != want {
+			t.Errorf("rejection %q: %d candidates, want %d", rej, n, want)
+		}
+	}
+}
