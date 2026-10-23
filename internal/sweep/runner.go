@@ -58,7 +58,7 @@ const (
 )
 
 var (
-	errPaused     = errors.New("paused")
+	ErrPaused     = errors.New("paused")
 	errRedownload = errors.New("autoRedownloadFailedFromInteractiveSearch is on")
 	errCapReached = errors.New("cap reached")
 )
@@ -139,7 +139,7 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 
 	status, reason := statusDone, ""
 	switch {
-	case errors.Is(err, errPaused):
+	case errors.Is(err, ErrPaused):
 		status, err = statusPaused, nil
 	case errors.Is(err, errRedownload):
 		status, reason, err = statusRefused, errRedownload.Error(), nil
@@ -655,7 +655,7 @@ func (x *run) guard(ctx context.Context) error {
 		return err
 	}
 	if paused {
-		return errPaused
+		return ErrPaused
 	}
 	cfg, err := retry(ctx, x, false, func() (client.DownloadClientConfig, error) {
 		return x.Sonarr.DownloadClientConfig(ctx)

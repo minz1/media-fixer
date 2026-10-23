@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
+	"github.com/minz1/mediafixer/internal/sweep"
 )
 
 func main() {
@@ -126,6 +128,19 @@ func run() error {
 	// CLI.
 	srv.SetChecker(bundle.clients.Dispatcher(nil, nil))
 	srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
+
+	if _, err = database.InterruptRunningSweeps(ctx); err != nil {
+		log.Error("interrupt running sweeps", "error", err)
+		return err
+	}
+	if cfg.Sonarr.URL != "" {
+		sweep.NewScheduler(ctx, &sweep.Runner{
+			Sonarr: bundle.clients.Sonarr, DB: database, Notify: bot.NotifyOwner,
+			Now: time.Now, Sleep: sweep.Sleep, Log: log,
+		}, database).Start()
+	} else {
+		log.Warn("sonarr not configured — pack sweep unavailable")
+	}
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 
