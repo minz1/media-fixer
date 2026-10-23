@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -483,7 +484,8 @@ func (c *ArrClient) get(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("arr GET %s: status %d", path, resp.StatusCode)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, statusBodyLimit))
+		return fmt.Errorf("arr GET %s: %w", path, &HTTPStatusError{Status: resp.StatusCode, Body: string(b)})
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
