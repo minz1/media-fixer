@@ -384,6 +384,42 @@ func TestAdvancePendingOutcome_NoReleaseFound_EscalatesAfterGrace(t *testing.T) 
 	}
 }
 
+func TestAdvancePendingOutcome_QueueItemGoneClearsDownloadingStage(t *testing.T) {
+	t.Parallel()
+	ag := &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			return &agent.PendingOutcomeObservation{}, nil
+		},
+	}
+	svc, database, _ := newPendingOutcomeTestService(t, ag)
+	ctx := context.Background()
+
+	inc := &db.Incident{
+		Status: db.StatusVerifying, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "New Show",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	po := &db.PendingOutcome{
+		MediaType: "tv", Title: "New Show", Season: 1, Episode: 1,
+		StartedAt: now, LastStage: "downloading", LastProgressPct: 37, LastProgressAt: now,
+	}
+	if err := database.SetPendingOutcome(ctx, inc.ID, po, now); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.AdvancePendingOutcomes(ctx)
+
+	got, err := database.GetPendingOutcome(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastStage == "downloading" {
+		t.Error("stage still downloading after the queue item vanished; the next progress note would claim a download")
+	}
+}
+
 // TestAdvancePendingOutcome_CheckErrors_RescheduledNotEscalated is the
 // end-to-end regression test for the false-escalation bug CheckPendingOutcome
 // itself was fixed for (see internal/agent's

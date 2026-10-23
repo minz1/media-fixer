@@ -227,6 +227,7 @@ func (s *Service) advanceDownloading(
 // grace, genuinely no release found, or (if an owner opted in) a slower
 // long-term watch for new content.
 func (s *Service) advanceNoQueueItem(ctx context.Context, inc *db.Incident, po *db.PendingOutcome, now time.Time) {
+	po.LastStage = "searching"
 	if po.KeepSearching {
 		if now.After(po.KeepSearchingUntil) {
 			s.escalatePendingOutcome(ctx, inc, po, "still no release found after an extended search")
