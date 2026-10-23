@@ -200,3 +200,30 @@ func TestEscalationNote_SkippedAfterAgentFixed(t *testing.T) {
 		t.Errorf("msgs = %q, want only the owner DM", notif.msgs)
 	}
 }
+
+type detachedSeerr struct {
+	fakeSeerr
+
+	cancellable bool
+}
+
+func (d *detachedSeerr) Comment(ctx context.Context, issueID, msg string) error {
+	d.cancellable = ctx.Done() != nil
+	return d.fakeSeerr.Comment(ctx, issueID, msg)
+}
+
+func TestIntakeNote_OutlivesTheWebhookRequest(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newTestService(t)
+	seerr := &detachedSeerr{}
+	svc.SetSeerr(seerr)
+	if _, err := svc.Handle(t.Context(), seerrReport("7")); err != nil {
+		t.Fatal(err)
+	}
+	if len(seerr.comments["7"]) != 1 {
+		t.Fatalf("comments on 7 = %q, want one", seerr.comments["7"])
+	}
+	if seerr.cancellable {
+		t.Error("intake comment used the request context; a dropped webhook would cancel it")
+	}
+}

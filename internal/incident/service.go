@@ -223,6 +223,7 @@ func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) 
 		return
 	}
 	msg := fmt.Sprintf("👀 Thanks, we're looking into **%s**.", inc.Title)
+	ctx = context.WithoutCancel(ctx)
 	s.callSeerrIssue(ctx, inc, "comment on", r.SeerrIssueID, func(id string) error {
 		return s.seerr.Comment(ctx, id, msg)
 	})
