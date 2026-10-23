@@ -157,6 +157,15 @@ func TestRun_MaxAutonomousActionsLeavesEscalationToTheService(t *testing.T) {
 	if !after.AutonomousLocked {
 		t.Error("autonomous actions were not locked after the budget was spent")
 	}
+	actions, err := database.ListActions(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range actions {
+		if agent.UserPhrase(a.Action) == "" {
+			t.Errorf("logged action %q has no UserPhrase", a.Action)
+		}
+	}
 }
 
 // TestRun_EmptyChoicesIsAnErrorNotAPanic pins the llmCall guard. A 200 with an

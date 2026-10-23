@@ -1075,7 +1075,7 @@ func (d *Dispatcher) dispatchRepairSweep(ctx context.Context, _ map[string]any) 
 	if err != nil {
 		return nil, err
 	}
-	d.logAction(ctx, "repair_sweep", nil)
+	d.logAction(ctx, toolRepairSweep, nil)
 	return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 }
 
