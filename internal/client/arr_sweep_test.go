@@ -297,3 +297,12 @@ func TestArr_SweepFieldsDecoded(t *testing.T) {
 		t.Errorf("episodes = %+v", eps)
 	}
 }
+
+func TestArr_SearchSeries_HTTP404IsNotErrNotFound(t *testing.T) {
+	t.Parallel()
+	c, _ := sweepServer(t, http.StatusNotFound, `not here`)
+	_, err := c.SearchSeries(context.Background(), "The Boys")
+	if err == nil || errors.Is(err, client.ErrNotFound) {
+		t.Errorf("err = %v, want a status error that is not ErrNotFound", err)
+	}
+}

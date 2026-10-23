@@ -31,6 +31,8 @@ func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
 
 func (s *Scheduler) Runner() *Runner { return s.r }
 
+func (s *Scheduler) Wait() { s.wg.Wait() }
+
 func (s *Scheduler) Start() {
 	go func() {
 		t := time.NewTicker(time.Minute)

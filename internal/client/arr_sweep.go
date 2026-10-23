@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,10 +69,6 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("status %d: %s", e.Status, e.Body)
 }
 
-func (e *HTTPStatusError) Is(target error) bool {
-	return target == ErrNotFound && e.Status == http.StatusNotFound
-}
-
 func (c *ArrClient) SetSlowTimeout(d time.Duration) {
 	c.slow.Timeout = d
 }
@@ -119,7 +116,11 @@ func (c *ArrClient) RemoveQueueItem(
 		"blocklist":        {strconv.FormatBool(blocklist)},
 		"skipRedownload":   {strconv.FormatBool(skipRedownload)},
 	}
-	return c.do(ctx, c.http, http.MethodDelete, fmt.Sprintf("/api/v3/queue/%d", id), q, nil, nil)
+	err := c.do(ctx, c.http, http.MethodDelete, fmt.Sprintf("/api/v3/queue/%d", id), q, nil, nil)
+	if se, ok := errors.AsType[*HTTPStatusError](err); ok && se.Status == http.StatusNotFound {
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
+	return err
 }
 
 func (c *ArrClient) Command(ctx context.Context, id int) (string, error) {

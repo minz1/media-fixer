@@ -68,6 +68,23 @@ func buildAgentComponents(
 	return b, nil
 }
 
+func startSweep(
+	ctx context.Context, sonarrURL string, sonarr *client.ArrClient, database *db.DB, bot *discord.Bot,
+	srv *server.Server, log *slog.Logger,
+) *sweep.Scheduler {
+	if sonarrURL == "" {
+		log.WarnContext(ctx, "sonarr not configured — pack sweep unavailable")
+		return nil
+	}
+	sch := sweep.NewScheduler(ctx, &sweep.Runner{
+		Sonarr: sonarr, DB: database, Notify: bot.NotifyOwner,
+		Now: time.Now, Sleep: sweep.Sleep, Log: log,
+	}, database)
+	srv.SetSweep(sch)
+	sch.Start()
+	return sch
+}
+
 func run() error {
 	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
 	flag.Parse()
@@ -133,15 +150,8 @@ func run() error {
 		log.Error("interrupt running sweeps", "error", err)
 		return err
 	}
-	if cfg.Sonarr.URL != "" {
-		sch := sweep.NewScheduler(ctx, &sweep.Runner{
-			Sonarr: bundle.clients.Sonarr, DB: database, Notify: bot.NotifyOwner,
-			Now: time.Now, Sleep: sweep.Sleep, Log: log,
-		}, database)
-		srv.SetSweep(sch)
-		sch.Start()
-	} else {
-		log.Warn("sonarr not configured — pack sweep unavailable")
+	if sch := startSweep(ctx, cfg.Sonarr.URL, bundle.clients.Sonarr, database, bot, srv, log); sch != nil {
+		defer func() { stop(); sch.Wait() }()
 	}
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
