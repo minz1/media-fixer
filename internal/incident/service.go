@@ -205,6 +205,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 // resolves nobody is notified — and on the dedup path the second reporter is
 // silently lost entirely.
 func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) {
+	ctx = context.WithoutCancel(ctx)
 	if err := s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID); err != nil {
 		s.log.ErrorContext(ctx, "add reporter",
 			"incident", inc.ID, "reporter", r.ReportedBy, "error", err)
@@ -223,7 +224,6 @@ func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) 
 		return
 	}
 	msg := fmt.Sprintf("👀 Thanks, we're looking into **%s**.", inc.Title)
-	ctx = context.WithoutCancel(ctx)
 	s.callSeerrIssue(ctx, inc, "comment on", r.SeerrIssueID, func(id string) error {
 		return s.seerr.Comment(ctx, id, msg)
 	})

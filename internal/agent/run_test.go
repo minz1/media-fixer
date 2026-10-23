@@ -161,6 +161,9 @@ func TestRun_MaxAutonomousActionsLeavesEscalationToTheService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(actions) != 3 {
+		t.Fatalf("logged %d actions, want the 3 applied before the budget tripped", len(actions))
+	}
 	for _, a := range actions {
 		if agent.UserPhrase(a.Action) == "" {
 			t.Errorf("logged action %q has no UserPhrase", a.Action)
