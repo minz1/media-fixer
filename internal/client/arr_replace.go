@@ -365,7 +365,8 @@ func (c *ArrClient) triggerReplaceSearch(ctx context.Context, plan *ReplacePlan)
 	case plan.MediaType == ReplaceMediaMovie:
 		return "MoviesSearch", c.SearchMovieNow(ctx, plan.MediaID)
 	case plan.Scope == ReplaceScopeEpisode:
-		return "EpisodeSearch", c.SearchEpisode(ctx, plan.EpisodeID)
+		_, err := c.SearchEpisodes(ctx, []int{plan.EpisodeID})
+		return "EpisodeSearch", err
 	case plan.Scope == ReplaceScopeSeason:
 		return "SeasonSearch", c.SeasonSearch(ctx, plan.MediaID, plan.SeasonNumber)
 	case plan.Scope == ReplaceScopeSeries:

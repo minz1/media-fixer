@@ -1302,7 +1302,8 @@ func (d *Dispatcher) triggerArrSearch(
 		if findErr != nil {
 			return "", findErr
 		}
-		return "episode", d.Sonarr.SearchEpisode(ctx, epID)
+		_, err := d.Sonarr.SearchEpisodes(ctx, []int{epID})
+		return "episode", err
 	case season >= 0:
 		return "season", d.Sonarr.SeasonSearch(ctx, status.SeriesID, season)
 	default:
@@ -1311,7 +1312,7 @@ func (d *Dispatcher) triggerArrSearch(
 }
 
 // findSonarrEpisodeID looks up Sonarr's internal episode ID for a
-// season/episode number — SearchEpisode takes that ID, not the human-facing
+// season/episode number — SearchEpisodes takes that ID, not the human-facing
 // episode number MediaStatusResult reports.
 func (d *Dispatcher) findSonarrEpisodeID(ctx context.Context, seriesID, season, episode int) (int, error) {
 	episodes, err := d.Sonarr.GetEpisodes(ctx, seriesID, season)

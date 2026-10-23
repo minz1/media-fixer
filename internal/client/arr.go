@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ArrClient talks to either Sonarr or Radarr via their shared v3 API surface.
@@ -17,6 +18,7 @@ type ArrClient struct {
 	base   string
 	apiKey string
 	http   *http.Client
+	slow   *http.Client
 }
 
 func NewArr(base, apiKey string) *ArrClient {
@@ -24,13 +26,16 @@ func NewArr(base, apiKey string) *ArrClient {
 		base:   base,
 		apiKey: apiKey,
 		http:   &http.Client{Timeout: defaultHTTPTimeout},
+		slow:   &http.Client{Timeout: slowHTTPTimeout},
 	}
 }
 
 type Series struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	Path  string `json:"path"`
+	ID         int    `json:"id"`
+	Title      string `json:"title"`
+	Path       string `json:"path"`
+	Monitored  bool   `json:"monitored"`
+	SeriesType string `json:"seriesType"`
 }
 
 type Movie struct {
@@ -42,13 +47,16 @@ type Movie struct {
 }
 
 type Episode struct {
-	ID            int    `json:"id"`
-	SeriesID      int    `json:"seriesId"`
-	Title         string `json:"title"`
-	SeasonNumber  int    `json:"seasonNumber"`
-	EpisodeNumber int    `json:"episodeNumber"`
-	EpisodeFileID int    `json:"episodeFileId"`
-	HasFile       bool   `json:"hasFile"`
+	ID                    int        `json:"id"`
+	SeriesID              int        `json:"seriesId"`
+	Title                 string     `json:"title"`
+	SeasonNumber          int        `json:"seasonNumber"`
+	EpisodeNumber         int        `json:"episodeNumber"`
+	EpisodeFileID         int        `json:"episodeFileId"`
+	HasFile               bool       `json:"hasFile"`
+	Monitored             bool       `json:"monitored"`
+	AirDateUtc            *time.Time `json:"airDateUtc"`
+	AbsoluteEpisodeNumber int        `json:"absoluteEpisodeNumber"`
 }
 
 // EpisodeFile is a single on-disk file backing an episode, as tracked by Sonarr.
@@ -69,13 +77,14 @@ type MovieFile struct {
 
 // HistoryRecord is one grab/import/failure event from Sonarr/Radarr history.
 type HistoryRecord struct {
-	ID          int    `json:"id"`
-	EpisodeID   int    `json:"episodeId,omitempty"`
-	SeriesID    int    `json:"seriesId,omitempty"`
-	MovieID     int    `json:"movieId,omitempty"`
-	SourceTitle string `json:"sourceTitle"`
-	DownloadID  string `json:"downloadId"`
-	EventType   string `json:"eventType"`
+	ID          int       `json:"id"`
+	EpisodeID   int       `json:"episodeId,omitempty"`
+	SeriesID    int       `json:"seriesId,omitempty"`
+	MovieID     int       `json:"movieId,omitempty"`
+	SourceTitle string    `json:"sourceTitle"`
+	DownloadID  string    `json:"downloadId"`
+	EventType   string    `json:"eventType"`
+	Date        time.Time `json:"date"`
 }
 
 // arrYearSuffixRE strips a trailing " (YYYY)" year qualifier some titles carry.
@@ -213,51 +222,56 @@ const (
 )
 
 func (c *ArrClient) RescanSeries(ctx context.Context, seriesID int) error {
-	return c.postCommand(ctx, map[string]any{
+	_, err := c.postCommand(ctx, map[string]any{
 		paramCommandName: "RescanSeries",
 		paramSeriesID:    seriesID,
 	})
+	return err
 }
 
 // RescanMovie triggers Radarr to rescan the disk for a movie.
 func (c *ArrClient) RescanMovie(ctx context.Context, movieID int) error {
-	return c.postCommand(ctx, map[string]any{
+	_, err := c.postCommand(ctx, map[string]any{
 		paramCommandName: "RescanMovie",
 		"movieId":        movieID,
 	})
+	return err
 }
 
-// SearchEpisode triggers Sonarr to search for a specific episode.
-func (c *ArrClient) SearchEpisode(ctx context.Context, episodeID int) error {
+// SearchEpisodes triggers Sonarr to search for the given episodes and returns the command id.
+func (c *ArrClient) SearchEpisodes(ctx context.Context, episodeIDs []int) (int, error) {
 	return c.postCommand(ctx, map[string]any{
 		paramCommandName: "EpisodeSearch",
-		"episodeIds":     []int{episodeID},
+		"episodeIds":     episodeIDs,
 	})
 }
 
 // SeasonSearch triggers Sonarr to search for every episode in a season.
 func (c *ArrClient) SeasonSearch(ctx context.Context, seriesID, season int) error {
-	return c.postCommand(ctx, map[string]any{
+	_, err := c.postCommand(ctx, map[string]any{
 		paramCommandName: "SeasonSearch",
 		paramSeriesID:    seriesID,
 		"seasonNumber":   season,
 	})
+	return err
 }
 
 // SeriesSearch triggers Sonarr to search for every monitored episode of a series.
 func (c *ArrClient) SeriesSearch(ctx context.Context, seriesID int) error {
-	return c.postCommand(ctx, map[string]any{
+	_, err := c.postCommand(ctx, map[string]any{
 		paramCommandName: "SeriesSearch",
 		paramSeriesID:    seriesID,
 	})
+	return err
 }
 
 // SearchMovieNow triggers Radarr to search for a movie.
 func (c *ArrClient) SearchMovieNow(ctx context.Context, movieID int) error {
-	return c.postCommand(ctx, map[string]any{
+	_, err := c.postCommand(ctx, map[string]any{
 		paramCommandName: "MoviesSearch",
 		"movieIds":       []int{movieID},
 	})
+	return err
 }
 
 // GetEpisodes returns episodes for a series, optionally filtered by season.
@@ -419,27 +433,31 @@ func (c *ArrClient) MarkHistoryFailed(ctx context.Context, historyID int) error 
 	return nil
 }
 
-func (c *ArrClient) postCommand(ctx context.Context, body any) error {
+func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.base+"/api/v3/command", bytes.NewReader(b))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", c.apiKey)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("arr command: %w", err)
+		return 0, fmt.Errorf("arr command: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("arr command: status %d", resp.StatusCode)
+		return 0, fmt.Errorf("arr command: status %d", resp.StatusCode)
 	}
-	return nil
+	var cmd struct {
+		ID int `json:"id"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&cmd)
+	return cmd.ID, nil
 }
 
 // get issues a GET request. path may be a bare path (prefixed with c.base) or
