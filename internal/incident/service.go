@@ -846,7 +846,7 @@ func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status st
 }
 
 // Rerun re-runs diagnosis for an incident: on the dashboard's "still broken"
-// path, on the "Re-investigate" path, and on zombie recovery after a crash.
+// path and on the "Re-investigate" path.
 // These used to be two separate methods (Reopen/Reinvestigate) that did the
 // same thing with different seeding, and both had the same bug: neither reset
 // status to a state Agent.Run's own transition gate would accept, so

@@ -1245,6 +1245,9 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 	if createErr := database.CreateIncident(ctx, inc); createErr != nil {
 		t.Fatal(createErr)
 	}
+	if repErr := database.AddReporter(ctx, inc.ID, "x", "discord", "discord-x"); repErr != nil {
+		t.Fatal(repErr)
+	}
 	if statusErr := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusInvestigating); statusErr != nil {
 		t.Fatal(statusErr)
 	}
@@ -1277,6 +1280,11 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 	case <-fakeAgent.runCalls:
 	case <-time.After(notifyWaitTimeout):
 		t.Fatal("timed out waiting for the stale run to be rerun")
+	}
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	if n := countMsgs(notif.msgs, "🔁 Taking another look at **Hung**."); n != 0 {
+		t.Errorf("rerun notes = %d, want none for a stale-run recovery; msgs %q", n, notif.msgs)
 	}
 }
 
