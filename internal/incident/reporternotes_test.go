@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
@@ -225,5 +226,49 @@ func TestIntakeNote_OutlivesTheWebhookRequest(t *testing.T) {
 	}
 	if seerr.cancellable {
 		t.Error("intake comment used the request context; a dropped webhook would cancel it")
+	}
+}
+
+func TestSeerrFailureDM_OncePerHour(t *testing.T) {
+	t.Parallel()
+	svc, _, notif := newTestService(t)
+	svc.SetSeerr(&fakeSeerr{err: errors.New("seerr down")})
+	ctx := context.Background()
+
+	for _, title := range []string{"Lost", "Fringe"} {
+		r := seerrReport("7")
+		r.Title = title
+		if _, err := svc.Handle(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(notif.msgs) != 1 {
+		t.Fatalf("owner msgs = %q, want one Seerr failure DM per hour", notif.msgs)
+	}
+
+	svc.BackdateSeerrAlertForTest(time.Hour)
+	r := seerrReport("9")
+	r.Title = "Dark"
+	if _, err := svc.Handle(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if len(notif.msgs) != 2 {
+		t.Errorf("owner msgs = %q, want a second DM after an hour", notif.msgs)
+	}
+}
+
+func TestRerunNote_NotOnRestartRecovery(t *testing.T) {
+	t.Parallel()
+	svc, _, notif := newEscalationService(t, db.StatusInvestigating)
+
+	svc.RecoverZombies(context.Background())
+
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	if n := countMsgs(notif.msgs, rerunNote); n != 0 {
+		t.Errorf("rerun notes = %d, want none after a restart; msgs %q", n, notif.msgs)
+	}
+	if len(notif.msgs) != 1 || !strings.Contains(notif.msgs[0], "is being re-run") {
+		t.Errorf("msgs = %q, want only the owner's re-run DM", notif.msgs)
 	}
 }

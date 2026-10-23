@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -22,6 +23,7 @@ const (
 	retryDelay2     = 6 * time.Minute
 	rerunNoteGap    = 30 * time.Minute
 	progressNoteGap = 60 * time.Minute
+	seerrAlertGap   = time.Hour
 )
 
 const (
@@ -66,6 +68,9 @@ type Service struct {
 	seerr      SeerrIssues
 	log        *slog.Logger
 	runs       *runManager
+
+	seerrAlertMu sync.Mutex
+	seerrAlertAt time.Time
 }
 
 type SeerrIssues interface {
@@ -763,10 +768,23 @@ func (s *Service) notifySeerrIssues(ctx context.Context, inc *db.Incident, verb 
 func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id string, call func(string) error) {
 	if err := call(id); err != nil {
 		s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", err)
-		_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v", verb, id, inc.Title, inc.ID[:8], err,
-		))
+		if s.claimSeerrAlert(time.Now()) {
+			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+				"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v\n%s",
+				verb, id, inc.Title, inc.ID[:8], err, "Further Seerr failures in the next hour are only logged.",
+			))
+		}
 	}
+}
+
+func (s *Service) claimSeerrAlert(now time.Time) bool {
+	s.seerrAlertMu.Lock()
+	defer s.seerrAlertMu.Unlock()
+	if now.Sub(s.seerrAlertAt) < seerrAlertGap {
+		return false
+	}
+	s.seerrAlertAt = now
+	return true
 }
 
 func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
@@ -843,6 +861,10 @@ func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status st
 // with a summary of the prior conversation (if any) so the agent knows what
 // it already tried and does not repeat a failed action from scratch.
 func (s *Service) Rerun(ctx context.Context, id string) error {
+	return s.rerun(ctx, id, true)
+}
+
+func (s *Service) rerun(ctx context.Context, id string, noteReporters bool) error {
 	// Deliberate human/system override — clear any autonomous lock so the
 	// re-run actually proceeds, even for a previously blocked/locked incident.
 	_ = s.db.SetAutonomousLocked(ctx, id, false)
@@ -857,7 +879,9 @@ func (s *Service) Rerun(ctx context.Context, id string) error {
 	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
 		return s.buildReinvestigateSeed(seedCtx, id, inc)
 	})
-	s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
+	if noteReporters {
+		s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
+	}
 	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
 		"🔁 Incident **%s** (#%s) is being re-run.",
 		inc.Title, inc.ID[:8],
@@ -914,7 +938,7 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 	}
 	for _, inc := range incidents {
 		s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.Rerun(ctx, inc.ID); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, false); rerunErr != nil {
 			s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
@@ -931,7 +955,7 @@ func (s *Service) SweepStaleRuns(ctx context.Context) {
 	}
 	for _, inc := range stale {
 		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.Rerun(ctx, inc.ID); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, false); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}

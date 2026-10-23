@@ -44,3 +44,10 @@ func (s *Service) EscalateToOwnerForTest(ctx context.Context, inc *db.Incident, 
 func ProgressPhrasesForTest(actions []*db.ActionLog, since time.Time, po *db.PendingOutcome) []string {
 	return progressPhrases(actions, since, po)
 }
+
+// BackdateSeerrAlertForTest moves the last Seerr failure DM d into the past.
+func (s *Service) BackdateSeerrAlertForTest(d time.Duration) {
+	s.seerrAlertMu.Lock()
+	defer s.seerrAlertMu.Unlock()
+	s.seerrAlertAt = s.seerrAlertAt.Add(-d)
+}
