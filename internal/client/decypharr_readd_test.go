@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,7 @@ import (
 // add endpoints, recording what it was called with.
 type readdStub struct {
 	torrents []map[string]any
+	total    int
 
 	mu        sync.Mutex
 	deleted   []string
@@ -27,7 +29,11 @@ type readdStub struct {
 func (s *readdStub) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/torrents", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"torrents": s.torrents})
+		total := s.total
+		if total == 0 {
+			total = len(s.torrents)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"torrents": s.torrents, "total": total})
 	})
 	mux.HandleFunc("/api/torrents/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -82,6 +88,36 @@ func TestPlanTorrentReadd_RefusesWithoutAMagnet(t *testing.T) {
 	_, err := c.PlanTorrentReadd(context.Background(), "Show.S01E01")
 	if !errors.Is(err, client.ErrNoMagnet) {
 		t.Fatalf("err = %v, want ErrNoMagnet: deleting this torrent would be unrecoverable", err)
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.deleted) != 0 {
+		t.Error("planning deleted something; it must be read-only")
+	}
+}
+
+func TestPlanTorrentReadd_RefusesBeyondOnePage(t *testing.T) {
+	t.Parallel()
+	const (
+		pageSize = 100
+		total    = 150
+	)
+	torrents := make([]map[string]any, 0, pageSize)
+	torrents = append(torrents, map[string]any{
+		"name": "Show", "info_hash": "exact", "category": "sonarr", "magnet": "magnet:?xt=exact",
+	})
+	for i := len(torrents); i < pageSize; i++ {
+		torrents = append(torrents, map[string]any{
+			"name": fmt.Sprintf("Show.S01E%02d", i), "info_hash": fmt.Sprintf("h%d", i),
+			"category": "sonarr", "magnet": fmt.Sprintf("magnet:?xt=h%d", i),
+		})
+	}
+	stub := &readdStub{torrents: torrents, total: total}
+	c := newReaddClient(t, stub)
+
+	_, err := c.PlanTorrentReadd(context.Background(), "Show")
+	if err == nil || !strings.Contains(err.Error(), "more than one page") {
+		t.Fatalf("err = %v, want a refusal naming more than one page: a match on page two is never seen", err)
 	}
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
