@@ -110,6 +110,10 @@ func TestScheduler_InterruptedRunReRunsAfterRestart(t *testing.T) {
 	}
 	sch := h.restart(t0().Add(20 * time.Minute))
 	h.tick(sch, t0().Add(21*time.Minute))
+	if n := len(h.runs(t)); n != 1 {
+		t.Fatalf("runs 20 min after the interrupted start = %d, want 1 (retry waits an hour)", n)
+	}
+	h.tick(sch, t0().Add(time.Hour+2*time.Minute))
 	runs := h.runs(t)
 	if len(runs) != 2 || runs[0].Status != "done" || runs[1].Status != "interrupted" {
 		t.Errorf("runs = %+v, want a fresh done run after the interrupted one", runs)
@@ -455,5 +459,90 @@ func TestScheduler_PruningDryRunsKeepsSlotRun(t *testing.T) {
 		if !r.Dry && r.StartedAt.After(t0()) {
 			t.Errorf("live run %d at %v, want none after the slot's run", r.ID, r.StartedAt)
 		}
+	}
+}
+
+func interruptedRun(t *testing.T, h *harness, at time.Time, results ...string) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := h.db.CreateSweepRun(ctx, "schedule", false, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, res := range results {
+		if err = h.db.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+			Result: res, At: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = h.db.InterruptRunningSweeps(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScheduler_InterruptedRunsCapped(t *testing.T) {
+	t.Parallel()
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), settings())
+	for _, at := range []time.Time{t0().Add(time.Minute), t0().Add(time.Hour + 2*time.Minute), t0().Add(2*time.Hour + 3*time.Minute)} {
+		interruptedRun(t, h, at)
+	}
+	sch := h.restart(t0().Add(3*time.Hour + 5*time.Minute))
+	h.tick(sch, t0().Add(3*time.Hour+5*time.Minute))
+	if n := len(h.runs(t)); n != 3 {
+		t.Errorf("runs = %d, want 3 (two retries used, no third)", n)
+	}
+	if next := sch.NextRun(t0().Add(3 * time.Hour)); next == nil || !next.Equal(t0().AddDate(0, 0, 7)) {
+		t.Errorf("NextRun = %v, want the next slot %v", next, t0().AddDate(0, 0, 7))
+	}
+}
+
+func TestScheduler_RetryGetsRemainingBudget(t *testing.T) {
+	t.Parallel()
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), settings())
+	interruptedRun(t, h, t0().Add(time.Minute), "imported", "imported", "failed")
+	sch := h.restart(t0().Add(time.Hour + 2*time.Minute))
+	h.tick(sch, t0().Add(time.Hour+2*time.Minute))
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Counts.MaxGrabs != settings().MaxGrabs-3 {
+		t.Errorf("runs = %+v, want a retry with max_grabs %d", runs, settings().MaxGrabs-3)
+	}
+}
+
+func TestScheduler_ZeroBudgetMakesNoGrab(t *testing.T) {
+	t.Parallel()
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), settings())
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
+	used := make([]string, settings().MaxGrabs)
+	for i := range used {
+		used[i] = "imported"
+	}
+	interruptedRun(t, h, t0().Add(time.Minute), used...)
+	sch := h.restart(t0().Add(time.Hour + 2*time.Minute))
+	h.tick(sch, t0().Add(time.Hour+2*time.Minute))
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Status != "done" || runs[0].Counts.MaxGrabs != 0 {
+		t.Errorf("runs = %+v, want a done retry with max_grabs 0", runs)
+	}
+	if n := h.fake.countWrites("POST /release"); n != 0 {
+		t.Errorf("POST /release count = %d, want 0", n)
+	}
+}
+
+func TestRunNow_IgnoresSlotGrabs(t *testing.T) {
+	t.Parallel()
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), settings())
+	used := make([]string, settings().MaxGrabs)
+	for i := range used {
+		used[i] = "imported"
+	}
+	interruptedRun(t, h, t0().Add(time.Minute), used...)
+	sch := h.restart(t0().Add(2 * time.Hour))
+	if err := sch.RunNow("manual", false); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	if runs := h.runs(t); runs[0].Counts.MaxGrabs != settings().MaxGrabs {
+		t.Errorf("manual run max_grabs = %d, want the full %d", runs[0].Counts.MaxGrabs, settings().MaxGrabs)
 	}
 }

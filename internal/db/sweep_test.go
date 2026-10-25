@@ -294,7 +294,7 @@ func TestLastSweepRunStart_ExcludesStatusesAndDryRuns(t *testing.T) {
 	}
 }
 
-func TestFailedSweepRunsSince(t *testing.T) {
+func TestRetryableSweepRunsSince(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
@@ -302,7 +302,7 @@ func TestFailedSweepRunsSince(t *testing.T) {
 		hours  int
 		dry    bool
 		status string
-	}{{-1, false, "failed"}, {1, false, "failed"}, {2, true, "failed"}, {3, false, "done"}, {4, false, "failed"}} {
+	}{{-1, false, "failed"}, {1, false, "failed"}, {2, true, "failed"}, {3, false, "done"}, {4, false, "interrupted"}} {
 		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
 		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
 		if err != nil {
@@ -312,9 +312,51 @@ func TestFailedSweepRunsSince(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := d.FailedSweepRunsSince(ctx, sweepT0())
-	want := []time.Time{sweepT0().Add(4*time.Hour + time.Minute), sweepT0().Add(time.Hour + time.Minute)}
-	if err != nil || len(got) != 2 || !got[0].Equal(want[0]) || !got[1].Equal(want[1]) {
-		t.Errorf("FailedSweepRunsSince = %v, %v; want %v", got, err, want)
+	if _, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.InterruptRunningSweeps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n, latest, err := d.RetryableSweepRunsSince(ctx, sweepT0())
+	if err != nil || n != 3 || !latest.Equal(sweepT0().Add(5*time.Hour)) {
+		t.Errorf("RetryableSweepRunsSince = %d, %v, %v; want 3, %v (a crashed run has no finish, so its start)",
+			n, latest, err, sweepT0().Add(5*time.Hour))
+	}
+	n, latest, err = d.RetryableSweepRunsSince(ctx, sweepT0().Add(6*time.Hour))
+	if err != nil || n != 0 || !latest.IsZero() {
+		t.Errorf("RetryableSweepRunsSince after all runs = %d, %v, %v; want 0, zero", n, latest, err)
+	}
+}
+
+func TestLiveGrabsSince(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	grabs := []string{"grabbing", "imported", "failed", "refused", "archive", "downloading"}
+	for _, r := range []struct {
+		hours   int
+		dry     bool
+		results []string
+	}{
+		{-1, false, []string{"imported"}},
+		{1, false, []string{"imported", "no_pack", "failed", "searched"}},
+		{2, true, []string{"would_grab", "imported"}},
+		{3, false, []string{"refused", "grabbing"}},
+	} {
+		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
+		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, res := range r.results {
+			if err = d.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+				Result: res, At: at}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if n, err := d.LiveGrabsSince(ctx, sweepT0(), grabs); err != nil || n != 4 {
+		t.Errorf("LiveGrabsSince = %d, %v; want 4", n, err)
 	}
 }

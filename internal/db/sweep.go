@@ -298,22 +298,41 @@ func (d *DB) stringSet(ctx context.Context, query string, args ...any) (map[stri
 	return out, rows.Err()
 }
 
-func (d *DB) FailedSweepRunsSince(ctx context.Context, since time.Time) ([]time.Time, error) {
+func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int, time.Time, error) {
 	rows, err := d.read.QueryContext(ctx,
-		`SELECT finished_at FROM sweep_runs
-		 WHERE dry = 0 AND status = 'failed' AND finished_at IS NOT NULL AND started_at >= ?
-		 ORDER BY id DESC`, since)
+		`SELECT started_at, finished_at FROM sweep_runs
+		 WHERE dry = 0 AND status IN ('failed', 'interrupted') AND started_at >= ?`, since)
 	if err != nil {
-		return nil, err
+		return 0, time.Time{}, err
 	}
 	defer rows.Close()
-	var out []time.Time
+	n, latest := 0, time.Time{}
 	for rows.Next() {
-		var at time.Time
-		if err = rows.Scan(&at); err != nil {
-			return nil, err
+		var started time.Time
+		var finished *time.Time
+		if err = rows.Scan(&started, &finished); err != nil {
+			return 0, time.Time{}, err
 		}
-		out = append(out, at)
+		if finished != nil {
+			started = *finished
+		}
+		n++
+		if started.After(latest) {
+			latest = started
+		}
 	}
-	return out, rows.Err()
+	return n, latest, rows.Err()
+}
+
+func (d *DB) LiveGrabsSince(ctx context.Context, since time.Time, results []string) (int, error) {
+	want, err := json.Marshal(results)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = d.read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
+		 WHERE r.dry = 0 AND r.started_at >= ? AND i.result IN (SELECT value FROM json_each(?))`,
+		since, string(want)).Scan(&n)
+	return n, err
 }

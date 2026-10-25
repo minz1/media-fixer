@@ -67,6 +67,12 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil || now.Before(next) {
 		return err
 	}
+	grabs, err := s.d.LiveGrabsSince(s.base, slot(set, now),
+		[]string{resultGrabbing, resultImported, resultFailed, resultRefused, resultArchive, resultDownloading})
+	if err != nil {
+		return err
+	}
+	set.MaxGrabs = max(0, set.MaxGrabs-grabs)
 	return s.start(triggerSchedule, false, set)
 }
 
@@ -106,14 +112,14 @@ func (s *Scheduler) next(set Settings, now time.Time) (time.Time, error) {
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return time.Time{}, err
 	}
-	failed, err := s.d.FailedSweepRunsSince(s.base, at)
+	n, latest, err := s.d.RetryableSweepRunsSince(s.base, at)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if len(failed) > 0 {
-		at = failed[0].Add(time.Hour)
+	if n > 0 {
+		at = latest.Add(time.Hour)
 	}
-	if len(failed) > maxRetries || at.After(following) {
+	if n > maxRetries || at.After(following) {
 		return following, nil
 	}
 	return at, nil
