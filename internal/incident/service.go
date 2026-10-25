@@ -116,24 +116,19 @@ func (s *Service) SetSeerr(seerr SeerrIssues) {
 }
 
 // launch starts a background agent run for an incident with a fixed seed (nil
-// for a fresh run). Thin wrapper over launchWithSeed for callers that already
-// have a fully-built seed in hand.
+// for a fresh run).
 func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) {
-	s.launchWithSeed(inc, func(context.Context) []openai.ChatCompletionMessage { return seed })
-}
-
-// launchWithSeed starts (or restarts) the background agent pipeline for an
-// incident under the run manager. Because begin() cancels any in-flight run for
-// the same incident, a rerun supersedes a prior run instead of racing it.
-// buildSeed runs on the new run's own (background) context rather than the
-// caller's, so a seed built from an expensive call (buildReinvestigateSeed
-// summarizes the prior conversation via an LLM call) never blocks — or gets
-// silently dropped by — an HTTP request context.
-func (s *Service) launchWithSeed(inc *db.Incident, buildSeed func(context.Context) []openai.ChatCompletionMessage) {
 	ctx, tok := s.runs.begin(inc.ID)
-	s.startRun(ctx, tok, inc, buildSeed)
+	s.startRun(ctx, tok, inc, func(context.Context) []openai.ChatCompletionMessage { return seed })
 }
 
+// startRun runs the background agent pipeline for an incident under a token
+// from runs.begin, which cancels any in-flight run for the same incident, so a
+// rerun supersedes a prior run instead of racing it. buildSeed runs on the new
+// run's own (background) context rather than the caller's, so a seed built from
+// an expensive call (buildReinvestigateSeed summarizes the prior conversation
+// via an LLM call) never blocks — or gets silently dropped by — an HTTP request
+// context.
 func (s *Service) startRun(
 	ctx context.Context,
 	tok *runToken,
@@ -897,9 +892,9 @@ const (
 )
 
 func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) error {
+	runCtx, tok := s.runs.begin(id)
 	// Deliberate human/system override — clear any autonomous lock so the
 	// re-run actually proceeds, even for a previously blocked/locked incident.
-	runCtx, tok := s.runs.begin(id)
 	_ = s.db.SetAutonomousLocked(ctx, id, false)
 	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
 		s.runs.end(id, tok)
