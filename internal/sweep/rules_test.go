@@ -79,7 +79,7 @@ func TestSeasonCandidates_SV22(t *testing.T) {
 		t.Fatal("no candidates")
 	}
 	sweep.Rank(c)
-	if !strings.HasPrefix(c[0].Indexer, "Zilean") || c[0].ReleaseWeight != 30 {
+	if !strings.HasPrefix(c[0].Indexer, "Comet") || c[0].ReleaseWeight != 32 {
 		t.Fatalf("first = %s w=%d %q", c[0].Indexer, c[0].ReleaseWeight, c[0].Title)
 	}
 }
@@ -194,7 +194,7 @@ func TestRank_TierOrder(t *testing.T) {
 		{Title: "plain-heavy", Indexer: "1337x (Prowlarr)", Protocol: "torrent", ReleaseWeight: 9},
 	}
 	sweep.Rank(rels)
-	want := []string{"zilean", "comet", "plain", "plain-heavy", "usenet"}
+	want := []string{"comet", "plain", "plain-heavy", "zilean", "usenet"}
 	if got := titles(rels); !slices.Equal(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}

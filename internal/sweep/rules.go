@@ -75,7 +75,7 @@ func Rank(rels []client.Release) {
 
 func rankTier(r client.Release) int {
 	tier := 3
-	if strings.HasPrefix(r.Indexer, "Comet") || strings.HasPrefix(r.Indexer, "Zilean") {
+	if strings.HasPrefix(r.Indexer, "Comet") {
 		tier -= 2
 	}
 	if r.Protocol == "torrent" {

@@ -161,7 +161,7 @@ func TestRun_Post500NoGrab_Refused(t *testing.T) {
 	h := newHarness(t)
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1),
-		seasonRel("g1", "Show.S01.DDP.2.0", "Zilean", 10),
+		seasonRel("g1", "Show.S01.DDP.2.0", "Comet", 10),
 		seasonRel("g2", "Show S01 B", "Comet", 20))
 	h.fake.plan("g1", grabPlan{status: http.StatusInternalServerError, body: "torrent_blocked"})
 	h.fake.plan("g2", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
