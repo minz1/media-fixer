@@ -170,7 +170,9 @@ func (s *Server) sweepCard(
 		for _, x := range series {
 			list = append(list, sweepSeries{x.ID, x.Title, slices.Contains(set.ExcludedSeries, x.ID)})
 		}
-		slices.SortFunc(list, func(a, b sweepSeries) int { return compareFold(a.Title, b.Title) })
+		slices.SortFunc(list, func(a, b sweepSeries) int {
+			return strings.Compare(strings.ToLower(a.Title), strings.ToLower(b.Title))
+		})
 		card["Series"] = list
 	}
 	if flags, err := sonarr.DownloadClientConfig(ctx); err != nil {
@@ -228,11 +230,9 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 		}
 		*f.dst = n
 	}
-	if err := r.ParseForm(); err == nil {
-		for _, v := range r.PostForm["excluded_series"] {
-			if id, perr := strconv.Atoi(v); perr == nil {
-				set.ExcludedSeries = append(set.ExcludedSeries, id)
-			}
+	for _, v := range r.PostForm["excluded_series"] {
+		if id, err := strconv.Atoi(v); err == nil {
+			set.ExcludedSeries = append(set.ExcludedSeries, id)
 		}
 	}
 	for k, v := range set.Validate() {
@@ -249,10 +249,6 @@ func weekdayNames() []string {
 		names = append(names, d.String())
 	}
 	return names
-}
-
-func compareFold(a, b string) int {
-	return strings.Compare(strings.ToLower(a), strings.ToLower(b))
 }
 
 func sweepColor(status string) string {

@@ -277,9 +277,8 @@ func TestQueuedEpisodes(t *testing.T) {
 func queueDetail(state string, msgs ...string) client.QueueDetail {
 	d := client.QueueDetail{TrackedDownloadState: state}
 	d.StatusMessages = append(d.StatusMessages, struct {
-		Title    string   `json:"title"`
 		Messages []string `json:"messages"`
-	}{Title: "Show.S01E01.mkv", Messages: msgs})
+	}{Messages: msgs})
 	return d
 }
 
