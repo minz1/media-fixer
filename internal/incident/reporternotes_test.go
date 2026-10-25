@@ -138,6 +138,11 @@ func TestRerunNote_RateLimited(t *testing.T) {
 	if n := countMsgs(notif.msgs, rerunNote); n != 1 {
 		t.Errorf("rerun notes = %d, want 1; msgs %q", n, notif.msgs)
 	}
+	for _, m := range notif.msgs {
+		if strings.Contains(m, "re-run") {
+			t.Errorf("owner got %q for a manual rerun, want no owner DM", m)
+		}
+	}
 }
 
 func newEscalationService(t *testing.T, status db.IncidentStatus) (*incident.Service, *db.Incident, *syncNotifier) {
@@ -268,8 +273,8 @@ func TestRerunNote_NotOnRestartRecovery(t *testing.T) {
 	if n := countMsgs(notif.msgs, rerunNote); n != 0 {
 		t.Errorf("rerun notes = %d, want none after a restart; msgs %q", n, notif.msgs)
 	}
-	if len(notif.msgs) != 1 || !strings.Contains(notif.msgs[0], "is being re-run") {
-		t.Errorf("msgs = %q, want only the owner's re-run DM", notif.msgs)
+	if len(notif.msgs) != 0 {
+		t.Errorf("msgs = %q, want nothing after a restart", notif.msgs)
 	}
 }
 

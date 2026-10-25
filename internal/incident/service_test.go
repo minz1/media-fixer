@@ -1293,6 +1293,11 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 	if n := countMsgs(notif.msgs, "🔁 Taking another look at **Hung**."); n != 0 {
 		t.Errorf("rerun notes = %d, want none for a stale-run recovery; msgs %q", n, notif.msgs)
 	}
+	stale := fmt.Sprintf(
+		"⏱️ Incident **Hung** (#%s) stopped making progress for 15 min and is being re-run.", inc.ID[:8])
+	if n := countMsgs(notif.msgs, stale); n != 1 {
+		t.Errorf("stale owner DMs = %d, want 1 %q; msgs %q", n, stale, notif.msgs)
+	}
 }
 
 type fakeSeerr struct {

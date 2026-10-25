@@ -876,10 +876,18 @@ func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status st
 // with a summary of the prior conversation (if any) so the agent knows what
 // it already tried and does not repeat a failed action from scratch.
 func (s *Service) Rerun(ctx context.Context, id string) error {
-	return s.rerun(ctx, id, true)
+	return s.rerun(ctx, id, rerunManual)
 }
 
-func (s *Service) rerun(ctx context.Context, id string, noteReporters bool) error {
+type rerunOrigin int
+
+const (
+	rerunManual rerunOrigin = iota
+	rerunRestart
+	rerunStale
+)
+
+func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) error {
 	// Deliberate human/system override — clear any autonomous lock so the
 	// re-run actually proceeds, even for a previously blocked/locked incident.
 	_ = s.db.SetAutonomousLocked(ctx, id, false)
@@ -894,13 +902,16 @@ func (s *Service) rerun(ctx context.Context, id string, noteReporters bool) erro
 	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
 		return s.buildReinvestigateSeed(seedCtx, id, inc)
 	})
-	if noteReporters {
+	switch origin {
+	case rerunManual:
 		s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
+	case rerunStale:
+		_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+			"⏱️ Incident **%s** (#%s) stopped making progress for %d min and is being re-run.",
+			inc.Title, inc.ID[:8], int(staleRunThreshold.Minutes()),
+		))
+	case rerunRestart:
 	}
-	_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-		"🔁 Incident **%s** (#%s) is being re-run.",
-		inc.Title, inc.ID[:8],
-	))
 	return nil
 }
 
@@ -953,7 +964,7 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 	}
 	for _, inc := range incidents {
 		s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, false); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, rerunRestart); rerunErr != nil {
 			s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
@@ -970,7 +981,7 @@ func (s *Service) SweepStaleRuns(ctx context.Context) {
 	}
 	for _, inc := range stale {
 		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, false); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, rerunStale); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
