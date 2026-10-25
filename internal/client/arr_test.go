@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/client"
@@ -287,6 +288,37 @@ func TestArr_MarkHistoryFailed(t *testing.T) {
 	c := client.NewArr(srv.URL, "key")
 	if err := c.MarkHistoryFailed(context.Background(), 555); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestArr_MarkHistoryFailed_KeepsItsConnectionsWhenTheDefaultTransportDropsIdle(t *testing.T) {
+	t.Parallel()
+	var (
+		mu      sync.Mutex
+		remotes []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		remotes = append(remotes, r.RemoteAddr)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+
+	c := client.NewArr(srv.URL, "key")
+	ctx := context.Background()
+	if err := c.MarkHistoryFailed(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	http.DefaultClient.CloseIdleConnections()
+	if err := c.MarkHistoryFailed(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(remotes) != 2 || remotes[0] != remotes[1] {
+		t.Errorf("requests came from %v, want one reused connection: closing the shared default "+
+			"transport's idle connections reached this client's pool", remotes)
 	}
 }
 

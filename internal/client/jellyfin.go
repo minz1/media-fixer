@@ -29,7 +29,7 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 	return &JellyfinClient{
 		base:   base,
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: defaultHTTPTimeout},
+		http:   newHTTPClient(defaultHTTPTimeout),
 	}
 }
 

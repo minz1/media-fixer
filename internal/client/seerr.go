@@ -20,7 +20,7 @@ func NewSeerr(baseURL, apiKey string) *SeerrClient {
 	return &SeerrClient{
 		base:   strings.TrimRight(baseURL, "/"),
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: defaultHTTPTimeout},
+		http:   newHTTPClient(defaultHTTPTimeout),
 	}
 }
 

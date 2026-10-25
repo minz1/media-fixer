@@ -20,7 +20,7 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 	return &DecypharrClient{
 		base:     base,
 		apiToken: apiToken,
-		http:     &http.Client{Timeout: defaultHTTPTimeout},
+		http:     newHTTPClient(defaultHTTPTimeout),
 	}
 }
 

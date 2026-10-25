@@ -18,7 +18,7 @@ type LokiClient struct {
 }
 
 func NewLoki(base, tlsCert, tlsKey string) (*LokiClient, error) {
-	httpClient := &http.Client{Timeout: defaultHTTPTimeout}
+	httpClient := newHTTPClient(defaultHTTPTimeout)
 
 	if tlsCert != "" && tlsKey != "" {
 		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
