@@ -74,7 +74,12 @@ func LoadSettings(ctx context.Context, d *db.DB) (Settings, error) {
 
 func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) error {
 	prev, err := LoadSettings(ctx, d)
-	if err != nil {
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syntaxErr), errors.As(err, &typeErr):
+		prev = DefaultSettings()
+	case err != nil:
 		return err
 	}
 	switch {
