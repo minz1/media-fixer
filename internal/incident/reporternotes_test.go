@@ -296,7 +296,7 @@ func TestSeerrAlert_FailedDMRetriesNext(t *testing.T) {
 			n++
 		}
 	}
-	if n != 1 {
+	if n != 1 || len(notif.msgs) != 1 {
 		t.Errorf("owner Seerr alerts delivered = %d, want 1 (the first DM failed, the next retries); msgs %q",
 			n, notif.msgs)
 	}
