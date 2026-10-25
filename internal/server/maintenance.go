@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -15,10 +16,11 @@ import (
 )
 
 const (
-	sweepRunsShown   = 10
-	sweepUnavailable = "sweep unavailable (Sonarr not configured)"
-	triggerManual    = "manual"
-	lookupRounding   = 100 * time.Millisecond
+	sweepRunsShown          = 10
+	sweepUnavailable        = "sweep unavailable (Sonarr not configured)"
+	sweepSettingsUnreadable = "Stored sweep settings couldn't be read; saving replaces them."
+	triggerManual           = "manual"
+	lookupRounding          = 100 * time.Millisecond
 )
 
 type sweepSeries struct {
@@ -42,12 +44,12 @@ func (s *Server) SetSweep(sch *sweep.Scheduler) {
 func (s *Server) maintenanceIndex(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{tplKeyBaseURL: s.baseURL}
 	if s.sweep != nil {
-		set, err := sweep.LoadSettings(r.Context(), s.db)
+		set, unreadable, err := s.loadSweepSettings(r.Context())
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		data["Card"] = s.sweepCard(r.Context(), set, nil, "", "", false)
+		data["Card"] = s.sweepCard(r.Context(), set, nil, "", unreadable, false)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "maintenance", data)
@@ -84,10 +86,13 @@ func (s *Server) sweepRun(w http.ResponseWriter, r *http.Request) {
 	if err := s.sweep.RunNow(triggerManual, dry); err != nil {
 		notice, failure = "", err.Error()
 	}
-	set, err := sweep.LoadSettings(r.Context(), s.db)
+	set, unreadable, err := s.loadSweepSettings(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if unreadable != "" {
+		notice, failure = "", unreadable
 	}
 	s.renderSweepCard(r.Context(), w, set, nil, notice, failure, failure == "")
 }
@@ -113,12 +118,20 @@ func (s *Server) sweepForget(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	set, err := sweep.LoadSettings(r.Context(), s.db)
+	set, unreadable, err := s.loadSweepSettings(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.renderSweepCard(r.Context(), w, set, nil, "", "", false)
+	s.renderSweepCard(r.Context(), w, set, nil, "", unreadable, false)
+}
+
+func (s *Server) loadSweepSettings(ctx context.Context) (sweep.Settings, string, error) {
+	set, err := sweep.LoadSettings(ctx, s.db)
+	if errors.Is(err, sweep.ErrCorruptSettings) {
+		return set, sweepSettingsUnreadable, nil
+	}
+	return set, "", err
 }
 
 func (s *Server) sweepConfigured(w http.ResponseWriter) bool {

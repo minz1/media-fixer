@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -209,7 +210,7 @@ func TestSaveSettings_EnabledAt(t *testing.T) {
 
 func TestSaveSettings_OverwritesCorruptRow(t *testing.T) {
 	t.Parallel()
-	for _, raw := range []string{`{not json`, `[]`, `{"max_grabs":"x"}`} {
+	for _, raw := range []string{`{not json`, `[]`, `{"max_grabs":"x"}`, `{"enabled_at":"garbage"}`} {
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
@@ -724,5 +725,26 @@ func TestScheduler_RetryAfterCrashMakesNoSearches(t *testing.T) {
 	runs := h.runs(t)
 	if len(runs) != 2 || runs[0].Counts.MaxSearches != 0 {
 		t.Errorf("runs = %+v, want a retry with max_searches 0 (the crashed run's searches are unknown)", runs)
+	}
+}
+
+func TestSaveSettings_PartlyReadableEnabledRowGetsFreshEnabledAt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	raw := fmt.Sprintf(
+		`{"enabled":true,"weekday":%d,"hour_utc":%d,"enabled_at":"2020-01-01T00:00:00Z","max_grabs":"x"}`,
+		settings().Weekday, settings().HourUTC,
+	)
+	if err := h.db.SetSetting(ctx, sweep.SettingsKey, raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := sweep.SaveSettings(ctx, h.db, settings(), t0()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sweep.LoadSettings(ctx, h.db)
+	if err != nil || got.EnabledAt == nil || !got.EnabledAt.Equal(t0()) {
+		t.Errorf("enabled_at = %v, %v; want %v (the unreadable row's old stamp must not survive)",
+			got.EnabledAt, err, t0())
 	}
 }

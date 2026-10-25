@@ -503,3 +503,25 @@ func TestMaintenance_RefusedListShowsWhatBlocks(t *testing.T) {
 		t.Error("refused heading still says last 7 days")
 	}
 }
+
+func TestMaintenance_CorruptSettingsRowRendersAndSaveRepairs(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	if err := env.db.SetSetting(context.Background(), sweep.SettingsKey, `{not json`); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, env.srv, http.MethodGet, "/media/maintenance", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET with a corrupt row: status %d, want 200", rec.Code)
+	}
+	mustContain(t, rec.Body.String(), "saving replaces them")
+	rec = do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", validSettingsForm())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save over a corrupt row: status %d: %s", rec.Code, rec.Body.String())
+	}
+	mustContain(t, rec.Body.String(), "Saved")
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	if strings.Contains(body, "saving replaces them") {
+		t.Error("the unreadable-settings notice is still shown after a save")
+	}
+}

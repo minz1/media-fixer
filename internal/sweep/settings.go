@@ -68,18 +68,15 @@ func LoadSettings(ctx context.Context, d *db.DB) (Settings, error) {
 	if err != nil {
 		return s, err
 	}
-	err = json.Unmarshal([]byte(raw), &s)
-	return s, err
+	if err = json.Unmarshal([]byte(raw), &s); err != nil {
+		return DefaultSettings(), fmt.Errorf("%w: %w", ErrCorruptSettings, err)
+	}
+	return s, nil
 }
 
 func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) error {
 	prev, err := LoadSettings(ctx, d)
-	var syntaxErr *json.SyntaxError
-	var typeErr *json.UnmarshalTypeError
-	switch {
-	case errors.As(err, &syntaxErr), errors.As(err, &typeErr):
-		prev = DefaultSettings()
-	case err != nil:
+	if err != nil && !errors.Is(err, ErrCorruptSettings) {
 		return err
 	}
 	switch {
