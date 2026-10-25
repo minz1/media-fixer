@@ -177,7 +177,7 @@ func TestRun_Post500NoGrab_Refused(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(refused) != 1 || refused[0].TitleKey != sweep.NormTitle("Show.S01.DDP.2.0") ||
-		!strings.Contains(refused[0].Reason, "500") || !strings.Contains(refused[0].Reason, "torrent_blocked") {
+		!strings.Contains(refused[0].Reason, "500") || !strings.Contains(refused[0].Reason, "code=torrent_blocked") {
 		t.Errorf("refused = %+v", refused)
 	}
 }
@@ -633,5 +633,24 @@ func TestRun_DryRunEpisodePass(t *testing.T) {
 	}
 	if run.Items[4].Episodes != "4" || run.Counts.Searched != 3 {
 		t.Errorf("anime search item %+v, counts %+v", run.Items[4], run.Counts)
+	}
+}
+
+func TestRun_ProviderErrorRetriedNextRun(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show.S01.1080p", "Comet", 10))
+	h.fake.plan("g1", grabPlan{status: http.StatusInternalServerError, body: `{"code": "provider_error"}`})
+	if got := itemResults(h.run(t, false, settings())); !slices.Equal(got, []string{"refused"}) {
+		t.Fatalf("run 1 results = %v", got)
+	}
+	h.clock.mu.Lock()
+	h.clock.t = h.clock.t.Add(7 * 24 * time.Hour)
+	h.clock.mu.Unlock()
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+	h.run(t, false, settings())
+	if n := h.fake.countWrites("POST /release g1"); n != 2 {
+		t.Errorf("POST g1 count = %d, want 2 (provider_error is retried next run); writes %v", n, h.fake.writeLog())
 	}
 }

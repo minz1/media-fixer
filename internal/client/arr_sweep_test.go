@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,6 +314,40 @@ func TestArr_SearchEpisodes_UndecodableReply(t *testing.T) {
 		c, _ := sweepServer(t, http.StatusCreated, reply)
 		if id, err := c.SearchEpisodes(context.Background(), []int{1}); err == nil {
 			t.Errorf("reply %q: id %d, nil error; want the decode error", reply, id)
+		}
+	}
+}
+
+func TestDo_KeepsDecypharrCodeBeyondBodyLimit(t *testing.T) {
+	t.Parallel()
+	body := `{"message":"Failed to connect to qBittorrent, check your settings.","description":"` +
+		strings.Repeat("at NzbDrone.Core.Download.Clients ", 20) +
+		`HttpException: HTTP request failed: [502:BadGateway] [POST] at [http://127.0.0.1:8282/api/v2/torrents/add] ` +
+		`{\"error\": \"x has error\", \"code\": \"provider_error\", \"retryable\": true, \"permanent\": false}"}`
+	c, _ := sweepServer(t, http.StatusInternalServerError, body)
+	err := c.GrabRelease(context.Background(), "g", 4)
+	var se *client.HTTPStatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("err = %v, want *HTTPStatusError", err)
+	}
+	if len(se.Body) != 200 || se.Code != client.CodeProviderError {
+		t.Errorf("body len = %d, code = %q; want 200 and %q", len(se.Body), se.Code, client.CodeProviderError)
+	}
+}
+
+func TestDo_CodeWordPrecedence(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]string{
+		`provider_error then torrent_blocked`: client.CodeTorrentBlocked,
+		`no code here`:                        "",
+	} {
+		c, _ := sweepServer(t, http.StatusInternalServerError, body)
+		var se *client.HTTPStatusError
+		if !errors.As(c.GrabRelease(context.Background(), "g", 4), &se) {
+			t.Fatalf("%q: want *HTTPStatusError", body)
+		}
+		if se.Code != want {
+			t.Errorf("%q: code = %q, want %q", body, se.Code, want)
 		}
 	}
 }

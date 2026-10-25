@@ -223,7 +223,7 @@ func TestNoPackTargets_IgnoresDryAndOld(t *testing.T) {
 	}
 }
 
-func TestRefusedKeys_Window(t *testing.T) {
+func TestSweepRefused_Window(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
@@ -240,13 +240,6 @@ func TestRefusedKeys_Window(t *testing.T) {
 		}
 	}
 	since := sweepT0().Add(-7 * 24 * time.Hour)
-	keys, err := d.RefusedKeys(ctx, since)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(keys) != 1 || !keys["andor s02"] {
-		t.Errorf("RefusedKeys = %v", keys)
-	}
 	list, err := d.ListSweepRefused(ctx, since)
 	if err != nil {
 		t.Fatal(err)
@@ -258,8 +251,8 @@ func TestRefusedKeys_Window(t *testing.T) {
 	if err = d.DeleteSweepRefused(ctx, recent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if keys, err = d.RefusedKeys(ctx, since); err != nil || len(keys) != 0 {
-		t.Errorf("RefusedKeys after delete = %v, %v", keys, err)
+	if list, err = d.ListSweepRefused(ctx, since); err != nil || len(list) != 0 {
+		t.Errorf("ListSweepRefused after delete = %v, %v", list, err)
 	}
 }
 

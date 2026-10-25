@@ -32,6 +32,7 @@ const (
 	getRetryEvery  = 20 * time.Second
 	getRetryFor    = 10 * time.Minute
 	RefusedMemory  = 7 * 24 * time.Hour
+	BlockedMemory  = 90 * 24 * time.Hour
 	noPackMemory   = 30 * 24 * time.Hour
 	searchGap      = 60 * time.Second
 	commandPoll    = 15 * time.Second
@@ -165,9 +166,13 @@ func (x *run) sweep(ctx context.Context) error {
 		return err
 	}
 	now := x.Now()
-	var err error
-	if x.refused, err = x.DB.RefusedKeys(ctx, now.Add(-RefusedMemory)); err != nil {
+	rows, err := x.DB.ListSweepRefused(ctx, now.Add(-BlockedMemory))
+	if err != nil {
 		return err
+	}
+	x.refused = map[string]bool{}
+	for _, r := range Blocking(rows, now) {
+		x.refused[r.TitleKey] = true
 	}
 	if x.skip, err = x.DB.NoPackTargets(ctx, now.Add(-noPackMemory)); err != nil {
 		return err
@@ -636,6 +641,9 @@ func (x *run) refuse(ctx context.Context, itemID int64, rel client.Release, perr
 	reason := perr.Error()
 	if se, ok := errors.AsType[*client.HTTPStatusError](perr); ok {
 		reason = fmt.Sprintf("%d %s", se.Status, se.Body)
+		if se.Code != "" {
+			reason += " code=" + se.Code
+		}
 	}
 	key := NormTitle(rel.Title)
 	x.refused[key] = true

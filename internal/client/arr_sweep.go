@@ -16,6 +16,7 @@ import (
 const (
 	slowHTTPTimeout  = 15 * time.Minute
 	statusBodyLimit  = 200
+	statusScanLimit  = 64 << 10
 	pathRelease      = "/api/v3/release"
 	paramSeasonQuery = "seasonNumber"
 )
@@ -60,9 +61,15 @@ type DownloadClientConfig struct {
 	AutoRedownloadFailedFromInteractiveSearch bool `json:"autoRedownloadFailedFromInteractiveSearch"`
 }
 
+const (
+	CodeTorrentBlocked = "torrent_blocked"
+	CodeProviderError  = "provider_error"
+)
+
 type HTTPStatusError struct {
 	Status int
 	Body   string
+	Code   string
 }
 
 func (e *HTTPStatusError) Error() string {
@@ -164,8 +171,15 @@ func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, statusBodyLimit))
-		return fmt.Errorf("arr %s %s: %w", method, path, &HTTPStatusError{Status: resp.StatusCode, Body: string(b)})
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, statusScanLimit))
+		se := &HTTPStatusError{Status: resp.StatusCode, Body: string(b[:min(len(b), statusBodyLimit)])}
+		for _, code := range []string{CodeTorrentBlocked, CodeProviderError} {
+			if bytes.Contains(b, []byte(code)) {
+				se.Code = code
+				break
+			}
+		}
+		return fmt.Errorf("arr %s %s: %w", method, path, se)
 	}
 	if out == nil {
 		return nil

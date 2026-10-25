@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 const seasonAlts = `Existing file on disk (is of equal or higher preference|has a equal or higher Custom Format score)` +
@@ -150,4 +151,21 @@ func allMatch(rejections []string, re *regexp.Regexp) bool {
 		}
 	}
 	return true
+}
+
+func Blocking(rows []db.SweepRefused, now time.Time) []db.SweepRefused {
+	var out []db.SweepRefused
+	for _, r := range rows {
+		memory := RefusedMemory
+		switch {
+		case strings.Contains(r.Reason, client.CodeTorrentBlocked):
+			memory = BlockedMemory
+		case strings.Contains(r.Reason, client.CodeProviderError):
+			continue
+		}
+		if !r.RefusedAt.Before(now.Add(-memory)) {
+			out = append(out, r)
+		}
+	}
+	return out
 }

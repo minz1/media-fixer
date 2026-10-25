@@ -255,10 +255,6 @@ func (d *DB) AddSweepRefused(ctx context.Context, r *SweepRefused) error {
 	return err
 }
 
-func (d *DB) RefusedKeys(ctx context.Context, since time.Time) (map[string]bool, error) {
-	return d.stringSet(ctx, `SELECT DISTINCT title_key FROM sweep_refused WHERE refused_at >= ?`, since)
-}
-
 func (d *DB) ListSweepRefused(ctx context.Context, since time.Time) ([]SweepRefused, error) {
 	rows, err := d.read.QueryContext(ctx,
 		`SELECT id, title_key, release_title, indexer, refused_at, reason FROM sweep_refused

@@ -167,10 +167,11 @@ func (s *Server) sweepCard(
 	} else {
 		card["Runs"] = runs
 	}
-	if refused, err := s.db.ListSweepRefused(ctx, time.Now().Add(-sweep.RefusedMemory)); err != nil {
+	now := time.Now()
+	if refused, err := s.db.ListSweepRefused(ctx, now.Add(-sweep.BlockedMemory)); err != nil {
 		card["RefusedError"] = err.Error()
 	} else {
-		card["Refused"] = refused
+		card["Refused"] = sweep.Blocking(refused, now)
 	}
 	return card
 }

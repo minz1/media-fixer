@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
 
@@ -337,5 +338,24 @@ func TestAnimeCandidates_AnchorsEveryAlternative(t *testing.T) {
 		if n := len(sweep.AnimeCandidates([]client.Release{r}, ids, nil)); n != want {
 			t.Errorf("rejection %q: %d candidates, want %d", rej, n, want)
 		}
+	}
+}
+
+func TestBlocking(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	rows := []db.SweepRefused{
+		{TitleKey: "blocked-30d", RefusedAt: t0().Add(-30 * day), Reason: "500 x code=torrent_blocked"},
+		{TitleKey: "blocked-91d", RefusedAt: t0().Add(-91 * day), Reason: "500 x code=torrent_blocked"},
+		{TitleKey: "provider-1h", RefusedAt: t0().Add(-time.Hour), Reason: "500 x code=provider_error"},
+		{TitleKey: "plain-6d", RefusedAt: t0().Add(-6 * day), Reason: "500 refused"},
+		{TitleKey: "plain-8d", RefusedAt: t0().Add(-8 * day), Reason: "500 refused"},
+	}
+	var got []string
+	for _, r := range sweep.Blocking(rows, t0()) {
+		got = append(got, r.TitleKey)
+	}
+	if want := []string{"blocked-30d", "plain-6d"}; !slices.Equal(got, want) {
+		t.Errorf("blocking = %v, want %v", got, want)
 	}
 }
