@@ -20,7 +20,7 @@ func TestSelftestIndex_Unconfigured(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/media/selftest")
+	resp, err := ts.Client().Get(ts.URL + "/media/selftest")
 	if err != nil {
 		t.Fatal(err)
 	}

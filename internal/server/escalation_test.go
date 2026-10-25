@@ -183,7 +183,7 @@ func TestEscalationPreview_Success(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	resp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestEscalationPreview_NoFinding(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	resp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
 	if err != nil {
 		t.Fatal(err)
 	}

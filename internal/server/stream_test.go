@@ -80,7 +80,9 @@ func TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection(t *testing.T) {
 	go func() { done <- srv.Start(ctx) }()
 
 	base := "http://" + addr
-	waitForServer(t, base+"/media/")
+	hc := &http.Client{Transport: &http.Transport{}}
+	t.Cleanup(hc.CloseIdleConnections)
+	waitForServer(t, hc, base+"/media/")
 
 	// Open a real SSE connection and leave it open. The handler is now parked
 	// in its select loop, which is exactly the state that used to wedge
@@ -91,7 +93,7 @@ func TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		t.Fatalf("open SSE stream: %v", err)
 	}
@@ -134,7 +136,7 @@ func freePort(t *testing.T) string {
 
 // waitForServer blocks until the server answers, so the test never races
 // ListenAndServe's bind.
-func waitForServer(t *testing.T, url string) {
+func waitForServer(t *testing.T, hc *http.Client, url string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -142,7 +144,7 @@ func waitForServer(t *testing.T, url string) {
 		if reqErr != nil {
 			t.Fatal(reqErr)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := hc.Do(req)
 		if err == nil {
 			resp.Body.Close()
 			return
