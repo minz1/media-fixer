@@ -238,7 +238,7 @@ func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Rerun(r.Context(), id); err != nil {
+	if err := s.svc.Rerun(context.WithoutCancel(r.Context()), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
