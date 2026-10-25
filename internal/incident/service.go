@@ -131,6 +131,15 @@ func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) 
 // silently dropped by — an HTTP request context.
 func (s *Service) launchWithSeed(inc *db.Incident, buildSeed func(context.Context) []openai.ChatCompletionMessage) {
 	ctx, tok := s.runs.begin(inc.ID)
+	s.startRun(ctx, tok, inc, buildSeed)
+}
+
+func (s *Service) startRun(
+	ctx context.Context,
+	tok *runToken,
+	inc *db.Incident,
+	buildSeed func(context.Context) []openai.ChatCompletionMessage,
+) {
 	go func() {
 		defer s.runs.end(inc.ID, tok)
 		seed := buildSeed(ctx)
@@ -890,13 +899,16 @@ const (
 func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) error {
 	// Deliberate human/system override — clear any autonomous lock so the
 	// re-run actually proceeds, even for a previously blocked/locked incident.
+	runCtx, tok := s.runs.begin(id)
 	_ = s.db.SetAutonomousLocked(ctx, id, false)
 	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
+		s.runs.end(id, tok)
 		return err
 	}
 	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
+		s.runs.end(id, tok)
 		return err
 	}
 	switch origin {
@@ -909,7 +921,7 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 		))
 	case rerunRestart:
 	}
-	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
+	s.startRun(runCtx, tok, inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
 		return s.buildReinvestigateSeed(seedCtx, id, inc)
 	})
 	return nil

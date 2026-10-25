@@ -1358,3 +1358,93 @@ func TestResolve_UpdatesLinkedSeerrIssues(t *testing.T) {
 		t.Errorf("resolved = %v, want [42 43]", seerr.resolved)
 	}
 }
+
+type verifyingAgent struct {
+	*sequencedAgent
+}
+
+func (a *verifyingAgent) Run(
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	n := a.calls.Add(1)
+	a.runCalls <- n
+	if n == 1 {
+		return &agent.DiagnosticResult{
+			RootCause: "test", Confidence: "high",
+			PrimaryAction: "run-a", PrimaryReason: "test",
+			VerifyAfterSeconds: 1,
+		}, nil, nil
+	}
+	<-ctx.Done()
+	return nil, nil, ctx.Err()
+}
+
+func (a *verifyingAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
+	a.verifyResolvedCalls.Add(1)
+	return true
+}
+
+type heldNoteNotifier struct {
+	*syncNotifier
+
+	release chan struct{}
+}
+
+func (n *heldNoteNotifier) NotifyUser(ctx context.Context, id, msg string) error {
+	if strings.HasPrefix(msg, "🔁") {
+		<-n.release
+	}
+	return n.syncNotifier.NotifyUser(ctx, id, msg)
+}
+
+func TestRerun_HeldNoteDoesNotLetTheOldRunFinish(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	fakeAgent := &verifyingAgent{newSequencedAgent()}
+	notif := &heldNoteNotifier{syncNotifier: newSyncNotifier(), release: make(chan struct{})}
+	svc := incident.NewService(
+		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
+	)
+	ctx := context.Background()
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "Darker Than Black",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fakeAgent.runCalls:
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("timed out waiting for run A to start")
+	}
+
+	rerunDone := make(chan error, 1)
+	go func() { rerunDone <- svc.Rerun(ctx, inc.ID) }()
+	time.Sleep(1500 * time.Millisecond)
+	close(notif.release)
+	if err = <-rerunDone; err != nil {
+		t.Fatal(err)
+	}
+
+	if calls := fakeAgent.verifyResolvedCalls.Load(); calls != 0 {
+		t.Errorf("run A verified %d times while the rerun note was held; it should have been cancelled first", calls)
+	}
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	for _, m := range notif.msgs {
+		if strings.Contains(m, "fixed automatically") {
+			t.Errorf("run A DMed %q while the rerun note was held", m)
+		}
+	}
+}
