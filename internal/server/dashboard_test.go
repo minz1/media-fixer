@@ -361,3 +361,38 @@ func TestIncidentExport_DownloadsBundleWithEventsAndActions(t *testing.T) {
 		t.Error("expected at least one event (the action_applied event LogAction wrote), got none")
 	}
 }
+
+func TestActionRerun_SurvivesCancelledRequest(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	ctx := context.Background()
+	inc := &db.Incident{
+		Status: db.StatusAgentFixed, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/media/incidents/"+inc.ID+"/rerun", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req = req.WithContext(cancelled)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusReopened {
+		t.Errorf("status = %q, want %q", got.Status, db.StatusReopened)
+	}
+	last, err := database.LastReporterNoteAt(ctx, inc.ID)
+	if err != nil || last.IsZero() {
+		t.Errorf("last_reporter_note_at = %v, %v; want set", last, err)
+	}
+}
