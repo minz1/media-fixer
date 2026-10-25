@@ -30,7 +30,7 @@ func NewMediaAgent(baseURL, apiKey string) *MediaAgentClient {
 	return &MediaAgentClient{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		http:    &http.Client{Timeout: mediaAgentTimeout},
+		http:    newHTTPClient(mediaAgentTimeout),
 	}
 }
 

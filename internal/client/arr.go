@@ -26,8 +26,8 @@ func NewArr(base, apiKey string) *ArrClient {
 	return &ArrClient{
 		base:   base,
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: defaultHTTPTimeout},
-		slow:   &http.Client{Timeout: slowHTTPTimeout},
+		http:   newHTTPClient(defaultHTTPTimeout),
+		slow:   newHTTPClient(slowHTTPTimeout),
 	}
 }
 
