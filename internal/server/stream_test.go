@@ -80,8 +80,7 @@ func TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection(t *testing.T) {
 	go func() { done <- srv.Start(ctx) }()
 
 	base := "http://" + addr
-	hc := &http.Client{Transport: &http.Transport{}}
-	t.Cleanup(hc.CloseIdleConnections)
+	hc := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	waitForServer(t, hc, base+"/media/")
 
 	// Open a real SSE connection and leave it open. The handler is now parked
