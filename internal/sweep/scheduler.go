@@ -27,6 +27,9 @@ type Scheduler struct {
 
 	mu sync.Mutex
 	wg sync.WaitGroup
+
+	cmu    sync.Mutex
+	cancel context.CancelCauseFunc
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
@@ -137,13 +140,33 @@ func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
 		s.mu.Unlock()
 		return err
 	}
+	ctx, cancel := context.WithCancelCause(s.base)
+	if !dry {
+		s.cmu.Lock()
+		s.cancel = cancel
+		s.cmu.Unlock()
+	}
 	s.wg.Go(func() {
 		defer s.mu.Unlock()
-		if _, rerr := s.r.Run(s.base, trigger, dry, set); rerr != nil {
+		defer func() {
+			s.cmu.Lock()
+			s.cancel = nil
+			s.cmu.Unlock()
+			cancel(nil)
+		}()
+		if _, rerr := s.r.Run(ctx, trigger, dry, set); rerr != nil {
 			s.r.logger().ErrorContext(s.base, "pack sweep run", "trigger", trigger, "err", rerr)
 		}
 	})
 	return nil
+}
+
+func (s *Scheduler) CancelLive(cause error) {
+	s.cmu.Lock()
+	defer s.cmu.Unlock()
+	if s.cancel != nil {
+		s.cancel(cause)
+	}
 }
 
 func slot(s Settings, now time.Time) time.Time {

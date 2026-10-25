@@ -546,3 +546,116 @@ func TestRunNow_IgnoresSlotGrabs(t *testing.T) {
 		t.Errorf("manual run max_grabs = %d, want the full %d", runs[0].Counts.MaxGrabs, settings().MaxGrabs)
 	}
 }
+
+func TestSaveSettings_SlotChangeStampsEnabledAt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	s := settings()
+	if err := sweep.SaveSettings(ctx, h.db, s, t0().AddDate(0, 0, -1)); err != nil {
+		t.Fatal(err)
+	}
+	s.HourUTC = 10
+	if err := sweep.SaveSettings(ctx, h.db, s, t0()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sweep.LoadSettings(ctx, h.db)
+	if err != nil || got.EnabledAt == nil || !got.EnabledAt.Equal(t0()) {
+		t.Fatalf("enabled_at after a slot change = %v, %v; want %v", got.EnabledAt, err, t0())
+	}
+	s.MaxGrabs = 2
+	if err = sweep.SaveSettings(ctx, h.db, s, t0().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = sweep.LoadSettings(ctx, h.db); err != nil || !got.EnabledAt.Equal(t0()) {
+		t.Errorf("enabled_at after a non-slot change = %v, %v; want %v", got.EnabledAt, err, t0())
+	}
+}
+
+func TestScheduler_SlotMovedToPassedLaterHourWaits(t *testing.T) {
+	t.Parallel()
+	early := settings()
+	early.HourUTC = 10
+	h, sch := scheduledAt(t, t0().AddDate(0, 0, -1), early)
+	h.tick(sch, t0().Add(-2*time.Hour))
+	if err := sweep.SaveSettings(context.Background(), h.db, settings(), t0().Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	h.tick(sch, t0().Add(2*time.Hour+time.Minute))
+	if n := len(h.runs(t)); n != 1 {
+		t.Errorf("runs = %d, want 1 (no second run the same week)", n)
+	}
+	if next := sch.NextRun(t0().Add(2*time.Hour + time.Minute)); next == nil || !next.Equal(t0().AddDate(0, 0, 7)) {
+		t.Errorf("NextRun = %v, want %v", next, t0().AddDate(0, 0, 7))
+	}
+}
+
+func TestScheduler_SlotMovedLaterRunsThisWeek(t *testing.T) {
+	t.Parallel()
+	h, sch := scheduledAt(t, t0().Add(-time.Hour), settings())
+	h.tick(sch, t0())
+	moved := settings()
+	moved.Weekday = 3
+	if err := sweep.SaveSettings(context.Background(), h.db, moved, t0().AddDate(0, 0, 1)); err != nil {
+		t.Fatal(err)
+	}
+	h.tick(sch, t0().AddDate(0, 0, 3).Add(time.Minute))
+	if n := len(h.runs(t)); n != 2 {
+		t.Errorf("runs = %d, want 2 (the moved slot runs on Wednesday)", n)
+	}
+}
+
+func TestScheduler_CancelLiveStopsRun(t *testing.T) {
+	t.Parallel()
+	h, sch := newScheduled(t, settings())
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+	h.fake.beforePost = func() { sch.CancelLive(sweep.ErrDisabled) }
+	if err := sch.RunNow("manual", false); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	runs := h.runs(t)
+	if len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != sweep.ErrDisabled.Error() {
+		t.Errorf("runs = %+v, want one run interrupted with %q", runs, sweep.ErrDisabled.Error())
+	}
+	sch.CancelLive(sweep.ErrDisabled)
+}
+
+func TestScheduler_CancelLiveSparesDryRun(t *testing.T) {
+	t.Parallel()
+	h, sch := newScheduled(t, settings())
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
+	h.fake.beforeLookup = func() { sch.CancelLive(sweep.ErrDisabled) }
+	if err := sch.RunNow("manual", true); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	if runs := h.runs(t); len(runs) != 1 || runs[0].Status != "done" {
+		t.Errorf("runs = %+v, want the dry run done", runs)
+	}
+}
+
+func TestScheduler_ShutdownStillInterrupted(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	if err := sweep.SaveSettings(context.Background(), h.db, settings(), h.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	base, cancel := context.WithCancel(context.Background())
+	sch := sweep.NewScheduler(base, h.runner, h.db)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+	h.fake.beforePost = cancel
+	if err := sch.RunNow("manual", false); err != nil {
+		t.Fatal(err)
+	}
+	sch.Wait()
+	runs := h.runs(t)
+	if len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != context.Canceled.Error() {
+		t.Errorf("runs = %+v, want one run interrupted with %q", runs, context.Canceled.Error())
+	}
+}

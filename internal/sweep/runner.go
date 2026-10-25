@@ -145,7 +145,7 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 	case errors.Is(err, errRedownload):
 		status, reason, err = statusRefused, errRedownload.Error(), nil
 	case ctx.Err() != nil:
-		status, reason = statusInterrupted, ctx.Err().Error()
+		status, reason = statusInterrupted, context.Cause(ctx).Error()
 	case err != nil:
 		status, reason = statusFailed, err.Error()
 	}

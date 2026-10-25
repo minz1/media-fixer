@@ -80,7 +80,7 @@ func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) erro
 	switch {
 	case !s.Enabled:
 		s.EnabledAt = nil
-	case prev.Enabled:
+	case prev.Enabled && prev.Weekday == s.Weekday && prev.HourUTC == s.HourUTC:
 		s.EnabledAt = prev.EnabledAt
 	default:
 		now = now.UTC()

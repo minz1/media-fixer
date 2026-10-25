@@ -412,3 +412,70 @@ func TestMaintenance_NoSweepConfigured(t *testing.T) {
 		t.Errorf("GET status %d, want 503", got.Code)
 	}
 }
+
+func (e *maintEnv) startHeldLiveRun(t *testing.T) {
+	t.Helper()
+	enabled := sweep.DefaultSettings()
+	enabled.Enabled = true
+	if err := sweep.SaveSettings(context.Background(), e.db, enabled, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sch.RunNow("manual", false); err != nil {
+		t.Fatalf("RunNow: %v", err)
+	}
+	select {
+	case <-e.sonarr.lookups:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run never reached its first lookup")
+	}
+}
+
+func (e *maintEnv) waitIdle(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		e.sch.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run is still going 5s later")
+	}
+}
+
+func TestSweepSettingsSave_DisableCancelsRun(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	env.startHeldLiveRun(t)
+	form := validSettingsForm()
+	form.Del("enabled")
+	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	env.waitIdle(t)
+	runs, err := env.db.ListSweepRuns(context.Background(), 1)
+	if err != nil || len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != sweep.ErrDisabled.Error() {
+		t.Errorf("runs = %+v, %v; want the live run interrupted by the disable", runs, err)
+	}
+}
+
+func TestSweepSettingsSave_EnabledSaveKeepsRun(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	env.startHeldLiveRun(t)
+	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", validSettingsForm())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, active := env.sch.Runner().Progress(); !active {
+		t.Fatal("an enabled save stopped the live run")
+	}
+	close(env.sonarr.hold)
+	env.waitIdle(t)
+	runs, err := env.db.ListSweepRuns(context.Background(), 1)
+	if err != nil || len(runs) != 1 || runs[0].Status != "done" {
+		t.Errorf("runs = %+v, %v; want the live run done", runs, err)
+	}
+}

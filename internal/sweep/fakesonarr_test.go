@@ -82,6 +82,7 @@ type fakeSonarr struct {
 	deleteStatus  int
 	nextID        int
 	beforePost    func()
+	beforeLookup  func()
 }
 
 func newFakeSonarr(t *testing.T, clock *fakeClock) *fakeSonarr {
@@ -345,6 +346,12 @@ func (f *fakeSonarr) serveReleases(w http.ResponseWriter, q map[string][]string)
 		key = "e" + ep[0]
 	} else {
 		key = "s" + q["seriesId"][0] + ":" + q["seasonNumber"][0]
+	}
+	f.mu.Lock()
+	lookupHook := f.beforeLookup
+	f.mu.Unlock()
+	if lookupHook != nil {
+		lookupHook()
 	}
 	f.mu.Lock()
 	f.lookups[key]++

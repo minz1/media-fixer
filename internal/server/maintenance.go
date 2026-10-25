@@ -64,6 +64,9 @@ func (s *Server) sweepSettingsSave(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		if !set.Enabled {
+			s.sweep.CancelLive(sweep.ErrDisabled)
+		}
 		notice = "Saved."
 	}
 	s.renderSweepCard(r.Context(), w, set, errs, notice, "", false)
