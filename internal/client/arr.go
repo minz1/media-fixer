@@ -1,11 +1,8 @@
 package client
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -435,30 +432,11 @@ func (c *ArrClient) MarkHistoryFailed(ctx context.Context, historyID int) error 
 }
 
 func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return 0, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.base+"/api/v3/command", bytes.NewReader(b))
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Api-Key", c.apiKey)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("arr command: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		return 0, fmt.Errorf("arr command: status %d", resp.StatusCode)
-	}
 	var cmd struct {
 		ID int `json:"id"`
 	}
-	if err = json.NewDecoder(resp.Body).Decode(&cmd); err != nil {
-		return 0, fmt.Errorf("arr command: decode reply: %w", err)
+	if err := c.doAs(ctx, c.http, "arr command", http.MethodPost, "/api/v3/command", nil, body, &cmd); err != nil {
+		return 0, err
 	}
 	return cmd.ID, nil
 }
@@ -471,41 +449,9 @@ func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
 // which 404s at the reverse proxy and returns an HTML error page instead of
 // JSON).
 func (c *ArrClient) get(ctx context.Context, path string, out any) error {
-	u := path
-	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
-		u = c.base + path
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Api-Key", c.apiKey)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("arr GET %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, statusBodyLimit))
-		return fmt.Errorf("arr GET %s: %w", path, &HTTPStatusError{Status: resp.StatusCode, Body: string(b)})
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return c.do(ctx, c.http, http.MethodGet, path, nil, nil, out)
 }
 
 func (c *ArrClient) delete(ctx context.Context, path string) error {
-	u := c.base + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Api-Key", c.apiKey)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("arr DELETE %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("arr DELETE %s: status %d", path, resp.StatusCode)
-	}
-	return nil
+	return c.do(ctx, c.http, http.MethodDelete, path, nil, nil, nil)
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -48,10 +49,8 @@ type QueueDetail struct {
 	SeriesID             int    `json:"seriesId"`
 	EpisodeID            int    `json:"episodeId"`
 	SeasonNumber         int    `json:"seasonNumber"`
-	Title                string `json:"title"`
 	TrackedDownloadState string `json:"trackedDownloadState"`
 	StatusMessages       []struct {
-		Title    string   `json:"title"`
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
 }
@@ -145,7 +144,20 @@ func (c *ArrClient) DownloadClientConfig(ctx context.Context) (DownloadClientCon
 }
 
 func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string, q url.Values, body, out any) error {
-	u := c.base + path
+	return c.doAs(ctx, hc, "arr "+method+" "+path, method, path, q, body, out)
+}
+
+func (c *ArrClient) doAs(
+	ctx context.Context,
+	hc *http.Client,
+	label, method, path string,
+	q url.Values,
+	body, out any,
+) error {
+	u := path
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		u = c.base + path
+	}
 	if q != nil {
 		u += "?" + q.Encode()
 	}
@@ -167,7 +179,7 @@ func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("arr %s %s: %w", method, path, err)
+		return fmt.Errorf("%s: %w", label, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
@@ -179,13 +191,13 @@ func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string
 				break
 			}
 		}
-		return fmt.Errorf("arr %s %s: %w", method, path, se)
+		return fmt.Errorf("%s: %w", label, se)
 	}
 	if out == nil {
 		return nil
 	}
 	if derr := json.NewDecoder(resp.Body).Decode(out); derr != nil {
-		return fmt.Errorf("arr %s %s: %w", method, path, derr)
+		return fmt.Errorf("%s: %w", label, derr)
 	}
 	return nil
 }

@@ -12,9 +12,10 @@ import (
 	"github.com/minz1/mediafixer/internal/sweep"
 )
 
-func newScheduled(t *testing.T, s sweep.Settings) (*harness, *sweep.Scheduler) {
+func scheduledAt(t *testing.T, at time.Time, s sweep.Settings) (*harness, *sweep.Scheduler) {
 	t.Helper()
 	h := newHarness(t)
+	h.clock.t = at
 	if err := sweep.SaveSettings(context.Background(), h.db, s, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func (h *harness) tick(sch *sweep.Scheduler, at time.Time) {
 
 func TestScheduler_FiresOncePerSlot(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.tick(sch, t0())
 	for m := 1; m <= 60; m++ {
 		h.tick(sch, t0().Add(time.Duration(m)*time.Minute))
@@ -67,7 +68,7 @@ func TestScheduler_FiresOncePerSlot(t *testing.T) {
 
 func TestScheduler_PausedSlotRunsAfterUnpause(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.setPaused(t, true)
 	h.tick(sch, t0())
 	if n := len(h.runs(t)); n != 0 || len(*h.dms) != 0 {
@@ -87,7 +88,7 @@ func TestScheduler_PausedSlotRunsAfterUnpause(t *testing.T) {
 
 func TestScheduler_RefusedCountsAsSlotRun(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.flags.AutoRedownloadFailed = true
 	h.fake.flags.AutoRedownloadFailedFromInteractiveSearch = true
 	h.tick(sch, t0())
@@ -237,7 +238,7 @@ func TestSaveSettings_OverwritesCorruptRow(t *testing.T) {
 
 func TestScheduler_DisabledNeverFires(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, sweep.DefaultSettings())
+	h, sch := scheduledAt(t, t0(), sweep.DefaultSettings())
 	for d := range 8 {
 		h.tick(sch, t0().AddDate(0, 0, d))
 	}
@@ -251,7 +252,7 @@ func TestScheduler_DisabledNeverFires(t *testing.T) {
 
 func TestRunNow_ActiveAndPaused(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
 	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
@@ -281,7 +282,7 @@ func TestRunNow_ActiveAndPaused(t *testing.T) {
 
 func TestSettingsChangeDoesNotAffectActiveRun(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12, 13)...)
 	h.fake.addSeries(2, "Other", missingEps(2, 1, 31, 32)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
@@ -316,7 +317,7 @@ func TestSettingsChangeDoesNotAffectActiveRun(t *testing.T) {
 
 func TestRunNow_LiveRefusedWhileDisabled(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, sweep.DefaultSettings())
+	h, sch := scheduledAt(t, t0(), sweep.DefaultSettings())
 	if err := sch.RunNow("manual", false); !errors.Is(err, sweep.ErrDisabled) {
 		t.Fatalf("live RunNow while disabled = %v, want ErrDisabled", err)
 	}
@@ -331,16 +332,6 @@ func TestRunNow_LiveRefusedWhileDisabled(t *testing.T) {
 	if runs := h.runs(t); len(runs) != 1 || !runs[0].Dry {
 		t.Errorf("runs = %+v, want one dry run", runs)
 	}
-}
-
-func scheduledAt(t *testing.T, at time.Time, s sweep.Settings) (*harness, *sweep.Scheduler) {
-	t.Helper()
-	h := newHarness(t)
-	h.clock.t = at
-	if err := sweep.SaveSettings(context.Background(), h.db, s, h.clock.Now()); err != nil {
-		t.Fatal(err)
-	}
-	return h, sweep.NewScheduler(context.Background(), h.runner, h.db)
 }
 
 func TestScheduler_FirstEnableWaitsForSlot(t *testing.T) {
@@ -402,7 +393,7 @@ func TestScheduler_EnabledJustBeforeSlotFires(t *testing.T) {
 
 func TestScheduler_FailedRunRetriesAfterAnHour(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.seriesDownTil = t0().AddDate(0, 0, 1)
 	h.tick(sch, t0())
 	failed := h.runs(t)
@@ -446,7 +437,7 @@ func TestScheduler_FailedDryRunDoesNotDelaySlot(t *testing.T) {
 
 func TestScheduler_FailedRunRetriesTwicePerSlot(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.seriesDownTil = t0().AddDate(0, 0, 3)
 	for m := 0; m <= 8*60; m += 10 {
 		if m == 100 {
@@ -474,7 +465,7 @@ func TestScheduler_FailedRunRetriesTwicePerSlot(t *testing.T) {
 
 func TestScheduler_PruningDryRunsKeepsSlotRun(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.tick(sch, t0())
 	h.clock.mu.Lock()
 	h.clock.t = t0().Add(time.Hour)
@@ -635,7 +626,7 @@ func TestScheduler_SlotMovedLaterRunsThisWeek(t *testing.T) {
 
 func TestScheduler_CancelLiveStopsRun(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
 	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
@@ -652,7 +643,7 @@ func TestScheduler_CancelLiveStopsRun(t *testing.T) {
 
 func TestScheduler_CancelLiveSparesDryRun(t *testing.T) {
 	t.Parallel()
-	h, sch := newScheduled(t, settings())
+	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
 	h.fake.beforeLookup = func() { sch.CancelLive(sweep.ErrDisabled) }

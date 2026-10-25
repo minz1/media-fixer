@@ -351,3 +351,21 @@ func TestDo_CodeWordPrecedence(t *testing.T) {
 		}
 	}
 }
+
+func TestArr_ThinCalls_KeepErrorPrefixes(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError} {
+		c, _ := sweepServer(t, status, `boom`)
+		ctx := context.Background()
+		_, getErr := c.ListSeries(ctx)
+		for prefix, err := range map[string]error{
+			"arr GET /api/v3/series: ":           getErr,
+			"arr DELETE /api/v3/episodefile/9: ": c.DeleteEpisodeFile(ctx, 9),
+			"arr command: ":                      c.SeasonSearch(ctx, 3, 2),
+		} {
+			if err == nil || !strings.HasPrefix(err.Error(), prefix) || errors.Is(err, client.ErrNotFound) {
+				t.Errorf("status %d: err = %v, want prefix %q and not ErrNotFound", status, err, prefix)
+			}
+		}
+	}
+}

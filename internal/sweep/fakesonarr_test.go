@@ -320,9 +320,8 @@ func (f *fakeSonarr) applyOutcome(p *pendingOutcome) {
 		}
 		rec := client.QueueDetail{ID: 12, DownloadID: p.dlID, TrackedDownloadState: "importPending"}
 		rec.StatusMessages = append(rec.StatusMessages, struct {
-			Title    string   `json:"title"`
 			Messages []string `json:"messages"`
-		}{Title: p.title, Messages: []string{"Found archive file, might need to be extracted"}})
+		}{Messages: []string{"Found archive file, might need to be extracted"}})
 		f.queue = append(f.queue, rec)
 	case "":
 	default:
@@ -332,9 +331,8 @@ func (f *fakeSonarr) applyOutcome(p *pendingOutcome) {
 		for i, msg := range p.plan.leftover {
 			rec := client.QueueDetail{ID: 30 + i, DownloadID: p.dlID, TrackedDownloadState: "importPending"}
 			rec.StatusMessages = append(rec.StatusMessages, struct {
-				Title    string   `json:"title"`
 				Messages []string `json:"messages"`
-			}{Title: p.title, Messages: []string{msg}})
+			}{Messages: []string{msg}})
 			f.queue = append(f.queue, rec)
 		}
 	}
