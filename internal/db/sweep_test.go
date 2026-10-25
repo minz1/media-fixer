@@ -350,12 +350,49 @@ func TestLiveGrabsSince(t *testing.T) {
 		}
 		for _, res := range r.results {
 			if err = d.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
-				Result: res, At: at}); err != nil {
+				ReleaseTitle: "Show.S01", Result: res, At: at}); err != nil {
 				t.Fatal(err)
 			}
 		}
+		if err = d.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+			Episodes: "1-3", Result: "failed", At: at}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if n, err := d.LiveGrabsSince(ctx, sweepT0()); err != nil || n != 4 {
-		t.Errorf("LiveGrabsSince = %d, %v; want 4", n, err)
+		t.Errorf("LiveGrabsSince = %d, %v; want 4 (a failed episode search is not a grab)", n, err)
+	}
+}
+
+func TestLiveSearchesSince(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	for _, r := range []struct {
+		hours    int
+		dry      bool
+		searched int
+	}{{-1, false, 7}, {1, false, 10}, {2, true, 30}, {3, false, 5}} {
+		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
+		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = d.FinishSweepRun(ctx, id, "interrupted", "", db.SweepCounts{Searched: r.searched}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	searched, crashed, err := d.LiveSearchesSince(ctx, sweepT0())
+	if err != nil || searched != 15 || crashed {
+		t.Errorf("LiveSearchesSince = %d, %v, %v; want 15, false", searched, crashed, err)
+	}
+	if _, err = d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(4*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.InterruptRunningSweeps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, crashed, err = d.LiveSearchesSince(ctx, sweepT0()); err != nil || !crashed {
+		t.Errorf("LiveSearchesSince after a crash: crashed = %v, %v; want true", crashed, err)
 	}
 }

@@ -70,11 +70,20 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil || now.Before(next) {
 		return err
 	}
-	grabs, err := s.d.LiveGrabsSince(s.base, slot(set, now))
+	at := slot(set, now)
+	grabs, err := s.d.LiveGrabsSince(s.base, at)
+	if err != nil {
+		return err
+	}
+	searched, crashed, err := s.d.LiveSearchesSince(s.base, at)
 	if err != nil {
 		return err
 	}
 	set.MaxGrabs = max(0, set.MaxGrabs-grabs)
+	set.MaxSearches = max(0, set.MaxSearches-searched)
+	if crashed {
+		set.MaxSearches = 0
+	}
 	return s.start(triggerSchedule, false, set)
 }
 

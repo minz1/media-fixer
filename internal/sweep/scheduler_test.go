@@ -471,7 +471,7 @@ func interruptedRun(t *testing.T, h *harness, at time.Time, results ...string) {
 	}
 	for _, res := range results {
 		if err = h.db.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
-			Result: res, At: at}); err != nil {
+			ReleaseTitle: "Show.S01", Result: res, At: at}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -657,5 +657,45 @@ func TestScheduler_ShutdownStillInterrupted(t *testing.T) {
 	runs := h.runs(t)
 	if len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != signal.Error() {
 		t.Errorf("runs = %+v, want one run interrupted with %q", runs, signal.Error())
+	}
+}
+
+func finishedRun(t *testing.T, h *harness, at time.Time, status string, c db.SweepCounts) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := h.db.CreateSweepRun(ctx, "schedule", false, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.db.FinishSweepRun(ctx, id, status, "", c, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScheduler_RetryGetsRemainingSearches(t *testing.T) {
+	t.Parallel()
+	s := settings()
+	s.MaxSearches = 50
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), s)
+	finishedRun(t, h, t0().Add(time.Minute), "interrupted", db.SweepCounts{Searched: 20})
+	sch := h.restart(t0().Add(time.Hour + 2*time.Minute))
+	h.tick(sch, t0().Add(time.Hour+2*time.Minute))
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Counts.MaxSearches != 30 {
+		t.Errorf("runs = %+v, want a retry with max_searches 30", runs)
+	}
+}
+
+func TestScheduler_RetryAfterCrashMakesNoSearches(t *testing.T) {
+	t.Parallel()
+	s := settings()
+	s.MaxSearches = 50
+	h, _ := scheduledAt(t, t0().Add(-time.Hour), s)
+	interruptedRun(t, h, t0().Add(time.Minute))
+	sch := h.restart(t0().Add(time.Hour + 2*time.Minute))
+	h.tick(sch, t0().Add(time.Hour+2*time.Minute))
+	runs := h.runs(t)
+	if len(runs) != 2 || runs[0].Counts.MaxSearches != 0 {
+		t.Errorf("runs = %+v, want a retry with max_searches 0 (the crashed run's searches are unknown)", runs)
 	}
 }
