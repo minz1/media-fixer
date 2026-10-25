@@ -64,13 +64,19 @@ func (c *DecypharrClient) PlanTorrentReadd(ctx context.Context, name string) (*R
 		return nil, errors.New("decypharr readd: name is required")
 	}
 
-	torrents, err := c.ListTorrents(ctx, trimmed, "")
+	resp, err := c.ListTorrentsPage(ctx, trimmed, "")
 	if err != nil {
 		return nil, err
 	}
+	if resp.Total > len(resp.Torrents) {
+		return nil, fmt.Errorf(
+			"decypharr readd: %q matches %d torrents, more than one page; use the exact full name",
+			trimmed, resp.Total,
+		)
+	}
 
 	var match *TorrentEntry
-	for _, t := range torrents {
+	for _, t := range resp.Torrents {
 		if !strings.EqualFold(strings.TrimSpace(t.Name), trimmed) {
 			continue
 		}
