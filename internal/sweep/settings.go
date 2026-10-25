@@ -59,6 +59,8 @@ func (s Settings) Validate() map[string]string {
 	return errs
 }
 
+var ErrCorruptSettings = errors.New("stored sweep settings are unreadable")
+
 func LoadSettings(ctx context.Context, d *db.DB) (Settings, error) {
 	s := DefaultSettings()
 	raw, err := d.GetSetting(ctx, SettingsKey)

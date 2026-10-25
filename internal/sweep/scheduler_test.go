@@ -748,3 +748,21 @@ func TestSaveSettings_PartlyReadableEnabledRowGetsFreshEnabledAt(t *testing.T) {
 			got.EnabledAt, err, t0())
 	}
 }
+
+func TestScheduler_CorruptEnabledRowNeverFires(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	if err := h.db.SetSetting(context.Background(), sweep.SettingsKey, `{"enabled":true,"max_grabs":"x"}`); err != nil {
+		t.Fatal(err)
+	}
+	sch := sweep.NewScheduler(context.Background(), h.runner, h.db)
+	for d := range 8 {
+		h.tick(sch, t0().AddDate(0, 0, d))
+	}
+	if n := len(h.runs(t)); n != 0 {
+		t.Errorf("runs = %d, want none while the settings row is unreadable", n)
+	}
+	if next := sch.NextRun(t0()); next != nil {
+		t.Errorf("NextRun = %v, want nil", next)
+	}
+}

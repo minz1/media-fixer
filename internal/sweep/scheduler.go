@@ -18,8 +18,6 @@ const (
 var (
 	ErrRunActive = errors.New("a run is already active")
 	ErrDisabled  = errors.New("the sweep is disabled; only a Dry run can start")
-
-	ErrCorruptSettings = errors.New("stored sweep settings are unreadable")
 )
 
 type Scheduler struct {

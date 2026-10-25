@@ -525,3 +525,21 @@ func TestMaintenance_CorruptSettingsRowRendersAndSaveRepairs(t *testing.T) {
 		t.Error("the unreadable-settings notice is still shown after a save")
 	}
 }
+
+func TestMaintenance_RunAndForgetOnCorruptRowShowTheNotice(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	if err := env.db.SetSetting(context.Background(), sweep.SettingsKey, `{not json`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/media/maintenance/pack-sweep/run", "/media/maintenance/pack-sweep/refused/1/forget"} {
+		for _, dry := range []string{"0", "1"} {
+			rec := do(t, env.srv, http.MethodPost, path, url.Values{"dry": {dry}})
+			body := rec.Body.String()
+			if rec.Code != http.StatusOK || !strings.Contains(body, "saving replaces them") ||
+				strings.Contains(body, "started.") || strings.Contains(body, "invalid character") {
+				t.Errorf("POST %s dry=%s: status %d, body %q", path, dry, rec.Code, body)
+			}
+		}
+	}
+}
