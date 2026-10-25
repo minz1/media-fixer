@@ -51,14 +51,14 @@ type TorrentListResponse struct {
 }
 
 func (c *DecypharrClient) ListTorrents(ctx context.Context, search, state string) ([]*TorrentEntry, error) {
-	resp, err := c.ListTorrentsPage(ctx, search, state)
+	resp, err := c.listTorrentsPage(ctx, search, state)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Torrents, nil
 }
 
-func (c *DecypharrClient) ListTorrentsPage(ctx context.Context, search, state string) (*TorrentListResponse, error) {
+func (c *DecypharrClient) listTorrentsPage(ctx context.Context, search, state string) (*TorrentListResponse, error) {
 	u, _ := url.Parse(c.base + "/api/torrents")
 	q := u.Query()
 	if search != "" {

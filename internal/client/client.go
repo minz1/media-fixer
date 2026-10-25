@@ -15,7 +15,7 @@ const defaultHTTPTimeout = 30 * time.Second
 func newHTTPClient(timeout time.Duration) *http.Client {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
+		return &http.Client{Timeout: timeout}
 	}
 	return &http.Client{Timeout: timeout, Transport: base.Clone()}
 }

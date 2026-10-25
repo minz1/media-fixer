@@ -64,7 +64,7 @@ func (c *DecypharrClient) PlanTorrentReadd(ctx context.Context, name string) (*R
 		return nil, errors.New("decypharr readd: name is required")
 	}
 
-	resp, err := c.ListTorrentsPage(ctx, trimmed, "")
+	resp, err := c.listTorrentsPage(ctx, trimmed, "")
 	if err != nil {
 		return nil, err
 	}

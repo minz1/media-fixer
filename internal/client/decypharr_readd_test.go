@@ -17,8 +17,9 @@ import (
 // readdStub serves decypharr's torrent list plus the delete and qBittorrent
 // add endpoints, recording what it was called with.
 type readdStub struct {
-	torrents []map[string]any
-	total    int
+	torrents  []map[string]any
+	total     int
+	omitTotal bool
 
 	mu        sync.Mutex
 	deleted   []string
@@ -33,7 +34,11 @@ func (s *readdStub) handler() http.Handler {
 		if total == 0 {
 			total = len(s.torrents)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"torrents": s.torrents, "total": total})
+		body := map[string]any{"torrents": s.torrents, "total": total}
+		if s.omitTotal {
+			delete(body, "total")
+		}
+		_ = json.NewEncoder(w).Encode(body)
 	})
 	mux.HandleFunc("/api/torrents/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -123,6 +128,17 @@ func TestPlanTorrentReadd_RefusesBeyondOnePage(t *testing.T) {
 	defer stub.mu.Unlock()
 	if len(stub.deleted) != 0 {
 		t.Error("planning deleted something; it must be read-only")
+	}
+}
+
+func TestPlanTorrentReadd_PlansWhenTotalMissing(t *testing.T) {
+	t.Parallel()
+	stub := &readdStub{omitTotal: true, torrents: []map[string]any{
+		{"name": "Show", "info_hash": "exact", "category": "sonarr", "magnet": "magnet:?xt=exact"},
+	}}
+	plan, err := newReaddClient(t, stub).PlanTorrentReadd(context.Background(), "Show")
+	if err != nil || plan.Name != "Show" {
+		t.Fatalf("plan = %+v, %v; want a plan for Show when decypharr sends no total", plan, err)
 	}
 }
 
