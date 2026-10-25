@@ -207,6 +207,33 @@ func TestSaveSettings_EnabledAt(t *testing.T) {
 	}
 }
 
+func TestSaveSettings_OverwritesCorruptRow(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{`{not json`, `[]`, `{"max_grabs":"x"}`} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			ctx := context.Background()
+			if err := h.db.SetSetting(ctx, sweep.SettingsKey, raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := sweep.SaveSettings(ctx, h.db, settings(), t0()); err != nil {
+				t.Fatalf("SaveSettings over %q: %v", raw, err)
+			}
+			got, err := sweep.LoadSettings(ctx, h.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Enabled {
+				t.Error("saved settings not enabled")
+			}
+			if got.EnabledAt == nil || !got.EnabledAt.Equal(t0()) {
+				t.Errorf("enabled_at = %v, want %v", got.EnabledAt, t0())
+			}
+		})
+	}
+}
+
 func TestScheduler_DisabledNeverFires(t *testing.T) {
 	t.Parallel()
 	h, sch := newScheduled(t, sweep.DefaultSettings())
