@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/minz1/mediafixer/internal/incident"
+)
+
+const (
+	connectRetryFirst = 5 * time.Second
+	connectRetryCap   = 5 * time.Minute
 )
 
 // Bot wraps discordgo and registers the /report slash command.
@@ -17,6 +23,11 @@ type Bot struct {
 	ownerID string
 	svc     *incident.Service
 	log     *slog.Logger
+
+	connect    func() error
+	retryFirst time.Duration
+	retryCap   time.Duration
+	cancel     context.CancelFunc
 }
 
 // New creates a Bot from a Discord bot token.
@@ -26,11 +37,14 @@ func New(token, guildID, ownerID string, log *slog.Logger) (*Bot, error) {
 		return nil, fmt.Errorf("discordgo: %w", err)
 	}
 	b := &Bot{
-		session: sess,
-		guildID: guildID,
-		ownerID: ownerID,
-		log:     log,
+		session:    sess,
+		guildID:    guildID,
+		ownerID:    ownerID,
+		log:        log,
+		retryFirst: connectRetryFirst,
+		retryCap:   connectRetryCap,
 	}
+	b.connect = b.openAndRegister
 	sess.AddHandler(b.onInteraction)
 	return b, nil
 }
@@ -41,8 +55,36 @@ func (b *Bot) SetService(svc *incident.Service) {
 	b.svc = svc
 }
 
-// Start opens the Discord gateway connection and registers the /report command.
-func (b *Bot) Start() error {
+// Start connects to the Discord gateway and registers the /report command in
+// the background, retrying with backoff until it succeeds or ctx ends.
+func (b *Bot) Start(ctx context.Context) {
+	ctx, b.cancel = context.WithCancel(ctx)
+	go b.connectLoop(ctx)
+}
+
+func (b *Bot) connectLoop(ctx context.Context) {
+	wait := b.retryFirst
+	for attempt := 1; ; attempt++ {
+		err := b.connect()
+		if err == nil {
+			if ctx.Err() != nil {
+				_ = b.session.Close()
+				return
+			}
+			b.log.InfoContext(ctx, "discord bot started")
+			return
+		}
+		b.log.ErrorContext(ctx, "discord connect failed", "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		wait = min(wait+wait, b.retryCap)
+	}
+}
+
+func (b *Bot) openAndRegister() error {
 	cmd := &discordgo.ApplicationCommand{
 		Name:        "report",
 		Description: "Report a media playback problem",
@@ -80,15 +122,17 @@ func (b *Bot) Start() error {
 
 	_, err := b.session.ApplicationCommandCreate(b.session.State.User.ID, b.guildID, cmd)
 	if err != nil {
+		_ = b.session.Close()
 		return fmt.Errorf("register /report command: %w", err)
 	}
-
-	b.log.Info("discord bot started")
 	return nil
 }
 
-// Close closes the Discord gateway connection.
+// Close stops any pending connect retry and closes the Discord gateway connection.
 func (b *Bot) Close() error {
+	if b.cancel != nil {
+		b.cancel()
+	}
 	return b.session.Close()
 }
 

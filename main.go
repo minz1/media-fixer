@@ -128,10 +128,7 @@ func run() error {
 	}
 	bot.SetService(svc)
 
-	if err = bot.Start(); err != nil {
-		log.Error("start discord bot", "error", err)
-		return err
-	}
+	bot.Start(ctx)
 	defer bot.Close()
 
 	srv, err := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, jrnl, svc, log)
