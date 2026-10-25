@@ -333,7 +333,6 @@ func TestLiveGrabsSince(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
-	grabs := []string{"grabbing", "imported", "failed", "refused", "archive", "downloading"}
 	for _, r := range []struct {
 		hours   int
 		dry     bool
@@ -356,7 +355,7 @@ func TestLiveGrabsSince(t *testing.T) {
 			}
 		}
 	}
-	if n, err := d.LiveGrabsSince(ctx, sweepT0(), grabs); err != nil || n != 4 {
+	if n, err := d.LiveGrabsSince(ctx, sweepT0()); err != nil || n != 4 {
 		t.Errorf("LiveGrabsSince = %d, %v; want 4", n, err)
 	}
 }

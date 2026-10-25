@@ -70,8 +70,7 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil || now.Before(next) {
 		return err
 	}
-	grabs, err := s.d.LiveGrabsSince(s.base, slot(set, now),
-		[]string{resultGrabbing, resultImported, resultFailed, resultRefused, resultArchive, resultDownloading})
+	grabs, err := s.d.LiveGrabsSince(s.base, slot(set, now))
 	if err != nil {
 		return err
 	}
@@ -145,6 +144,9 @@ func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
 		s.cmu.Lock()
 		s.cancel = cancel
 		s.cmu.Unlock()
+		if cur, lerr := LoadSettings(s.base, s.d); lerr == nil && !cur.Enabled {
+			cancel(ErrDisabled)
+		}
 	}
 	s.wg.Go(func() {
 		defer s.mu.Unlock()

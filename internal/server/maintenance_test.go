@@ -479,3 +479,27 @@ func TestSweepSettingsSave_EnabledSaveKeepsRun(t *testing.T) {
 		t.Errorf("runs = %+v, %v; want the live run done", runs, err)
 	}
 }
+
+func TestMaintenance_RefusedListShowsWhatBlocks(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	ctx := context.Background()
+	for _, r := range []*db.SweepRefused{
+		{TitleKey: "blocked", ReleaseTitle: "Blocked.S01.1080p", Indexer: "Comet",
+			RefusedAt: time.Now().Add(-30 * 24 * time.Hour), Reason: "500 x code=torrent_blocked"},
+		{TitleKey: "retry", ReleaseTitle: "Retryable.S01.1080p", Indexer: "Comet",
+			RefusedAt: time.Now().Add(-time.Hour), Reason: "500 x code=provider_error"},
+	} {
+		if err := env.db.AddSweepRefused(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	mustContain(t, body, "Blocked.S01.1080p")
+	if strings.Contains(body, "Retryable.S01.1080p") {
+		t.Error("a provider_error refusal is listed, but it doesn't block the next run")
+	}
+	if strings.Contains(body, "last 7 days") {
+		t.Error("refused heading still says last 7 days")
+	}
+}

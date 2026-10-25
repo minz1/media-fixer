@@ -654,3 +654,23 @@ func TestRun_ProviderErrorRetriedNextRun(t *testing.T) {
 		t.Errorf("POST g1 count = %d, want 2 (provider_error is retried next run); writes %v", n, h.fake.writeLog())
 	}
 }
+
+func TestRun_SkipsReleaseBlockedThirtyDaysAgo(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1),
+		seasonRel("g1", "Show.S01.Blocked", "Comet", 10),
+		seasonRel("g2", "Show.S01.Other", "Comet", 20))
+	h.fake.plan("g2", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+	if err := h.db.AddSweepRefused(context.Background(), &db.SweepRefused{
+		TitleKey: sweep.NormTitle("Show.S01.Blocked"), ReleaseTitle: "Show.S01.Blocked", Indexer: "Comet",
+		RefusedAt: t0().Add(-30 * 24 * time.Hour), Reason: "500 x code=torrent_blocked",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t, false, settings())
+	if got := h.fake.writeLog(); !slices.Equal(got, []string{"POST /release g2"}) {
+		t.Errorf("writes = %v, want only g2 (g1 was blocked 30 days ago)", got)
+	}
+}

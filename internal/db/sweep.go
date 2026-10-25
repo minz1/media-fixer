@@ -324,15 +324,12 @@ func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int,
 	return n, latest, rows.Err()
 }
 
-func (d *DB) LiveGrabsSince(ctx context.Context, since time.Time, results []string) (int, error) {
-	want, err := json.Marshal(results)
-	if err != nil {
-		return 0, err
-	}
+func (d *DB) LiveGrabsSince(ctx context.Context, since time.Time) (int, error) {
 	var n int
-	err = d.read.QueryRowContext(ctx,
+	err := d.read.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
-		 WHERE r.dry = 0 AND r.started_at >= ? AND i.result IN (SELECT value FROM json_each(?))`,
-		since, string(want)).Scan(&n)
+		 WHERE r.dry = 0 AND r.started_at >= ?
+		   AND i.result IN ('grabbing', 'imported', 'failed', 'refused', 'archive', 'downloading')`,
+		since).Scan(&n)
 	return n, err
 }

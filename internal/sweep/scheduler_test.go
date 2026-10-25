@@ -620,7 +620,6 @@ func TestScheduler_CancelLiveStopsRun(t *testing.T) {
 	if len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != sweep.ErrDisabled.Error() {
 		t.Errorf("runs = %+v, want one run interrupted with %q", runs, sweep.ErrDisabled.Error())
 	}
-	sch.CancelLive(sweep.ErrDisabled)
 }
 
 func TestScheduler_CancelLiveSparesDryRun(t *testing.T) {
@@ -644,18 +643,19 @@ func TestScheduler_ShutdownStillInterrupted(t *testing.T) {
 	if err := sweep.SaveSettings(context.Background(), h.db, settings(), h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	base, cancel := context.WithCancel(context.Background())
+	signal := errors.New("terminated signal received")
+	base, cancel := context.WithCancelCause(context.Background())
 	sch := sweep.NewScheduler(base, h.runner, h.db)
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
 	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
-	h.fake.beforePost = cancel
+	h.fake.beforePost = func() { cancel(signal) }
 	if err := sch.RunNow("manual", false); err != nil {
 		t.Fatal(err)
 	}
 	sch.Wait()
 	runs := h.runs(t)
-	if len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != context.Canceled.Error() {
-		t.Errorf("runs = %+v, want one run interrupted with %q", runs, context.Canceled.Error())
+	if len(runs) != 1 || runs[0].Status != "interrupted" || runs[0].Reason != signal.Error() {
+		t.Errorf("runs = %+v, want one run interrupted with %q", runs, signal.Error())
 	}
 }
