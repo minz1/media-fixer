@@ -78,7 +78,7 @@ func postSeerrAuth(t *testing.T, ts *httptest.Server, payload map[string]any, au
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestSeerrWebhook_BadJSON(t *testing.T) {
 		bytes.NewReader([]byte("not json{")),
 	)
 	req.Header.Set("Authorization", "Bearer "+testWebhookSecret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
