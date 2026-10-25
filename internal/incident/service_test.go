@@ -25,9 +25,16 @@ import (
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
-type captureNotifier struct{ msgs []string }
+type captureNotifier struct {
+	msgs       []string
+	ownerFails int
+}
 
 func (c *captureNotifier) NotifyOwner(_ context.Context, msg string) error {
+	if c.ownerFails > 0 {
+		c.ownerFails--
+		return errors.New("discord down")
+	}
 	c.msgs = append(c.msgs, msg)
 	return nil
 }

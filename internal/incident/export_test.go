@@ -51,3 +51,17 @@ func (s *Service) BackdateSeerrAlertForTest(d time.Duration) {
 	defer s.seerrAlertMu.Unlock()
 	s.seerrAlertAt = s.seerrAlertAt.Add(-d)
 }
+
+func (s *Service) ClaimSeerrAlertForTest(now time.Time) (time.Time, bool) {
+	return s.claimSeerrAlert(now)
+}
+
+func (s *Service) ReleaseSeerrAlertForTest(claimed, prev time.Time) {
+	s.releaseSeerrAlert(claimed, prev)
+}
+
+func (s *Service) SeerrAlertAtForTest() time.Time {
+	s.seerrAlertMu.Lock()
+	defer s.seerrAlertMu.Unlock()
+	return s.seerrAlertAt
+}

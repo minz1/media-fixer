@@ -768,23 +768,38 @@ func (s *Service) notifySeerrIssues(ctx context.Context, inc *db.Incident, verb 
 func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id string, call func(string) error) {
 	if err := call(id); err != nil {
 		s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", err)
-		if s.claimSeerrAlert(time.Now()) {
-			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-				"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v\n%s",
-				verb, id, inc.Title, inc.ID[:8], err, "Further Seerr failures in the next hour are only logged.",
-			))
+		now := time.Now()
+		prev, ok := s.claimSeerrAlert(now)
+		if !ok {
+			return
+		}
+		if derr := s.notif.NotifyOwner(ctx, fmt.Sprintf(
+			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v\n%s",
+			verb, id, inc.Title, inc.ID[:8], err, "Further Seerr failures in the next hour are only logged.",
+		)); derr != nil {
+			s.log.ErrorContext(ctx, "seerr alert DM failed", "incident", inc.ID, "error", derr)
+			s.releaseSeerrAlert(now, prev)
 		}
 	}
 }
 
-func (s *Service) claimSeerrAlert(now time.Time) bool {
+func (s *Service) claimSeerrAlert(now time.Time) (time.Time, bool) {
 	s.seerrAlertMu.Lock()
 	defer s.seerrAlertMu.Unlock()
-	if now.Sub(s.seerrAlertAt) < seerrAlertGap {
-		return false
+	prev := s.seerrAlertAt
+	if now.Sub(prev) < seerrAlertGap {
+		return prev, false
 	}
 	s.seerrAlertAt = now
-	return true
+	return prev, true
+}
+
+func (s *Service) releaseSeerrAlert(claimed, prev time.Time) {
+	s.seerrAlertMu.Lock()
+	defer s.seerrAlertMu.Unlock()
+	if s.seerrAlertAt.Equal(claimed) {
+		s.seerrAlertAt = prev
+	}
 }
 
 func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
