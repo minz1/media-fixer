@@ -899,9 +899,6 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 	if err != nil {
 		return err
 	}
-	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
-		return s.buildReinvestigateSeed(seedCtx, id, inc)
-	})
 	switch origin {
 	case rerunManual:
 		s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
@@ -912,6 +909,9 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 		))
 	case rerunRestart:
 	}
+	s.launchWithSeed(inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
+		return s.buildReinvestigateSeed(seedCtx, id, inc)
+	})
 	return nil
 }
 
