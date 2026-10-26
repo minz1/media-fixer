@@ -246,10 +246,10 @@ const decypharrAllDir = "/mnt/decypharr/__all__"
 func decypharrCandidateDirs(folder, name string) []string {
 	var dirs []string
 	for _, n := range []string{folder, name} {
-		if n == "" || slices.Contains(dirs, "/mnt/decypharr/__all__/"+n) {
+		if n == "" || slices.Contains(dirs, decypharrAllDir+"/"+n) {
 			continue
 		}
-		dirs = append(dirs, "/mnt/decypharr/__all__/"+n, "/mnt/decypharr/"+n)
+		dirs = append(dirs, decypharrAllDir+"/"+n, "/mnt/decypharr/"+n)
 	}
 	return dirs
 }

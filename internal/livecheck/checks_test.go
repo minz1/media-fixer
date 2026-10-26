@@ -282,3 +282,36 @@ func TestCheckListDirectory_SingleFileTorrentListsItsFolder(t *testing.T) {
 		t.Errorf("list_directory never listed %s", decypharrAll)
 	}
 }
+
+func TestDiscoverSamplePath_PackWithOnlySubfoldersDoesNotListAll(t *testing.T) {
+	t.Parallel()
+	const folder = "Show.Complete.Pack"
+	fx, _, stub := discoverSampleAgainst(t, map[string][]mediaagentapi.ListDirEntry{
+		decypharrAll + "/" + folder: {{Name: "Season 01", IsDir: true}},
+	}, livecheck.Fixtures{TorrentName: folder, TorrentFolder: folder})
+	if fx.SamplePath != "" || fx.TorrentIsFile {
+		t.Errorf("SamplePath = %q, TorrentIsFile = %v, want neither", fx.SamplePath, fx.TorrentIsFile)
+	}
+	if stub.wasRequested(decypharrAll) {
+		t.Errorf("listed %s although the torrent folder listed fine", decypharrAll)
+	}
+}
+
+func TestDiscoverSamplePath_SingleFileMatchesNameOrOriginalFilename(t *testing.T) {
+	t.Parallel()
+	const (
+		name     = "Display.Name.2026.mkv"
+		original = "Original.File.2026.mkv"
+	)
+	for label, onDisk := range map[string]string{"name": name, "original_filename": original} {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			fx, _, _ := discoverSampleAgainst(t, map[string][]mediaagentapi.ListDirEntry{
+				decypharrAll: {{Name: "Other.mkv"}, {Name: onDisk}},
+			}, livecheck.Fixtures{TorrentName: name, TorrentFolder: original})
+			if want := decypharrAll + "/" + onDisk; fx.SamplePath != want || !fx.TorrentIsFile {
+				t.Errorf("SamplePath = %q, TorrentIsFile = %v, want %q and true", fx.SamplePath, fx.TorrentIsFile, want)
+			}
+		})
+	}
+}

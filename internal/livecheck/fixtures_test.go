@@ -445,3 +445,18 @@ func TestDiscoverTorrentNames_AllBadRecordsANote(t *testing.T) {
 		t.Errorf("notes %q do not mention bad entries", fx.Notes)
 	}
 }
+
+func TestDiscoverFixtures_ReaddStillPicksABadEntry(t *testing.T) {
+	t.Parallel()
+	bad := &client.TorrentEntry{Name: "Broken.Movie", InfoHash: "c", Magnet: "magnet:?xt=c", Bad: true}
+	srv := readdFixtureServer(t, map[string][]*client.TorrentEntry{
+		"":             {bad},
+		"Broken.Movie": {bad},
+	})
+	defer srv.Close()
+
+	fx, _ := runReaddCheck(t, srv)
+	if fx.ReaddTorrentName != "Broken.Movie" {
+		t.Errorf("ReaddTorrentName = %q, want Broken.Movie: readd is the fix for a bad entry", fx.ReaddTorrentName)
+	}
+}
