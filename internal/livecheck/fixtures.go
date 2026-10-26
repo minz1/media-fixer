@@ -32,6 +32,7 @@ type Fixtures struct {
 	ReaddTorrentName       string `json:"readd_torrent_name,omitempty"`
 	TorrentFolder          string `json:"torrent_folder,omitempty"`
 	SamplePath             string `json:"sample_path,omitempty"`
+	TorrentIsFile          bool   `json:"torrent_is_file,omitempty"`
 	RepairEntryName        string `json:"repair_entry_name,omitempty"`
 
 	// Notes records why a fixture could not be discovered, so a "degraded"
@@ -237,6 +238,8 @@ func discoverReaddTorrentName(
 	fx.missing("no decypharr torrent with a stored magnet and a unique name among the newest entries")
 }
 
+const decypharrAllDir = "/mnt/decypharr/__all__"
+
 // decypharrCandidateDirs are the directory layouts this stack has used for a
 // torrent's files, tried in order (see systemPrompt's note that
 // /data/library entries are symlinks into /mnt/decypharr/__all__/<torrent>/).
@@ -256,17 +259,42 @@ func discoverSamplePath(ctx context.Context, disp *agent.Dispatcher, fx *Fixture
 		fx.missing("media-agent not configured, cannot discover sample file")
 		return
 	}
+	listed := false
 	for _, dir := range decypharrCandidateDirs(fx.TorrentFolder, fx.TorrentName) {
 		result, err := disp.MediaAgent.ListDirectory(ctx, dir)
 		if err != nil || result == nil {
 			continue
 		}
+		listed = true
 		if path, ok := firstFilePath(dir, result.Entries); ok {
 			fx.SamplePath = path
 			return
 		}
 	}
+	if !listed {
+		if path, ok := singleFileTorrentPath(ctx, disp, fx); ok {
+			fx.SamplePath = path
+			fx.TorrentIsFile = true
+			return
+		}
+	}
 	fx.missing("no readable file found under torrent directory for " + fx.TorrentName)
+}
+
+func singleFileTorrentPath(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) (string, bool) {
+	result, err := disp.MediaAgent.ListDirectory(ctx, decypharrAllDir)
+	if err != nil || result == nil {
+		return "", false
+	}
+	for _, entry := range result.Entries {
+		if entry.IsDir || entry.Name == "" {
+			continue
+		}
+		if entry.Name == fx.TorrentFolder || entry.Name == fx.TorrentName {
+			return decypharrAllDir + "/" + entry.Name, true
+		}
+	}
+	return "", false
 }
 
 // firstFilePath returns the first non-directory entry's path, following a
