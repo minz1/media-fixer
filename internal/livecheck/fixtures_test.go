@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -403,5 +405,43 @@ func TestDiscoverFixtures_ReaddDegradesWithoutUniqueMagnetTorrent(t *testing.T) 
 
 	if _, r := runReaddCheck(t, srv); r.Status != livecheck.StatusDegraded {
 		t.Errorf("status = %s (%s%s), want degraded", r.Status, r.Detail, r.Error)
+	}
+}
+
+func discoverTorrentNamesFromJSON(t *testing.T, body string) livecheck.Fixtures {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/decypharr/api/torrents", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	disp := &agent.Dispatcher{Decypharr: client.NewDecypharr(srv.URL+"/decypharr", "token")}
+	fx := livecheck.Fixtures{ReaddTorrentName: "preset"}
+	livecheck.DiscoverTorrentNamesForTest(context.Background(), disp, &fx)
+	return fx
+}
+
+func TestDiscoverTorrentNames_SkipsBadEntries(t *testing.T) {
+	t.Parallel()
+	fx := discoverTorrentNamesFromJSON(t, `{"torrents":[`+
+		`{"name":"Bad.Show.S01E03.mkv","original_filename":"Bad.Show.S01E03.mkv","bad":true},`+
+		`{"name":"Good.Show.S01","original_filename":"Good.Show.S01","bad":false}],"total":2}`)
+	if fx.TorrentName != "Good.Show.S01" || fx.TorrentFolder != "Good.Show.S01" {
+		t.Errorf("TorrentName = %q, TorrentFolder = %q, want Good.Show.S01", fx.TorrentName, fx.TorrentFolder)
+	}
+}
+
+func TestDiscoverTorrentNames_AllBadRecordsANote(t *testing.T) {
+	t.Parallel()
+	fx := discoverTorrentNamesFromJSON(t, `{"torrents":[`+
+		`{"name":"Bad.One.mkv","bad":true},{"name":"Bad.Two","bad":true}],"total":2}`)
+	if fx.TorrentName != "" {
+		t.Errorf("TorrentName = %q, want empty", fx.TorrentName)
+	}
+	if !slices.ContainsFunc(fx.Notes, func(n string) bool { return strings.Contains(n, "bad") }) {
+		t.Errorf("notes %q do not mention bad entries", fx.Notes)
 	}
 }

@@ -190,12 +190,22 @@ func discoverTorrentNames(ctx context.Context, disp *agent.Dispatcher, fx *Fixtu
 		return
 	}
 	if fx.TorrentName == "" {
-		fx.TorrentName = torrents[0].Name
-		fx.TorrentFolder = torrents[0].OriginalFilename
+		pickTorrentFixture(fx, torrents)
 	}
 	if fx.ReaddTorrentName == "" {
 		discoverReaddTorrentName(ctx, disp, fx, torrents)
 	}
+}
+
+func pickTorrentFixture(fx *Fixtures, torrents []*client.TorrentEntry) {
+	for _, t := range torrents {
+		if !t.Bad {
+			fx.TorrentName = t.Name
+			fx.TorrentFolder = t.OriginalFilename
+			return
+		}
+	}
+	fx.missing("every decypharr torrent on the newest page is marked bad")
 }
 
 func discoverReaddTorrentName(
