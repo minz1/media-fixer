@@ -34,3 +34,7 @@ func DecypharrCandidateDirsForTest(folder, name string) []string {
 func DiscoverJellyfinItemForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	discoverJellyfinItem(ctx, disp, fx)
 }
+
+func DiscoverTorrentNamesForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
+	discoverTorrentNames(ctx, disp, fx)
+}

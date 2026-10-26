@@ -37,6 +37,7 @@ type TorrentEntry struct {
 	Size     int64     `json:"size"`
 	Progress float64   `json:"progress"`
 	AddedOn  time.Time `json:"added_on"`
+	Bad      bool      `json:"bad"`
 
 	// ActiveProvider is which debrid backend currently holds the torrent
 	// ("torbox", "usenet", ...). Named `debrid` in an earlier decypharr
