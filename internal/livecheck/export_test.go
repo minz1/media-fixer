@@ -38,3 +38,7 @@ func DiscoverJellyfinItemForTest(ctx context.Context, disp *agent.Dispatcher, fx
 func DiscoverTorrentNamesForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	discoverTorrentNames(ctx, disp, fx)
 }
+
+func DiscoverSamplePathForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
+	discoverSamplePath(ctx, disp, fx)
+}
