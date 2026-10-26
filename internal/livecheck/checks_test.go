@@ -266,3 +266,19 @@ func TestDiscoverSamplePath_NeitherFileNorListableFolder(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckListDirectory_SingleFileTorrentListsItsFolder(t *testing.T) {
+	t.Parallel()
+	fx, result, stub := discoverSampleAgainst(t, singleFileListings(), livecheck.Fixtures{
+		TorrentName: singleFileName, TorrentFolder: singleFileName,
+	})
+	if !fx.TorrentIsFile {
+		t.Fatalf("TorrentIsFile = false, notes %q", fx.Notes)
+	}
+	if result.Status != livecheck.StatusOK {
+		t.Errorf("list_directory status = %s, detail = %s, err = %s", result.Status, result.Detail, result.Error)
+	}
+	if !stub.wasRequested(decypharrAll) {
+		t.Errorf("list_directory never listed %s", decypharrAll)
+	}
+}
