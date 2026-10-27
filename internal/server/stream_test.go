@@ -72,8 +72,13 @@ func TestDashboardTemplates_HxSSEAttributesHaveTheirExtensionLoaded(t *testing.T
 // than observing the shutdown signal.
 func TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection(t *testing.T) {
 	t.Parallel()
-	addr := freePort(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
 	srv := newDashboardTestServerOnAddr(t, addr)
+	srv.UseListenerForTest(listener)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -118,19 +123,6 @@ func TestServerStart_ShutdownDoesNotHangOnOpenSSEConnection(t *testing.T) {
 		t.Fatal("Start did not return within 3s with an SSE connection open: " +
 			"shutdown is blocked on the streaming handler")
 	}
-}
-
-// freePort reserves and immediately releases a port, so Start's own
-// ListenAndServe can bind it. Racy in principle, fine in a test process.
-func freePort(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close()
-	return addr
 }
 
 // waitForServer blocks until the server answers, so the test never races
