@@ -1349,6 +1349,30 @@ func (d *DB) FindStaleInvestigating(ctx context.Context, staleBefore time.Time) 
 	return out, rows.Err()
 }
 
+func (d *DB) FindStaleReopened(ctx context.Context, staleBefore time.Time) ([]*Incident, error) {
+	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
+	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
+	             COALESCE(finding,''), COALESCE(recommended_actions,''),
+	             action_count, autonomous_locked
+	      FROM incidents
+	      WHERE status = ? AND updated_at < ?`
+	rows, err := d.read.QueryContext(ctx, q, StatusReopened, staleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Incident
+	for rows.Next() {
+		inc, scanErr := scanIncident(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, inc)
+	}
+	return out, rows.Err()
+}
+
 // --- Pending outcome tracking (async fixes, e.g. arr_search_missing) ---
 
 // PendingOutcome tracks an asynchronous fix from trigger through resolution.
