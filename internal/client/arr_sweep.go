@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -154,10 +153,7 @@ func (c *ArrClient) doAs(
 	q url.Values,
 	body, out any,
 ) error {
-	u := path
-	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
-		u = c.base + path
-	}
+	u := c.base + path
 	if q != nil {
 		u += "?" + q.Encode()
 	}

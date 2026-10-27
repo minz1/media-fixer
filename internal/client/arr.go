@@ -115,7 +115,7 @@ func normalizeArrTitle(title string) string {
 // ListSeries returns every series known to Sonarr.
 func (c *ArrClient) ListSeries(ctx context.Context) ([]Series, error) {
 	var series []Series
-	if err := c.get(ctx, "/api/v3/series", &series); err != nil {
+	if err := c.get(ctx, "/api/v3/series", nil, &series); err != nil {
 		return nil, err
 	}
 	return series, nil
@@ -124,7 +124,7 @@ func (c *ArrClient) ListSeries(ctx context.Context) ([]Series, error) {
 // ListMovies returns every movie known to Radarr.
 func (c *ArrClient) ListMovies(ctx context.Context) ([]Movie, error) {
 	var movies []Movie
-	if err := c.get(ctx, "/api/v3/movie", &movies); err != nil {
+	if err := c.get(ctx, "/api/v3/movie", nil, &movies); err != nil {
 		return nil, err
 	}
 	return movies, nil
@@ -274,16 +274,14 @@ func (c *ArrClient) SearchMovieNow(ctx context.Context, movieID int) error {
 
 // GetEpisodes returns episodes for a series, optionally filtered by season.
 func (c *ArrClient) GetEpisodes(ctx context.Context, seriesID, season int) ([]Episode, error) {
-	u, _ := url.Parse(c.base + "/api/v3/episode")
-	q := u.Query()
+	q := url.Values{}
 	q.Set("seriesId", strconv.Itoa(seriesID))
 	if season >= 0 {
 		q.Set("seasonNumber", strconv.Itoa(season))
 	}
-	u.RawQuery = q.Encode()
 
 	var episodes []Episode
-	if err := c.get(ctx, u.String(), &episodes); err != nil {
+	if err := c.get(ctx, "/api/v3/episode", q, &episodes); err != nil {
 		return nil, err
 	}
 	return episodes, nil
@@ -291,13 +289,11 @@ func (c *ArrClient) GetEpisodes(ctx context.Context, seriesID, season int) ([]Ep
 
 // GetEpisodeFiles returns the on-disk files Sonarr tracks for a series.
 func (c *ArrClient) GetEpisodeFiles(ctx context.Context, seriesID int) ([]EpisodeFile, error) {
-	u, _ := url.Parse(c.base + "/api/v3/episodefile")
-	q := u.Query()
+	q := url.Values{}
 	q.Set("seriesId", strconv.Itoa(seriesID))
-	u.RawQuery = q.Encode()
 
 	var files []EpisodeFile
-	if err := c.get(ctx, u.String(), &files); err != nil {
+	if err := c.get(ctx, "/api/v3/episodefile", q, &files); err != nil {
 		return nil, err
 	}
 	return files, nil
@@ -311,13 +307,11 @@ func (c *ArrClient) DeleteEpisodeFile(ctx context.Context, fileID int) error {
 
 // GetMovieFiles returns the on-disk files Radarr tracks for a movie.
 func (c *ArrClient) GetMovieFiles(ctx context.Context, movieID int) ([]MovieFile, error) {
-	u, _ := url.Parse(c.base + "/api/v3/moviefile")
-	q := u.Query()
+	q := url.Values{}
 	q.Set("movieId", strconv.Itoa(movieID))
-	u.RawQuery = q.Encode()
 
 	var files []MovieFile
-	if err := c.get(ctx, u.String(), &files); err != nil {
+	if err := c.get(ctx, "/api/v3/moviefile", q, &files); err != nil {
 		return nil, err
 	}
 	return files, nil
@@ -336,17 +330,15 @@ const grabEventType = "grabbed"
 // SeriesGrabHistory returns grab events for a series, optionally filtered by
 // season (pass a negative season to fetch every season).
 func (c *ArrClient) SeriesGrabHistory(ctx context.Context, seriesID, season int) ([]HistoryRecord, error) {
-	u, _ := url.Parse(c.base + "/api/v3/history/series")
-	q := u.Query()
+	q := url.Values{}
 	q.Set("seriesId", strconv.Itoa(seriesID))
 	q.Set("eventType", grabEventType)
 	if season >= 0 {
 		q.Set("seasonNumber", strconv.Itoa(season))
 	}
-	u.RawQuery = q.Encode()
 
 	var records []HistoryRecord
-	if err := c.get(ctx, u.String(), &records); err != nil {
+	if err := c.get(ctx, "/api/v3/history/series", q, &records); err != nil {
 		return nil, err
 	}
 	return records, nil
@@ -354,14 +346,12 @@ func (c *ArrClient) SeriesGrabHistory(ctx context.Context, seriesID, season int)
 
 // MovieGrabHistory returns grab events for a movie.
 func (c *ArrClient) MovieGrabHistory(ctx context.Context, movieID int) ([]HistoryRecord, error) {
-	u, _ := url.Parse(c.base + "/api/v3/history/movie")
-	q := u.Query()
+	q := url.Values{}
 	q.Set("movieId", strconv.Itoa(movieID))
 	q.Set("eventType", grabEventType)
-	u.RawQuery = q.Encode()
 
 	var records []HistoryRecord
-	if err := c.get(ctx, u.String(), &records); err != nil {
+	if err := c.get(ctx, "/api/v3/history/movie", q, &records); err != nil {
 		return nil, err
 	}
 	return records, nil
@@ -399,12 +389,12 @@ const queuePageSize = 250
 // should take. includeUnknownSeriesItems/includeUnknownMovieItems are
 // harmless no-ops on whichever API (Sonarr/Radarr) doesn't recognize them.
 func (c *ArrClient) GetQueue(ctx context.Context) ([]QueueRecord, error) {
-	u := fmt.Sprintf(
-		"%s/api/v3/queue?pageSize=%d&includeUnknownSeriesItems=true&includeUnknownMovieItems=true",
-		c.base, queuePageSize,
-	)
+	q := url.Values{}
+	q.Set("pageSize", strconv.Itoa(queuePageSize))
+	q.Set("includeUnknownSeriesItems", "true")
+	q.Set("includeUnknownMovieItems", "true")
 	var resp queueResponse
-	if err := c.get(ctx, u, &resp); err != nil {
+	if err := c.get(ctx, "/api/v3/queue", q, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Records, nil
@@ -414,21 +404,7 @@ func (c *ArrClient) GetQueue(ctx context.Context) ([]QueueRecord, error) {
 // this, not another search command, is what actually blocklists a release in
 // Sonarr/Radarr's v3 API.
 func (c *ArrClient) MarkHistoryFailed(ctx context.Context, historyID int) error {
-	u := fmt.Sprintf("%s/api/v3/history/failed/%d", c.base, historyID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Api-Key", c.apiKey)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("arr POST %s: %w", u, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("arr POST %s: status %d", u, resp.StatusCode)
-	}
-	return nil
+	return c.do(ctx, c.http, http.MethodPost, fmt.Sprintf("/api/v3/history/failed/%d", historyID), nil, nil, nil)
 }
 
 func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
@@ -441,15 +417,8 @@ func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
 	return cmd.ID, nil
 }
 
-// get issues a GET request. path may be a bare path (prefixed with c.base) or
-// an already-absolute URL — callers that build a query string by parsing
-// c.base plus a path must pass the resulting URL's full string form, not
-// just its path+query, or the path component of c.base gets prefixed a
-// second time (e.g. a base of ".../sonarr" becomes ".../sonarr/sonarr/...",
-// which 404s at the reverse proxy and returns an HTML error page instead of
-// JSON).
-func (c *ArrClient) get(ctx context.Context, path string, out any) error {
-	return c.do(ctx, c.http, http.MethodGet, path, nil, nil, out)
+func (c *ArrClient) get(ctx context.Context, path string, q url.Values, out any) error {
+	return c.do(ctx, c.http, http.MethodGet, path, q, nil, out)
 }
 
 func (c *ArrClient) delete(ctx context.Context, path string) error {
