@@ -84,8 +84,8 @@ func (b *Bot) connectLoop(ctx context.Context) {
 	}
 }
 
-func (b *Bot) openAndRegister() error {
-	cmd := &discordgo.ApplicationCommand{
+func reportCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
 		Name:        "report",
 		Description: "Report a media playback problem",
 		Options: []*discordgo.ApplicationCommandOption{
@@ -96,6 +96,7 @@ func (b *Bot) openAndRegister() error {
 				Required:    true,
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{Name: "Can't play", Value: "cant_play"},
+					{Name: "It plays but buffers / low quality", Value: "buffering"},
 					{Name: "Login failed", Value: "login_failed"},
 					{Name: "Missing media", Value: "missing_media"},
 					{Name: "Other", Value: "other"},
@@ -115,7 +116,10 @@ func (b *Bot) openAndRegister() error {
 			},
 		},
 	}
+}
 
+func (b *Bot) openAndRegister() error {
+	cmd := reportCommand()
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("discord open: %w", err)
 	}

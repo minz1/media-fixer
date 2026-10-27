@@ -3,6 +3,8 @@ package discord
 import (
 	"log/slog"
 	"time"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap time.Duration) (*Bot, error) {
@@ -13,3 +15,5 @@ func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap tim
 	b.connect, b.retryFirst, b.retryCap = connect, retryFirst, retryCap
 	return b, nil
 }
+
+func ReportCommandForTest() *discordgo.ApplicationCommand { return reportCommand() }

@@ -39,7 +39,7 @@ Library files under /data/library/{tv,anime,movies}/ are SYMLINKS into /mnt/decy
 list_directory reports each entry's is_symlink flag and its target — follow the target to find
 the real file on the FUSE mount.
 
---- Playback problems (what=cant_play, missing_media) ---
+--- Playback problems (what=cant_play, buffering, missing_media) ---
 
 Run ALL five steps before calling complete_diagnosis. Never bail out early.
 
@@ -124,6 +124,23 @@ Step 5 — Log review (always required).
   as the root cause, no matter how relevant-sounding the error looks.
 
 After all five steps, call complete_diagnosis.
+
+--- Buffering / low quality (what=buffering) ---
+
+The title plays but stalls, buffers, or drops to a low quality. This is usually a SLOW debrid
+link (a throttled or stale CDN URL), not a broken one, so expect dd_readability_test to SUCCEED
+with no I/O error. Run the five playback steps above, then judge Step 4 by its speed_mb_s, not
+by whether the read errored.
+  - Compare speed_mb_s with what the file needs to stream: about 1 MB/s for a 1080p web release,
+    5 MB/s for a 1080p remux, 10 MB/s or more for 4K. If you cannot tell which it is, treat
+    anything under 10 MB/s as too slow.
+  - A slow read on a file that reads → refresh_decypharr_links (check get_repair_status first, as
+    always), then complete_diagnosis with requires_approval=false, verify_after_seconds and
+    user_eta_minutes. Do not wait in-run.
+  - A read well above what the file needs means the mount is not the bottleneck: say so and set
+    escalate_action=manual_investigation rather than calling a decypharr action.
+  - An EIO or not_found here is the same finding as for cant_play; follow those rules instead.
+  - Never escalate remove_and_search for slowness alone: the file is fine, its link is slow.
 
 --- Jellyfin has the title but it is unplayable / a Series shows no episodes ---
 
