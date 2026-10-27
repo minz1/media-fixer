@@ -225,7 +225,7 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Resolve(r.Context(), id); err != nil {
+	if err := s.svc.Resolve(context.WithoutCancel(r.Context()), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -263,7 +263,7 @@ func (s *Server) actionKeepSearching(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.KeepSearching(r.Context(), id); err != nil {
+	if err := s.svc.KeepSearching(context.WithoutCancel(r.Context()), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -323,7 +323,7 @@ func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.ApproveEscalation(r.Context(), id); err != nil {
+	if err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
