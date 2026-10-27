@@ -175,8 +175,14 @@ func discoverTorrentAndSample(ctx context.Context, disp *agent.Dispatcher, fx *F
 	if fx.TorrentName == "" || fx.ReaddTorrentName == "" {
 		discoverTorrentNames(ctx, disp, fx)
 	}
-	if fx.SamplePath == "" && fx.TorrentName != "" {
+	switch {
+	case fx.TorrentName == "":
+	case fx.SamplePath == "":
 		discoverSamplePath(ctx, disp, fx)
+	case disp.MediaAgent != nil:
+		if _, ok := singleFileTorrentPath(ctx, disp, fx); ok {
+			fx.TorrentIsFile = true
+		}
 	}
 }
 
