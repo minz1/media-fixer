@@ -30,6 +30,9 @@ type Scheduler struct {
 
 	cmu    sync.Mutex
 	cancel context.CancelCauseFunc
+
+	wmu    sync.Mutex
+	warned string
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
@@ -56,8 +59,19 @@ func (s *Scheduler) Start() {
 }
 
 func (s *Scheduler) Tick(now time.Time) {
-	if err := s.tick(now); err != nil && !errors.Is(err, ErrRunActive) && !errors.Is(err, ErrPaused) {
+	err := s.tick(now)
+	if errors.Is(err, ErrRunActive) || errors.Is(err, ErrPaused) {
+		err = nil
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	switch {
+	case err != nil && err.Error() != s.warned:
+		s.warned = err.Error()
 		s.r.logger().WarnContext(s.base, "pack sweep scheduler", "err", err)
+	case err == nil && s.warned != "":
+		s.warned = ""
+		s.r.logger().InfoContext(s.base, "pack sweep scheduler error cleared")
 	}
 }
 
