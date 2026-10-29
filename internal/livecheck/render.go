@@ -92,11 +92,11 @@ func resultRow(r Result) string {
 }
 
 func summaryLine(results []Result) string {
-	counts := map[Status]int{}
+	order := []Status{StatusOK, StatusDegraded, StatusFail, StatusMissing, StatusUnconfigured, StatusSkipped}
+	counts := make(map[Status]int, len(order))
 	for _, r := range results {
 		counts[r.Status]++
 	}
-	order := []Status{StatusOK, StatusDegraded, StatusFail, StatusMissing, StatusUnconfigured, StatusSkipped}
 	parts := make([]string, 0, len(order))
 	for _, s := range order {
 		if counts[s] > 0 {
