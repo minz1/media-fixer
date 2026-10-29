@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,5 +130,24 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWhilePaused(t *testing.T) {
 	defer notif.mu.Unlock()
 	if len(notif.msgs) != 0 {
 		t.Errorf("msgs = %q, want no stale-run DM while autonomous actions are paused", notif.msgs)
+	}
+}
+
+func TestSweepStaleRuns_LogsAFailedPauseCheck(t *testing.T) {
+	t.Parallel()
+	database, _ := newReopenedIncident(t, staleAge)
+	logs := &syncBuffer{}
+	ag := newAlwaysFixedAgent()
+	svc := incident.NewService(
+		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.NewTextHandler(logs, nil)),
+	)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.SweepStaleRuns(context.Background())
+
+	if !strings.Contains(logs.String(), "stale reopened sweep: pause check") {
+		t.Errorf("logs = %q, want the failed pause check logged", logs.String())
 	}
 }

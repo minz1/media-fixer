@@ -1004,7 +1004,12 @@ func (s *Service) SweepStaleRuns(ctx context.Context) {
 }
 
 func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time) {
-	if paused, err := s.db.IsAutonomousPaused(ctx); err != nil || paused {
+	paused, err := s.db.IsAutonomousPaused(ctx)
+	if err != nil {
+		s.log.ErrorContext(ctx, "stale reopened sweep: pause check", "error", err)
+		return
+	}
+	if paused {
 		return
 	}
 	stale, err := s.db.FindStaleReopened(ctx, staleBefore)
