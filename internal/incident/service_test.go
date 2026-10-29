@@ -1448,3 +1448,24 @@ func TestRerun_HeldNoteDoesNotLetTheOldRunFinish(t *testing.T) {
 		}
 	}
 }
+
+func TestHandle_CreatesBufferingIncident(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newTestService(t)
+	ctx := context.Background()
+
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "buffering", Title: "Shogun",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.What != "buffering" {
+		t.Errorf("what = %q, want buffering", got.What)
+	}
+}
