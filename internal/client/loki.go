@@ -29,11 +29,14 @@ func NewLoki(base, tlsCert, tlsKey string) (*LokiClient, error) {
 		if err != nil {
 			return nil, fmt.Errorf("loki mTLS: system cert pool: %w", err)
 		}
-		httpClient.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Certificates: []tls.Certificate{cert},
-				RootCAs:      pool,
-			},
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      pool,
+		}
+		if tr, ok := httpClient.Transport.(*http.Transport); ok {
+			tr.TLSClientConfig = tlsConfig
+		} else {
+			httpClient.Transport = &http.Transport{TLSClientConfig: tlsConfig}
 		}
 	}
 
