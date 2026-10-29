@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
+	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
 
@@ -85,6 +86,44 @@ func startSweep(
 	return sch
 }
 
+func startStuckQueue(
+	ctx context.Context, cfg *config.Config, clients *clientset.Set, database *db.DB, bot *discord.Bot,
+	srv *server.Server, log *slog.Logger,
+) *stuckqueue.Scheduler {
+	r := &stuckqueue.Runner{DB: database, Notify: bot.NotifyOwner, Now: time.Now, Log: log}
+	if cfg.Sonarr.URL != "" {
+		r.Sonarr = clients.Sonarr
+	}
+	if cfg.Radarr.URL != "" {
+		r.Radarr = clients.Radarr
+	}
+	if r.Sonarr == nil && r.Radarr == nil {
+		log.WarnContext(ctx, "sonarr and radarr not configured — stuck-queue sweep unavailable")
+		return nil
+	}
+	sch := stuckqueue.NewScheduler(ctx, r, database)
+	srv.SetStuckQueue(sch)
+	sch.Start()
+	return sch
+}
+
+func startMaintenance(
+	ctx context.Context, stop context.CancelFunc, cfg *config.Config, clients *clientset.Set, database *db.DB,
+	bot *discord.Bot, srv *server.Server, log *slog.Logger,
+) func() {
+	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log)
+	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log)
+	return func() {
+		stop()
+		if sweepSch != nil {
+			sweepSch.Wait()
+		}
+		if stuckSch != nil {
+			stuckSch.Wait()
+		}
+	}
+}
+
 func run() error {
 	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
 	flag.Parse()
@@ -147,9 +186,7 @@ func run() error {
 		log.Error("interrupt running sweeps", "error", err)
 		return err
 	}
-	if sch := startSweep(ctx, cfg.Sonarr.URL, bundle.clients.Sonarr, database, bot, srv, log); sch != nil {
-		defer func() { stop(); sch.Wait() }()
-	}
+	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log)()
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 
