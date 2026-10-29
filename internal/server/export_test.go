@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net"
+
+	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
 // SeerrIssueTypeToWhat exports the internal mapping for use in package server_test.
@@ -24,3 +26,11 @@ func (s *Server) ExecuteTemplateForTest(w io.Writer, name string, data any) erro
 }
 
 func (s *Server) UseListenerForTest(l net.Listener) { s.listener = l }
+
+func (s *Server) StuckCardDataForTest(
+	res stuckqueue.Result,
+	set stuckqueue.Settings,
+	unreadable string,
+) map[string]any {
+	return s.stuckCardData(&res, set, nil, "", "", unreadable)
+}

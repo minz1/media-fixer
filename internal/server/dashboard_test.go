@@ -417,11 +417,11 @@ func TestActionRerun_SurvivesCancelledRequest(t *testing.T) {
 	}
 }
 
-func serveCancelled(t *testing.T, srv *server.Server, method, path string) *httptest.ResponseRecorder {
+func serveCancelled(t *testing.T, srv *server.Server, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	req := httptest.NewRequest(method, path, nil)
+	req := httptest.NewRequest(http.MethodPost, path, nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req = req.WithContext(cancelled)
 	rec := httptest.NewRecorder()
@@ -440,7 +440,7 @@ func TestActionResolve_SurvivesCancelledRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := serveCancelled(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/resolve")
+	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/resolve")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
@@ -474,7 +474,7 @@ func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := serveCancelled(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/keep-searching")
+	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/keep-searching")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())

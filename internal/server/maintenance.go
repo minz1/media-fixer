@@ -51,6 +51,7 @@ func (s *Server) maintenanceIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		data["Card"] = s.sweepCard(r.Context(), set, nil, "", unreadable, false)
 	}
+	data["Stuck"] = s.stuckCardFor(r.Context(), "", "")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "maintenance", data)
 }

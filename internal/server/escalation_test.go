@@ -403,7 +403,7 @@ func TestApproveEscalation_SurvivesCancelledRequest(t *testing.T) {
 		t.Fatalf("preview status = %d", preview.Code)
 	}
 
-	rec := serveCancelled(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/approve-escalation")
+	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/approve-escalation")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())

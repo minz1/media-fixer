@@ -636,9 +636,71 @@
         <p class="text-sm text-red-600">sweep unavailable (Sonarr not configured)</p>
       </div>
       {{end}}
+      <div class="mt-6">{{template "stuck_card" .Stuck}}</div>
     </div>
   </body>
 </html>
+{{end}}
+
+{{define "stuck_card"}}
+<div id="stuck-queue" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+  <div>
+    <h2 class="text-xl font-bold text-gray-900 mb-1">Stuck queue</h2>
+    <p class="text-sm text-gray-500">
+      Finished Sonarr/Radarr downloads that won't import. Leftovers for episodes you already have are removed from
+      the queue automatically (files and decypharr are untouched); the rest wait here for you.
+    </p>
+  </div>
+  {{if .Unavailable}}
+  <p class="text-sm text-red-600">{{.Unavailable}}</p>
+  {{else}}
+  {{with .Notice}}<p class="text-sm text-green-700">{{.}}</p>{{end}}
+  {{with .Failure}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+  {{with .Unreadable}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+  <div class="flex items-center gap-4 text-sm text-gray-700">
+    {{with .LastRun}}<span>Last run {{.}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
+    {{else}}<span>No run yet.</span>{{end}}
+    <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/run" hx-target="#stuck-queue" hx-swap="outerHTML">
+      <button type="submit" class="px-3 py-1 rounded-sm bg-gray-800 text-white text-sm">Run now</button>
+    </form>
+  </div>
+  {{range .Apps}}
+  <div>
+    <h3 class="font-semibold text-gray-900">{{.Name}}{{with .Summary}} <span class="text-sm font-normal text-gray-500">{{.}}</span>{{end}}</h3>
+    {{with .Error}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+    {{range .Items}}
+    <div class="mt-3 border border-gray-200 rounded-sm p-3 text-sm">
+      <div class="flex justify-between gap-4">
+        <span class="font-medium text-gray-900">{{.Title}}</span>
+        <span class="text-gray-500">{{.Verdict}} · {{.Targets}} · {{.Age}}</span>
+      </div>
+      {{range .Messages}}<p class="text-gray-600">{{.}}</p>{{end}}
+      {{with .Rejections}}<p class="text-gray-600">Import check: {{range $i, $r := .}}{{if $i}}; {{end}}{{$r}}{{end}}</p>{{end}}
+      {{with .ImportRefusal}}<p class="text-amber-700">No import: {{.}}</p>{{end}}
+      <div class="mt-2 flex gap-2">
+        {{$item := .}}{{range .Buttons}}
+        <form hx-post="{{$.BaseURL}}/maintenance/stuck-queue/{{.Action}}" hx-target="#stuck-queue" hx-swap="outerHTML"
+          hx-confirm="{{.Confirm}}">
+          <input type="hidden" name="app" value="{{$item.App}}" />
+          <input type="hidden" name="download_id" value="{{$item.DownloadID}}" />
+          <button type="submit" class="px-3 py-1 rounded-sm border border-gray-300 text-gray-800">{{.Label}}</button>
+        </form>
+        {{end}}
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+  <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/settings" hx-target="#stuck-queue" hx-swap="outerHTML"
+    class="flex flex-wrap items-end gap-4">
+    <label class="text-sm text-gray-700"><input type="checkbox" name="enabled" {{if .Settings.Enabled}}checked{{end}} /> Enabled</label>
+    <label class="text-sm text-gray-700"><input type="checkbox" name="dry_run" {{if .Settings.DryRun}}checked{{end}} /> Dry run</label>
+    {{template "sweep_num" (dict "Label" "Every (minutes)" "Name" "interval_minutes" "Value" .Settings.IntervalMinutes "Min" 15 "Max" 1440 "Err" (index .Errors "interval_minutes"))}}
+    {{template "sweep_num" (dict "Label" "Wait before acting (hours)" "Name" "min_age_hours" "Value" .Settings.MinAgeHours "Min" 1 "Max" 168 "Err" (index .Errors "min_age_hours"))}}
+    <button type="submit" class="px-3 py-1 rounded-sm bg-gray-800 text-white text-sm">Save</button>
+  </form>
+  {{end}}
+</div>
 {{end}}
 
 {{define "sweep_num"}}

@@ -18,6 +18,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/livecheck"
+	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
 
@@ -64,6 +65,7 @@ type Server struct {
 	seerrWebhookSecret string
 
 	sweep *sweep.Scheduler
+	stuck *stuckqueue.Scheduler
 
 	listener net.Listener
 }
@@ -130,6 +132,9 @@ func New(
 		r.Post("/maintenance/pack-sweep/run", s.sweepRun)
 		r.Get("/maintenance/pack-sweep/status", s.sweepStatusFragment)
 		r.Post("/maintenance/pack-sweep/refused/{id}/forget", s.sweepForget)
+		r.Post("/maintenance/stuck-queue/settings", s.stuckSettingsSave)
+		r.Post("/maintenance/stuck-queue/run", s.stuckRun)
+		r.Post("/maintenance/stuck-queue/{action}", s.stuckAction)
 	})
 
 	s.http = &http.Server{
