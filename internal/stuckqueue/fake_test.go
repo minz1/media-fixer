@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -72,6 +73,10 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 			c = "[]"
 		}
 		_, _ = io.WriteString(w, c)
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/queue/"):
+		f.record(r)
+		id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v3/queue/"))
+		f.dropDownloadOf(id)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
 		body := f.record(r)
 		if name, _ := body["name"].(string); f.failCommand[name] {
@@ -106,4 +111,57 @@ func (f *fakeArr) record(r *http.Request) map[string]any {
 	_ = json.Unmarshal(b, &body)
 	f.writes = append(f.writes, write{Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(), Body: body})
 	return body
+}
+
+func (f *fakeArr) dropDownloadOf(id int) {
+	dl := ""
+	for _, r := range f.records {
+		if int(r["id"].(float64)) == id {
+			dl, _ = r["downloadId"].(string)
+		}
+	}
+	kept := f.records[:0]
+	for _, r := range f.records {
+		if d, _ := r["downloadId"].(string); dl == "" || !strings.EqualFold(d, dl) {
+			kept = append(kept, r)
+		}
+	}
+	f.records = kept
+}
+
+func (f *fakeArr) set(recs ...map[string]any) {
+	f.mu.Lock()
+	f.records = recs
+	f.mu.Unlock()
+}
+
+func (f *fakeArr) writesCopy() []write {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]write(nil), f.writes...)
+}
+
+func (f *fakeArr) setCandidates(downloadID, raw string) {
+	f.mu.Lock()
+	f.candidates[downloadID] = raw
+	f.mu.Unlock()
+}
+
+func rawRec(id int, dl, title string, ep int, hasFile bool, msgs ...string) map[string]any {
+	return map[string]any{
+		"id": float64(id), "downloadId": dl, "title": title, "status": "completed",
+		"trackedDownloadState": "importPending", "seriesId": float64(1), "episodeId": float64(ep),
+		"seasonNumber": float64(1), "episodeHasFile": hasFile,
+		"episode":        map[string]any{"episodeNumber": float64(ep)},
+		"statusMessages": []map[string]any{{"messages": msgs}},
+	}
+}
+
+func rawMovie(id int, dl, title string, movieID int, hasFile bool, msgs ...string) map[string]any {
+	return map[string]any{
+		"id": float64(id), "downloadId": dl, "title": title, "status": "completed",
+		"trackedDownloadState": "importPending", "movieId": float64(movieID),
+		"movie":          map[string]any{"hasFile": hasFile},
+		"statusMessages": []map[string]any{{"messages": msgs}},
+	}
 }
