@@ -385,3 +385,38 @@ func TestApproveEscalation_RunsThePreviewedPlan(t *testing.T) {
 		t.Error("executed a re-resolved plan instead of the approved one")
 	}
 }
+
+func TestApproveEscalation_SurvivesCancelledRequest(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{
+		planResult: map[string]any{"MediaType": "tv", "Title": "T"},
+		runResult:  map[string]any{"deleted_files": []string{"ep01.mkv"}},
+	}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncident(t, database)
+
+	preview := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(preview, httptest.NewRequest(
+		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview", nil,
+	))
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status = %d", preview.Code)
+	}
+
+	rec := serveCancelled(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/approve-escalation")
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
+	}
+	got := waitForStatus(t, database, inc.ID, db.StatusVerifying)
+	if got.Status != db.StatusVerifying {
+		t.Errorf("status = %q, want %q", got.Status, db.StatusVerifying)
+	}
+	actions, err := database.ListActions(context.Background(), inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || actions[0].Action != agent.EscalateRemoveAndSearch {
+		t.Errorf("actions = %+v", actions)
+	}
+}

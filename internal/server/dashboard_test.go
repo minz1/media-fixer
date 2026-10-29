@@ -396,3 +396,81 @@ func TestActionRerun_SurvivesCancelledRequest(t *testing.T) {
 		t.Errorf("last_reporter_note_at = %v, %v; want set", last, err)
 	}
 }
+
+func serveCancelled(t *testing.T, srv *server.Server, method, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req = req.WithContext(cancelled)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestActionResolve_SurvivesCancelledRequest(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	ctx := context.Background()
+	inc := &db.Incident{
+		Status: db.StatusAgentFixed, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := serveCancelled(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/resolve")
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusResolved {
+		t.Errorf("status = %q, want %q", got.Status, db.StatusResolved)
+	}
+	last, err := database.LastReporterNoteAt(ctx, inc.ID)
+	if err != nil || last.IsZero() {
+		t.Errorf("last_reporter_note_at = %v, %v; want set", last, err)
+	}
+}
+
+func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	ctx := context.Background()
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "New Show"}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	po := &db.PendingOutcome{MediaType: "tv", Title: "New Show", Season: 1, Episode: 1, StartedAt: time.Now()}
+	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := serveCancelled(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/keep-searching")
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
+	}
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusVerifying {
+		t.Errorf("status = %q, want %q", got.Status, db.StatusVerifying)
+	}
+	armed, err := database.GetPendingOutcome(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !armed.KeepSearching {
+		t.Error("pending outcome KeepSearching = false, want true")
+	}
+}
