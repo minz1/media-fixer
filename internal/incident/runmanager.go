@@ -48,7 +48,7 @@ type runManager struct {
 }
 
 // runToken identifies a specific run so end() only clears the registration if a
-// superseding begin() has not already replaced it.
+// later supersede() has not already replaced it.
 type runToken struct{ cancel context.CancelFunc }
 
 // newRunManager builds a runManager whose runs are all cancelled once base is
@@ -76,14 +76,9 @@ func newRunManager(base context.Context) *runManager {
 	return m
 }
 
-// begin cancels any in-flight run for id and registers a fresh cancellable
-// context — cancelled either by a superseding begin() for the same id, or by
+// supersede cancels any in-flight run for id and registers a fresh cancellable
+// context — cancelled either by a later supersede() for the same id, or by
 // the manager's shutdown, whichever comes first.
-func (m *runManager) begin(id string) (context.Context, *runToken) {
-	ctx, tok, _ := m.supersede(id)
-	return ctx, tok
-}
-
 func (m *runManager) supersede(id string) (context.Context, *runToken, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,7 +109,7 @@ func (m *runManager) supersede(id string) (context.Context, *runToken, bool) {
 }
 
 // end releases tok's context and clears the registration, but only if tok is still
-// the current run for id (a superseding begin() may already have replaced it).
+// the current run for id (a later supersede() may already have replaced it).
 func (m *runManager) end(id string, tok *runToken) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

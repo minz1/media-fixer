@@ -143,16 +143,7 @@ func (c *ArrClient) DownloadClientConfig(ctx context.Context) (DownloadClientCon
 }
 
 func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string, q url.Values, body, out any) error {
-	return c.doAs(ctx, hc, "arr "+method+" "+path, method, path, q, body, out)
-}
-
-func (c *ArrClient) doAs(
-	ctx context.Context,
-	hc *http.Client,
-	label, method, path string,
-	q url.Values,
-	body, out any,
-) error {
+	label := "arr " + method + " " + path
 	u := c.base + path
 	if q != nil {
 		u += "?" + q.Encode()

@@ -130,7 +130,7 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 // full agent runs — so it outlives the HTTP request that triggered it, and a
 // later reopen/reinvestigate cancels it cleanly instead of racing it.
 func (s *Service) launchVerification(inc *db.Incident, result *agent.DiagnosticResult) {
-	ctx, tok := s.runs.begin(inc.ID)
+	ctx, tok, _ := s.runs.supersede(inc.ID)
 	go func() {
 		defer s.runs.end(inc.ID, tok)
 		s.runVerification(ctx, inc, result)

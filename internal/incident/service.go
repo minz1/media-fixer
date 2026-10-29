@@ -118,12 +118,12 @@ func (s *Service) SetSeerr(seerr SeerrIssues) {
 // launch starts a background agent run for an incident with a fixed seed (nil
 // for a fresh run).
 func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) {
-	ctx, tok := s.runs.begin(inc.ID)
+	ctx, tok, _ := s.runs.supersede(inc.ID)
 	s.startRun(ctx, tok, inc, func(context.Context) []openai.ChatCompletionMessage { return seed })
 }
 
 // startRun runs the background agent pipeline for an incident under a token
-// from runs.begin, which cancels any in-flight run for the same incident, so a
+// from runs.supersede, which cancels any in-flight run for the same incident, so a
 // rerun supersedes a prior run instead of racing it. buildSeed runs on the new
 // run's own (background) context rather than the caller's, so a seed built from
 // an expensive call (buildReinvestigateSeed summarizes the prior conversation

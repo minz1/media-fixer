@@ -411,7 +411,7 @@ func (c *ArrClient) postCommand(ctx context.Context, body any) (int, error) {
 	var cmd struct {
 		ID int `json:"id"`
 	}
-	if err := c.doAs(ctx, c.http, "arr command", http.MethodPost, "/api/v3/command", nil, body, &cmd); err != nil {
+	if err := c.do(ctx, c.http, http.MethodPost, "/api/v3/command", nil, body, &cmd); err != nil {
 		return 0, err
 	}
 	return cmd.ID, nil
