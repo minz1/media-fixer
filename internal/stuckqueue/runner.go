@@ -250,7 +250,7 @@ func (r *Runner) notify(ctx context.Context, items []Item, capHit bool) {
 func dmText(items []Item, capHit bool) string {
 	capLine := fmt.Sprintf("Stopped after clearing %d this run.", maxAutoClears)
 	if len(items) == 0 {
-		return fmt.Sprintf("📦 Stuck-queue sweep stopped after clearing %d this run.", maxAutoClears)
+		return "📦 Stuck-queue sweep: " + capLine
 	}
 	tail := ""
 	if capHit {
@@ -259,7 +259,7 @@ func dmText(items []Item, capHit bool) string {
 	var b strings.Builder
 	b.WriteString(dmHeader)
 	for i, it := range items {
-		line := "\n• " + appName(it.App) + " — " + it.Title + " — " + reason(it)
+		line := "\n• " + it.App.Name() + " — " + it.Title + " — " + reason(it)
 		more := fmt.Sprintf("\n…and %d more", len(items)-i)
 		if b.Len()+len(line)+len(more)+len(tail) > dmLimit {
 			b.WriteString(more)
@@ -271,7 +271,7 @@ func dmText(items []Item, capHit bool) string {
 	return b.String()
 }
 
-func appName(a App) string {
+func (a App) Name() string {
 	switch a {
 	case AppSonarr:
 		return "Sonarr"

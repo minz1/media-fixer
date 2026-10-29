@@ -223,7 +223,7 @@ func TestRun_Cap(t *testing.T) {
 	if n := len(deletes(e.sonarr.writesCopy())); n != 20 || !res.CapHit {
 		t.Fatalf("deletes = %d, capHit = %v", n, res.CapHit)
 	}
-	if dms := e.dmsCopy(); len(dms) != 1 || dms[0] != "📦 Stuck-queue sweep stopped after clearing 20 this run." {
+	if dms := e.dmsCopy(); len(dms) != 1 || dms[0] != "📦 Stuck-queue sweep: Stopped after clearing 20 this run." {
 		t.Fatalf("dms = %q", dms)
 	}
 }

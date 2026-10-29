@@ -89,3 +89,11 @@ func disabledDefaults() Settings {
 	s.Enabled = false
 	return s
 }
+
+type Bounds struct {
+	IntervalLo, IntervalHi, MinAgeLo, MinAgeHi int
+}
+
+func SettingBounds() Bounds {
+	return Bounds{lowestIntervalMinutes, highestIntervalMinutes, lowestMinAgeHours, highestMinAgeHours}
+}

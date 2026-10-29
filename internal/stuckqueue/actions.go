@@ -18,7 +18,7 @@ func (s *Scheduler) Act(
 	defer s.mu.Unlock()
 	c := s.r.client(app)
 	if c == nil {
-		return "", refuse("%s is not configured", appName(app))
+		return "", refuse("%s is not configured", app.Name())
 	}
 	entries, err := c.QueueEntries(ctx)
 	if err != nil {
@@ -27,7 +27,7 @@ func (s *Scheduler) Act(
 	downloads := Group(app, entries)
 	i := slices.IndexFunc(downloads, func(d Download) bool { return strings.EqualFold(d.DownloadID, downloadID) })
 	if i < 0 {
-		return "", refuse("this download is no longer in the %s queue", appName(app))
+		return "", refuse("this download is no longer in the %s queue", app.Name())
 	}
 	d := downloads[i]
 	if !d.Stuck() {
@@ -78,7 +78,7 @@ func (s *Scheduler) apply(
 		}
 		if err := search(ctx, c, d); err != nil {
 			return "", fmt.Errorf("the release is blocklisted and removed, but the search failed; search from %s: %w",
-				appName(d.App), err)
+				d.App.Name(), err)
 		}
 		return "Re-grab started for " + d.Targets() + ".", nil
 	case ActionRemove:

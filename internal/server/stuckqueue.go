@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -153,6 +152,7 @@ func (s *Server) stuckCardData(
 		"Notice":      notice,
 		"Failure":     failure,
 		"Unreadable":  unreadable,
+		"Bounds":      stuckqueue.SettingBounds(),
 	}
 	if res == nil {
 		return card
@@ -169,7 +169,7 @@ func (s *Server) stuckCardData(
 }
 
 func stuckApp(ar stuckqueue.AppResult) stuckAppView {
-	v := stuckAppView{Name: titleApp(ar.App)}
+	v := stuckAppView{Name: ar.App.Name()}
 	switch {
 	case !ar.Configured:
 		v.Summary = "not configured"
@@ -222,14 +222,6 @@ func stuckButtonFor(a stuckqueue.Action, targets string) stuckButton {
 		}
 	}
 	return stuckButton{Action: string(a), Label: string(a)}
-}
-
-func titleApp(a stuckqueue.App) string {
-	s := string(a)
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func parseStuckSettings(r *http.Request) (stuckqueue.Settings, map[string]string) {
