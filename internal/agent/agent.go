@@ -667,8 +667,11 @@ func (a *Agent) processToolCalls(
 				continue
 			}
 
-			*autonomousActions++
-			_, _ = a.db.IncrementActionCount(ctx, inc.ID)
+			if n, incErr := a.db.IncrementActionCount(ctx, inc.ID); incErr == nil {
+				*autonomousActions = n
+			} else {
+				*autonomousActions++
+			}
 
 			if *autonomousActions > maxAutonomousActions {
 				// Lock autonomous action, but deliberately do NOT write

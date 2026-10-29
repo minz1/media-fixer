@@ -264,3 +264,36 @@ func TestVerifyResolved_WithoutJellyfinItemUsesArrFilePresence(t *testing.T) {
 		}
 	})
 }
+
+func TestRun_ActionBudgetCountsActionsRecordedOutsideThisRun(t *testing.T) {
+	t.Parallel()
+	llm := &scriptedLLM{responses: []string{
+		toolCallResponse("refresh_decypharr_links", `{}`),
+		toolCallResponse("decypharr_repair_sweep", `{}`),
+		toolCallResponse("decypharr_cache_cleanup", `{}`),
+		toolCallResponse("decypharr_recheck", `{"name":"something"}`),
+	}}
+	ag, database := newRunTestAgent(t, llm)
+	inc := seedRunIncident(t, database)
+	ctx := context.Background()
+	for range 2 {
+		if _, err := database.IncrementActionCount(ctx, inc.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, _, err := ag.Run(ctx, inc, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result == nil || !result.RequiresApproval {
+		t.Fatalf("result = %+v, want the budget to trip", result)
+	}
+	actions, err := database.ListActions(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("logged %d actions, want 1: two were already counted in the DB", len(actions))
+	}
+}
