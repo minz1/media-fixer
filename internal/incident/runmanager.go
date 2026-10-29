@@ -80,9 +80,15 @@ func newRunManager(base context.Context) *runManager {
 // context — cancelled either by a superseding begin() for the same id, or by
 // the manager's shutdown, whichever comes first.
 func (m *runManager) begin(id string) (context.Context, *runToken) {
+	ctx, tok, _ := m.supersede(id)
+	return ctx, tok
+}
+
+func (m *runManager) supersede(id string) (context.Context, *runToken, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if prev, ok := m.active[id]; ok {
+	prev, replaced := m.active[id]
+	if replaced {
 		prev.cancel()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,7 +110,7 @@ func (m *runManager) begin(id string) (context.Context, *runToken) {
 	}
 	tok := &runToken{cancel: cancel}
 	m.active[id] = tok
-	return ctx, tok
+	return ctx, tok, replaced
 }
 
 // end releases tok's context and clears the registration, but only if tok is still

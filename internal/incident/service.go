@@ -892,20 +892,26 @@ const (
 )
 
 func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) error {
-	runCtx, tok := s.runs.begin(id)
-	// Deliberate human/system override — clear any autonomous lock so the
-	// re-run actually proceeds, even for a previously blocked/locked incident.
-	_ = s.db.SetAutonomousLocked(ctx, id, false)
-	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
-		s.runs.end(id, tok)
-		return err
-	}
-	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
-		s.runs.end(id, tok)
 		return err
 	}
+	runCtx, tok, replaced := s.runs.supersede(id)
+	// Deliberate human/system override — clear any autonomous lock so the
+	// re-run actually proceeds, even for a previously blocked/locked incident.
+	if lockErr := s.db.SetAutonomousLocked(ctx, id, false); lockErr == nil {
+		inc.AutonomousLocked = false
+	}
+	if err = s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
+		s.runs.end(id, tok)
+		if replaced {
+			s.log.ErrorContext(ctx, "rerun cancelled the running run and started no replacement",
+				"incident", id, "error", err)
+		}
+		return err
+	}
+	inc.Status = db.StatusReopened
+	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	switch origin {
 	case rerunManual:
 		s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
