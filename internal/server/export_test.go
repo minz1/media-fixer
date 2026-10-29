@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"io"
+	"net"
 )
 
 // SeerrIssueTypeToWhat exports the internal mapping for use in package server_test.
@@ -21,3 +22,5 @@ func (s *Server) BuildIncidentPageDataForTest(ctx context.Context, id string, fu
 func (s *Server) ExecuteTemplateForTest(w io.Writer, name string, data any) error {
 	return s.tmpl.t.ExecuteTemplate(w, name, data)
 }
+
+func (s *Server) UseListenerForTest(l net.Listener) { s.listener = l }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,8 @@ type Server struct {
 	seerrWebhookSecret string
 
 	sweep *sweep.Scheduler
+
+	listener net.Listener
 }
 
 // SetChecker wires the dispatcher the /selftest page runs checks against.
@@ -146,7 +149,13 @@ func (s *Server) Start(ctx context.Context) error {
 	s.log.InfoContext(ctx, "http server starting", "addr", s.http.Addr, "base", s.baseURL)
 	errCh := make(chan error, 1)
 	go func() {
-		if err := s.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if s.listener != nil {
+			err = s.http.Serve(s.listener)
+		} else {
+			err = s.http.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
