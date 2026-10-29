@@ -1,0 +1,56 @@
+{
+  "page": 1,
+  "pageSize": 250,
+  "sortKey": "timeleft",
+  "sortDirection": "descending",
+  "totalRecords": 1,
+  "records": [
+    {
+      "languages": [
+        {
+          "id": 0,
+          "name": "Unknown"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 0,
+          "name": "Unknown",
+          "source": "unknown",
+          "resolution": 0,
+          "modifier": "none"
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormatScore": 0,
+      "size": 879147608,
+      "title": "Skin Like Sun.mp4",
+      "estimatedCompletionTime": "2026-10-29T20:58:00Z",
+      "added": "2026-10-27T13:27:55Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importBlocked",
+      "statusMessages": [
+        {
+          "title": "Skin Like Sun.mp4",
+          "messages": [
+            "Unable to parse download, automatic import is not possible."
+          ]
+        }
+      ],
+      "downloadId": "F506193582FE74CA35533070B575288FAFEFE757",
+      "protocol": "torrent",
+      "downloadClient": "decypharr",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "Zilean (Prowlarr)",
+      "outputPath": "/data/downloads/radarr/Skin Like Sun",
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1237824983
+    }
+  ]
+}

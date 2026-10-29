@@ -1,0 +1,1332 @@
+{
+  "page": 1,
+  "pageSize": 250,
+  "sortKey": "timeleft",
+  "sortDirection": "descending",
+  "totalRecords": 18,
+  "records": [
+    {
+      "seriesId": 137,
+      "episodeId": 10908,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 137,
+        "tvdbId": 12029669,
+        "episodeFileId": 14384,
+        "seasonNumber": 1,
+        "episodeNumber": 3,
+        "title": "The God of Destruction Heads to Earth",
+        "airDate": "2026-10-25",
+        "airDateUtc": "2026-10-25T14:15:00Z",
+        "lastSearchTime": "2026-10-26T21:33:23Z",
+        "runtime": 23,
+        "overview": "After facing off with Goku, Beerus heads to Earth seeking other Saiyans. On Earth, Goku's companions have gathered to celebrate Bulma's birthday. When Vegeta sees Beerus, the terror of the God of Destruction resurfaces in his mind...!",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 3,
+        "unverifiedSceneNumbering": false,
+        "id": 10908
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 3,
+          "name": "WEBDL-1080p",
+          "source": "web",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 19,
+          "name": "Anime Web Tier 03"
+        },
+        {
+          "id": 38,
+          "name": "CR"
+        }
+      ],
+      "customFormatScore": 406,
+      "size": 1218923209,
+      "title": "Dragon.Ball.Super.Beerus.2026.S01E03.1080p.CR.WEB-DL.AAC2.0.H.264-AnoZu",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-25T17:18:16Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "Dragon.Ball.Super.Beerus.2026.S01E03.1080p.CR.WEB-DL.AAC2.0.H.264-AnoZu.mkv",
+          "messages": [
+            "Unable to determine if file is a sample",
+            "Not a quality revision upgrade for existing episode file(s)"
+          ]
+        }
+      ],
+      "downloadId": "ED20E54BB42FC39AFB23D42B081416CD4FAD7F3E",
+      "protocol": "torrent",
+      "downloadClient": "decypharr",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "Nyaa.si (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/Dragon.Ball.Super.Beerus.2026.S01E03.1080p.CR.WEB-DL.AAC2.0.H.264-AnoZu",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1074397686
+    },
+    {
+      "seriesId": 188,
+      "episodeId": 14607,
+      "seasonNumber": 9,
+      "episode": {
+        "seriesId": 188,
+        "tvdbId": 434288,
+        "episodeFileId": 0,
+        "seasonNumber": 9,
+        "episodeNumber": 1,
+        "title": "Salmon on the Run",
+        "airDate": "1982-01-10",
+        "airDateUtc": "1982-01-11T02:00:00Z",
+        "lastSearchTime": "2026-10-28T13:26:47Z",
+        "runtime": 60,
+        "overview": "NOVA captures the breathtaking power and determination of these amazing creatures and examines how business and technology are changing the fishing industry—and the salmon itself.",
+        "hasFile": false,
+        "monitored": true,
+        "unverifiedSceneNumbering": false,
+        "id": 14607
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 1,
+          "name": "SDTV",
+          "source": "television",
+          "resolution": 480
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 901950803,
+      "title": "NOVA.S09E01.Salmon.on.the.Run.1982.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T18:55:22Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "NOVA.S09E01.Salmon.on.the.Run.1982.VHSRip.AAC2.0.x264-astro-Obfuscated",
+          "messages": [
+            "Unable to determine if file is a sample"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "a04b60d8-379e-4a61-8818-926f4039c6e8",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/NOVA.S09E01.Salmon.on.the.Run.1982.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1886296760
+    },
+    {
+      "seriesId": 175,
+      "episodeId": 13781,
+      "seasonNumber": 2,
+      "episode": {
+        "seriesId": 175,
+        "tvdbId": 5566674,
+        "episodeFileId": 14157,
+        "seasonNumber": 2,
+        "episodeNumber": 19,
+        "title": "Back to Normal",
+        "airDate": "2016-04-26",
+        "airDateUtc": "2016-04-27T00:00:00Z",
+        "lastSearchTime": "2026-10-26T03:15:51Z",
+        "runtime": 42,
+        "overview": "A meta-human with super strength named Griffin Grey mistakes Harry for Earth-1 Harrison Wells and kidnaps him, demanding that Wells cure him from his current condition. Realizing another brilliant Wells could help track Griffin’s location, Barry asks Jesse to help. Meanwhile, Wally corners Joe about The Flash.",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 42,
+        "unverifiedSceneNumbering": false,
+        "id": 13781
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 7,
+          "name": "Bluray-1080p",
+          "source": "bluray",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 3516538434,
+      "title": "the.flash.s02e19.1080p.bluray.x264-turmoil-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-26T03:15:53Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "the.flash.s02e19.1080p.bluray.x264-turmoil-Obfuscated",
+          "messages": [
+            "Not an upgrade for existing episode file(s). Existing quality: WEBDL-1080p. New Quality Bluray-1080p."
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "0ffd8f57-e66a-4c1f-8fb2-cee5eea0ec4d",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/the.flash.s02e19.1080p.bluray.x264-turmoil-Obfuscated",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1464435435
+    },
+    {
+      "languages": [
+        {
+          "id": 0,
+          "name": "Unknown"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 2,
+          "name": "DVD",
+          "source": "dvd",
+          "resolution": 480
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 48,
+          "name": "Language: Not Original"
+        }
+      ],
+      "customFormatScore": 0,
+      "size": 93467831602,
+      "title": "[A&C] One Piece Season 01 - East Blue [0001-0061] (DVD) [Multi-Audio-Subs]",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importBlocked",
+      "statusMessages": [
+        {
+          "title": "[A&C] One Piece Season 01 - East Blue [0001-0061] (DVD) [Multi-Audio-Subs]",
+          "messages": [
+            "Series title mismatch; automatic import is not possible. Check the download troubleshooting entry on the wiki for common causes."
+          ]
+        }
+      ],
+      "downloadId": "47B7DD5507FCC20C3E6EDBDE14D97FFFDED2BB59",
+      "protocol": "torrent",
+      "downloadClient": "decypharr",
+      "downloadClientHasPostImportCategory": false,
+      "outputPath": "/data/downloads/sonarr/[A&C] One Piece Season 01 - East Blue [0001-0061] (DVD) [Multi-Audio-Subs]",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1304969599
+    },
+    {
+      "seriesId": 166,
+      "episodeId": 16054,
+      "seasonNumber": 3,
+      "episode": {
+        "seriesId": 166,
+        "tvdbId": 11923572,
+        "episodeFileId": 0,
+        "seasonNumber": 3,
+        "episodeNumber": 12,
+        "title": "Welcome Home",
+        "airDate": "2026-10-23",
+        "airDateUtc": "2026-10-23T03:00:00Z",
+        "lastSearchTime": "2026-10-29T20:46:45Z",
+        "runtime": 23,
+        "overview": "Trapped between memories and photographs, Cheng Xiaoshi searches for a way back.",
+        "hasFile": false,
+        "monitored": true,
+        "absoluteEpisodeNumber": 42,
+        "unverifiedSceneNumbering": true,
+        "id": 16054
+      },
+      "languages": [
+        {
+          "id": 10,
+          "name": "Chinese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 18,
+          "name": "WEBDL-2160p",
+          "source": "web",
+          "resolution": 2160
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 49,
+          "name": "HDR"
+        }
+      ],
+      "customFormatScore": 500,
+      "size": 1057693724,
+      "title": "LINK.CLICK.S03E12.2021.2160p.WEB-DL.H.265.HDR.AAC-HHWEB",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-29T20:46:46Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "LINK.CLICK.S03E12.2021.2160p.WEB-DL.H.265.HDR.AAC-HHWEB",
+          "messages": [
+            "This show has individual episode mappings on TheXEM but the mapping for this episode has not been confirmed yet by their administrators. TheXEM needs manual input."
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "fb7aa538-6373-4d47-8771-a22815f0c37c",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/LINK.CLICK.S03E12.2021.2160p.WEB-DL.H.265.HDR.AAC-HHWEB",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1910858291
+    },
+    {
+      "seriesId": 188,
+      "episodeId": 14517,
+      "seasonNumber": 4,
+      "episode": {
+        "seriesId": 188,
+        "tvdbId": 406917,
+        "episodeFileId": 0,
+        "seasonNumber": 4,
+        "episodeNumber": 10,
+        "title": "Sociobiology : The Human Animal",
+        "airDate": "1977-03-23",
+        "airDateUtc": "1977-03-24T02:00:00Z",
+        "lastSearchTime": "2026-10-28T13:21:09Z",
+        "runtime": 60,
+        "overview": "NOVA investigates the controversial theory of Harvard University biologist E.O. Wilson, that many aspects of human behavior are genetically determined.",
+        "hasFile": false,
+        "monitored": true,
+        "unverifiedSceneNumbering": false,
+        "id": 14517
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 1,
+          "name": "SDTV",
+          "source": "television",
+          "resolution": 480
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 704087297,
+      "title": "NOVA.S04E10.Sociobiology.The.Human.Animal.1977.VHSRip.AAC2.0.x264-rattera-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T18:48:38Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "NOVA.S04E10.Sociobiology.The.Human.Animal.1977.VHSRip.AAC2.0.x264-rattera-Obfuscated",
+          "messages": [
+            "Unable to determine if file is a sample"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "2bd722a3-1907-4618-8ba9-2511e342a830",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/NOVA.S04E10.Sociobiology.The.Human.Animal.1977.VHSRip.AAC2.0.x264-rattera-Obfuscated",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 2127004166
+    },
+    {
+      "seriesId": 167,
+      "episodeId": 13420,
+      "seasonNumber": 13,
+      "episode": {
+        "seriesId": 167,
+        "tvdbId": 11922180,
+        "episodeFileId": 13742,
+        "seasonNumber": 13,
+        "episodeNumber": 12,
+        "title": "Sisters in Arms",
+        "airDate": "2026-10-22",
+        "airDateUtc": "2026-10-23T02:43:00Z",
+        "lastSearchTime": "2026-10-23T13:07:18Z",
+        "runtime": 31,
+        "overview": "Fiona confronts a family secret, while the Coven prepares for a foe worse than any they've faced.",
+        "hasFile": true,
+        "monitored": true,
+        "unverifiedSceneNumbering": false,
+        "id": 13420
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 18,
+          "name": "WEBDL-2160p",
+          "source": "web",
+          "resolution": 2160
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 19,
+          "name": "Anime Web Tier 03"
+        },
+        {
+          "id": 39,
+          "name": "DSNP"
+        },
+        {
+          "id": 68,
+          "name": "UHD Streaming Boost"
+        },
+        {
+          "id": 5,
+          "name": "WEB Tier 01"
+        }
+      ],
+      "customFormatScore": 1850,
+      "size": 2614112475,
+      "title": "American Horror Story S13E12 Sisters in Arms 2160p DSNP WEB-DL DDP5 1 H 265-Kitsune",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-24T02:34:59Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "American Horror Story S13E12 Sisters in Arms 2160p DSNP WEB-DL DDP5 1 H 265-Kitsune.mkv",
+          "messages": [
+            "Unable to determine if file is a sample"
+          ]
+        }
+      ],
+      "downloadId": "62BBF4958F22BB3A765FACFEA4303AE1D7D0664A",
+      "protocol": "torrent",
+      "downloadClient": "decypharr",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "Uindex (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/American Horror Story S13E12 Sisters in Arms 2160p DSNP WEB-DL DDP5 1 H 265-Kitsune",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 233788850
+    },
+    {
+      "seriesId": 184,
+      "episodeId": 14265,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 184,
+        "tvdbId": 313969,
+        "episodeFileId": 15566,
+        "seasonNumber": 1,
+        "episodeNumber": 24,
+        "title": "Evanescent Encounter (Part 1)",
+        "airDate": "2005-03-05",
+        "airDateUtc": "2005-03-04T15:00:00Z",
+        "lastSearchTime": "2026-10-28T13:10:16Z",
+        "runtime": 23,
+        "overview": "Fuu, Mugen and Jin have finally arrived in Nagasaki to find Ikitsuki island in search of the Sunflower Samurai.  There seems to be one small problem that might keep them from getting there though.  A group of assassins are following closely behind.",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 24,
+        "unverifiedSceneNumbering": false,
+        "id": 14265
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 7,
+          "name": "Bluray-1080p",
+          "source": "bluray",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 34,
+          "name": "10bit"
+        }
+      ],
+      "customFormatScore": 0,
+      "size": 53760000,
+      "title": "[philosophy-raws][Samurai Champloo][24][BDRIP][Hi10P FLAC][1920X1080]",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T02:05:30Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "[philosophy-raws][Samurai Champloo][24][BDRIP][Hi10P FLAC][1920X1080]",
+          "messages": [
+            "Unable to determine if file is a sample",
+            "Not a Custom Format upgrade for existing episode file(s). New: [10bit] (0) do not improve on Existing: [Anime BD Tier 02, Anime Dual Audio, Seadex, x265 (no HDR/DV)] (6401)"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "6e2a0a2f-cc46-411f-b90d-7ca555ed5562",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/[philosophy-raws][Samurai Champloo][24][BDRIP][Hi10P FLAC][1920X1080]",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1705353935
+    },
+    {
+      "seriesId": 188,
+      "episodeId": 14611,
+      "seasonNumber": 9,
+      "episode": {
+        "seriesId": 188,
+        "tvdbId": 434292,
+        "episodeFileId": 0,
+        "seasonNumber": 9,
+        "episodeNumber": 5,
+        "title": "Finding a Voice",
+        "airDate": "1982-02-07",
+        "airDateUtc": "1982-02-08T02:00:00Z",
+        "lastSearchTime": "2026-10-28T13:26:47Z",
+        "runtime": 60,
+        "overview": "What is it like not to be able to communicate with others? NOVA explores the severest of speech disabilities with Dick Boydell—born with cerebral palsy, confined to a wheel chair and unable for 30 years to say more than \"yes\" or \"no\" and investigates some of the new technology that gives the speechless a \"voice.\"",
+        "hasFile": false,
+        "monitored": true,
+        "unverifiedSceneNumbering": false,
+        "id": 14611
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 1,
+          "name": "SDTV",
+          "source": "television",
+          "resolution": 480
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 947699883,
+      "title": "NOVA.S09E05.Finding.a.Voice.1982.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T18:55:28Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "NOVA.S09E05.Finding.a.Voice.1982.VHSRip.AAC2.0.x264-astro-Obfuscated",
+          "messages": [
+            "Unable to determine if file is a sample"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "5937394c-bd1b-42d2-9798-c31919706026",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/NOVA.S09E05.Finding.a.Voice.1982.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1783251539
+    },
+    {
+      "seriesId": 158,
+      "episodeId": 12907,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 158,
+        "tvdbId": 12015281,
+        "episodeFileId": 13959,
+        "seasonNumber": 1,
+        "episodeNumber": 5,
+        "title": "Family's Trust",
+        "airDate": "2026-10-30",
+        "airDateUtc": "2026-10-30T14:30:00Z",
+        "runtime": 24,
+        "overview": "Grid continues his blacksmithing. He puts up an epic armor for auction, and gets a request for more.",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 5,
+        "sceneAbsoluteEpisodeNumber": 5,
+        "sceneEpisodeNumber": 5,
+        "sceneSeasonNumber": 1,
+        "unverifiedSceneNumbering": false,
+        "id": 12907
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 3,
+          "name": "WEBDL-1080p",
+          "source": "web",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 35,
+          "name": "Anime Dual Audio"
+        },
+        {
+          "id": 20,
+          "name": "Anime Web Tier 04"
+        },
+        {
+          "id": 38,
+          "name": "CR"
+        }
+      ],
+      "customFormatScore": 407,
+      "size": 1512423894,
+      "title": "Overgeared S01E05 Familys Trust 1080p CR WEB-DL DUAL AAC2.0 H.264-VARYG (Tempal Item no Chikara, Dual-Audio, Multi-Subs)",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-25T14:43:19Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "Overgeared S01E05 Familys Trust 1080p CR WEB-DL DUAL AAC2.0 H.264-VARYG (Tempal Item no Chikara, Dual-Audio, Multi-Subs)",
+          "messages": [
+            "Not a Custom Format upgrade for existing episode file(s). New: [Anime Dual Audio, Anime Web Tier 04, CR] (407) do not improve on Existing: [Anime Dual Audio, Anime Web Tier 03, CR] (507)"
+          ]
+        }
+      ],
+      "downloadId": "64AB6871131593BB0D44FF10ABD829EA2A9E0378",
+      "protocol": "torrent",
+      "downloadClient": "decypharr",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "Nyaa.si (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/Overgeared S01E05 Familys Trust 1080p CR WEB-DL DUAL AAC2.0 H.264-VARYG (Tempal Item no Chikara, Dual-Audio, Multi-Subs)",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1948903436
+    },
+    {
+      "seriesId": 188,
+      "episodeId": 14591,
+      "seasonNumber": 8,
+      "episode": {
+        "seriesId": 188,
+        "tvdbId": 434272,
+        "episodeFileId": 0,
+        "seasonNumber": 8,
+        "episodeNumber": 5,
+        "title": "The Science of Murder",
+        "airDate": "1981-02-17",
+        "airDateUtc": "1981-02-18T02:00:00Z",
+        "lastSearchTime": "2026-10-28T13:24:57Z",
+        "runtime": 60,
+        "overview": "NOVA investigates what science can do in helping to solve murder—in understanding why it occurs, and how the rate might be reduced—and explores the work of people who have the stark job of dealing with death: the police, pathologist, scientists and psychiatrists.",
+        "hasFile": false,
+        "monitored": true,
+        "unverifiedSceneNumbering": false,
+        "id": 14591
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 1,
+          "name": "SDTV",
+          "source": "television",
+          "resolution": 480
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 796741022,
+      "title": "NOVA.S08E05.The.Science.of.Murder.1981.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T18:53:40Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "NOVA.S08E05.The.Science.of.Murder.1981.VHSRip.AAC2.0.x264-astro-Obfuscated",
+          "messages": [
+            "Unable to determine if file is a sample"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "06a24324-7d10-4a6c-bd6e-d8d44559f527",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/NOVA.S08E05.The.Science.of.Murder.1981.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1234648830
+    },
+    {
+      "seriesId": 137,
+      "episodeId": 10381,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 137,
+        "tvdbId": 11961083,
+        "episodeFileId": 8426,
+        "seasonNumber": 1,
+        "episodeNumber": 1,
+        "title": "The God Who Destroys",
+        "airDate": "2026-10-11",
+        "airDateUtc": "2026-10-11T14:15:00Z",
+        "lastSearchTime": "2026-10-26T21:32:33Z",
+        "runtime": 23,
+        "overview": "Years after the battle with Earth's greatest enemy, Majin Buu, the planet's savior Son Goku spends his days in peace. Meanwhile, on a distant planet, the God of Destruction Beerus awakens from his long slumber!",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 1,
+        "unverifiedSceneNumbering": false,
+        "id": 10381
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 9,
+          "name": "HDTV-1080p",
+          "source": "television",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 2,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 31,
+          "name": "v2"
+        }
+      ],
+      "customFormatScore": 2,
+      "size": 1440649711,
+      "title": "[OECUF&ok] Dragon Ball Super Beerus - 01 v2 [Multi-Subs] [1080p]",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-23T18:17:15Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "[OECUF&ok] Dragon Ball Super Beerus - 01 v2 [Multi-Subs] [1080p].mkv",
+          "messages": [
+            "Not a Custom Format upgrade for existing episode file(s). New: [v2] (2) do not improve on Existing: [Anime Web Tier 03, CR] (406)"
+          ]
+        }
+      ],
+      "downloadId": "EFD6884F57C10D9B281DB10C05F939B9FE3FD498",
+      "protocol": "torrent",
+      "downloadClient": "decypharr",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "Nyaa.si (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/[OECUF&ok] Dragon Ball Super Beerus - 01 v2 [Multi-Subs] [1080p]",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 804347979
+    },
+    {
+      "seriesId": 184,
+      "episodeId": 14244,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 184,
+        "tvdbId": 302448,
+        "episodeFileId": 15545,
+        "seasonNumber": 1,
+        "episodeNumber": 3,
+        "title": "Hellhounds for Hire (Part 1)",
+        "airDate": "2004-06-10",
+        "airDateUtc": "2004-06-09T15:00:00Z",
+        "lastSearchTime": "2026-10-28T12:56:28Z",
+        "runtime": 23,
+        "overview": "Mugen and Jin decide to ditch Fuu, but they end up joining opposite sides in a basica gang warfare with Fuu in the middle reminding them of their promise.",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 3,
+        "unverifiedSceneNumbering": false,
+        "id": 14244
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 7,
+          "name": "Bluray-1080p",
+          "source": "bluray",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 35,
+          "name": "Anime Dual Audio"
+        },
+        {
+          "id": 70,
+          "name": "BR-DISK"
+        },
+        {
+          "id": 71,
+          "name": "BR-DISK (BTN)"
+        }
+      ],
+      "customFormatScore": 101,
+      "size": 3881535980,
+      "title": "Samurai.Champloo.EP.26.Evanescent.Encounter.Part.3.BD.AVC.1080p.FLAC.Dual.Audio",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T02:04:42Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importBlocked",
+      "statusMessages": [
+        {
+          "title": "Samurai.Champloo.EP.26.Evanescent.Encounter.Part.3.BD.AVC.1080p.FLAC.Dual.Audio",
+          "messages": [
+            "Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details."
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "c1753572-626f-4590-a9c6-c54598f803f0",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/Samurai.Champloo.EP.26.Evanescent.Encounter.Part.3.BD.AVC.1080p.FLAC.Dual.Audio",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 621463217
+    },
+    {
+      "seriesId": 184,
+      "episodeId": 14261,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 184,
+        "tvdbId": 313965,
+        "episodeFileId": 15562,
+        "seasonNumber": 1,
+        "episodeNumber": 20,
+        "title": "Elegy of Entrapment, Verse 1",
+        "airDate": "2005-02-05",
+        "airDateUtc": "2005-02-04T15:00:00Z",
+        "lastSearchTime": "2026-10-28T13:07:42Z",
+        "runtime": 23,
+        "overview": "Fuu, Mugen and Jin meet up with a blind girl who is a traveling musician.  Because of her blindness, she is able to sense the emotions of the group.  Is this girl more than just a musician?",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 20,
+        "unverifiedSceneNumbering": false,
+        "id": 14261
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 7,
+          "name": "Bluray-1080p",
+          "source": "bluray",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 34,
+          "name": "10bit"
+        }
+      ],
+      "customFormatScore": 0,
+      "size": 53760000,
+      "title": "[philosophy-raws][Samurai Champloo][20][BDRIP][Hi10P FLAC][1920X1080]",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T02:05:25Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "[philosophy-raws][Samurai Champloo][20][BDRIP][Hi10P FLAC][1920X1080]",
+          "messages": [
+            "Unable to determine if file is a sample",
+            "Not a Custom Format upgrade for existing episode file(s). New: [10bit] (0) do not improve on Existing: [Anime BD Tier 02, Anime Dual Audio, Seadex, x265 (no HDR/DV)] (6401)"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "6cf647c8-6559-4eb8-a2dc-7603a7caa04d",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/[philosophy-raws][Samurai Champloo][20][BDRIP][Hi10P FLAC][1920X1080]",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 785085640
+    },
+    {
+      "seriesId": 184,
+      "episodeId": 14249,
+      "seasonNumber": 1,
+      "episode": {
+        "seriesId": 184,
+        "tvdbId": 302453,
+        "episodeFileId": 15550,
+        "seasonNumber": 1,
+        "episodeNumber": 8,
+        "title": "The Art of Altercation",
+        "airDate": "2004-07-15",
+        "airDateUtc": "2004-07-14T15:00:00Z",
+        "lastSearchTime": "2026-10-28T12:59:44Z",
+        "runtime": 23,
+        "overview": "A man hunting for Jin has been challenging any samurai wearing glasses he can find, accompanied by a beat-boxing duo of underlings. The question arises as to whether or not he will recognize Jin when he becomes infatuated with Fuu, for Jin has had to pawn his glasses.",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 8,
+        "unverifiedSceneNumbering": false,
+        "id": 14249
+      },
+      "languages": [
+        {
+          "id": 8,
+          "name": "Japanese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 7,
+          "name": "Bluray-1080p",
+          "source": "bluray",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 34,
+          "name": "10bit"
+        }
+      ],
+      "customFormatScore": 0,
+      "size": 53760000,
+      "title": "[philosophy-raws][Samurai Champloo][08][BDRIP][Hi10P FLAC][1920X1080]",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T02:05:14Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "[philosophy-raws][Samurai Champloo][08][BDRIP][Hi10P FLAC][1920X1080]",
+          "messages": [
+            "Unable to determine if file is a sample",
+            "Not a Custom Format upgrade for existing episode file(s). New: [10bit] (0) do not improve on Existing: [Anime BD Tier 02, Anime Dual Audio, Seadex, x265 (no HDR/DV)] (6401)"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "5b3d54ee-ca4e-4993-9bb9-421cd02748ea",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/[philosophy-raws][Samurai Champloo][08][BDRIP][Hi10P FLAC][1920X1080]",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 1244399733
+    },
+    {
+      "seriesId": 166,
+      "episodeId": 16053,
+      "seasonNumber": 3,
+      "episode": {
+        "seriesId": 166,
+        "tvdbId": 11923571,
+        "episodeFileId": 0,
+        "seasonNumber": 3,
+        "episodeNumber": 11,
+        "title": "The Vanishing Exit",
+        "airDate": "2026-10-16",
+        "airDateUtc": "2026-10-16T03:00:00Z",
+        "lastSearchTime": "2026-10-29T20:46:17Z",
+        "runtime": 25,
+        "overview": "Cheng Xiaoshi jumps between photos as the paths back to the present close one by one.",
+        "hasFile": false,
+        "monitored": true,
+        "absoluteEpisodeNumber": 41,
+        "unverifiedSceneNumbering": true,
+        "id": 16053
+      },
+      "languages": [
+        {
+          "id": 10,
+          "name": "Chinese"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 3,
+          "name": "WEBDL-1080p",
+          "source": "web",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [
+        {
+          "id": 20,
+          "name": "Anime Web Tier 04"
+        },
+        {
+          "id": 38,
+          "name": "CR"
+        }
+      ],
+      "customFormatScore": 0,
+      "size": 1465201342,
+      "title": "[VARYG] LINK CLICK S03E11 The Exit Disappears 1080p CR WEB-DL AAC2.0 H.264 (Shiguang Dailiren - Yingdu Pian, Multi-Subs)",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-29T20:46:18Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "[VARYG] LINK CLICK S03E11 The Exit Disappears 1080p CR WEB-DL AAC2.0 H.264 (Shiguang Dailiren - Yingdu Pian, Multi-Subs)",
+          "messages": [
+            "This show has individual episode mappings on TheXEM but the mapping for this episode has not been confirmed yet by their administrators. TheXEM needs manual input."
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "ce84b21f-789e-4aa3-8157-9b1b9d3c5def",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "AnimeTosho (Usenet) (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/[VARYG] LINK CLICK S03E11 The Exit Disappears 1080p CR WEB-DL AAC2.0 H.264 (Shiguang Dailiren - Yingdu Pian, Multi-Subs)",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 2041911445
+    },
+    {
+      "seriesId": 188,
+      "episodeId": 14553,
+      "seasonNumber": 6,
+      "episode": {
+        "seriesId": 188,
+        "tvdbId": 406953,
+        "episodeFileId": 0,
+        "seasonNumber": 6,
+        "episodeNumber": 6,
+        "title": "The Invisible Flame",
+        "airDate": "1979-02-22",
+        "airDateUtc": "1979-02-23T02:00:00Z",
+        "lastSearchTime": "2026-10-28T13:23:03Z",
+        "runtime": 60,
+        "overview": "Some day hydrogen may replace the gasoline that we are now using up so rapidly. NOVA looks at the potential of hydrogen as a zero-pollution fuel.",
+        "hasFile": false,
+        "monitored": true,
+        "unverifiedSceneNumbering": false,
+        "id": 14553
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 1,
+          "name": "SDTV",
+          "source": "television",
+          "resolution": 480
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 854418606,
+      "title": "NOVA.S06E06.The.Invisible.Flame.1979.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-27T18:51:03Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "NOVA.S06E06.The.Invisible.Flame.1979.VHSRip.AAC2.0.x264-astro-Obfuscated",
+          "messages": [
+            "Unable to determine if file is a sample"
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "7917f442-e6c4-4c6a-9c93-4d2cf9dc10af",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/NOVA.S06E06.The.Invisible.Flame.1979.VHSRip.AAC2.0.x264-astro-Obfuscated",
+      "episodeHasFile": false,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 470660251
+    },
+    {
+      "seriesId": 175,
+      "episodeId": 13783,
+      "seasonNumber": 2,
+      "episode": {
+        "seriesId": 175,
+        "tvdbId": 5589452,
+        "episodeFileId": 14159,
+        "seasonNumber": 2,
+        "episodeNumber": 21,
+        "title": "The Runaway Dinosaur",
+        "airDate": "2016-05-10",
+        "airDateUtc": "2016-05-11T00:00:00Z",
+        "lastSearchTime": "2026-10-26T03:16:11Z",
+        "runtime": 42,
+        "overview": "With Barry gone, the team must figure out a way to handle the return of an old enemy - Girder. Realizing Girder is retracing his steps from his last attack, Iris volunteers to act as bait to trap him in S.T.A.R. Labs. Meanwhile, Barry fights to return to his old life.",
+        "hasFile": true,
+        "monitored": true,
+        "absoluteEpisodeNumber": 44,
+        "unverifiedSceneNumbering": false,
+        "id": 13783
+      },
+      "languages": [
+        {
+          "id": 1,
+          "name": "English"
+        }
+      ],
+      "quality": {
+        "quality": {
+          "id": 7,
+          "name": "Bluray-1080p",
+          "source": "bluray",
+          "resolution": 1080
+        },
+        "revision": {
+          "version": 1,
+          "real": 0,
+          "isRepack": false
+        }
+      },
+      "customFormats": [],
+      "customFormatScore": 0,
+      "size": 3516845486,
+      "title": "the.flash.s02e21.1080p.bluray.x264-turmoil-Obfuscated",
+      "estimatedCompletionTime": "2026-10-29T21:22:03Z",
+      "added": "2026-10-26T03:16:12Z",
+      "status": "completed",
+      "trackedDownloadStatus": "warning",
+      "trackedDownloadState": "importPending",
+      "statusMessages": [
+        {
+          "title": "the.flash.s02e21.1080p.bluray.x264-turmoil-Obfuscated",
+          "messages": [
+            "Not an upgrade for existing episode file(s). Existing quality: WEBDL-1080p. New Quality Bluray-1080p."
+          ]
+        }
+      ],
+      "errorMessage": "",
+      "downloadId": "43a7cb9c-44bc-4bc9-af25-77a8540c8f62",
+      "protocol": "usenet",
+      "downloadClient": "decypharr Usenet",
+      "downloadClientHasPostImportCategory": false,
+      "indexer": "NZBgeek (Prowlarr)",
+      "outputPath": "/data/downloads/sonarr/the.flash.s02e21.1080p.bluray.x264-turmoil-Obfuscated",
+      "episodeHasFile": true,
+      "sizeleft": 0,
+      "timeleft": "00:00:00",
+      "id": 720971190
+    }
+  ]
+}

@@ -105,7 +105,7 @@ func (c *ArrClient) HistorySince(ctx context.Context, since time.Time) ([]Histor
 }
 
 func (c *ArrClient) QueueDetails(ctx context.Context) ([]QueueDetail, error) {
-	q := url.Values{"includeEpisode": {"true"}}
+	q := url.Values{"includeEpisode": {queryTrue}}
 	var recs []QueueDetail
 	err := c.do(ctx, c.http, http.MethodGet, "/api/v3/queue/details", q, nil, &recs)
 	return recs, err
@@ -165,6 +165,9 @@ func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := hc.Do(req)
+	if ue, ok := errors.AsType[*url.Error](err); ok {
+		err = ue.Err
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
