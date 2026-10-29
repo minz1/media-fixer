@@ -1013,3 +1013,45 @@ func TestListActions_DistinctAppliedAt(t *testing.T) {
 		t.Errorf("first applied_at = %v, want %v", actions[0].AppliedAt, first)
 	}
 }
+
+func TestFindStaleReopened(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	create := func(title string, status db.IncidentStatus) *db.Incident {
+		inc := &db.Incident{Status: status, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
+		if err := d.CreateIncident(ctx, inc); err != nil {
+			t.Fatal(err)
+		}
+		return inc
+	}
+	stale := create("Stale", db.StatusReopened)
+	fresh := create("Fresh", db.StatusReopened)
+	staleInvestigating := create("Investigating", db.StatusInvestigating)
+
+	cutoff := time.Now().Add(-time.Hour)
+	for _, inc := range []*db.Incident{stale, staleInvestigating} {
+		if err := d.ExecForTest(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
+			cutoff.Add(-time.Minute), inc.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const insertEvent = `INSERT INTO incident_events (incident_id, at, kind, payload, source)
+		VALUES (?, ?, 'llm_round', '{}', 'live')`
+	if err := d.ExecForTest(ctx, insertEvent, stale.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.FindStaleReopened(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != stale.ID {
+		titles := make([]string, len(got))
+		for i, inc := range got {
+			titles[i] = inc.Title
+		}
+		t.Fatalf("got %v, want only %q (fresh %q must not match)", titles, stale.Title, fresh.Title)
+	}
+}

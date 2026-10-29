@@ -958,21 +958,23 @@ func (s *Service) buildReinvestigateSeed(
 }
 
 // RecoverZombies is called on startup to resume any incidents left in
-// "investigating" status from a previous process run — a crashed process
+// "investigating" or "reopened" status from a previous process run — a crashed process
 // with nothing left running to check. SweepStaleRuns is the companion for a
 // process that never crashed at all: a run whose goroutine is still alive
 // but has stopped making progress, which this cannot see (nothing here is
 // wrong from the process's point of view).
 func (s *Service) RecoverZombies(ctx context.Context) {
-	incidents, err := s.db.FindByStatus(ctx, db.StatusInvestigating)
-	if err != nil {
-		s.log.ErrorContext(ctx, "zombie recovery query", "error", err)
-		return
-	}
-	for _, inc := range incidents {
-		s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, rerunRestart); rerunErr != nil {
-			s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
+	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened} {
+		incidents, err := s.db.FindByStatus(ctx, status)
+		if err != nil {
+			s.log.ErrorContext(ctx, "zombie recovery query", "status", status, "error", err)
+			continue
+		}
+		for _, inc := range incidents {
+			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
+			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart); rerunErr != nil {
+				s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
+			}
 		}
 	}
 }
@@ -981,15 +983,33 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 // (see Agent.logTurn/db.TouchHeartbeat) is older than staleRunThreshold — a
 // run whose goroutine is still alive but stopped making progress.
 func (s *Service) SweepStaleRuns(ctx context.Context) {
-	stale, err := s.db.FindStaleInvestigating(ctx, time.Now().Add(-staleRunThreshold))
+	staleBefore := time.Now().Add(-staleRunThreshold)
+	stale, err := s.db.FindStaleInvestigating(ctx, staleBefore)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
-		return
 	}
 	for _, inc := range stale {
 		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
 		if rerunErr := s.rerun(ctx, inc.ID, rerunStale); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
+		}
+	}
+	s.sweepStaleReopened(ctx, staleBefore)
+}
+
+func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time) {
+	if paused, err := s.db.IsAutonomousPaused(ctx); err != nil || paused {
+		return
+	}
+	stale, err := s.db.FindStaleReopened(ctx, staleBefore)
+	if err != nil {
+		s.log.ErrorContext(ctx, "stale reopened sweep query", "error", err)
+		return
+	}
+	for _, inc := range stale {
+		s.log.WarnContext(ctx, "recovering stale reopened incident", "incident", inc.ID, "title", inc.Title)
+		if rerunErr := s.rerun(ctx, inc.ID, rerunStale); rerunErr != nil {
+			s.log.ErrorContext(ctx, "stale reopened rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
 }
