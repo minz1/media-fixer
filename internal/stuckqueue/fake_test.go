@@ -31,6 +31,7 @@ type fakeArr struct {
 	failQueue   bool
 	failCommand map[string]bool
 	nextID      int
+	gate        chan struct{}
 }
 
 func newFakeArr(t *testing.T) *fakeArr {
@@ -61,6 +62,12 @@ func (f *fakeArr) loadFixture(t *testing.T, path string) {
 }
 
 func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	gate := f.gate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
@@ -164,4 +171,12 @@ func rawMovie(id int, dl, title string, movieID int, hasFile bool, msgs ...strin
 		"movie":          map[string]any{"hasFile": hasFile},
 		"statusMessages": []map[string]any{{"messages": msgs}},
 	}
+}
+
+func (f *fakeArr) hold() chan struct{} {
+	g := make(chan struct{})
+	f.mu.Lock()
+	f.gate = g
+	f.mu.Unlock()
+	return g
 }
