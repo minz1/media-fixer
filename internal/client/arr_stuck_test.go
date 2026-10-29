@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -188,5 +189,145 @@ func TestDo_CancelledStillIs(t *testing.T) {
 	_, err := client.NewArr(srv.URL, "key").QueueEntries(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+const sonarrCandidateJSON = `[{"path":"/data/downloads/sonarr/NOVA.S09E01/nova.mkv","series":{"id":188},
+"seasonNumber":9,"episodes":[{"id":14607,"seasonNumber":9,"episodeNumber":1,"hasFile":false}],
+"quality":{"quality":{"id":1,"name":"SDTV"},"revision":{"version":1}},"languages":[{"id":1,"name":"English"}],
+"releaseGroup":"X","indexerFlags":0,"releaseType":"singleEpisode","downloadId":"D",
+"rejections":[{"reason":"Unable to determine if file is a sample","type":"permanent"}]}]`
+
+type captured struct {
+	method, path string
+	query        map[string][]string
+	body         []byte
+}
+
+func captureServer(t *testing.T, reply string) (*client.ArrClient, *[]captured) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []captured
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, captured{r.Method, r.URL.Path, r.URL.Query(), b})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	return client.NewArr(srv.URL, "key"), &calls
+}
+
+func TestManualImportCandidates_Query(t *testing.T) {
+	t.Parallel()
+	c, calls := captureServer(t, `[]`)
+	if _, err := c.ManualImportCandidates(context.Background(), "D1"); err != nil {
+		t.Fatal(err)
+	}
+	got := (*calls)[0]
+	if got.method != http.MethodGet || got.path != "/api/v3/manualimport" {
+		t.Fatalf("call = %s %s", got.method, got.path)
+	}
+	want := map[string][]string{"downloadId": {"D1"}, "filterExistingFiles": {"false"}}
+	if len(got.query) != len(want) || got.query["downloadId"][0] != "D1" ||
+		got.query["filterExistingFiles"][0] != "false" {
+		t.Fatalf("query = %v, want %v", got.query, want)
+	}
+	if _, ok := got.query["seriesId"]; ok {
+		t.Fatal("seriesId must never be sent")
+	}
+}
+
+func TestManualImportCandidates_Parses(t *testing.T) {
+	t.Parallel()
+	c, _ := captureServer(t, sonarrCandidateJSON)
+	cs, err := c.ManualImportCandidates(context.Background(), "D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 1 || cs[0].SeriesID != 188 || len(cs[0].Episodes) != 1 || cs[0].Episodes[0].ID != 14607 ||
+		cs[0].Episodes[0].HasFile || cs[0].Episodes[0].EpisodeNumber != 1 || cs[0].ReleaseType != "singleEpisode" {
+		t.Fatalf("candidates = %+v", cs)
+	}
+	if !slices.Equal(cs[0].Rejections, []string{"Unable to determine if file is a sample"}) {
+		t.Fatalf("rejections = %v", cs[0].Rejections)
+	}
+
+	rc, _ := captureServer(t, `[{"path":"/m.mkv","movie":{"id":5,"hasFile":true},"rejections":[]}]`)
+	ms, err := rc.ManualImportCandidates(context.Background(), "D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 1 || ms[0].MovieID != 5 || !ms[0].MovieHasFile {
+		t.Fatalf("radarr candidates = %+v", ms)
+	}
+}
+
+func TestManualImport_Body(t *testing.T) {
+	t.Parallel()
+	c, calls := captureServer(t, `{"id":77}`)
+	cands, err := func() ([]client.ImportCandidate, error) {
+		pc, _ := captureServer(t, sonarrCandidateJSON)
+		return pc.ManualImportCandidates(context.Background(), "D")
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := c.ManualImport(context.Background(), cands)
+	if err != nil || id != 77 {
+		t.Fatalf("id = %d, err = %v", id, err)
+	}
+	got := (*calls)[0]
+	if got.method != http.MethodPost || got.path != "/api/v3/command" {
+		t.Fatalf("call = %s %s", got.method, got.path)
+	}
+	var body struct {
+		Name       string           `json:"name"`
+		ImportMode string           `json:"importMode"`
+		Files      []map[string]any `json:"files"`
+	}
+	if err = json.Unmarshal(got.body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Name != "ManualImport" || body.ImportMode != "move" || len(body.Files) != 1 {
+		t.Fatalf("body = %s", got.body)
+	}
+	f := body.Files[0]
+	for _, k := range []string{
+		"path", "seriesId", "seasonNumber", "episodeIds", "quality", "languages",
+		"releaseGroup", "indexerFlags", "releaseType", "downloadId",
+	} {
+		if _, ok := f[k]; !ok {
+			t.Errorf("file is missing %q: %s", k, got.body)
+		}
+	}
+	if ids, _ := f["episodeIds"].([]any); len(ids) != 1 || ids[0] != float64(14607) {
+		t.Errorf("episodeIds = %v", f["episodeIds"])
+	}
+	if _, ok := f["movieId"]; ok {
+		t.Error("a Sonarr file must not carry movieId")
+	}
+
+	rc, rcalls := captureServer(t, `{"id":78}`)
+	movie := []client.ImportCandidate{{Path: "/m.mkv", MovieID: 5}}
+	if _, err = rc.ManualImport(context.Background(), movie); err != nil {
+		t.Fatal(err)
+	}
+	var rbody struct {
+		Files []map[string]any `json:"files"`
+	}
+	if err = json.Unmarshal((*rcalls)[0].body, &rbody); err != nil {
+		t.Fatal(err)
+	}
+	rf := rbody.Files[0]
+	if rf["movieId"] != float64(5) {
+		t.Errorf("radarr file = %v", rf)
+	}
+	for _, k := range []string{"seriesId", "episodeIds"} {
+		if _, ok := rf[k]; ok {
+			t.Errorf("a Radarr file must not carry %q", k)
+		}
 	}
 }

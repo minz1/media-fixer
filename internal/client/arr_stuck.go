@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strconv"
 )
@@ -101,4 +102,98 @@ func (r queueEntryJSON) entry() QueueEntry {
 		e.HasFile, e.HasFileKnown = *r.Movie.HasFile, true
 	}
 	return e
+}
+
+type CandidateEpisode struct {
+	ID            int  `json:"id"`
+	SeasonNumber  int  `json:"seasonNumber"`
+	EpisodeNumber int  `json:"episodeNumber"`
+	HasFile       bool `json:"hasFile"`
+}
+
+type ImportCandidate struct {
+	Path         string
+	DownloadID   string
+	ReleaseGroup string
+	ReleaseType  string
+	SeriesID     int
+	MovieID      int
+	SeasonNumber int
+	IndexerFlags int
+	MovieHasFile bool
+	Episodes     []CandidateEpisode
+	Quality      json.RawMessage
+	Languages    json.RawMessage
+	Rejections   []string
+}
+
+type candidateJSON struct {
+	Path         string `json:"path"`
+	DownloadID   string `json:"downloadId"`
+	ReleaseGroup string `json:"releaseGroup"`
+	ReleaseType  string `json:"releaseType"`
+	SeriesID     int    `json:"seriesId"`
+	Series       *struct {
+		ID int `json:"id"`
+	} `json:"series"`
+	Movie *struct {
+		ID      int  `json:"id"`
+		HasFile bool `json:"hasFile"`
+	} `json:"movie"`
+	SeasonNumber int                `json:"seasonNumber"`
+	IndexerFlags int                `json:"indexerFlags"`
+	Episodes     []CandidateEpisode `json:"episodes"`
+	Quality      json.RawMessage    `json:"quality"`
+	Languages    json.RawMessage    `json:"languages"`
+	Rejections   []struct {
+		Reason string `json:"reason"`
+	} `json:"rejections"`
+}
+
+func (c *ArrClient) ManualImportCandidates(ctx context.Context, downloadID string) ([]ImportCandidate, error) {
+	q := url.Values{"downloadId": {downloadID}, "filterExistingFiles": {"false"}}
+	var raw []candidateJSON
+	if err := c.get(ctx, "/api/v3/manualimport", q, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]ImportCandidate, 0, len(raw))
+	for _, r := range raw {
+		ic := ImportCandidate{
+			Path: r.Path, DownloadID: r.DownloadID, ReleaseGroup: r.ReleaseGroup, ReleaseType: r.ReleaseType,
+			SeriesID: r.SeriesID, SeasonNumber: r.SeasonNumber, IndexerFlags: r.IndexerFlags,
+			Episodes: r.Episodes, Quality: r.Quality, Languages: r.Languages,
+		}
+		if r.Series != nil && r.Series.ID != 0 {
+			ic.SeriesID = r.Series.ID
+		}
+		if r.Movie != nil {
+			ic.MovieID, ic.MovieHasFile = r.Movie.ID, r.Movie.HasFile
+		}
+		for _, rj := range r.Rejections {
+			ic.Rejections = append(ic.Rejections, rj.Reason)
+		}
+		out = append(out, ic)
+	}
+	return out, nil
+}
+
+func (c *ArrClient) ManualImport(ctx context.Context, cands []ImportCandidate) (int, error) {
+	files := make([]map[string]any, 0, len(cands))
+	for _, ic := range cands {
+		f := map[string]any{
+			"path": ic.Path, "quality": ic.Quality, "languages": ic.Languages, "releaseGroup": ic.ReleaseGroup,
+			"indexerFlags": ic.IndexerFlags, "releaseType": ic.ReleaseType, "downloadId": ic.DownloadID,
+		}
+		if ic.MovieID != 0 {
+			f["movieId"] = ic.MovieID
+		} else {
+			ids := make([]int, 0, len(ic.Episodes))
+			for _, e := range ic.Episodes {
+				ids = append(ids, e.ID)
+			}
+			f["seriesId"], f["seasonNumber"], f["episodeIds"] = ic.SeriesID, ic.SeasonNumber, ids
+		}
+		files = append(files, f)
+	}
+	return c.postCommand(ctx, map[string]any{paramCommandName: "ManualImport", "importMode": "move", "files": files})
 }
