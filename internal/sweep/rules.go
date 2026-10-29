@@ -156,7 +156,7 @@ func allMatch(rejections []string, re *regexp.Regexp) bool {
 func Blocking(rows []db.SweepRefused, now time.Time) []db.SweepRefused {
 	var out []db.SweepRefused
 	for _, r := range rows {
-		memory := RefusedMemory
+		memory := refusedMemory
 		switch {
 		case strings.Contains(r.Reason, client.CodeTorrentBlocked):
 			memory = BlockedMemory

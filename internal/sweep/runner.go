@@ -31,7 +31,7 @@ const (
 	historySkew    = 5 * time.Minute
 	getRetryEvery  = 20 * time.Second
 	getRetryFor    = 10 * time.Minute
-	RefusedMemory  = 7 * 24 * time.Hour
+	refusedMemory  = 7 * 24 * time.Hour
 	BlockedMemory  = 90 * 24 * time.Hour
 	noPackMemory   = 30 * 24 * time.Hour
 	searchGap      = 60 * time.Second

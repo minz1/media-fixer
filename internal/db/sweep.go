@@ -239,9 +239,23 @@ func (d *DB) UpdateSweepItem(ctx context.Context, id int64, result, downloadID s
 }
 
 func (d *DB) NoPackTargets(ctx context.Context, since time.Time) (map[string]bool, error) {
-	return d.stringSet(ctx,
+	rows, err := d.read.QueryContext(ctx,
 		`SELECT DISTINCT i.target FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
 		 WHERE r.dry = 0 AND i.result = 'no_pack' AND i.at >= ?`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	var s string
+	for rows.Next() {
+		if err = rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out[s] = true
+	}
+	return out, rows.Err()
 }
 
 func (d *DB) AddSweepRefused(ctx context.Context, r *SweepRefused) error {
@@ -278,24 +292,6 @@ func (d *DB) ListSweepRefused(ctx context.Context, since time.Time) ([]SweepRefu
 func (d *DB) DeleteSweepRefused(ctx context.Context, id int64) error {
 	_, err := d.write.ExecContext(ctx, `DELETE FROM sweep_refused WHERE id = ?`, id)
 	return err
-}
-
-func (d *DB) stringSet(ctx context.Context, query string, args ...any) (map[string]bool, error) {
-	rows, err := d.read.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := map[string]bool{}
-	var s string
-	for rows.Next() {
-		if err = rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		out[s] = true
-	}
-	return out, rows.Err()
 }
 
 func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int, time.Time, error) {
