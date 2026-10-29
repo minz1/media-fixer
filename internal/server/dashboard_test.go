@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -261,17 +262,36 @@ func TestDashboardEvents_RendersIncidentsListInitially(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), sseTestTimeout)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), sseEventDeadline)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/media/events", nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "incidents-list") || !strings.Contains(body, "Severance") {
-		t.Errorf("expected the incidents list partial naming the incident, got:\n%s", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/media/events", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(nil, sseMaxLineBytes)
+	for scanner.Scan() {
+		body.WriteString(scanner.Text() + "\n")
+		if strings.Contains(body.String(), "incidents-list") && strings.Contains(body.String(), "Severance") {
+			return
+		}
+	}
+	t.Errorf("expected the incidents list partial naming the incident, got (%v):\n%s", scanner.Err(), body.String())
 }
+
+const (
+	sseEventDeadline = 10 * time.Second
+	sseMaxLineBytes  = 1 << 20
+)
 
 // TestIncidentTranscript_Renders confirms the full thought-process page
 // renders for a real incident.
