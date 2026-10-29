@@ -1263,7 +1263,7 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 	// threshold, simulating a run whose goroutine hung mid-diagnosis — via a
 	// second raw connection, since db.DB exposes no "set an arbitrary past
 	// timestamp" method (nor should it, outside a test).
-	raw, err := sql.Open("sqlite", dbPath)
+	raw, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
