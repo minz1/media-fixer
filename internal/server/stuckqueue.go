@@ -92,7 +92,9 @@ func (s *Server) stuckAction(w http.ResponseWriter, r *http.Request) {
 		s.renderStuckCard(r.Context(), w, "", "")
 		return
 	}
-	notice, err := s.stuck.Act(context.WithoutCancel(r.Context()), app, r.FormValue("download_id"), action)
+	notice, err := s.stuck.Act(
+		context.WithoutCancel(r.Context()), app, r.FormValue("download_id"), action, r.FormValue("targets"),
+	)
 	failure := ""
 	if err != nil {
 		failure = err.Error()

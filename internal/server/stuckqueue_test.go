@@ -126,10 +126,23 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 	if err := env.srv.ExecuteTemplateForTest(&buf, "stuck_card", data); err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, buf.String(),
-		"Link Click", "NOVA", "Flash", "One Piece", "Import → S03E11", "Re-grab", "Remove",
-		"Unable to determine if file is a sample", "more than one file targets the same episode",
-		"unreachable: arr GET /api/v3/queue: 500", "dry run", "would clear 1", `name="download_id" value="LC"`,
+	mustContain(
+		t,
+		buf.String(),
+		"Link Click",
+		"NOVA",
+		"Flash",
+		"One Piece",
+		"Import → S03E11",
+		"Re-grab",
+		"Remove",
+		"Unable to determine if file is a sample",
+		"more than one file targets the same episode",
+		"unreachable: arr GET /api/v3/queue: 500",
+		"dry run",
+		"would clear 1",
+		`name="download_id" value="LC"`,
+		`name="targets" value="S03E11"`,
 		"/media/maintenance/stuck-queue/import",
 	)
 }

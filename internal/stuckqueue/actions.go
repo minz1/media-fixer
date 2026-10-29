@@ -9,7 +9,9 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 )
 
-func (s *Scheduler) Act(ctx context.Context, app App, downloadID string, action Action) (string, error) {
+func (s *Scheduler) Act(
+	ctx context.Context, app App, downloadID string, action Action, seenTargets string,
+) (string, error) {
 	if !s.mu.TryLock() {
 		return "", refuse("a run is active, try again in a moment")
 	}
@@ -30,6 +32,9 @@ func (s *Scheduler) Act(ctx context.Context, app App, downloadID string, action 
 	d := downloads[i]
 	if !d.Stuck() {
 		return "", refuse("this download is no longer stuck")
+	}
+	if now := d.Targets(); now != seenTargets {
+		return "", refuse("this download now maps to %s, not %s; check the card again", now, seenTargets)
 	}
 	v := Classify(d)
 	var cands []client.ImportCandidate
@@ -100,11 +105,13 @@ func search(ctx context.Context, c *client.ArrClient, d Download) error {
 func (s *Scheduler) forget(app App, downloadID string) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	for i := range s.last.Apps {
-		if s.last.Apps[i].App == app {
-			s.last.Apps[i].Items = slices.DeleteFunc(s.last.Apps[i].Items, func(it Item) bool {
+	apps := slices.Clone(s.last.Apps)
+	for i := range apps {
+		if apps[i].App == app {
+			apps[i].Items = slices.DeleteFunc(slices.Clone(apps[i].Items), func(it Item) bool {
 				return strings.EqualFold(it.DownloadID, downloadID)
 			})
 		}
 	}
+	s.last.Apps = apps
 }
