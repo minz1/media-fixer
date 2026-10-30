@@ -34,7 +34,9 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func newRunningIncident(t *testing.T, logs *syncBuffer) (*incident.Service, *db.DB, string, *blockingAgent, string) {
+func newRunningIncident(
+	t *testing.T, logs *syncBuffer, notif *syncNotifier,
+) (*incident.Service, *db.DB, string, *blockingAgent, string) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
 	if err != nil {
@@ -49,7 +51,7 @@ func newRunningIncident(t *testing.T, logs *syncBuffer) (*incident.Service, *db.
 
 	ag := newBlockingAgent()
 	logger := slog.New(slog.NewTextHandler(logs, nil))
-	svc := incident.NewService(t.Context(), database, nil, ag, nil, nil, newSyncNotifier(), logger)
+	svc := incident.NewService(t.Context(), database, nil, ag, nil, nil, notif, logger)
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Slow"}
 	if err = database.CreateIncident(context.Background(), inc); err != nil {
@@ -68,7 +70,7 @@ func newRunningIncident(t *testing.T, logs *syncBuffer) (*incident.Service, *db.
 
 func TestRerun_ReadFailureLeavesTheRunningRunAlone(t *testing.T) {
 	t.Parallel()
-	svc, database, _, ag, id := newRunningIncident(t, &syncBuffer{})
+	svc, database, _, ag, id := newRunningIncident(t, &syncBuffer{}, newSyncNotifier())
 
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -87,7 +89,7 @@ func TestRerun_ReadFailureLeavesTheRunningRunAlone(t *testing.T) {
 func TestRerun_StatusWriteFailureAfterCancelLogsError(t *testing.T) {
 	t.Parallel()
 	logs := &syncBuffer{}
-	svc, _, dbPath, ag, id := newRunningIncident(t, logs)
+	svc, _, dbPath, ag, id := newRunningIncident(t, logs, newSyncNotifier())
 
 	raw, err := sql.Open("sqlite", dbPath)
 	if err != nil {

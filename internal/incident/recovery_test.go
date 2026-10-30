@@ -4,14 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const staleAge = 20 * time.Minute
@@ -155,7 +162,8 @@ func TestSweepStaleRuns_LogsAFailedPauseCheck(t *testing.T) {
 func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing.T) {
 	t.Parallel()
 	logs := &syncBuffer{}
-	svc, database, dbPath, _, _ := newRunningIncident(t, logs)
+	notif := newSyncNotifier()
+	svc, database, dbPath, _, _ := newRunningIncident(t, logs, notif)
 	ctx := context.Background()
 	waiting := &db.Incident{
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Queued",
@@ -180,5 +188,52 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing
 
 	if strings.Contains(logs.String(), "recovering stale reopened incident") {
 		t.Errorf("a reopened incident with a registered run was rerun; logs:\n%s", logs.String())
+	}
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	stale := fmt.Sprintf(
+		"⏱️ Incident **Queued** (#%s) stopped making progress for 15 min and is being re-run.", waiting.ID[:8])
+	if n := countMsgs(notif.msgs, stale); n != 0 {
+		t.Errorf("stale owner DMs = %d, want 0; msgs %q", n, notif.msgs)
+	}
+}
+
+func TestRerun_HungSummarizerDoesNotHoldTheRunBeforeDiagnosis(t *testing.T) {
+	t.Parallel()
+	database, inc := newReopenedIncident(t, 0)
+	ctx := context.Background()
+	hit := make(chan struct{}, 1)
+	llm := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		hit <- struct{}{}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(llm.Close)
+	cfg := openai.DefaultConfig("test")
+	cfg.BaseURL = llm.URL
+	jrnl := journal.New(database)
+	seed := []openai.ChatCompletionMessage{{Role: "user", Content: "seed"}}
+	if err := jrnl.RunStarted(ctx, inc.ID, seed); err != nil {
+		t.Fatal(err)
+	}
+	ag := newBlockingAgent()
+	summarizer := agent.NewSummarizer(openai.NewClientWithConfig(cfg), "m")
+	svc := incident.NewService(t.Context(), database, jrnl, ag, nil, summarizer, newSyncNotifier(),
+		slog.New(slog.DiscardHandler))
+	svc.SetSeedTimeoutForTest(quietWindow)
+
+	if err := svc.Rerun(ctx, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-ag.started:
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("a hung summarizer kept the rerun from reaching diagnosis")
+	}
+	select {
+	case <-hit:
+	default:
+		t.Fatal("the rerun never asked the summarizer, so the seed timeout went untested")
 	}
 }

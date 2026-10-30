@@ -65,3 +65,7 @@ func (s *Service) SeerrAlertAtForTest() time.Time {
 	defer s.seerrAlertMu.Unlock()
 	return s.seerrAlertAt
 }
+
+func (s *Service) SetSeedTimeoutForTest(d time.Duration) {
+	s.seedTimeout = d
+}

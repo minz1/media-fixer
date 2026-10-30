@@ -59,15 +59,16 @@ const (
 
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
-	db         *db.DB
-	journal    *journal.Journal
-	agent      AgentRunner
-	control    *agent.ControlReviewer
-	summarizer *agent.Summarizer
-	notif      Notifier
-	seerr      SeerrIssues
-	log        *slog.Logger
-	runs       *runManager
+	db          *db.DB
+	journal     *journal.Journal
+	agent       AgentRunner
+	control     *agent.ControlReviewer
+	summarizer  *agent.Summarizer
+	notif       Notifier
+	seerr       SeerrIssues
+	log         *slog.Logger
+	runs        *runManager
+	seedTimeout time.Duration
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -98,14 +99,15 @@ func NewService(
 	log *slog.Logger,
 ) *Service {
 	s := &Service{
-		db:         database,
-		journal:    jrnl,
-		agent:      ag,
-		control:    control,
-		summarizer: summarizer,
-		notif:      notif,
-		log:        log,
-		runs:       newRunManager(base),
+		db:          database,
+		journal:     jrnl,
+		agent:       ag,
+		control:     control,
+		summarizer:  summarizer,
+		notif:       notif,
+		log:         log,
+		runs:        newRunManager(base),
+		seedTimeout: staleRunThreshold,
 	}
 	go s.backgroundSweepLoop(base)
 	return s
@@ -137,7 +139,9 @@ func (s *Service) startRun(
 ) {
 	go func() {
 		defer s.runs.end(inc.ID, tok)
-		seed := buildSeed(ctx)
+		seedCtx, cancel := context.WithTimeout(ctx, s.seedTimeout)
+		seed := buildSeed(seedCtx)
+		cancel()
 		s.runAgent(ctx, inc, seed)
 	}()
 }
