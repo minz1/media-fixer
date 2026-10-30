@@ -196,7 +196,8 @@ func run() error {
 		log.Error("interrupt running sweeps", "error", err)
 		return err
 	}
-	handlers, renderers := map[string]card.Handler{}, map[string]card.Renderer{}
+	handlers := map[string]card.Handler{"inc": svc.CardHandler()}
+	renderers := map[string]card.Renderer{"inc": svc.CardRenderer()}
 	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log)()
 	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
 

@@ -202,8 +202,8 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 			r.Title,
 			inc.ID[:8],
 		), "")
-		c.Verbs = []string{verbUnlock, verbResolve}
-		if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil {
+		c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
+		if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil && !errors.Is(notifyErr, card.ErrUntracked) {
 			s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
 		}
 		return inc, nil
@@ -660,7 +660,7 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, c card.
 		return
 	}
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
-	c.Verbs = escalationVerbs()
+	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), escalationVerbs()
 	_ = s.notif.NotifyOwner(ctx, c)
 	if getErr == nil && prior.Status != db.StatusAgentFixed {
 		s.notifyReporters(ctx, inc,
@@ -958,7 +958,7 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 			"⏱️ Incident **%s** (#%s) stopped making progress for %d min and is being re-run.",
 			inc.Title, inc.ID[:8], int(staleRunThreshold.Minutes()),
 		), "")
-		c.Verbs = []string{verbResolve}
+		c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbResolve}
 		_ = s.notif.NotifyOwner(ctx, c)
 	case rerunRestart:
 	}
