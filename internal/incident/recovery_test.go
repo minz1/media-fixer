@@ -151,3 +151,34 @@ func TestSweepStaleRuns_LogsAFailedPauseCheck(t *testing.T) {
 		t.Errorf("logs = %q, want the failed pause check logged", logs.String())
 	}
 }
+
+func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing.T) {
+	t.Parallel()
+	logs := &syncBuffer{}
+	svc, database, dbPath, _, _ := newRunningIncident(t, logs)
+	ctx := context.Background()
+	waiting := &db.Incident{
+		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Queued",
+	}
+	if err := database.CreateIncident(ctx, waiting); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Rerun(ctx, waiting.ID); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite&_timezone=UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err = raw.ExecContext(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
+		time.Now().Add(-staleAge), waiting.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.SweepStaleRuns(ctx)
+
+	if strings.Contains(logs.String(), "recovering stale reopened incident") {
+		t.Errorf("a reopened incident with a registered run was rerun; logs:\n%s", logs.String())
+	}
+}

@@ -1018,6 +1018,9 @@ func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time)
 		return
 	}
 	for _, inc := range stale {
+		if s.runs.running(inc.ID) {
+			continue
+		}
 		s.log.WarnContext(ctx, "recovering stale reopened incident", "incident", inc.ID, "title", inc.Title)
 		if rerunErr := s.rerun(ctx, inc.ID, rerunStale); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale reopened rerun failed", "incident", inc.ID, "error", rerunErr)

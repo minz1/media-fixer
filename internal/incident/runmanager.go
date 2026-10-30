@@ -119,6 +119,13 @@ func (m *runManager) end(id string, tok *runToken) {
 	tok.cancel()
 }
 
+func (m *runManager) running(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.active[id]
+	return ok
+}
+
 // acquireGlobal blocks until the single global diagnostic slot is free, or ctx is
 // done first (e.g. this run was superseded while waiting).
 func (m *runManager) acquireGlobal(ctx context.Context) error {
