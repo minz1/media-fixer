@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -24,8 +27,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Addr    string `toml:"addr"`
-	BaseURL string `toml:"base_url"`
+	Addr      string `toml:"addr"`
+	BaseURL   string `toml:"base_url"`
+	PublicURL string `toml:"public_url"`
 }
 
 type DBConfig struct {
@@ -103,10 +107,35 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("decode config %s: %w", path, err)
 	}
 
+	if err := validatePublicURL(cfg.Server.PublicURL); err != nil {
+		return nil, err
+	}
+
 	applyEnvOverrides(cfg)
 	applyControlLLMDefaults(cfg)
 
 	return cfg, nil
+}
+
+func validatePublicURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("public_url %q: %w", raw, err)
+	}
+
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("public_url %q: %w", raw, errors.New("must be an absolute http or https URL"))
+	}
+
+	if strings.HasSuffix(raw, "/") {
+		return fmt.Errorf("public_url %q: %w", raw, errors.New("must not end with a slash"))
+	}
+
+	return nil
 }
 
 // applyEnvOverrides overlays secrets from environment variables so that

@@ -8,10 +8,12 @@
   settingsFormat = pkgs.formats.toml {};
 
   configFile = settingsFormat.generate "media-fixer.toml" ({
-    server = {
-      addr = cfg.addr;
-      base_url = cfg.baseURL;
-    };
+    server =
+      {
+        addr = cfg.addr;
+        base_url = cfg.baseURL;
+      }
+      // lib.optionalAttrs (cfg.publicURL != null) {public_url = cfg.publicURL;};
     db = {
       path = "/var/lib/media-fixer/media-fixer.db";
     };
@@ -67,6 +69,12 @@ in {
       type = lib.types.str;
       default = "/media";
       description = "URL base path for the dashboard.";
+    };
+
+    publicURL = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Absolute external URL of the dashboard, including the base path, for links in Discord.";
     };
 
     environmentFile = lib.mkOption {
