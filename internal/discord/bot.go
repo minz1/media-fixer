@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -32,6 +33,15 @@ type Bot struct {
 	retryFirst time.Duration
 	retryCap   time.Duration
 	cancel     context.CancelFunc
+
+	mu        sync.Mutex
+	cards     cardState
+	wake      chan struct{}
+	poll      time.Duration
+	renderers map[string]card.Renderer
+	liveMsgs  map[string]bool
+	stopCards context.CancelFunc
+	cardsDone chan struct{}
 }
 
 // New creates a Bot from a Discord bot token.
@@ -49,6 +59,13 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		log:        log,
 		retryFirst: connectRetryFirst,
 		retryCap:   connectRetryCap,
+		cards: cardState{
+			pending: map[string]bool{}, messages: map[string]bool{}, overlays: map[string]overlay{},
+		},
+		wake:      make(chan struct{}, 1),
+		poll:      livePoll,
+		liveMsgs:  map[string]bool{},
+		cardsDone: make(chan struct{}),
 	}
 	b.connect = b.openAndRegister
 	sess.AddHandler(b.onInteraction)
@@ -138,17 +155,33 @@ func (b *Bot) openAndRegister() error {
 	return nil
 }
 
-// Close stops any pending connect retry and closes the Discord gateway connection.
+// Close stops any pending connect retry and the card updater, then closes the Discord gateway connection.
 func (b *Bot) Close() error {
 	if b.cancel != nil {
 		b.cancel()
 	}
+	if b.stopCards != nil {
+		b.stopCards()
+		<-b.cardsDone
+	}
 	return b.session.Close()
 }
 
-// NotifyOwner sends a DM to the configured owner user ID.
+// NotifyOwner sends a DM to the configured owner user ID and tracks a card with subjects for live updates.
 func (b *Bot) NotifyOwner(ctx context.Context, c card.Card) error {
-	return b.NotifyUser(ctx, b.ownerID, c)
+	m, plain, err := b.send(ctx, b.ownerID, c)
+	if err != nil {
+		return err
+	}
+	subjects := cardSubjects(c)
+	if len(subjects) == 0 {
+		return nil
+	}
+	d := b.cardStore()
+	if plain || d == nil {
+		return fmt.Errorf("%w", card.ErrUntracked)
+	}
+	return b.record(ctx, d, m, c, subjects)
 }
 
 // NotifyUser sends a DM to an arbitrary Discord user ID.

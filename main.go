@@ -12,6 +12,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/clientset"
 	"github.com/minz1/mediafixer/internal/config"
@@ -124,6 +125,15 @@ func startMaintenance(
 	}
 }
 
+func startCards(
+	ctx context.Context, bot *discord.Bot, database *db.DB, jrnl *journal.Journal,
+	renderers map[string]card.Renderer,
+) func() {
+	ch, unsub := jrnl.SubscribeAll()
+	bot.StartCards(ctx, database, ch, renderers)
+	return unsub
+}
+
 func run() error {
 	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
 	flag.Parse()
@@ -186,7 +196,9 @@ func run() error {
 		log.Error("interrupt running sweeps", "error", err)
 		return err
 	}
+	renderers := map[string]card.Renderer{}
 	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log)()
+	defer startCards(ctx, bot, database, jrnl, renderers)()
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 

@@ -24,7 +24,12 @@ func ReportCommandForTest() *discordgo.ApplicationCommand { return reportCommand
 func PlainTextForTest(c card.Card) string { return plainText(c) }
 
 func NewWithSenderForTest(log *slog.Logger, api sender, ownerID, publicURL string) *Bot {
-	return &Bot{api: api, ownerID: ownerID, publicURL: publicURL, log: log}
+	b, err := New("x", "", ownerID, publicURL, log)
+	if err != nil {
+		panic(err)
+	}
+	b.api = api
+	return b
 }
 
 func RenderForTest(c card.Card, publicURL string) []discordgo.MessageComponent {
@@ -34,3 +39,16 @@ func RenderForTest(c card.Card, publicURL string) []discordgo.MessageComponent {
 func SendForTest(ctx context.Context, b *Bot, userID string, c card.Card) (*discordgo.Message, bool, error) {
 	return b.send(ctx, userID, c)
 }
+
+func SetOverlayForTest(b *Bot, messageID, line string) { b.setOverlay(messageID, overlay{Line: line}) }
+
+func HasOverlayForTest(b *Bot, messageID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.cards.overlays[messageID]
+	return ok
+}
+
+func SetPollIntervalForTest(b *Bot, d time.Duration) { b.poll = d }
+
+func CardsDoneForTest(b *Bot) <-chan struct{} { return b.cardsDone }
