@@ -52,8 +52,9 @@ func (s *Server) SetStuckQueue(sch *stuckqueue.Scheduler) {
 	s.stuck = sch
 }
 
-func (s *Server) stuckCard(w http.ResponseWriter, r *http.Request) {
-	s.renderStuckCard(r.Context(), w, "", "")
+func (s *Server) stuckResults(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.t.ExecuteTemplate(w, "stuck_results", s.stuckCardFor(r.Context(), "", ""))
 }
 
 func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {

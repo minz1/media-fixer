@@ -152,6 +152,16 @@ func TestRun_WaitsMinAge(t *testing.T) {
 	}
 }
 
+func TestRun_WaitingGapOffersOnlyRemove(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	w := app(e.runner.Run(context.Background(), liveSettings()), stuckqueue.AppSonarr).Waiting
+	if len(w) != 1 || !slices.Equal(w[0].Actions, []stuckqueue.Action{stuckqueue.ActionRemove}) {
+		t.Fatalf("waiting = %+v, want the young gap download with Remove only", w)
+	}
+}
+
 func TestRun_DryRun(t *testing.T) {
 	t.Parallel()
 	e := newRunEnv(t)

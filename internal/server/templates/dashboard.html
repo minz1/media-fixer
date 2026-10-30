@@ -643,8 +643,7 @@
 {{end}}
 
 {{define "stuck_card"}}
-<div id="stuck-queue" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6"
-  {{if .Running}}hx-get="{{.BaseURL}}/maintenance/stuck-queue" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+<div id="stuck-queue" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
   <div>
     <h2 class="text-xl font-bold text-gray-900 mb-1">Stuck queue</h2>
     <p class="text-sm text-gray-500">
@@ -655,9 +654,25 @@
   {{if .Unavailable}}
   <p class="text-sm text-red-600">{{.Unavailable}}</p>
   {{else}}
+  {{with .Unreadable}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+  {{template "stuck_results" .}}
+  <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/settings" hx-target="#stuck-queue" hx-swap="outerHTML"
+    class="flex flex-wrap items-end gap-4">
+    <label class="text-sm text-gray-700"><input type="checkbox" name="enabled" {{if .Settings.Enabled}}checked{{end}} /> Enabled</label>
+    <label class="text-sm text-gray-700"><input type="checkbox" name="dry_run" {{if .Settings.DryRun}}checked{{end}} /> Dry run</label>
+    {{template "sweep_num" (dict "Label" "Every (minutes)" "Name" "interval_minutes" "Value" .Settings.IntervalMinutes "Min" .Bounds.IntervalLo "Max" .Bounds.IntervalHi "Err" (index .Errors "interval_minutes"))}}
+    {{template "sweep_num" (dict "Label" "Wait before acting (hours)" "Name" "min_age_hours" "Value" .Settings.MinAgeHours "Min" .Bounds.MinAgeLo "Max" .Bounds.MinAgeHi "Err" (index .Errors "min_age_hours"))}}
+    <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Save</button>
+  </form>
+  {{end}}
+</div>
+{{end}}
+
+{{define "stuck_results"}}
+<div id="stuck-results" class="space-y-6"
+  {{if .Running}}hx-get="{{.BaseURL}}/maintenance/stuck-queue/results" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
   {{with .Notice}}<p class="text-sm text-green-700">{{.}}</p>{{end}}
   {{with .Failure}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
-  {{with .Unreadable}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
   <div class="flex items-center gap-4 text-sm text-gray-700">
     {{if .Running}}<span><span class="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Running</span> checking the Sonarr and Radarr queues</span>{{end}}
     {{with .LastRun}}<span>Last run {{.}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
@@ -693,15 +708,6 @@
     </div>
     {{end}}
   </div>
-  {{end}}
-  <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/settings" hx-target="#stuck-queue" hx-swap="outerHTML"
-    class="flex flex-wrap items-end gap-4">
-    <label class="text-sm text-gray-700"><input type="checkbox" name="enabled" {{if .Settings.Enabled}}checked{{end}} /> Enabled</label>
-    <label class="text-sm text-gray-700"><input type="checkbox" name="dry_run" {{if .Settings.DryRun}}checked{{end}} /> Dry run</label>
-    {{template "sweep_num" (dict "Label" "Every (minutes)" "Name" "interval_minutes" "Value" .Settings.IntervalMinutes "Min" .Bounds.IntervalLo "Max" .Bounds.IntervalHi "Err" (index .Errors "interval_minutes"))}}
-    {{template "sweep_num" (dict "Label" "Wait before acting (hours)" "Name" "min_age_hours" "Value" .Settings.MinAgeHours "Min" .Bounds.MinAgeLo "Max" .Bounds.MinAgeHi "Err" (index .Errors "min_age_hours"))}}
-    <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Save</button>
-  </form>
   {{end}}
 </div>
 {{end}}

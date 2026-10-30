@@ -144,7 +144,7 @@ func (x *sweepRun) app(ctx context.Context, a App) AppResult {
 		if age < x.set.MinAge() {
 			ar.Waiting = append(ar.Waiting, Item{
 				Download: d, Verdict: v, Age: age, Due: row.FirstSeenAt.Add(x.set.MinAge()),
-				Actions: offered(d, v, refuse("import is checked once the wait is over")),
+				Actions: []Action{ActionRemove},
 			})
 			continue
 		}

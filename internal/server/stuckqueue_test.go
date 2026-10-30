@@ -225,10 +225,16 @@ func TestStuckRun_CardRefreshesUntilDone(t *testing.T) {
 	env.arr.hold = hold
 	env.arr.mu.Unlock()
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/run", url.Values{})
-	mustContain(t, rec.Body.String(), "Running", `hx-get="/media/maintenance/stuck-queue"`, `hx-trigger="every 3s"`)
+	mustContain(t, rec.Body.String(), "Running", `hx-get="/media/maintenance/stuck-queue/results"`,
+		`hx-trigger="every 3s"`, `name="min_age_hours"`)
+	rec = do(t, env.srv, http.MethodGet, "/media/maintenance/stuck-queue/results", nil)
+	mustContain(t, rec.Body.String(), `id="stuck-results"`, "Running", `hx-trigger="every 3s"`)
+	if strings.Contains(rec.Body.String(), `name="min_age_hours"`) {
+		t.Fatalf("the polled fragment re-renders the settings form:\n%s", rec.Body.String())
+	}
 	close(hold)
 	env.sch.Wait()
-	rec = do(t, env.srv, http.MethodGet, "/media/maintenance/stuck-queue", nil)
+	rec = do(t, env.srv, http.MethodGet, "/media/maintenance/stuck-queue/results", nil)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "hx-trigger=\"every") {
 		t.Fatalf("status %d, a finished run still polls:\n%s", rec.Code, rec.Body.String())
 	}
