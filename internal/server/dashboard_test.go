@@ -233,22 +233,43 @@ func TestIncidentEvents_OpenIncidentStreamsThenClosesOnContextDone(t *testing.T)
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), sseTestTimeout)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), sseEventDeadline)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID+"/events", nil).WithContext(ctx)
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req) // blocks until ctx times out, then returns
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "incident-transcript") {
-		t.Errorf("expected an initial incident-transcript partial, got:\n%s", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/media/incidents/"+inc.ID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(body, "event: settled") {
-		t.Errorf("an investigating incident must not close as settled, got:\n%s", body)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(nil, sseMaxLineBytes)
+	for scanner.Scan() {
+		body.WriteString(scanner.Text() + "\n")
+		if strings.Contains(body.String(), "incident-transcript") {
+			break
+		}
+	}
+	if !strings.Contains(body.String(), "incident-transcript") {
+		t.Fatalf("expected an initial incident-transcript partial, got (%v):\n%s", scanner.Err(), body.String())
+	}
+	quiet := time.AfterFunc(sseQuietWindow, cancel)
+	defer quiet.Stop()
+	for scanner.Scan() {
+		body.WriteString(scanner.Text() + "\n")
+	}
+	if strings.Contains(body.String(), "event: settled") {
+		t.Errorf("an investigating incident must not close as settled, got:\n%s", body.String())
 	}
 }
 
-const sseTestTimeout = 150 * time.Millisecond
+const sseQuietWindow = 150 * time.Millisecond
 
 // TestDashboardEvents_RendersIncidentsListInitially confirms the dashboard-
 // wide stream sends the current incidents list immediately on connect.
