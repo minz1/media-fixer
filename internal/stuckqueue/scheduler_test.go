@@ -155,26 +155,6 @@ func TestRunNow_Corrupt(t *testing.T) {
 	}
 }
 
-func TestRunning_WhileRunActive(t *testing.T) {
-	t.Parallel()
-	e, s := newSched(t)
-	if s.Running() {
-		t.Fatal("running before any run")
-	}
-	gate := e.sonarr.hold()
-	if err := s.RunNow(); err != nil {
-		t.Fatal(err)
-	}
-	if !s.Running() {
-		t.Fatal("not running while the run is held")
-	}
-	close(gate)
-	s.Wait()
-	if s.Running() {
-		t.Fatal("still running after the run finished")
-	}
-}
-
 func TestScheduler_RefreshesAfterStoringLast(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
@@ -202,5 +182,25 @@ func TestScheduler_RefreshesAfterStoringLast(t *testing.T) {
 	up, ok, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
 	if !ok || len(up.Buttons) == 0 || up.Status != "" {
 		t.Fatalf("update = %+v, %v; want still stuck with buttons", up, ok)
+	}
+}
+
+func TestState_ResultAndRunningTogether(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	if _, _, running := s.State(); running {
+		t.Fatal("running before any run")
+	}
+	gate := e.sonarr.hold()
+	if err := s.RunNow(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, running := s.State(); ok || !running {
+		t.Fatalf("held run: ok=%v running=%v, want no result and running", ok, running)
+	}
+	close(gate)
+	s.Wait()
+	if res, ok, running := s.State(); !ok || running || len(res.Apps) != 2 {
+		t.Fatalf("finished run: ok=%v running=%v apps=%d", ok, running, len(res.Apps))
 	}
 }

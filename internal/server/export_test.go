@@ -32,5 +32,5 @@ func (s *Server) StuckCardDataForTest(
 	set stuckqueue.Settings,
 	unreadable string,
 ) map[string]any {
-	return s.stuckCardData(&res, set, nil, "", "", unreadable)
+	return s.stuckCardData(&res, false, set, nil, "", "", unreadable)
 }

@@ -76,7 +76,8 @@ func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {
 		}
 		notice = "Saved."
 	}
-	s.writeStuckCard(w, s.stuckCardData(s.lastStuck(), set, errs, notice, "", ""))
+	res, running := s.stuckState()
+	s.writeStuckCard(w, s.stuckCardData(res, running, set, errs, notice, "", ""))
 }
 
 func (s *Server) stuckRun(w http.ResponseWriter, r *http.Request) {
@@ -120,14 +121,12 @@ func validStuckAction(a stuckqueue.Action) bool {
 	return false
 }
 
-func (s *Server) lastStuck() *stuckqueue.Result {
-	if s.stuck == nil {
-		return nil
+func (s *Server) stuckState() (*stuckqueue.Result, bool) {
+	res, ok, running := s.stuck.State()
+	if !ok {
+		return nil, running
 	}
-	if res, ok := s.stuck.Last(); ok {
-		return &res
-	}
-	return nil
+	return &res, running
 }
 
 func (s *Server) renderStuckCard(ctx context.Context, w http.ResponseWriter, notice, failure string) {
@@ -150,11 +149,13 @@ func (s *Server) stuckCardFor(ctx context.Context, notice, failure string) map[s
 	} else if err != nil {
 		failure = err.Error()
 	}
-	return s.stuckCardData(s.lastStuck(), set, nil, notice, failure, unreadable)
+	res, running := s.stuckState()
+	return s.stuckCardData(res, running, set, nil, notice, failure, unreadable)
 }
 
 func (s *Server) stuckCardData(
-	res *stuckqueue.Result, set stuckqueue.Settings, errs map[string]string, notice, failure, unreadable string,
+	res *stuckqueue.Result, running bool, set stuckqueue.Settings, errs map[string]string,
+	notice, failure, unreadable string,
 ) map[string]any {
 	card := map[string]any{
 		tplKeyBaseURL: s.baseURL,
@@ -164,7 +165,7 @@ func (s *Server) stuckCardData(
 		"Failure":     failure,
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
-		"Running":     s.stuck.Running(),
+		"Running":     running,
 	}
 	if res == nil {
 		return card

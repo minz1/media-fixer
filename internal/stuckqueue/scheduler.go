@@ -85,10 +85,10 @@ func (s *Scheduler) Last() (Result, bool) {
 	return s.last, s.hasLast
 }
 
-func (s *Scheduler) Running() bool {
+func (s *Scheduler) State() (Result, bool, bool) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	return s.running
+	return s.last, s.hasLast, s.running
 }
 
 func (s *Scheduler) start(now time.Time, set Settings) error {
