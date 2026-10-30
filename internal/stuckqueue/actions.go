@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Scheduler) Act(
-	ctx context.Context, app App, downloadID string, action Action, seenTargets string,
+	ctx context.Context, app App, downloadID string, action Action, targetsFp string,
 ) (string, error) {
 	if !s.mu.TryLock() {
 		return "", refuse("a run is active, try again in a moment")
@@ -33,8 +33,8 @@ func (s *Scheduler) Act(
 	if !d.Stuck() {
 		return "", refuse("this download is no longer stuck")
 	}
-	if now := d.Targets(); now != seenTargets {
-		return "", refuse("this download now maps to %s, not %s; check the card again", now, seenTargets)
+	if d.TargetsFP() != targetsFp {
+		return "", refuse("this download now maps to %s; check the card again", d.Targets())
 	}
 	if action != ActionRemove {
 		if err = s.waitOver(ctx, app, d.DownloadID); err != nil {

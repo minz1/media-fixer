@@ -35,6 +35,7 @@ type stuckItemView struct {
 	Age           string
 	Due           string
 	Targets       string
+	TargetsFP     string
 	Messages      []string
 	ImportRefusal string
 	Rejections    []string
@@ -102,7 +103,7 @@ func (s *Server) stuckAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notice, err := s.stuck.Act(
-		context.WithoutCancel(r.Context()), app, r.FormValue("download_id"), action, r.FormValue("targets"),
+		context.WithoutCancel(r.Context()), app, r.FormValue("download_id"), action, r.FormValue("targets_fp"),
 	)
 	failure := ""
 	if err != nil {
@@ -200,8 +201,8 @@ func stuckApp(ar stuckqueue.AppResult, minAgeHours int) stuckAppView {
 func stuckItem(it stuckqueue.Item) stuckItemView {
 	v := stuckItemView{
 		App: string(it.App), DownloadID: it.DownloadID, Title: it.Title, Verdict: string(it.Verdict),
-		Age: it.Age.Round(ageRounding).String(), Targets: it.Targets(), ImportRefusal: it.ImportRefusal,
-		Rejections: it.Rejections,
+		Age: it.Age.Round(ageRounding).String(), Targets: it.Targets(), TargetsFP: it.TargetsFP(),
+		ImportRefusal: it.ImportRefusal, Rejections: it.Rejections,
 	}
 	if !it.Due.IsZero() {
 		v.Due = it.Due.UTC().Format(stuckTimeLayout)

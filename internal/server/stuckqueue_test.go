@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/server"
@@ -151,7 +152,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		"due 2026-10-30 05:07 UTC",
 		`name="download_id" value="AH"`,
 		`name="download_id" value="LC"`,
-		`name="targets" value="S03E11"`,
+		`name="targets_fp" value="`+card.Fingerprint([]byte("S03E11"))+`"`,
 		"/media/maintenance/stuck-queue/import",
 	)
 }
@@ -280,7 +281,9 @@ func TestStuckAction_RefusalInCard(t *testing.T) {
 func TestStuckAction_SurvivesCancelledRequest(t *testing.T) {
 	t.Parallel()
 	env := newStuckEnv(t)
-	rec := serveCancelled(t, env.srv, "/media/maintenance/stuck-queue/remove?app=sonarr&download_id=D")
+	rec := serveCancelled(
+		t, env.srv, "/media/maintenance/stuck-queue/remove?app=sonarr&download_id=D&targets_fp="+card.Fingerprint(nil),
+	)
 	if rec.Code != http.StatusOK || env.arr.deleteCount() != 1 {
 		t.Fatalf("status %d, deletes %d, body %s", rec.Code, env.arr.deleteCount(), rec.Body.String())
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -45,7 +46,7 @@ func actSeen(
 	action stuckqueue.Action,
 	seen string,
 ) (string, error) {
-	return s.Act(context.Background(), a, dl, action, seen)
+	return s.Act(context.Background(), a, dl, action, card.Fingerprint([]byte(seen)))
 }
 
 func refusedNoWrite(t *testing.T, f *fakeArr, err error, reason string) {
@@ -275,6 +276,23 @@ func TestAct_RefusesRemappedTargets(t *testing.T) {
 	e.sonarr.setCandidates("D", candidateJSON("D", 2, false))
 	_, err := actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionImport, "S01E01")
 	refusedNoWrite(t, e.sonarr, err, "now maps to S01E02")
+}
+
+func TestAct_RefusesOnTargetsFingerprintMismatch(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "Link Click", 2, false, sample))
+	if _, err := e.db.UpsertStuckSeen(
+		context.Background(), string(stuckqueue.AppSonarr), "D", "D", "", e.clock.Now().Add(-7*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	const stale = "0123456789ab"
+	_, err := s.Act(context.Background(), stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove, stale)
+	refusedNoWrite(t, e.sonarr, err, "now maps to S01E02")
+	if strings.Contains(err.Error(), stale) {
+		t.Fatalf("refusal %q shows the fingerprint", err)
+	}
 }
 
 func TestAct_ForgetLeavesHandedOutResultsAlone(t *testing.T) {

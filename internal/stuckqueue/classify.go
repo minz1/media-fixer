@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 )
 
@@ -64,6 +65,8 @@ func (d Download) MaybeHasFile() bool {
 }
 
 func (d Download) Targets() string { return targets(d.Records) }
+
+func (d Download) TargetsFP() string { return card.Fingerprint([]byte(d.Targets())) }
 
 func Classify(d Download) Verdict {
 	if slices.ContainsFunc(d.Records, unmapped) {
