@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -277,6 +278,7 @@ const (
 	migReporterNote                     = 15
 	migSweep                            = 16
 	migStuckQueue                       = 17
+	migDiscordCards                     = 18
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -385,7 +387,7 @@ type migration struct {
 // event log (see eventLogMigrations). Split into two functions purely to stay
 // under a reasonable single-function length — they're one logical list.
 func migrations() []migration {
-	return append(append(legacyMigrations(), eventLogMigrations()...), stuckQueueMigrations()...)
+	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations())
 }
 
 func legacyMigrations() []migration {

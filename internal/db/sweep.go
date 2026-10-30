@@ -106,9 +106,7 @@ func (d *DB) InterruptRunningSweeps(ctx context.Context) (int, error) {
 }
 
 func (d *DB) ListSweepRuns(ctx context.Context, limit int) ([]SweepRun, error) {
-	rows, err := d.read.QueryContext(ctx,
-		`SELECT id, trigger, dry, started_at, finished_at, status, COALESCE(reason, ''), counts
-		 FROM sweep_runs ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := d.read.QueryContext(ctx, sweepRunColumns+` ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -117,30 +115,9 @@ func (d *DB) ListSweepRuns(ctx context.Context, limit int) ([]SweepRun, error) {
 	var runs []SweepRun
 	byID := map[int64]int{}
 	for rows.Next() {
-		var (
-			r        SweepRun
-			finished sql.NullTime
-			counts   sql.NullString
-		)
-		if err = rows.Scan(
-			&r.ID,
-			&r.Trigger,
-			&r.Dry,
-			&r.StartedAt,
-			&finished,
-			&r.Status,
-			&r.Reason,
-			&counts,
-		); err != nil {
-			return nil, err
-		}
-		if finished.Valid {
-			r.FinishedAt = &finished.Time
-		}
-		if counts.Valid {
-			if err = json.Unmarshal([]byte(counts.String), &r.Counts); err != nil {
-				return nil, err
-			}
+		r, scanErr := scanSweepRun(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		byID[r.ID] = len(runs)
 		runs = append(runs, r)
@@ -152,6 +129,37 @@ func (d *DB) ListSweepRuns(ctx context.Context, limit int) ([]SweepRun, error) {
 		return nil, nil
 	}
 	return runs, d.attachSweepItems(ctx, runs, byID, runs[len(runs)-1].ID)
+}
+
+const sweepRunColumns = `SELECT id, trigger, dry, started_at, finished_at, status, COALESCE(reason, ''), counts
+	FROM sweep_runs`
+
+func (d *DB) GetSweepRun(ctx context.Context, id int64) (SweepRun, error) {
+	r, err := scanSweepRun(d.read.QueryRowContext(ctx, sweepRunColumns+` WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return SweepRun{}, ErrNotFound
+	}
+	return r, err
+}
+
+func scanSweepRun(row interface{ Scan(dest ...any) error }) (SweepRun, error) {
+	var (
+		r        SweepRun
+		finished sql.NullTime
+		counts   sql.NullString
+	)
+	if err := row.Scan(&r.ID, &r.Trigger, &r.Dry, &r.StartedAt, &finished, &r.Status, &r.Reason, &counts); err != nil {
+		return SweepRun{}, err
+	}
+	if finished.Valid {
+		r.FinishedAt = &finished.Time
+	}
+	if counts.Valid {
+		if err := json.Unmarshal([]byte(counts.String), &r.Counts); err != nil {
+			return SweepRun{}, err
+		}
+	}
+	return r, nil
 }
 
 func (d *DB) attachSweepItems(ctx context.Context, runs []SweepRun, byID map[int64]int, minRunID int64) error {

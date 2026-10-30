@@ -396,3 +396,29 @@ func TestLiveSearchesSince(t *testing.T) {
 		t.Errorf("LiveSearchesSince after a crash: crashed = %v, %v; want true", crashed, err)
 	}
 }
+
+func TestGetSweepRun(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	if _, err := d.GetSweepRun(ctx, 99); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("missing run err = %v, want ErrNotFound", err)
+	}
+	id, err := d.CreateSweepRun(ctx, "manual", true, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := db.SweepCounts{Grabs: 1, Lookups: 2}
+	if err = d.FinishSweepRun(ctx, id, "done", "", c, sweepT0().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := d.GetSweepRun(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ID != id || r.Trigger != "manual" || !r.Dry || r.Status != "done" || r.Counts.Grabs != 1 ||
+		r.Counts.Lookups != 2 || !r.StartedAt.Equal(sweepT0()) || r.FinishedAt == nil ||
+		!r.FinishedAt.Equal(sweepT0().Add(time.Minute)) {
+		t.Fatalf("run = %+v", r)
+	}
+}
