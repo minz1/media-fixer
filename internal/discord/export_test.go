@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 )
 
 func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap time.Duration) (*Bot, error) {
-	b, err := New("x", "", "", log)
+	b, err := New("x", "", "", "", log)
 	if err != nil {
 		return nil, err
 	}
@@ -21,3 +22,15 @@ func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap tim
 func ReportCommandForTest() *discordgo.ApplicationCommand { return reportCommand() }
 
 func PlainTextForTest(c card.Card) string { return plainText(c) }
+
+func NewWithSenderForTest(log *slog.Logger, api sender, ownerID, publicURL string) *Bot {
+	return &Bot{api: api, ownerID: ownerID, publicURL: publicURL, log: log}
+}
+
+func RenderForTest(c card.Card, publicURL string) []discordgo.MessageComponent {
+	return render(c, nil, overlay{}, publicURL)
+}
+
+func SendForTest(ctx context.Context, b *Bot, userID string, c card.Card) (*discordgo.Message, bool, error) {
+	return b.send(ctx, userID, c)
+}

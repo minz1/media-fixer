@@ -20,11 +20,13 @@ const (
 
 // Bot wraps discordgo and registers the /report slash command.
 type Bot struct {
-	session *discordgo.Session
-	guildID string
-	ownerID string
-	svc     *incident.Service
-	log     *slog.Logger
+	session   *discordgo.Session
+	api       sender
+	guildID   string
+	ownerID   string
+	publicURL string
+	svc       *incident.Service
+	log       *slog.Logger
 
 	connect    func() error
 	retryFirst time.Duration
@@ -33,15 +35,17 @@ type Bot struct {
 }
 
 // New creates a Bot from a Discord bot token.
-func New(token, guildID, ownerID string, log *slog.Logger) (*Bot, error) {
+func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, error) {
 	sess, err := discordgo.New("Bot " + token)
 	if err != nil {
 		return nil, fmt.Errorf("discordgo: %w", err)
 	}
 	b := &Bot{
 		session:    sess,
+		api:        sess,
 		guildID:    guildID,
 		ownerID:    ownerID,
+		publicURL:  publicURL,
 		log:        log,
 		retryFirst: connectRetryFirst,
 		retryCap:   connectRetryCap,
@@ -148,12 +152,8 @@ func (b *Bot) NotifyOwner(ctx context.Context, c card.Card) error {
 }
 
 // NotifyUser sends a DM to an arbitrary Discord user ID.
-func (b *Bot) NotifyUser(_ context.Context, userID string, c card.Card) error {
-	ch, err := b.session.UserChannelCreate(userID)
-	if err != nil {
-		return fmt.Errorf("create DM channel: %w", err)
-	}
-	_, err = b.session.ChannelMessageSend(ch.ID, plainText(c))
+func (b *Bot) NotifyUser(ctx context.Context, userID string, c card.Card) error {
+	_, _, err := b.send(ctx, userID, c)
 	return err
 }
 
