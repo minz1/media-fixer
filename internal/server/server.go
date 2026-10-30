@@ -132,6 +132,7 @@ func New(
 		r.Post("/maintenance/pack-sweep/run", s.sweepRun)
 		r.Get("/maintenance/pack-sweep/status", s.sweepStatusFragment)
 		r.Post("/maintenance/pack-sweep/refused/{id}/forget", s.sweepForget)
+		r.Get("/maintenance/stuck-queue", s.stuckCard)
 		r.Post("/maintenance/stuck-queue/settings", s.stuckSettingsSave)
 		r.Post("/maintenance/stuck-queue/run", s.stuckRun)
 		r.Post("/maintenance/stuck-queue/{action}", s.stuckAction)

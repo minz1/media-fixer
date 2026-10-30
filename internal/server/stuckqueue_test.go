@@ -103,21 +103,26 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 	refused := item(rec(2, 12, "NV", false, "sample"), "NOVA", stuckqueue.VerdictGap,
 		stuckqueue.ActionRegrab, stuckqueue.ActionRemove)
 	refused.ImportRefusal = "refused: more than one file targets the same episode"
+	young := item(rec(5, 14, "AH", true, "Not an upgrade"), "AHS", stuckqueue.VerdictClear, stuckqueue.ActionRemove)
+	young.Age, young.Due = time.Hour, time.Date(2026, 10, 30, 5, 7, 0, 0, time.UTC)
 	res := stuckqueue.Result{
 		FinishedAt: time.Date(2026, 10, 29, 22, 0, 0, 0, time.UTC), DryRun: true, MinAgeHours: 6,
 		Apps: []stuckqueue.AppResult{
-			{App: stuckqueue.AppSonarr, Configured: true, WouldClear: 1, Waiting: 2, Items: []stuckqueue.Item{
-				gap,
-				refused,
-				item(
-					rec(3, 13, "FL", true, "Not an upgrade"),
-					"Flash",
-					stuckqueue.VerdictClear,
-					stuckqueue.ActionRemove,
-				),
-				item(client.QueueEntry{ID: 4, DownloadID: "OP", Status: "completed"}, "One Piece",
-					stuckqueue.VerdictUnmapped, stuckqueue.ActionRemove),
-			}},
+			{
+				App: stuckqueue.AppSonarr, Configured: true, WouldClear: 1, Waiting: []stuckqueue.Item{young},
+				Items: []stuckqueue.Item{
+					gap,
+					refused,
+					item(
+						rec(3, 13, "FL", true, "Not an upgrade"),
+						"Flash",
+						stuckqueue.VerdictClear,
+						stuckqueue.ActionRemove,
+					),
+					item(client.QueueEntry{ID: 4, DownloadID: "OP", Status: "completed"}, "One Piece",
+						stuckqueue.VerdictUnmapped, stuckqueue.ActionRemove),
+				},
+			},
 			{App: stuckqueue.AppRadarr, Configured: true, Unreachable: true, Err: "arr GET /api/v3/queue: 500"},
 		},
 	}
@@ -141,7 +146,10 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		"unreachable: arr GET /api/v3/queue: 500",
 		"dry run",
 		"would clear 1",
-		"2 waiting out the 6 h delay",
+		"1 waiting out the 6 h delay",
+		"AHS",
+		"due 2026-10-30 05:07 UTC",
+		`name="download_id" value="AH"`,
 		`name="download_id" value="LC"`,
 		`name="targets" value="S03E11"`,
 		"/media/maintenance/stuck-queue/import",
@@ -207,6 +215,24 @@ func TestStuckRun_Busy(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	mustContain(t, rec.Body.String(), "a stuck-queue run is already running")
+}
+
+func TestStuckRun_CardRefreshesUntilDone(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	hold := make(chan struct{})
+	env.arr.mu.Lock()
+	env.arr.hold = hold
+	env.arr.mu.Unlock()
+	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/run", url.Values{})
+	mustContain(t, rec.Body.String(), "Running", `hx-get="/media/maintenance/stuck-queue"`, `hx-trigger="every 3s"`)
+	close(hold)
+	env.sch.Wait()
+	rec = do(t, env.srv, http.MethodGet, "/media/maintenance/stuck-queue", nil)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "hx-trigger=\"every") {
+		t.Fatalf("status %d, a finished run still polls:\n%s", rec.Code, rec.Body.String())
+	}
+	mustContain(t, rec.Body.String(), "Last run", "1 waiting out the 6 h delay")
 }
 
 func TestStuckAction_RequiresSameOrigin(t *testing.T) {

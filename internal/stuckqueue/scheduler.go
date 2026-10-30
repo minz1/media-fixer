@@ -26,6 +26,7 @@ type Scheduler struct {
 	lastStart time.Time
 	last      Result
 	hasLast   bool
+	running   bool
 	warned    string
 }
 
@@ -81,18 +82,24 @@ func (s *Scheduler) Last() (Result, bool) {
 	return s.last, s.hasLast
 }
 
+func (s *Scheduler) Running() bool {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.running
+}
+
 func (s *Scheduler) start(now time.Time, set Settings) error {
 	if !s.mu.TryLock() {
 		return ErrRunActive
 	}
 	s.smu.Lock()
-	s.lastStart = now
+	s.lastStart, s.running = now, true
 	s.smu.Unlock()
 	s.wg.Go(func() {
 		defer s.mu.Unlock()
 		res := s.r.Run(s.base, set)
 		s.smu.Lock()
-		s.last, s.hasLast = res, true
+		s.last, s.hasLast, s.running = res, true, false
 		s.smu.Unlock()
 	})
 	return nil

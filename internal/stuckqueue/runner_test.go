@@ -137,16 +137,18 @@ func TestRun_WaitsMinAge(t *testing.T) {
 	if n := len(deletes(e.sonarr.writesCopy())); n != 0 {
 		t.Fatalf("deleted %d on first sight", n)
 	}
-	if w := app(first, stuckqueue.AppSonarr).Waiting; w != 1 {
-		t.Fatalf("waiting = %d, want the young download counted", w)
+	w := app(first, stuckqueue.AppSonarr).Waiting
+	if len(w) != 1 || !w[0].Due.Equal(e.clock.Now().Add(6*time.Hour)) ||
+		!slices.Equal(w[0].Actions, []stuckqueue.Action{stuckqueue.ActionRemove}) {
+		t.Fatalf("waiting = %+v, want the young download listed with its due time and Remove", w)
 	}
 	e.clock.Add(6 * time.Hour)
 	res := e.runner.Run(context.Background(), liveSettings())
 	if n := len(deletes(e.sonarr.writesCopy())); n != 1 || app(res, stuckqueue.AppSonarr).Cleared != 1 {
 		t.Fatalf("deletes = %d, result = %+v", n, res)
 	}
-	if w := app(res, stuckqueue.AppSonarr).Waiting; w != 0 || res.MinAgeHours != liveSettings().MinAgeHours {
-		t.Fatalf("waiting = %d, min age = %d after the wait", w, res.MinAgeHours)
+	if w = app(res, stuckqueue.AppSonarr).Waiting; len(w) != 0 || res.MinAgeHours != liveSettings().MinAgeHours {
+		t.Fatalf("waiting = %+v, min age = %d after the wait", w, res.MinAgeHours)
 	}
 }
 

@@ -151,3 +151,23 @@ func TestRunNow_Corrupt(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRunning_WhileRunActive(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	if s.Running() {
+		t.Fatal("running before any run")
+	}
+	gate := e.sonarr.hold()
+	if err := s.RunNow(); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Running() {
+		t.Fatal("not running while the run is held")
+	}
+	close(gate)
+	s.Wait()
+	if s.Running() {
+		t.Fatal("still running after the run finished")
+	}
+}

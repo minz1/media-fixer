@@ -106,11 +106,11 @@ func (s *Scheduler) forget(app App, downloadID string) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	apps := slices.Clone(s.last.Apps)
+	gone := func(it Item) bool { return strings.EqualFold(it.DownloadID, downloadID) }
 	for i := range apps {
 		if apps[i].App == app {
-			apps[i].Items = slices.DeleteFunc(slices.Clone(apps[i].Items), func(it Item) bool {
-				return strings.EqualFold(it.DownloadID, downloadID)
-			})
+			apps[i].Items = slices.DeleteFunc(slices.Clone(apps[i].Items), gone)
+			apps[i].Waiting = slices.DeleteFunc(slices.Clone(apps[i].Waiting), gone)
 		}
 	}
 	s.last.Apps = apps

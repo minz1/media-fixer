@@ -33,6 +33,7 @@ type stuckItemView struct {
 	Title         string
 	Verdict       string
 	Age           string
+	Due           string
 	Targets       string
 	Messages      []string
 	ImportRefusal string
@@ -49,6 +50,10 @@ type stuckAppView struct {
 
 func (s *Server) SetStuckQueue(sch *stuckqueue.Scheduler) {
 	s.stuck = sch
+}
+
+func (s *Server) stuckCard(w http.ResponseWriter, r *http.Request) {
+	s.renderStuckCard(r.Context(), w, "", "")
 }
 
 func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +158,7 @@ func (s *Server) stuckCardData(
 		"Failure":     failure,
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
+		"Running":     s.stuck.Running(),
 	}
 	if res == nil {
 		return card
@@ -179,8 +185,8 @@ func stuckApp(ar stuckqueue.AppResult, minAgeHours int) stuckAppView {
 		return v
 	}
 	v.Summary = fmt.Sprintf("cleared %d, would clear %d, %d listed, %d waiting out the %d h delay",
-		ar.Cleared, ar.WouldClear, len(ar.Items), ar.Waiting, minAgeHours)
-	for _, it := range ar.Items {
+		ar.Cleared, ar.WouldClear, len(ar.Items), len(ar.Waiting), minAgeHours)
+	for _, it := range slices.Concat(ar.Items, ar.Waiting) {
 		v.Items = append(v.Items, stuckItem(it))
 	}
 	return v
@@ -191,6 +197,9 @@ func stuckItem(it stuckqueue.Item) stuckItemView {
 		App: string(it.App), DownloadID: it.DownloadID, Title: it.Title, Verdict: string(it.Verdict),
 		Age: it.Age.Round(ageRounding).String(), Targets: it.Targets(), ImportRefusal: it.ImportRefusal,
 		Rejections: it.Rejections,
+	}
+	if !it.Due.IsZero() {
+		v.Due = it.Due.UTC().Format(stuckTimeLayout)
 	}
 	for _, r := range it.Records {
 		for _, m := range r.Messages {

@@ -195,6 +195,25 @@ func TestAct_DropsFromLast(t *testing.T) {
 	}
 }
 
+func TestAct_DropsWaitingFromLast(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	if err := s.RunNow(); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	if res, _ := s.Last(); len(app(res, stuckqueue.AppSonarr).Waiting) != 1 {
+		t.Fatalf("setup: last = %+v", res)
+	}
+	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
+		t.Fatal(err)
+	}
+	if res, _ := s.Last(); len(app(res, stuckqueue.AppSonarr).Waiting) != 0 {
+		t.Fatalf("last still lists it as waiting: %+v", res)
+	}
+}
+
 func TestAct_UnconfiguredApp(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
