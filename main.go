@@ -89,7 +89,7 @@ func startSweep(
 
 func startStuckQueue(
 	ctx context.Context, cfg *config.Config, clients *clientset.Set, database *db.DB, bot *discord.Bot,
-	srv *server.Server, log *slog.Logger,
+	srv *server.Server, log *slog.Logger, handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) *stuckqueue.Scheduler {
 	r := &stuckqueue.Runner{DB: database, Notify: bot.NotifyOwner, Now: time.Now, Log: log}
 	if cfg.Sonarr.URL != "" {
@@ -103,6 +103,8 @@ func startStuckQueue(
 		return nil
 	}
 	sch := stuckqueue.NewScheduler(ctx, r, database)
+	sch.Refresh = bot.Refresh
+	handlers["sq"], renderers["sq"] = sch.CardHandler(), sch.CardRenderer()
 	srv.SetStuckQueue(sch)
 	sch.Start()
 	return sch
@@ -111,9 +113,10 @@ func startStuckQueue(
 func startMaintenance(
 	ctx context.Context, stop context.CancelFunc, cfg *config.Config, clients *clientset.Set, database *db.DB,
 	bot *discord.Bot, srv *server.Server, log *slog.Logger,
+	handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) func() {
 	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log)
-	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log)
+	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log, handlers, renderers)
 	return func() {
 		stop()
 		if sweepSch != nil {
@@ -198,7 +201,7 @@ func run() error {
 	}
 	handlers := map[string]card.Handler{"inc": svc.CardHandler()}
 	renderers := map[string]card.Renderer{"inc": svc.CardRenderer()}
-	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log)()
+	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log, handlers, renderers)()
 	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))

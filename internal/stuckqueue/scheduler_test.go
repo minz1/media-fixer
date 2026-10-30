@@ -3,10 +3,13 @@ package stuckqueue_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -169,5 +172,35 @@ func TestRunning_WhileRunActive(t *testing.T) {
 	s.Wait()
 	if s.Running() {
 		t.Fatal("still running after the run finished")
+	}
+}
+
+func TestScheduler_RefreshesAfterStoringLast(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	var mu sync.Mutex
+	var calls []string
+	var rendered []bool
+	s.Refresh = func(prefix string) {
+		_, ok, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, prefix)
+		rendered = append(rendered, ok)
+	}
+	e.tickAt(s, time.Minute)
+	e.tickAt(s, 6*time.Hour)
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(calls, []string{"sq:", "sq:"}) {
+		t.Fatalf("refresh calls = %v, want one per run", calls)
+	}
+	if !rendered[1] {
+		t.Fatal("the run's own item did not render in its post-run refresh")
+	}
+	up, ok, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+	if !ok || len(up.Buttons) == 0 || up.Status != "" {
+		t.Fatalf("update = %+v, %v; want still stuck with buttons", up, ok)
 	}
 }

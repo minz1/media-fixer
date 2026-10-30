@@ -15,6 +15,8 @@ var (
 )
 
 type Scheduler struct {
+	Refresh func(string)
+
 	r    *Runner
 	d    *db.DB
 	base context.Context
@@ -28,6 +30,7 @@ type Scheduler struct {
 	hasLast   bool
 	running   bool
 	warned    string
+	outcomes  map[string]outcome
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
@@ -101,6 +104,7 @@ func (s *Scheduler) start(now time.Time, set Settings) error {
 		s.smu.Lock()
 		s.last, s.hasLast, s.running = res, true, false
 		s.smu.Unlock()
+		s.refresh(cardPrefix)
 	})
 	return nil
 }

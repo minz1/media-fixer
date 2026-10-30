@@ -21,7 +21,11 @@ func stuckCard(items []Item, capHit bool) card.Card {
 		tail = "\n" + capLine
 	}
 	for i, it := range items {
-		c.Items = append(c.Items, card.Item{Text: it.App.Name() + " — " + it.Title + " — " + reason(it)})
+		c.Items = append(c.Items, card.Item{
+			Subject: subjectOf(it.Download),
+			Text:    it.App.Name() + " — " + it.Title + " — " + reason(it),
+			Buttons: itemButtons(it.Download, it.Actions),
+		})
 		c.Footer = fmt.Sprintf("…and %d more", len(items)-i) + tail
 		if len(c.Plain()) > card.MaxPlain || c.Components() > card.MaxBuilt {
 			c.Items = c.Items[:i]

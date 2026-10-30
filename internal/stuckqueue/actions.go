@@ -64,7 +64,9 @@ func (s *Scheduler) Act(
 	}
 	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
 		"app", app, "download", d.DownloadID, "title", d.Title, "action", action)
+	s.recordOutcome(d, action)
 	s.forget(app, d.DownloadID)
+	s.refresh(subjectOf(d))
 	return notice, nil
 }
 

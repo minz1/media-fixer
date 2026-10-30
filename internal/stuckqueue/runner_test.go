@@ -69,6 +69,7 @@ type runEnv struct {
 	runner         *stuckqueue.Runner
 	mu             sync.Mutex
 	dms            []string
+	cards          []card.Card
 	notifyErr      error
 }
 
@@ -95,6 +96,7 @@ func newRunEnv(t *testing.T) *runEnv {
 				return e.notifyErr
 			}
 			e.dms = append(e.dms, msg.Plain())
+			e.cards = append(e.cards, msg)
 			return nil
 		},
 	}
@@ -410,6 +412,26 @@ func TestRun_DMFailureRetries(t *testing.T) {
 	e.runner.Run(context.Background(), liveSettings())
 	if dms := e.dmsCopy(); len(dms) != 1 || !strings.Contains(dms[0], "NOVA") {
 		t.Fatalf("dms = %q", dms)
+	}
+}
+
+func TestRun_UntrackedDMCountsDelivered(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	sends := 0
+	e.runner.Notify = func(context.Context, card.Card) error {
+		sends++
+		return fmt.Errorf("discord: %w", card.ErrUntracked)
+	}
+	e.agedRun(liveSettings())
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	if sends != 1 {
+		t.Fatalf("sends = %d, want 1 (an untracked card was delivered)", sends)
+	}
+	if strings.Contains(e.logs.String(), "owner DM failed") {
+		t.Fatalf("logged a failure for an untracked card:\n%s", e.logs.String())
 	}
 }
 

@@ -2,6 +2,7 @@ package stuckqueue
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"time"
@@ -240,7 +241,7 @@ func (r *Runner) notify(ctx context.Context, items []Item, capHit bool) {
 	if r.Notify == nil {
 		return
 	}
-	if err := r.Notify(ctx, stuckCard(items, capHit)); err != nil {
+	if err := r.Notify(ctx, stuckCard(items, capHit)); err != nil && !errors.Is(err, card.ErrUntracked) {
 		r.logger().WarnContext(ctx, "stuck-queue: owner DM failed; will retry next run", "err", err)
 		return
 	}
