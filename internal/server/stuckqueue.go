@@ -53,6 +53,10 @@ func (s *Server) SetStuckQueue(sch *stuckqueue.Scheduler) {
 }
 
 func (s *Server) stuckResults(w http.ResponseWriter, r *http.Request) {
+	if s.stuck == nil {
+		s.renderStuckCard(r.Context(), w, "", "")
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "stuck_results", s.stuckCardFor(r.Context(), "", ""))
 }

@@ -36,6 +36,11 @@ func (s *Scheduler) Act(
 	if now := d.Targets(); now != seenTargets {
 		return "", refuse("this download now maps to %s, not %s; check the card again", now, seenTargets)
 	}
+	if action != ActionRemove {
+		if err = s.waitOver(ctx, app, d.DownloadID); err != nil {
+			return "", err
+		}
+	}
 	v := Classify(d)
 	var cands []client.ImportCandidate
 	var guardErr error
@@ -61,6 +66,25 @@ func (s *Scheduler) Act(
 		"app", app, "download", d.DownloadID, "title", d.Title, "action", action)
 	s.forget(app, d.DownloadID)
 	return notice, nil
+}
+
+func (s *Scheduler) waitOver(ctx context.Context, app App, downloadID string) error {
+	set, err := LoadSettings(ctx, s.d)
+	if err != nil {
+		return err
+	}
+	row, ok, err := s.d.GetStuckSeen(ctx, string(app), downloadID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return refuse("no run has checked this download yet; only Remove is allowed until one does")
+	}
+	if due := row.FirstSeenAt.Add(set.MinAge()); s.r.Now().Before(due) {
+		return refuse("this download is inside the %d h wait until %s; only Remove is allowed",
+			set.MinAgeHours, due.UTC().Format("2006-01-02 15:04 UTC"))
+	}
+	return nil
 }
 
 func (s *Scheduler) apply(

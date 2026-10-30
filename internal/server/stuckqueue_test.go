@@ -161,6 +161,8 @@ func TestStuckCard_NotConfigured(t *testing.T) {
 	srv, _ := newDashboardTestServer(t)
 	rec := do(t, srv, http.MethodGet, "/media/maintenance", nil)
 	mustContain(t, rec.Body.String(), "Stuck queue unavailable (Sonarr and Radarr not configured)")
+	rec = do(t, srv, http.MethodGet, "/media/maintenance/stuck-queue/results", nil)
+	mustContain(t, rec.Body.String(), "Stuck queue unavailable (Sonarr and Radarr not configured)")
 }
 
 func TestStuckCard_CorruptSettings(t *testing.T) {
@@ -221,18 +223,23 @@ func TestStuckRun_CardRefreshesUntilDone(t *testing.T) {
 	t.Parallel()
 	env := newStuckEnv(t)
 	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
 	env.arr.mu.Lock()
 	env.arr.hold = hold
 	env.arr.mu.Unlock()
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/run", url.Values{})
 	mustContain(t, rec.Body.String(), "Running", `hx-get="/media/maintenance/stuck-queue/results"`,
 		`hx-trigger="every 3s"`, `name="min_age_hours"`)
+	if body := rec.Body.String(); strings.Index(body, "Run started.") > strings.Index(body, `id="stuck-results"`) {
+		t.Fatalf("the notice sits inside the polled fragment and vanishes on the next poll:\n%s", body)
+	}
 	rec = do(t, env.srv, http.MethodGet, "/media/maintenance/stuck-queue/results", nil)
 	mustContain(t, rec.Body.String(), `id="stuck-results"`, "Running", `hx-trigger="every 3s"`)
 	if strings.Contains(rec.Body.String(), `name="min_age_hours"`) {
 		t.Fatalf("the polled fragment re-renders the settings form:\n%s", rec.Body.String())
 	}
-	close(hold)
+	release()
 	env.sch.Wait()
 	rec = do(t, env.srv, http.MethodGet, "/media/maintenance/stuck-queue/results", nil)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "hx-trigger=\"every") {

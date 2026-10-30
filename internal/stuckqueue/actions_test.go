@@ -25,6 +25,16 @@ func act(e *runEnv, s *stuckqueue.Scheduler, a stuckqueue.App, dl string, action
 			}
 		}
 	}
+	if _, err := e.db.UpsertStuckSeen(
+		context.Background(),
+		string(a),
+		dl,
+		dl,
+		"",
+		e.clock.Now().Add(-7*time.Hour),
+	); err != nil {
+		return "", err
+	}
 	return actSeen(s, a, dl, action, targets)
 }
 
@@ -151,6 +161,29 @@ func TestAct_RegrabSearchFails(t *testing.T) {
 		!strings.Contains(err.Error(), "search from Radarr") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func TestAct_InsideWaitOnlyRemoves(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	if err := s.RunNow(); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	_, err := actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRegrab, "S01E01")
+	refusedNoWrite(t, e.sonarr, err, "inside the 6 h wait")
+	if _, err = actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove, "S01E01"); err != nil {
+		t.Fatalf("remove inside the wait: %v", err)
+	}
+}
+
+func TestAct_RefusesUnseen(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	_, err := actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRegrab, "S01E01")
+	refusedNoWrite(t, e.sonarr, err, "no run has checked")
 }
 
 func TestAct_Remove(t *testing.T) {

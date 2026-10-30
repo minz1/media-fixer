@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -55,6 +56,24 @@ func (d *DB) UpsertStuckSeen(
 		s.NotifiedAt = &notified.Time
 	}
 	return s, err
+}
+
+func (d *DB) GetStuckSeen(ctx context.Context, app, downloadID string) (StuckDownload, bool, error) {
+	s := StuckDownload{App: app, DownloadID: downloadID}
+	var notified sql.NullTime
+	err := d.read.QueryRowContext(
+		ctx,
+		`SELECT title, verdict, first_seen_at, notified_at FROM stuck_queue_downloads WHERE app = ? AND download_id = ?`,
+		app,
+		downloadID,
+	).Scan(&s.Title, &s.Verdict, &s.FirstSeenAt, &notified)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s, false, nil
+	}
+	if notified.Valid {
+		s.NotifiedAt = &notified.Time
+	}
+	return s, err == nil, err
 }
 
 func (d *DB) MarkStuckNotified(ctx context.Context, app, downloadID string, now time.Time) error {

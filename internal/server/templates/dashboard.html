@@ -654,6 +654,8 @@
   {{if .Unavailable}}
   <p class="text-sm text-red-600">{{.Unavailable}}</p>
   {{else}}
+  {{with .Notice}}<p class="text-sm text-green-700">{{.}}</p>{{end}}
+  {{with .Failure}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
   {{with .Unreadable}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
   {{template "stuck_results" .}}
   <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/settings" hx-target="#stuck-queue" hx-swap="outerHTML"
@@ -671,8 +673,6 @@
 {{define "stuck_results"}}
 <div id="stuck-results" class="space-y-6"
   {{if .Running}}hx-get="{{.BaseURL}}/maintenance/stuck-queue/results" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
-  {{with .Notice}}<p class="text-sm text-green-700">{{.}}</p>{{end}}
-  {{with .Failure}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
   <div class="flex items-center gap-4 text-sm text-gray-700">
     {{if .Running}}<span><span class="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Running</span> checking the Sonarr and Radarr queues</span>{{end}}
     {{with .LastRun}}<span>Last run {{.}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
