@@ -133,9 +133,12 @@ func TestRun_WaitsMinAge(t *testing.T) {
 	t.Parallel()
 	e := newRunEnv(t)
 	e.sonarr.set(rawRec(1, "D1", "Flash", 19, true, notUpgrade))
-	e.runner.Run(context.Background(), liveSettings())
+	first := e.runner.Run(context.Background(), liveSettings())
 	if n := len(deletes(e.sonarr.writesCopy())); n != 0 {
 		t.Fatalf("deleted %d on first sight", n)
+	}
+	if w := app(first, stuckqueue.AppSonarr).Waiting; w != 1 {
+		t.Fatalf("waiting = %d, want the young download counted", w)
 	}
 	e.clock.Add(6 * time.Hour)
 	res := e.runner.Run(context.Background(), liveSettings())

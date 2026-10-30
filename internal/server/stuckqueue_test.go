@@ -106,7 +106,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 	res := stuckqueue.Result{
 		FinishedAt: time.Date(2026, 10, 29, 22, 0, 0, 0, time.UTC), DryRun: true,
 		Apps: []stuckqueue.AppResult{
-			{App: stuckqueue.AppSonarr, Configured: true, WouldClear: 1, Items: []stuckqueue.Item{
+			{App: stuckqueue.AppSonarr, Configured: true, WouldClear: 1, Waiting: 2, Items: []stuckqueue.Item{
 				gap,
 				refused,
 				item(
@@ -141,6 +141,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		"unreachable: arr GET /api/v3/queue: 500",
 		"dry run",
 		"would clear 1",
+		"2 waiting",
 		`name="download_id" value="LC"`,
 		`name="targets" value="S03E11"`,
 		"/media/maintenance/stuck-queue/import",

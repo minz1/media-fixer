@@ -661,7 +661,7 @@
     {{with .LastRun}}<span>Last run {{.}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
     {{else}}<span>No run yet.</span>{{end}}
     <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/run" hx-target="#stuck-queue" hx-swap="outerHTML">
-      <button type="submit" class="px-3 py-1 rounded-sm bg-gray-800 text-white text-sm">Run now</button>
+      <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Run now</button>
     </form>
   </div>
   {{range .Apps}}
@@ -698,7 +698,7 @@
     <label class="text-sm text-gray-700"><input type="checkbox" name="dry_run" {{if .Settings.DryRun}}checked{{end}} /> Dry run</label>
     {{template "sweep_num" (dict "Label" "Every (minutes)" "Name" "interval_minutes" "Value" .Settings.IntervalMinutes "Min" .Bounds.IntervalLo "Max" .Bounds.IntervalHi "Err" (index .Errors "interval_minutes"))}}
     {{template "sweep_num" (dict "Label" "Wait before acting (hours)" "Name" "min_age_hours" "Value" .Settings.MinAgeHours "Min" .Bounds.MinAgeLo "Max" .Bounds.MinAgeHi "Err" (index .Errors "min_age_hours"))}}
-    <button type="submit" class="px-3 py-1 rounded-sm bg-gray-800 text-white text-sm">Save</button>
+    <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Save</button>
   </form>
   {{end}}
 </div>

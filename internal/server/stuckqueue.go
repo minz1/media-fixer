@@ -178,7 +178,9 @@ func stuckApp(ar stuckqueue.AppResult) stuckAppView {
 		v.Error = "unreachable: " + ar.Err
 		return v
 	}
-	v.Summary = fmt.Sprintf("cleared %d, would clear %d, %d listed", ar.Cleared, ar.WouldClear, len(ar.Items))
+	v.Summary = fmt.Sprintf(
+		"cleared %d, would clear %d, %d listed, %d waiting", ar.Cleared, ar.WouldClear, len(ar.Items), ar.Waiting,
+	)
 	for _, it := range ar.Items {
 		v.Items = append(v.Items, stuckItem(it))
 	}

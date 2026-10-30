@@ -45,6 +45,7 @@ type AppResult struct {
 	Items       []Item
 	Cleared     int
 	WouldClear  int
+	Waiting     int
 }
 
 type Result struct {
@@ -139,6 +140,7 @@ func (x *sweepRun) app(ctx context.Context, a App) AppResult {
 		}
 		age := now.Sub(row.FirstSeenAt)
 		if age < x.set.MinAge() {
+			ar.Waiting++
 			continue
 		}
 		x.handle(ctx, c, &ar, Item{Download: d, Verdict: v, Age: age}, entries, row.NotifiedAt == nil)
