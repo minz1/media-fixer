@@ -12,3 +12,4 @@ dev-run.sh
 
 docs/
 .autopilot/runs/
+.autopilot/rules.md
