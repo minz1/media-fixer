@@ -104,7 +104,8 @@ func TestSend_4xxFallsBackToPlain(t *testing.T) {
 	if len(api.plain) != 1 || api.plain[0] != "T\nB" {
 		t.Errorf("plain sends = %q", api.plain)
 	}
-	if l := logs.String(); !strings.Contains(l, "plain=true") || !strings.Contains(l, "status=400") {
+	l := logs.String()
+	if !strings.Contains(l, "level=WARN") || !strings.Contains(l, "plain=true") || !strings.Contains(l, "status=400") {
 		t.Errorf("logs = %q", l)
 	}
 }

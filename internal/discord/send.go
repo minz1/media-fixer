@@ -48,6 +48,6 @@ func (b *Bot) send(ctx context.Context, userID string, c card.Card) (*discordgo.
 	if err != nil {
 		return nil, true, fmt.Errorf("send plain after %s: %w", rest.Error(), err)
 	}
-	b.log.InfoContext(ctx, "discord card sent", "plain", true, "status", rest.Response.StatusCode, "error", rest)
+	b.log.WarnContext(ctx, "discord card sent", "plain", true, "status", rest.Response.StatusCode, "error", rest)
 	return m, true, nil
 }
