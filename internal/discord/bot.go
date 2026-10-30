@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/incident"
 )
 
@@ -141,18 +143,30 @@ func (b *Bot) Close() error {
 }
 
 // NotifyOwner sends a DM to the configured owner user ID.
-func (b *Bot) NotifyOwner(ctx context.Context, msg string) error {
-	return b.NotifyUser(ctx, b.ownerID, msg)
+func (b *Bot) NotifyOwner(ctx context.Context, c card.Card) error {
+	return b.NotifyUser(ctx, b.ownerID, c)
 }
 
 // NotifyUser sends a DM to an arbitrary Discord user ID.
-func (b *Bot) NotifyUser(_ context.Context, userID, msg string) error {
+func (b *Bot) NotifyUser(_ context.Context, userID string, c card.Card) error {
 	ch, err := b.session.UserChannelCreate(userID)
 	if err != nil {
 		return fmt.Errorf("create DM channel: %w", err)
 	}
-	_, err = b.session.ChannelMessageSend(ch.ID, msg)
+	_, err = b.session.ChannelMessageSend(ch.ID, plainText(c))
 	return err
+}
+
+func plainText(c card.Card) string {
+	s := c.Plain()
+	if len(s) <= card.MaxPlain {
+		return s
+	}
+	cut := card.MaxPlain
+	for !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {

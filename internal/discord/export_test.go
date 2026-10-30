@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"github.com/minz1/mediafixer/internal/card"
 )
 
 func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap time.Duration) (*Bot, error) {
@@ -17,3 +19,5 @@ func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap tim
 }
 
 func ReportCommandForTest() *discordgo.ApplicationCommand { return reportCommand() }
+
+func PlainTextForTest(c card.Card) string { return plainText(c) }

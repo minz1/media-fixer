@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -83,9 +84,9 @@ func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incid
 		s.log.ErrorContext(ctx, "set pending outcome", "incident", inc.ID, "error", setErr)
 		return
 	}
-	s.notifyReporters(ctx, inc, fmt.Sprintf(
+	s.notifyReporters(ctx, inc, reporterCard(card.Info, fmt.Sprintf(
 		"🔎 Searching for **%s** — we'll let you know once it's downloading.", inc.Title,
-	))
+	)))
 }
 
 // arrSearchTarget is what startPendingOutcomeTracking recovers from
@@ -202,9 +203,9 @@ func (s *Service) advanceDownloading(
 ) {
 	if !po.GrabNotified {
 		po.GrabNotified = true
-		s.notifyReporters(ctx, inc, fmt.Sprintf(
+		s.notifyReporters(ctx, inc, reporterCard(card.Info, fmt.Sprintf(
 			"📥 Found **%s** — downloading now. We'll let you know when it's ready.", inc.Title,
-		))
+		)))
 	}
 	if obs.ProgressPct > po.LastProgressPct {
 		po.LastProgressAt = now
@@ -250,12 +251,11 @@ func (s *Service) advanceNoQueueItem(ctx context.Context, inc *db.Incident, po *
 // escalateToOwner moves status to manual_test_needed.
 func (s *Service) escalatePendingOutcome(ctx context.Context, inc *db.Incident, po *db.PendingOutcome, reason string) {
 	s.log.WarnContext(ctx, "pending outcome escalating", "incident", inc.ID, "reason", reason)
-	s.escalateToOwner(ctx, inc, fmt.Sprintf(
-		"⚠️ Incident **%s** (#%s): searched for **%s** but %s.\n"+
-			"Approve \"Keep searching\" on the dashboard to keep watching for a release over the next "+
-			"week, or investigate manually.",
+	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+		"⚠️ Incident **%s** (#%s): searched for **%s** but %s.",
 		inc.Title, inc.ID[:8], pendingOutcomeTargetLabel(po), reason,
-	))
+	), "Approve \"Keep searching\" on the dashboard to keep watching for a release over the next "+
+		"week, or investigate manually."))
 }
 
 // pendingOutcomeTargetLabel renders a PendingOutcome's target for a

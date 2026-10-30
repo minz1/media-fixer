@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
@@ -67,7 +68,7 @@ var (
 type Runner struct {
 	Sonarr *client.ArrClient
 	DB     *db.DB
-	Notify func(context.Context, string) error
+	Notify func(context.Context, card.Card) error
 	Now    func() time.Time
 	Sleep  func(context.Context, time.Duration) error
 	Log    *slog.Logger
@@ -150,11 +151,22 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 		status, reason = statusFailed, err.Error()
 	}
 	fctx := context.WithoutCancel(ctx)
-	if ferr := r.DB.FinishSweepRun(fctx, id, status, reason, x.c, r.Now()); ferr != nil {
+	end := r.Now()
+	if ferr := r.DB.FinishSweepRun(fctx, id, status, reason, x.c, end); ferr != nil {
 		return id, errors.Join(err, ferr)
 	}
 	if r.Notify != nil {
-		if nerr := r.Notify(fctx, x.summary(status, reason, r.Now().Sub(start))); nerr != nil {
+		sr := db.SweepRun{
+			ID:         id,
+			Trigger:    trigger,
+			Dry:        dry,
+			StartedAt:  start,
+			FinishedAt: &end,
+			Status:     status,
+			Reason:     reason,
+			Counts:     x.c,
+		}
+		if nerr := r.Notify(fctx, summaryCard(sr)); nerr != nil {
 			r.logger().WarnContext(fctx, "sweep summary DM failed", "run", id, "err", nerr)
 		}
 	}
@@ -686,23 +698,6 @@ func (x *run) report(phase, current string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.progress = &Progress{Phase: phase, Current: current, Counts: x.c}
-}
-
-func (x *run) summary(status, reason string, took time.Duration) string {
-	kind := "Pack sweep"
-	if x.dry {
-		kind = "Pack sweep dry run"
-	}
-	if reason != "" {
-		status += " (" + reason + ")"
-	}
-	c := x.c
-	return fmt.Sprintf(
-		"%s %s: grabs %d/%d, lookups %d/%d, searched %d/%d, imported %d, failed %d, refused %d, "+
-			"still downloading %d, took %s. /media/maintenance",
-		kind, status, c.Grabs, c.MaxGrabs, c.Lookups, c.MaxLookups, c.Searched, c.MaxSearches,
-		c.Imported, c.Failed, c.Refused, c.Downloading, took.Round(time.Second),
-	)
 }
 
 func (r *Runner) logger() *slog.Logger {

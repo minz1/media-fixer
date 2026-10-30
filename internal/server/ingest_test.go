@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -19,13 +20,13 @@ import (
 // stubNotifier satisfies incident.Notifier without a real Discord connection.
 type stubNotifier struct{ msgs []string }
 
-func (s *stubNotifier) NotifyOwner(_ context.Context, msg string) error {
-	s.msgs = append(s.msgs, msg)
+func (s *stubNotifier) NotifyOwner(_ context.Context, msg card.Card) error {
+	s.msgs = append(s.msgs, msg.Plain())
 	return nil
 }
 
-func (s *stubNotifier) NotifyUser(_ context.Context, _, msg string) error {
-	s.msgs = append(s.msgs, msg)
+func (s *stubNotifier) NotifyUser(_ context.Context, _ string, msg card.Card) error {
+	s.msgs = append(s.msgs, msg.Plain())
 	return nil
 }
 

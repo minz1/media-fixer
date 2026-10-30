@@ -12,6 +12,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/journal"
 )
@@ -81,8 +82,8 @@ type SeerrIssues interface {
 
 // Notifier is implemented by the Discord bot to send DMs.
 type Notifier interface {
-	NotifyOwner(ctx context.Context, msg string) error
-	NotifyUser(ctx context.Context, userID, msg string) error
+	NotifyOwner(ctx context.Context, c card.Card) error
+	NotifyUser(ctx context.Context, userID string, c card.Card) error
 }
 
 // NewService wires up the incident service. base is the process-lifetime context
@@ -195,13 +196,14 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
 		_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
 		s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
-		msg := fmt.Sprintf(
+		c := ownerCard(inc, card.Alert, fmt.Sprintf(
 			"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
 			openCount+1,
 			r.Title,
 			inc.ID[:8],
-		)
-		if notifyErr := s.notif.NotifyOwner(ctx, msg); notifyErr != nil {
+		), "")
+		c.Verbs = []string{verbUnlock, verbResolve}
+		if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil {
 			s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
 		}
 		return inc, nil
@@ -373,21 +375,21 @@ func (s *Service) evaluateDiagnosis(
 		return diagnosisOutcome{done: true}
 
 	case agent.VerdictEscalateToOwner:
-		s.escalateToOwner(ctx, inc, fmt.Sprintf(
-			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).\nRoot cause: %s\nConcern: %s",
+		s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).",
 			inc.Title,
 			inc.ID[:8],
-			result.RootCause,
-			verdict.Reason,
-		))
+		), "", card.Field{Name: fieldRootCause, Value: result.RootCause}, card.Field{Name: "Concern", Value: verdict.Reason}))
 		return diagnosisOutcome{done: true}
 
 	case agent.VerdictSuggestAlternative:
 		if attempt == maxAttempts-1 {
-			s.escalateToOwner(ctx, inc, fmt.Sprintf(
-				"⚠️ **%s** (#%s): agent still needs approval after %d retries.\nRoot cause: %s\nAction needed: %s",
-				inc.Title, inc.ID[:8], attempt+1, result.RootCause, agent.EscalationSummary(result),
-			))
+			s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+				"⚠️ **%s** (#%s): agent still needs approval after %d retries.",
+				inc.Title, inc.ID[:8], attempt+1,
+			), "",
+				card.Field{Name: fieldRootCause, Value: result.RootCause},
+				card.Field{Name: "Action needed", Value: agent.EscalationSummary(result)}))
 			return diagnosisOutcome{done: true}
 		}
 		feedback := openai.ChatCompletionMessage{
@@ -557,7 +559,10 @@ func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, acti
 	s.notifyReporters(
 		ctx,
 		inc,
-		fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
+		reporterCard(
+			card.Success,
+			fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
+		),
 	)
 	s.resolveSeerrIssues(ctx, inc)
 }
@@ -619,11 +624,11 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 			eta = defaultUserETAMinutes
 		}
 		s.log.InfoContext(ctx, "fix still applying, advising reporters", "incident", inc.ID, "eta_min", eta)
-		s.notifyReporters(ctx, inc, fmt.Sprintf(
+		s.notifyReporters(ctx, inc, reporterCard(card.Info, fmt.Sprintf(
 			"🔧 We're still rebuilding the library for **%s** — it should be playable in about %d minute(s). Give it a try then!",
 			inc.Title,
 			eta,
-		))
+		)))
 		return
 	}
 
@@ -638,7 +643,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 // exhausted, max retries hit) routes through here so escalation is idempotent
 // under concurrent/superseded runs — the same TransitionStatus pattern used for
 // the "fixed" notification, applied once structurally instead of per call site.
-func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg string) {
+func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, c card.Card) {
 	prior, getErr := s.db.GetIncident(ctx, inc.ID)
 	if getErr != nil {
 		s.log.ErrorContext(ctx, "read status before escalation", "incident", inc.ID, "error", getErr)
@@ -655,9 +660,11 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, msg str
 		return
 	}
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
-	_ = s.notif.NotifyOwner(ctx, msg)
+	c.Verbs = escalationVerbs()
+	_ = s.notif.NotifyOwner(ctx, c)
 	if getErr == nil && prior.Status != db.StatusAgentFixed {
-		s.notifyReporters(ctx, inc, fmt.Sprintf("🧑‍🔧 Handed **%s** to minz1. You'll hear back here.", inc.Title))
+		s.notifyReporters(ctx, inc,
+			reporterCard(card.Info, fmt.Sprintf("🧑‍🔧 Handed **%s** to minz1. You'll hear back here.", inc.Title)))
 	}
 }
 
@@ -677,19 +684,21 @@ func (s *Service) handleRunError(ctx context.Context, inc *db.Incident, err erro
 
 func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err error) {
 	s.log.ErrorContext(ctx, "agent error", "incident", inc.ID, "error", err)
-	s.escalateToOwner(ctx, inc, fmt.Sprintf(
-		"❌ Agent error for incident **%s** (#%s): %v\nIncident marked for manual review.",
+	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+		"❌ Agent error for incident **%s** (#%s): %v",
 		inc.Title,
 		inc.ID[:8],
 		err,
-	))
+	), "Incident marked for manual review."))
 }
 
 func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
-	s.escalateToOwner(ctx, inc, fmt.Sprintf(
-		"🔍 Incident **%s** (#%s) needs your attention%s.\nRoot cause: %s\nAction needed: %s\nReason: %s",
-		inc.Title, inc.ID[:8], note, result.RootCause, agent.EscalationSummary(result), result.PrimaryReason,
-	))
+	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+		"🔍 Incident **%s** (#%s) needs your attention%s.", inc.Title, inc.ID[:8], note,
+	), "",
+		card.Field{Name: fieldRootCause, Value: result.RootCause},
+		card.Field{Name: "Action needed", Value: agent.EscalationSummary(result)},
+		card.Field{Name: "Reason", Value: result.PrimaryReason}))
 }
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
@@ -702,25 +711,32 @@ func (s *Service) Resolve(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	s.notifyReporters(ctx, inc, fmt.Sprintf("✅ Your report for **%s** has been resolved. Give it a try!", inc.Title))
+	s.notifyReporters(
+		ctx,
+		inc,
+		reporterCard(
+			card.Success,
+			fmt.Sprintf("✅ Your report for **%s** has been resolved. Give it a try!", inc.Title),
+		),
+	)
 	s.resolveSeerrIssues(ctx, inc)
 	return nil
 }
 
-func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, msg string) {
+func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, c card.Card) {
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
-	s.deliverToReporters(ctx, inc, msg)
+	s.deliverToReporters(ctx, inc, c)
 }
 
 func (s *Service) noteReporters(
 	ctx context.Context,
 	inc *db.Incident,
-	msg string,
+	c card.Card,
 	now time.Time,
 	minGap time.Duration,
 ) {
 	if s.claimReporterNote(ctx, inc.ID, now, minGap) {
-		s.deliverToReporters(ctx, inc, msg)
+		s.deliverToReporters(ctx, inc, c)
 	}
 }
 
@@ -732,29 +748,29 @@ func (s *Service) claimReporterNote(ctx context.Context, id string, now time.Tim
 	return claimed
 }
 
-func (s *Service) deliverToReporters(ctx context.Context, inc *db.Incident, msg string) {
-	s.notifyDiscordReporters(ctx, inc, msg)
-	s.notifySeerrIssues(ctx, inc, "comment on", func(id string) error { return s.seerr.Comment(ctx, id, msg) })
+func (s *Service) deliverToReporters(ctx context.Context, inc *db.Incident, c card.Card) {
+	s.notifyDiscordReporters(ctx, inc, c)
+	s.notifySeerrIssues(ctx, inc, "comment on", func(id string) error { return s.seerr.Comment(ctx, id, c.Plain()) })
 }
 
-func (s *Service) notifyDiscordReporters(ctx context.Context, inc *db.Incident, msg string) {
+func (s *Service) notifyDiscordReporters(ctx context.Context, inc *db.Incident, c card.Card) {
 	ids, err := s.db.ListDiscordReporterIDs(ctx, inc.ID)
 	if err != nil {
 		s.log.ErrorContext(ctx, "list discord reporter IDs", "incident", inc.ID, "error", err)
 		return
 	}
 	for _, id := range ids {
-		if notifyErr := s.notif.NotifyUser(ctx, id, msg); notifyErr != nil {
+		if notifyErr := s.notif.NotifyUser(ctx, id, c); notifyErr != nil {
 			s.log.ErrorContext(ctx, "notify reporter", "user", id, "incident", inc.ID, "error", notifyErr)
 			// A failed reporter DM (e.g. "no mutual guilds" — the reporter DM'd the
 			// bot from a server it isn't in) used to just vanish into an ERROR log
 			// line: the reporter was never told anything, and no one else was
 			// either. Fall back to the owner so a silently-undeliverable DM is at
 			// least visible somewhere.
-			_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
-				"⚠️ Could not DM reporter %s for **%s** (#%s): %v\nMessage was: %s",
-				id, inc.Title, inc.ID[:8], notifyErr, msg,
-			))
+			_ = s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
+				"⚠️ Could not DM reporter %s for **%s** (#%s): %v",
+				id, inc.Title, inc.ID[:8], notifyErr,
+			), "", card.Field{Name: "Message was", Value: c.Plain()}))
 		}
 	}
 }
@@ -781,10 +797,10 @@ func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id
 		if !ok {
 			return
 		}
-		if derr := s.notif.NotifyOwner(ctx, fmt.Sprintf(
-			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v\n%s",
-			verb, id, inc.Title, inc.ID[:8], err, "Further Seerr failures in the next hour are only logged.",
-		)); derr != nil {
+		if derr := s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
+			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v",
+			verb, id, inc.Title, inc.ID[:8], err,
+		), "Further Seerr failures in the next hour are only logged.")); derr != nil {
 			s.log.ErrorContext(ctx, "seerr alert DM failed", "incident", inc.ID, "error", derr)
 			s.releaseSeerrAlert(now, prev)
 		}
@@ -918,12 +934,23 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	switch origin {
 	case rerunManual:
-		s.noteReporters(ctx, inc, fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title), time.Now(), rerunNoteGap)
+		s.noteReporters(
+			ctx,
+			inc,
+			reporterCard(
+				card.Info,
+				fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title),
+			),
+			time.Now(),
+			rerunNoteGap,
+		)
 	case rerunStale:
-		_ = s.notif.NotifyOwner(ctx, fmt.Sprintf(
+		c := ownerCard(inc, card.Info, fmt.Sprintf(
 			"⏱️ Incident **%s** (#%s) stopped making progress for %d min and is being re-run.",
 			inc.Title, inc.ID[:8], int(staleRunThreshold.Minutes()),
-		))
+		), "")
+		c.Verbs = []string{verbResolve}
+		_ = s.notif.NotifyOwner(ctx, c)
 	case rerunRestart:
 	}
 	s.startRun(runCtx, tok, inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {

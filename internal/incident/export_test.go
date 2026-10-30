@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -32,12 +33,12 @@ func (s *Service) DistinctAppliedActionCountForTest(ctx context.Context, inciden
 
 // NotifyReportersForTest exposes Service.notifyReporters for service_test.go.
 func (s *Service) NotifyReportersForTest(ctx context.Context, inc *db.Incident, msg string) {
-	s.notifyReporters(ctx, inc, msg)
+	s.notifyReporters(ctx, inc, reporterCard(card.Info, msg))
 }
 
 // EscalateToOwnerForTest exposes Service.escalateToOwner for reporternotes_test.go.
 func (s *Service) EscalateToOwnerForTest(ctx context.Context, inc *db.Incident, msg string) {
-	s.escalateToOwner(ctx, inc, msg)
+	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, msg, ""))
 }
 
 // ProgressPhrasesForTest exposes progressPhrases for progress_test.go.

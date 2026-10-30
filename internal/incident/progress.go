@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -48,7 +49,8 @@ func (s *Service) reportProgress(ctx context.Context, inc *db.Incident, now time
 		return
 	}
 	s.noteReporters(ctx, inc,
-		fmt.Sprintf("⏳ Still working on **%s**: %s.", inc.Title, strings.Join(phrases, ", ")), now, progressNoteGap)
+		reporterCard(card.Info, fmt.Sprintf("⏳ Still working on **%s**: %s.", inc.Title, strings.Join(phrases, ", "))),
+		now, progressNoteGap)
 }
 
 func progressPhrases(actions []*db.ActionLog, since time.Time, po *db.PendingOutcome) []string {

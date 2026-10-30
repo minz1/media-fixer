@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	_ "modernc.org/sqlite" // register SQLite driver for the raw-backdate test helper
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -27,20 +29,24 @@ import (
 
 type captureNotifier struct {
 	msgs       []string
+	cards      []card.Card
+	users      []card.Card
 	ownerFails int
 }
 
-func (c *captureNotifier) NotifyOwner(_ context.Context, msg string) error {
+func (c *captureNotifier) NotifyOwner(_ context.Context, msg card.Card) error {
 	if c.ownerFails > 0 {
 		c.ownerFails--
 		return errors.New("discord down")
 	}
-	c.msgs = append(c.msgs, msg)
+	c.msgs = append(c.msgs, msg.Plain())
+	c.cards = append(c.cards, msg)
 	return nil
 }
 
-func (c *captureNotifier) NotifyUser(_ context.Context, _, msg string) error {
-	c.msgs = append(c.msgs, msg)
+func (c *captureNotifier) NotifyUser(_ context.Context, _ string, msg card.Card) error {
+	c.msgs = append(c.msgs, msg.Plain())
+	c.users = append(c.users, msg)
 	return nil
 }
 
@@ -165,8 +171,12 @@ func TestHandle_SystemicLock(t *testing.T) {
 	if got.Status != db.StatusBlocked {
 		t.Errorf("expected status blocked for systemic-locked incident, got %q", got.Status)
 	}
-	if len(notif.msgs) == 0 {
-		t.Error("expected owner notification for systemic lock")
+	if len(notif.cards) != 1 {
+		t.Fatalf("owner cards = %d, want 1 systemic lock card", len(notif.cards))
+	}
+	c := notif.cards[0]
+	if c.Tone != card.Alert || c.Path != "/incidents/"+inc.ID || !slices.Equal(c.Verbs, []string{"unlock", "resolve"}) {
+		t.Errorf("systemic card tone %v path %q verbs %v", c.Tone, c.Path, c.Verbs)
 	}
 }
 
@@ -547,18 +557,18 @@ func newSyncNotifier() *syncNotifier {
 	return &syncNotifier{userMsgs: make(chan string, 8)}
 }
 
-func (n *syncNotifier) NotifyOwner(_ context.Context, msg string) error {
+func (n *syncNotifier) NotifyOwner(_ context.Context, msg card.Card) error {
 	n.mu.Lock()
-	n.msgs = append(n.msgs, msg)
+	n.msgs = append(n.msgs, msg.Plain())
 	n.mu.Unlock()
 	return nil
 }
 
-func (n *syncNotifier) NotifyUser(_ context.Context, _, msg string) error {
+func (n *syncNotifier) NotifyUser(_ context.Context, _ string, msg card.Card) error {
 	n.mu.Lock()
-	n.msgs = append(n.msgs, msg)
+	n.msgs = append(n.msgs, msg.Plain())
 	n.mu.Unlock()
-	n.userMsgs <- msg
+	n.userMsgs <- msg.Plain()
 	return nil
 }
 
@@ -1179,12 +1189,12 @@ func TestRunAgent_LowConfidence_TriggersControlReview_ApproveProceedsAutonomousl
 // reporter-DM fallback path.
 type failingUserNotifier struct{ ownerMsgs []string }
 
-func (n *failingUserNotifier) NotifyOwner(_ context.Context, msg string) error {
-	n.ownerMsgs = append(n.ownerMsgs, msg)
+func (n *failingUserNotifier) NotifyOwner(_ context.Context, msg card.Card) error {
+	n.ownerMsgs = append(n.ownerMsgs, msg.Plain())
 	return nil
 }
 
-func (n *failingUserNotifier) NotifyUser(_ context.Context, _, _ string) error {
+func (n *failingUserNotifier) NotifyUser(_ context.Context, _ string, _ card.Card) error {
 	return errors.New("no mutual guilds")
 }
 
@@ -1390,8 +1400,8 @@ type heldNoteNotifier struct {
 	release chan struct{}
 }
 
-func (n *heldNoteNotifier) NotifyUser(ctx context.Context, id, msg string) error {
-	if strings.HasPrefix(msg, "🔁") {
+func (n *heldNoteNotifier) NotifyUser(ctx context.Context, id string, msg card.Card) error {
+	if strings.HasPrefix(msg.Plain(), "🔁") {
 		<-n.release
 	}
 	return n.syncNotifier.NotifyUser(ctx, id, msg)
@@ -1467,5 +1477,31 @@ func TestHandle_CreatesBufferingIncident(t *testing.T) {
 	}
 	if got.What != "buffering" {
 		t.Errorf("what = %q, want buffering", got.What)
+	}
+}
+
+func TestEscalateToOwner_Cards(t *testing.T) {
+	t.Parallel()
+	svc, _, notif := newTestService(t)
+	ctx := context.Background()
+	inc, err := svc.Handle(ctx, &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "House",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.EscalateToOwnerForTest(ctx, inc, "owner: look at House")
+	if len(notif.cards) != 1 || len(notif.users) != 1 {
+		t.Fatalf("owner cards %d, reporter cards %d, want 1 each", len(notif.cards), len(notif.users))
+	}
+	owner := notif.cards[0]
+	want := []string{"resolve", "rerun", "keep", "unlock", "preview", "refresh", "approve"}
+	if owner.Plain() != "owner: look at House" || owner.Tone != card.Warn ||
+		owner.Path != "/incidents/"+inc.ID || !slices.Equal(owner.Verbs, want) {
+		t.Errorf("owner card = %+v", owner)
+	}
+	if rep := notif.users[0]; rep.Subject != "" || rep.Path != "" || len(rep.Verbs) != 0 || len(rep.Buttons) != 0 {
+		t.Errorf("reporter card carries owner parts: %+v", rep)
 	}
 }

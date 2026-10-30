@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
@@ -87,13 +88,13 @@ func newRunEnv(t *testing.T) *runEnv {
 	e.runner = &stuckqueue.Runner{
 		Sonarr: e.sonarr.client(), Radarr: e.radarr.client(), DB: d, Now: e.clock.Now,
 		Log: slog.New(slog.NewTextHandler(e.logs, nil)),
-		Notify: func(_ context.Context, msg string) error {
+		Notify: func(_ context.Context, msg card.Card) error {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			if e.notifyErr != nil {
 				return e.notifyErr
 			}
-			e.dms = append(e.dms, msg)
+			e.dms = append(e.dms, msg.Plain())
 			return nil
 		},
 	}

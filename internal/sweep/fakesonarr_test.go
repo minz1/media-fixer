@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
@@ -437,10 +438,10 @@ func newHarness(t *testing.T) *harness {
 	r := &sweep.Runner{
 		Sonarr: fake.client(),
 		DB:     d,
-		Notify: func(_ context.Context, msg string) error {
+		Notify: func(_ context.Context, msg card.Card) error {
 			dmMu.Lock()
 			defer dmMu.Unlock()
-			*dms = append(*dms, msg)
+			*dms = append(*dms, msg.Plain())
 			return nil
 		},
 		Now:   clock.Now,

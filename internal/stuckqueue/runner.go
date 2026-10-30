@@ -2,12 +2,11 @@ package stuckqueue
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
@@ -22,7 +21,6 @@ const (
 
 const (
 	maxAutoClears = 20
-	dmLimit       = 2000
 	dmHeader      = "📦 Stuck downloads need you (Maintenance → Stuck queue):"
 	noReason      = "no reason given"
 )
@@ -61,7 +59,7 @@ type Runner struct {
 	Sonarr *client.ArrClient
 	Radarr *client.ArrClient
 	DB     *db.DB
-	Notify func(context.Context, string) error
+	Notify func(context.Context, card.Card) error
 	Now    func() time.Time
 	Log    *slog.Logger
 }
@@ -242,7 +240,7 @@ func (r *Runner) notify(ctx context.Context, items []Item, capHit bool) {
 	if r.Notify == nil {
 		return
 	}
-	if err := r.Notify(ctx, dmText(items, capHit)); err != nil {
+	if err := r.Notify(ctx, stuckCard(items, capHit)); err != nil {
 		r.logger().WarnContext(ctx, "stuck-queue: owner DM failed; will retry next run", "err", err)
 		return
 	}
@@ -252,30 +250,6 @@ func (r *Runner) notify(ctx context.Context, items []Item, capHit bool) {
 			r.logger().WarnContext(ctx, "stuck-queue: mark notified", "download", it.DownloadID, "err", err)
 		}
 	}
-}
-
-func dmText(items []Item, capHit bool) string {
-	capLine := fmt.Sprintf("Stopped after clearing %d this run.", maxAutoClears)
-	if len(items) == 0 {
-		return "📦 Stuck-queue sweep: " + capLine
-	}
-	tail := ""
-	if capHit {
-		tail = "\n" + capLine
-	}
-	var b strings.Builder
-	b.WriteString(dmHeader)
-	for i, it := range items {
-		line := "\n• " + it.App.Name() + " — " + it.Title + " — " + reason(it)
-		more := fmt.Sprintf("\n…and %d more", len(items)-i)
-		if b.Len()+len(line)+len(more)+len(tail) > dmLimit {
-			b.WriteString(more)
-			break
-		}
-		b.WriteString(line)
-	}
-	b.WriteString(tail)
-	return b.String()
 }
 
 func (a App) Name() string {
