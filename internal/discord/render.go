@@ -15,7 +15,6 @@ const (
 	accentSuccess = 0x57F287
 	accentWarn    = 0xFEE75C
 	accentAlert   = 0xED4245
-	rowSize       = 5
 )
 
 type overlay struct {
@@ -104,7 +103,7 @@ func buttonComponents(bs []card.Button, publicURL string) []discordgo.MessageCom
 
 func rows(bs []discordgo.MessageComponent) []discordgo.MessageComponent {
 	var out []discordgo.MessageComponent
-	for chunk := range slices.Chunk(bs, rowSize) {
+	for chunk := range slices.Chunk(bs, card.RowSize) {
 		out = append(out, discordgo.ActionsRow{Components: chunk})
 	}
 	return out

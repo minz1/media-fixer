@@ -27,14 +27,14 @@ type sender interface {
 }
 
 func (b *Bot) send(ctx context.Context, userID string, c card.Card) (*discordgo.Message, bool, error) {
-	ch, err := b.api.UserChannelCreate(userID, discordgo.WithContext(ctx))
+	ch, err := b.api.UserChannelCreate(userID)
 	if err != nil {
 		return nil, false, fmt.Errorf("create DM channel: %w", err)
 	}
 	m, err := b.api.ChannelMessageSendComplex(ch.ID, &discordgo.MessageSend{
 		Components: render(c, nil, overlay{}, b.publicURL),
 		Flags:      discordgo.MessageFlagsIsComponentsV2,
-	}, discordgo.WithContext(ctx))
+	})
 	if err == nil {
 		b.log.InfoContext(ctx, "discord card sent", "plain", false)
 		return m, false, nil
@@ -44,9 +44,9 @@ func (b *Bot) send(ctx context.Context, userID string, c card.Card) (*discordgo.
 		rest.Response.StatusCode < http.StatusBadRequest || rest.Response.StatusCode >= http.StatusInternalServerError {
 		return nil, false, fmt.Errorf("send card: %w", err)
 	}
-	m, err = b.api.ChannelMessageSend(ch.ID, plainText(c), discordgo.WithContext(ctx))
+	m, err = b.api.ChannelMessageSend(ch.ID, plainText(c))
 	if err != nil {
-		return nil, true, fmt.Errorf("send plain after %d: %w", rest.Response.StatusCode, err)
+		return nil, true, fmt.Errorf("send plain after %s: %w", rest.Error(), err)
 	}
 	b.log.InfoContext(ctx, "discord card sent", "plain", true, "status", rest.Response.StatusCode, "error", rest)
 	return m, true, nil

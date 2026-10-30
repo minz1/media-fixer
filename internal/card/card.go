@@ -12,7 +12,7 @@ const (
 	MaxBuilt      = MaxComponents - Reserve
 	MaxText       = 4000
 	MaxPlain      = 2000
-	rowSize       = 5
+	RowSize       = 5
 )
 
 var (
@@ -104,13 +104,11 @@ func (c Card) Components() int {
 	}
 	for _, it := range c.Items {
 		n++
-		if len(it.Buttons) > 0 {
-			n += 1 + len(it.Buttons)
-		}
+		n += len(it.Buttons) + (len(it.Buttons)+RowSize-1)/RowSize
 	}
 	buttons := max(len(c.Buttons), len(c.Verbs))
 	if c.Path != "" {
 		buttons++
 	}
-	return n + buttons + (buttons+rowSize-1)/rowSize
+	return n + buttons + (buttons+RowSize-1)/RowSize
 }

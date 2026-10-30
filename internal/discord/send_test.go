@@ -21,6 +21,7 @@ type fakeSender struct {
 	complex  []*discordgo.MessageSend
 	plain    []string
 	complErr error
+	plainErr error
 }
 
 func (f *fakeSender) UserChannelCreate(string, ...discordgo.RequestOption) (*discordgo.Channel, error) {
@@ -43,6 +44,9 @@ func (f *fakeSender) ChannelMessageSend(_, content string, _ ...discordgo.Reques
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.plain = append(f.plain, content)
+	if f.plainErr != nil {
+		return nil, f.plainErr
+	}
 	return &discordgo.Message{ID: "m2"}, nil
 }
 
@@ -115,5 +119,34 @@ func TestSend_TimeoutNoResend(t *testing.T) {
 	}
 	if len(api.plain) != 0 || strings.Contains(logs.String(), "discord card sent") {
 		t.Errorf("plain %q logs %q", api.plain, logs.String())
+	}
+}
+
+func TestSend_5xxNoResend(t *testing.T) {
+	t.Parallel()
+	api := &fakeSender{complErr: &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusBadGateway}}}
+	b, _ := sendBot(api)
+	if _, plain, err := discord.SendForTest(t.Context(), b, "u", card.Card{Title: "T"}); err == nil || plain {
+		t.Errorf("plain %v err %v", plain, err)
+	}
+	if len(api.plain) != 0 {
+		t.Errorf("plain sends = %q", api.plain)
+	}
+}
+
+func TestSend_PlainFallbackFails(t *testing.T) {
+	t.Parallel()
+	dmClosed := errors.New("dm closed")
+	api := &fakeSender{
+		complErr: &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusForbidden}},
+		plainErr: dmClosed,
+	}
+	b, logs := sendBot(api)
+	_, plain, err := discord.SendForTest(t.Context(), b, "u", card.Card{Title: "T"})
+	if !plain || !errors.Is(err, dmClosed) {
+		t.Errorf("plain %v err %v", plain, err)
+	}
+	if strings.Contains(logs.String(), "discord card sent") {
+		t.Errorf("logs = %q", logs.String())
 	}
 }
