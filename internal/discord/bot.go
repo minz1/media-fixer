@@ -39,6 +39,12 @@ type Bot struct {
 	wake      chan struct{}
 	poll      time.Duration
 	renderers map[string]card.Renderer
+	handlers  map[string]card.Handler
+	procCtx   context.Context
+	inFlight  map[string]bool
+	closed    bool
+	running   sync.WaitGroup
+	now       func() time.Time
 	liveMsgs  map[string]bool
 	stopCards context.CancelFunc
 	cardsDone chan struct{}
@@ -65,6 +71,8 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		wake:      make(chan struct{}, 1),
 		poll:      livePoll,
 		liveMsgs:  map[string]bool{},
+		inFlight:  map[string]bool{},
+		now:       time.Now,
 		cardsDone: make(chan struct{}),
 	}
 	b.connect = b.openAndRegister
@@ -155,16 +163,22 @@ func (b *Bot) openAndRegister() error {
 	return nil
 }
 
-// Close stops any pending connect retry and the card updater, then closes the Discord gateway connection.
+// Close stops any pending connect retry, closes the Discord gateway connection, waits for running button
+// handlers, then stops the card updater.
 func (b *Bot) Close() error {
 	if b.cancel != nil {
 		b.cancel()
 	}
+	err := b.session.Close()
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	b.running.Wait()
 	if b.stopCards != nil {
 		b.stopCards()
 		<-b.cardsDone
 	}
-	return b.session.Close()
+	return err
 }
 
 // NotifyOwner sends a DM to the configured owner user ID and tracks a card with subjects for live updates.
@@ -203,6 +217,10 @@ func plainText(c card.Card) string {
 }
 
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type == discordgo.InteractionMessageComponent {
+		b.onComponent(i)
+		return
+	}
 	if i.Type != discordgo.InteractionApplicationCommand {
 		return
 	}

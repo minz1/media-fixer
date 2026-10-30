@@ -127,10 +127,10 @@ func startMaintenance(
 
 func startCards(
 	ctx context.Context, bot *discord.Bot, database *db.DB, jrnl *journal.Journal,
-	renderers map[string]card.Renderer,
+	handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) func() {
 	ch, unsub := jrnl.SubscribeAll()
-	bot.StartCards(ctx, database, ch, renderers)
+	bot.StartCards(ctx, database, ch, handlers, renderers)
 	return unsub
 }
 
@@ -196,9 +196,9 @@ func run() error {
 		log.Error("interrupt running sweeps", "error", err)
 		return err
 	}
-	renderers := map[string]card.Renderer{}
+	handlers, renderers := map[string]card.Handler{}, map[string]card.Renderer{}
 	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log)()
-	defer startCards(ctx, bot, database, jrnl, renderers)()
+	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 

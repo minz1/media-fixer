@@ -52,3 +52,7 @@ func HasOverlayForTest(b *Bot, messageID string) bool {
 func SetPollIntervalForTest(b *Bot, d time.Duration) { b.poll = d }
 
 func CardsDoneForTest(b *Bot) <-chan struct{} { return b.cardsDone }
+
+func OnInteractionForTest(b *Bot, i *discordgo.InteractionCreate) { b.onInteraction(nil, i) }
+
+func SetClockForTest(b *Bot, now func() time.Time) { b.now = now }

@@ -42,7 +42,11 @@ func (b *Bot) Refresh(subjectOrPrefix string) {
 
 func (b *Bot) setOverlay(messageID string, ov overlay) {
 	b.mu.Lock()
-	b.cards.overlays[messageID] = ov
+	if ov.Line == "" && len(ov.Confirm) == 0 {
+		delete(b.cards.overlays, messageID)
+	} else {
+		b.cards.overlays[messageID] = ov
+	}
 	b.cards.messages[messageID] = true
 	b.mu.Unlock()
 	b.wakeCards()
@@ -57,10 +61,12 @@ func (b *Bot) wakeCards() {
 
 // StartCards starts the updater that keeps tracked owner cards current.
 func (b *Bot) StartCards(
-	ctx context.Context, d *db.DB, events <-chan *db.Event, renderers map[string]card.Renderer,
+	ctx context.Context, d *db.DB, events <-chan *db.Event,
+	handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) {
 	b.mu.Lock()
 	b.cards.store = d
+	b.handlers, b.procCtx = handlers, ctx
 	b.mu.Unlock()
 	b.renderers = renderers
 	ctx, b.stopCards = context.WithCancel(ctx)

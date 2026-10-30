@@ -94,20 +94,27 @@ func (r *fakeRenderer) count(subject string) int {
 }
 
 type cardEnv struct {
-	t      *testing.T
-	api    *editSender
-	bot    *discord.Bot
-	db     *db.DB
-	events chan *db.Event
+	t        *testing.T
+	api      *editSender
+	bot      *discord.Bot
+	db       *db.DB
+	events   chan *db.Event
+	handlers map[string]card.Handler
 }
 
-func newCardEnv(t *testing.T, publicURL string) *cardEnv {
+func openCardDB(t *testing.T) *db.DB {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "cards.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+func newCardEnv(t *testing.T, publicURL string) *cardEnv {
+	t.Helper()
+	d := openCardDB(t)
 	api := &editSender{}
 	b := discord.NewWithSenderForTest(slog.New(slog.DiscardHandler), api, "owner", publicURL)
 	t.Cleanup(func() { _ = b.Close() })
@@ -115,7 +122,7 @@ func newCardEnv(t *testing.T, publicURL string) *cardEnv {
 }
 
 func (e *cardEnv) start(renderers map[string]card.Renderer) {
-	e.bot.StartCards(e.t.Context(), e.db, e.events, renderers)
+	e.bot.StartCards(e.t.Context(), e.db, e.events, e.handlers, renderers)
 }
 
 func (e *cardEnv) track(subject, messageID string, c card.Card, sentAt time.Time) {
@@ -288,15 +295,19 @@ func TestUpdater_404DropsRows(t *testing.T) {
 	discord.SetOverlayForTest(e.bot, "m9", "Resolved")
 	e.start(map[string]card.Renderer{"inc": r.render})
 	e.waitEdits(1)
+	deadline := time.Now().Add(waitLimit)
+	for {
+		rows, err := e.db.ListDiscordMessage(t.Context(), "m9")
+		if err == nil && len(rows) == 0 && !discord.HasOverlayForTest(e.bot, "m9") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after 404: rows %+v err %v overlay %v", rows, err, discord.HasOverlayForTest(e.bot, "m9"))
+		}
+		time.Sleep(time.Millisecond)
+	}
 	e.bot.Refresh("inc:1")
 	time.Sleep(50 * time.Millisecond)
-	rows, err := e.db.ListDiscordMessage(t.Context(), "m9")
-	if err != nil || len(rows) != 0 {
-		t.Errorf("rows %+v err %v", rows, err)
-	}
-	if discord.HasOverlayForTest(e.bot, "m9") {
-		t.Error("overlay kept after 404")
-	}
 	if n := len(e.api.editList()); n != 1 {
 		t.Errorf("edit attempts = %d, want 1", n)
 	}
