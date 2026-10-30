@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -23,6 +24,8 @@ const (
 	cardKeep     = 14 * 24 * time.Hour
 	pruneEvery   = 24 * time.Hour
 	prefixSuffix = ":"
+
+	detailsTooLong = "Details too long for Discord; review them on the dashboard"
 )
 
 type cardState struct {
@@ -197,6 +200,10 @@ func (b *Bot) refreshMessage(ctx context.Context, d *db.DB, id string) {
 	}
 	ov := b.pinOverlay(id, ups)
 	comps := render(c, ups, ov, b.publicURL)
+	if textLen(comps) > card.MaxText {
+		ups, ov = withinTextLimit(ups, ov)
+		comps = render(c, ups, ov, b.publicURL)
+	}
 	hash, err := renderHash(comps)
 	if err != nil || hash == rows[0].Hash {
 		return
@@ -218,6 +225,35 @@ func (b *Bot) refreshMessage(ctx context.Context, d *db.DB, id string) {
 			b.log.WarnContext(ctx, "discord cards: store hash", "message", id, "error", err)
 		}
 	}
+}
+
+func textLen(cs []discordgo.MessageComponent) int {
+	n := 0
+	for _, c := range cs {
+		switch v := c.(type) {
+		case discordgo.Container:
+			n += textLen(v.Components)
+		case discordgo.TextDisplay:
+			n += utf8.RuneCountInString(v.Content)
+		}
+	}
+	return n
+}
+
+func withinTextLimit(ups map[string]card.Update, ov overlay) (map[string]card.Update, overlay) {
+	safe := func(bs []card.Button) []card.Button {
+		return slices.DeleteFunc(slices.Clone(bs), func(bt card.Button) bool { return bt.Style == card.Danger })
+	}
+	out := make(map[string]card.Update, len(ups))
+	for subject, up := range ups {
+		if len(up.Sections) > 0 {
+			up.Sections = []card.Field{{Name: "Details", Value: detailsTooLong}}
+		}
+		up.Buttons = safe(up.Buttons)
+		out[subject] = up
+	}
+	ov.Confirm = safe(ov.Confirm)
+	return out, ov
 }
 
 func (b *Bot) renderSubject(ctx context.Context, subject string) (card.Update, bool) {

@@ -548,3 +548,38 @@ func TestRender_LargestCardWithOverlayFits(t *testing.T) {
 		t.Errorf("edit = %s", s)
 	}
 }
+
+func TestRefresh_OverTextLimitDropsSectionsAndDanger(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	c := incCard("1")
+	c.Body = strings.Repeat("r", card.MaxText/2)
+	c.Verbs = []string{"approve", "refresh"}
+	approve := btn("inc", "approve", "1", "s", "fp")
+	approve.Style = card.Danger
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{
+		Sections: []card.Field{{Name: "Delete", Value: strings.Repeat("p", card.MaxText/2)}},
+		Buttons:  []card.Button{approve, btn("inc", "refresh", "1", "s")},
+	})
+	body, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.db.InsertDiscordCards(t.Context(), []db.DiscordCard{
+		{Subject: c.Subject, ChannelID: "dm", MessageID: "m1", Card: body, SentAt: time.Now()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.bot.Refresh("inc:1")
+	m := e.waitEdits(1)[0]
+	if n := len(texts(*m.Components)); n > card.MaxText {
+		t.Errorf("edit text = %d chars, limit %d", n, card.MaxText)
+	}
+	s := editJSON(t, m)
+	if strings.Contains(s, "mf1:inc:approve:") || !strings.Contains(s, "mf1:inc:refresh:") ||
+		!strings.Contains(s, "too long for Discord") {
+		t.Errorf("edit = %.300s…", s)
+	}
+}
