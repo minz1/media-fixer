@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -134,7 +135,7 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 		srv, database := newDashboardTestServer(t)
 		inc := newManualTestNeededIncident(t, database)
 		body := mustExecuteIncidentTemplate(t, srv, inc.ID, false)
-		if !strings.Contains(body, "remove_and_search") || !strings.Contains(body, "Approve &amp; Run") {
+		if !strings.Contains(body, "remove_and_search") || !strings.Contains(body, "/escalation-preview") {
 			t.Errorf("expected the escalation card to render, got:\n%s", body)
 		}
 	})
@@ -440,9 +441,15 @@ func TestActionRerun_SurvivesCancelledRequest(t *testing.T) {
 
 func serveCancelled(t *testing.T, srv *server.Server, path string) *httptest.ResponseRecorder {
 	t.Helper()
+	return serveCancelledForm(t, srv, path, nil)
+}
+
+func serveCancelledForm(t *testing.T, srv *server.Server, path string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req = req.WithContext(cancelled)
 	rec := httptest.NewRecorder()

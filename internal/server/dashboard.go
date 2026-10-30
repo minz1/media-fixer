@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/livecheck"
 )
 
@@ -225,7 +227,8 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Resolve(context.WithoutCancel(r.Context()), id); err != nil {
+	if err := s.svc.Resolve(context.WithoutCancel(r.Context()), id); err != nil &&
+		!errors.Is(err, incident.ErrAlreadyResolved) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -296,12 +299,13 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data := map[string]any{}
-	plan, err := s.svc.PreviewEscalation(r.Context(), id)
+	data := map[string]any{"BaseURL": s.baseURL, "IncidentID": id}
+	plan, fp, err := s.svc.PreviewEscalation(r.Context(), id)
 	if err != nil {
 		data["Error"] = err.Error()
 	} else {
 		data["Plan"] = plan
+		data["PlanFP"] = fp
 		// Surfaced out of the plan rather than reached into from the template:
 		// the preview renders several plan types and only one of them has a
 		// readability probe, so a template field access would error on the
@@ -323,7 +327,7 @@ func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id); err != nil {
+	if err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp")); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

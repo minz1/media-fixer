@@ -70,3 +70,9 @@ func (s *Service) SeerrAlertAtForTest() time.Time {
 func (s *Service) SetSeedTimeoutForTest(d time.Duration) {
 	s.seedTimeout = d
 }
+
+func ErrNotAwaitingDecisionForTest() error { return errNotAwaitingDecision }
+
+func ErrPlanChangedForTest() error { return errPlanChanged }
+
+func ErrPlanExpiredForTest() error { return errPlanExpired }

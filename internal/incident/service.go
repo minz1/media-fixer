@@ -703,14 +703,22 @@ func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
 func (s *Service) Resolve(ctx context.Context, id string) error {
-	if err := s.db.UpdateIncidentStatus(ctx, id, db.StatusResolved); err != nil {
-		return err
-	}
-	s.recordStatusChanged(ctx, id, string(db.StatusResolved))
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err
 	}
+	changed, err := s.db.TransitionStatus(ctx, id, db.StatusResolved,
+		db.StatusOpen, db.StatusInvestigating, db.StatusAgentFixed, db.StatusManualTestNeeded,
+		db.StatusReopened, db.StatusBlocked, db.StatusVerifying)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return ErrAlreadyResolved
+	}
+	inc.Status = db.StatusResolved
+	s.clearEscalationPlan(ctx, id)
+	s.recordStatusChanged(ctx, id, string(db.StatusResolved))
 	s.notifyReporters(
 		ctx,
 		inc,
@@ -931,6 +939,7 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 		return err
 	}
 	inc.Status = db.StatusReopened
+	s.clearEscalationPlan(ctx, id)
 	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	switch origin {
 	case rerunManual:

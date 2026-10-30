@@ -295,15 +295,6 @@
       >
         Preview
       </button>
-      <button
-        hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/approve-escalation"
-        hx-swap="outerHTML"
-        hx-target="body"
-        hx-confirm="This deletes the current file(s), blocklists the release, and starts a fresh search. Continue?"
-        class="px-4 py-2 text-sm bg-red-700 text-white rounded-sm hover:bg-red-800"
-      >
-        Approve &amp; Run
-      </button>
     </div>
     <div id="escalation-preview" class="mt-3"></div>
   </div>
@@ -467,6 +458,18 @@
   </p>
   {{end}}
   <pre class="text-xs overflow-auto">{{json .Plan}}</pre>
+  <form
+    hx-post="{{.BaseURL}}/incidents/{{.IncidentID}}/approve-escalation"
+    hx-swap="outerHTML"
+    hx-target="body"
+    hx-confirm="This deletes the current file(s), blocklists the release, and starts a fresh search. Continue?"
+    class="mt-3"
+  >
+    <input type="hidden" name="plan_fp" value="{{.PlanFP}}" />
+    <button type="submit" class="px-4 py-2 text-sm bg-red-700 text-white rounded-sm hover:bg-red-800">
+      Approve &amp; Run
+    </button>
+  </form>
   {{end}}
 </div>
 {{end}}

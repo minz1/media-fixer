@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -25,64 +26,51 @@ const (
 	escalationPlanTTL = time.Hour
 )
 
+var (
+	errNotAwaitingDecision = errors.New("this incident is not waiting for an escalation decision")
+	errNoPlan              = errors.New("preview this escalation before approving it, so the plan " +
+		"that runs is the one you saw")
+	errPlanExpired     = errors.New("may no longer describe the same files; preview it again")
+	errPlanChanged     = errors.New("the plan changed since you previewed it; preview it again")
+	ErrAlreadyResolved = errors.New("incident already resolved")
+)
+
 // PreviewEscalation resolves an incident's recommended escalation action into
 // a concrete, read-only plan (e.g. exactly which files would be deleted) for
 // the dashboard's Preview button. It makes no changes.
-func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, error) {
+func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string, error) {
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	result, err := escalationResult(inc)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	plan, err := s.agent.PlanEscalation(ctx, result)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	// Persist exactly what the owner is about to see. ApproveEscalation
-	// executes this, not a re-resolution — see its comment.
+	// executes this, not a re-resolution — see approvable.
 	planJSON, marshalErr := json.Marshal(plan)
 	if marshalErr != nil {
-		return nil, fmt.Errorf("encode escalation plan: %w", marshalErr)
+		return nil, "", fmt.Errorf("encode escalation plan: %w", marshalErr)
 	}
 	if setErr := s.db.SetEscalationPlan(ctx, id, planJSON); setErr != nil {
-		return nil, fmt.Errorf("store escalation plan: %w", setErr)
+		return nil, "", fmt.Errorf("store escalation plan: %w", setErr)
 	}
-	return plan, nil
+	s.recordStatusChanged(ctx, id, "")
+	return plan, card.Fingerprint(planJSON), nil
 }
 
 // ApproveEscalation executes an incident's recommended escalation after
 // owner approval, logs the outcome, and drops the incident into the same
 // verification loop non-destructive fixes use rather than marking it fixed
 // immediately — a re-search takes time to actually resolve the incident.
-func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
-	inc, err := s.db.GetIncident(ctx, id)
-	if err != nil {
+func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) error {
+	if _, _, _, err := s.approvable(ctx, id, planFp); err != nil {
 		return err
-	}
-	result, err := escalationResult(inc)
-	if err != nil {
-		return err
-	}
-
-	// Execute the plan the owner was actually shown. Re-resolving it at this
-	// point is a TOCTOU on a destructive operation: the
-	// preview lists specific files, and anything that changed in between
-	// silently widens the delete, with no second confirmation.
-	planJSON, previewedAt, planErr := s.db.GetEscalationPlan(ctx, id)
-	if planErr != nil {
-		if errors.Is(planErr, db.ErrNoEscalationPlan) {
-			return errors.New("preview this escalation before approving it, so the plan " +
-				"that runs is the one you saw")
-		}
-		return planErr
-	}
-	if time.Since(previewedAt) > escalationPlanTTL {
-		_ = s.db.ClearEscalationPlan(ctx, id)
-		return fmt.Errorf("this plan was previewed %s ago and may no longer describe the "+
-			"same files; preview it again", time.Since(previewedAt).Round(time.Minute))
 	}
 
 	// Escalation execution deletes files and triggers a re-search — as
@@ -98,6 +86,11 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 	// acquireGlobal forever.
 	defer s.runs.releaseGlobal()
 
+	inc, result, planJSON, err := s.approvable(ctx, id, planFp)
+	if err != nil {
+		return err
+	}
+
 	// ExecuteReplace is blocklist -> delete files -> trigger search, with no
 	// compensation if it stops partway. Running it on the caller's HTTP
 	// request context meant a closed tab or a proxy idle timeout could cancel
@@ -110,9 +103,8 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
 	// Consumed either way: a failed run leaves the library in a state the
 	// stored plan no longer describes, so it must be re-previewed too.
-	if clearErr := s.db.ClearEscalationPlan(execCtx, id); clearErr != nil {
-		s.log.ErrorContext(execCtx, "clear escalation plan", "incident", id, "error", clearErr)
-	}
+	s.clearEscalationPlan(execCtx, id)
+	s.recordStatusChanged(execCtx, id, "")
 	if runErr != nil {
 		return runErr
 	}
@@ -123,6 +115,52 @@ func (s *Service) ApproveEscalation(ctx context.Context, id string) error {
 		UserETAMinutes:     escalationVerifyETAMinutes,
 	})
 	return nil
+}
+
+// approvable returns the plan the owner was actually shown. Re-resolving it at
+// this point is a TOCTOU on a destructive operation: the preview lists specific
+// files, and anything that changed in between silently widens the delete, with
+// no second confirmation.
+func (s *Service) approvable(
+	ctx context.Context, id, planFp string,
+) (*db.Incident, *agent.DiagnosticResult, []byte, error) {
+	inc, err := s.db.GetIncident(ctx, id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if inc.Status != db.StatusManualTestNeeded {
+		return nil, nil, nil, errNotAwaitingDecision
+	}
+	result, err := escalationResult(inc)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	planJSON, previewedAt, err := s.db.GetEscalationPlan(ctx, id)
+	if errors.Is(err, db.ErrNoEscalationPlan) {
+		return nil, nil, nil, errNoPlan
+	}
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if age := time.Since(previewedAt); age > escalationPlanTTL {
+		s.clearEscalationPlan(ctx, id)
+		s.recordStatusChanged(ctx, id, "")
+		return nil, nil, nil, fmt.Errorf(
+			"this plan was previewed %s ago and %w",
+			age.Round(time.Minute),
+			errPlanExpired,
+		)
+	}
+	if card.Fingerprint(planJSON) != planFp {
+		return nil, nil, nil, errPlanChanged
+	}
+	return inc, result, planJSON, nil
+}
+
+func (s *Service) clearEscalationPlan(ctx context.Context, id string) {
+	if err := s.db.ClearEscalationPlan(ctx, id); err != nil {
+		s.log.ErrorContext(ctx, "clear escalation plan", "incident", id, "error", err)
+	}
 }
 
 // launchVerification starts a background verification loop for inc under the

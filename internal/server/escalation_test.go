@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -174,6 +176,15 @@ func waitForStatus(t *testing.T, database *db.DB, id string, want db.IncidentSta
 	return got
 }
 
+func storedPlanFP(t *testing.T, database *db.DB, id string) string {
+	t.Helper()
+	plan, _, err := database.GetEscalationPlan(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return card.Fingerprint(plan)
+}
+
 func TestEscalationPreview_Success(t *testing.T) {
 	t.Parallel()
 	ag := &stubEscalationAgent{planResult: map[string]any{"would_delete": []string{"ep01.mkv"}}}
@@ -248,7 +259,8 @@ func TestApproveEscalation_Success(t *testing.T) {
 	}
 	previewResp.Body.Close()
 
-	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +304,8 @@ func TestApproveEscalation_RunFails(t *testing.T) {
 	}
 	previewResp.Body.Close()
 
-	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +384,8 @@ func TestApproveEscalation_RunsThePreviewedPlan(t *testing.T) {
 	// The world moves on between preview and approval.
 	ag.planResult = map[string]any{"MediaType": "tv", "Title": "SomethingElse"}
 
-	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +417,8 @@ func TestApproveEscalation_SurvivesCancelledRequest(t *testing.T) {
 		t.Fatalf("preview status = %d", preview.Code)
 	}
 
-	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/approve-escalation")
+	rec := serveCancelledForm(t, srv, "/media/incidents/"+inc.ID+"/approve-escalation",
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
@@ -418,5 +433,86 @@ func TestApproveEscalation_SurvivesCancelledRequest(t *testing.T) {
 	}
 	if len(actions) != 1 || actions[0].Action != agent.EscalateRemoveAndSearch {
 		t.Errorf("actions = %+v", actions)
+	}
+}
+
+func TestEscalationPreview_RendersApproveWithPlanFP(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{planResult: map[string]any{"Title": "T"}}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncident(t, database)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview", nil,
+	))
+	body := rec.Body.String()
+	for _, want := range []string{
+		"/media/incidents/" + inc.ID + "/approve-escalation", "hx-confirm", `name="plan_fp"`,
+		`value="` + storedPlanFP(t, database, inc.ID) + `"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("preview partial missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestIncidentPage_NoApproveBeforePreview(t *testing.T) {
+	t.Parallel()
+	srv, database := newEscalationTestServer(t, &stubEscalationAgent{})
+	inc := newManualTestNeededIncident(t, database)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID, nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, "escalation-preview") {
+		t.Fatalf("incident page has no Preview button:\n%s", body)
+	}
+	if strings.Contains(body, "approve-escalation") {
+		t.Error("incident page offers Approve before any preview")
+	}
+}
+
+func TestApproveEscalation_MissingPlanFPRefused(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{planResult: map[string]any{"Title": "T"}}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncident(t, database)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResp.Body.Close()
+
+	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 300 {
+		t.Errorf("status = %d, want a refusal", resp.StatusCode)
+	}
+	if ag.approvedPlanJSON() != nil {
+		t.Error("an escalation ran without the previewed plan's fingerprint")
+	}
+}
+
+func TestResolve_AlreadyResolvedRedirects(t *testing.T) {
+	t.Parallel()
+	srv, database := newEscalationTestServer(t, &stubEscalationAgent{})
+	inc := newManualTestNeededIncident(t, database)
+	if err := database.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusResolved); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/resolve")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303; body: %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/media/incidents/"+inc.ID {
+		t.Errorf("Location = %q, want the incident page", loc)
 	}
 }
