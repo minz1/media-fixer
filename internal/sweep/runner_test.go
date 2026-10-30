@@ -338,12 +338,12 @@ func TestRun_GetFailsAfterTenMinutes(t *testing.T) {
 func TestRun_ReleaseNotRetriedOnTimeout(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	h.runner.Sonarr.SetSlowTimeout(50 * time.Millisecond)
+	h.runner.Sonarr.SetSlowTimeout(time.Second)
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12, 13)...)
 	h.fake.addSeries(2, "Other", missingEps(2, 1, 31, 32)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
 	h.fake.setReleases(seasonKey(2, 1), seasonRel("g2", "Other S01", "Zilean", 10))
-	h.fake.releaseDelay[seasonKey(1, 1)] = 300 * time.Millisecond
+	h.fake.releaseDelay[seasonKey(1, 1)] = time.Minute
 	h.fake.plan("g2", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
 	run := h.run(t, false, settings())
 	if got := h.fake.lookupCount(seasonKey(1, 1)); got != 1 {

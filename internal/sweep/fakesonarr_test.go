@@ -241,7 +241,7 @@ func (f *fakeSonarr) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/history/since":
 		f.serveHistory(w, q)
 	case r.Method == http.MethodGet && path == "/release":
-		f.serveReleases(w, q)
+		f.serveReleases(w, r, q)
 	case r.Method == http.MethodPost && path == "/release":
 		f.serveGrab(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/queue/"):
@@ -338,7 +338,7 @@ func (f *fakeSonarr) applyOutcome(p *pendingOutcome) {
 	}
 }
 
-func (f *fakeSonarr) serveReleases(w http.ResponseWriter, q map[string][]string) {
+func (f *fakeSonarr) serveReleases(w http.ResponseWriter, r *http.Request, q map[string][]string) {
 	var key string
 	if ep := q["episodeId"]; len(ep) > 0 {
 		key = "e" + ep[0]
@@ -358,7 +358,11 @@ func (f *fakeSonarr) serveReleases(w http.ResponseWriter, q map[string][]string)
 	rels := f.releases[key]
 	f.mu.Unlock()
 	if delay > 0 {
-		time.Sleep(delay)
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
 	}
 	if rels == nil {
 		rels = []client.Release{}
