@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -422,6 +423,17 @@ type harness struct {
 	db     *db.DB
 	runner *sweep.Runner
 	dms    *[]string
+
+	mu        sync.Mutex
+	cards     []card.Card
+	refreshed []string
+	startErr  error
+}
+
+func (h *harness) sent() ([]card.Card, []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.cards), slices.Clone(h.refreshed)
 }
 
 func newHarness(t *testing.T) *harness {
@@ -433,21 +445,29 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	var dmMu sync.Mutex
-	dms := &[]string{}
-	r := &sweep.Runner{
+	h := &harness{fake: fake, clock: clock, db: d, dms: &[]string{}}
+	h.runner = &sweep.Runner{
 		Sonarr: fake.client(),
 		DB:     d,
 		Notify: func(_ context.Context, msg card.Card) error {
-			dmMu.Lock()
-			defer dmMu.Unlock()
-			*dms = append(*dms, msg.Plain())
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			*h.dms = append(*h.dms, msg.Plain())
+			h.cards = append(h.cards, msg)
+			if len(h.cards) == 1 {
+				return h.startErr
+			}
 			return nil
+		},
+		Refresh: func(subject string) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.refreshed = append(h.refreshed, subject)
 		},
 		Now:   clock.Now,
 		Sleep: clock.Sleep,
 	}
-	return &harness{fake: fake, clock: clock, db: d, runner: r, dms: dms}
+	return h
 }
 
 func (h *harness) run(t *testing.T, dry bool, s sweep.Settings) db.SweepRun {

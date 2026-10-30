@@ -72,16 +72,18 @@ func buildAgentComponents(
 
 func startSweep(
 	ctx context.Context, sonarrURL string, sonarr *client.ArrClient, database *db.DB, bot *discord.Bot,
-	srv *server.Server, log *slog.Logger,
+	srv *server.Server, log *slog.Logger, renderers map[string]card.Renderer,
 ) *sweep.Scheduler {
 	if sonarrURL == "" {
 		log.WarnContext(ctx, "sonarr not configured — pack sweep unavailable")
 		return nil
 	}
-	sch := sweep.NewScheduler(ctx, &sweep.Runner{
-		Sonarr: sonarr, DB: database, Notify: bot.NotifyOwner,
+	r := &sweep.Runner{
+		Sonarr: sonarr, DB: database, Notify: bot.NotifyOwner, Refresh: bot.Refresh,
 		Now: time.Now, Sleep: sweep.Sleep, Log: log,
-	}, database)
+	}
+	renderers["sweep"] = r.CardRenderer()
+	sch := sweep.NewScheduler(ctx, r, database)
 	srv.SetSweep(sch)
 	sch.Start()
 	return sch
@@ -115,7 +117,7 @@ func startMaintenance(
 	bot *discord.Bot, srv *server.Server, log *slog.Logger,
 	handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) func() {
-	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log)
+	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log, renderers)
 	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log, handlers, renderers)
 	return func() {
 		stop()

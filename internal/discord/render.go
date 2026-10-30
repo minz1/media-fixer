@@ -37,19 +37,16 @@ func render(c card.Card, u map[string]card.Update, ov overlay, publicURL string)
 	text(c.Body)
 	text(fieldLines(c.Fields))
 	for _, it := range c.Items {
-		itemText, itemButtons := it.Text, it.Buttons
-		if up, ok := u[it.Subject]; ok && it.Subject != "" {
-			itemButtons = up.Buttons
-			if up.Status != "" {
-				itemText += "\n-# " + up.Status
-			}
-		}
+		itemText, itemButtons := itemView(it, u)
 		text(itemText)
 		kids = append(kids, rows(buttonComponents(itemButtons, publicURL))...)
 	}
-	cardButtons := c.Buttons
+	cardButtons, tone := c.Buttons, c.Tone
 	if up, ok := u[c.Subject]; ok && c.Subject != "" {
 		cardButtons = up.Buttons
+		if up.Tone != nil {
+			tone = *up.Tone
+		}
 		if up.Status != "" {
 			text("-# " + up.Status)
 		}
@@ -72,8 +69,19 @@ func render(c card.Card, u map[string]card.Update, ov overlay, publicURL string)
 		)
 	}
 	kids = append(kids, rows(cardComps)...)
-	accent := accentColor(c.Tone)
+	accent := accentColor(tone)
 	return []discordgo.MessageComponent{discordgo.Container{AccentColor: &accent, Components: kids}}
+}
+
+func itemView(it card.Item, u map[string]card.Update) (string, []card.Button) {
+	up, ok := u[it.Subject]
+	if !ok || it.Subject == "" {
+		return it.Text, it.Buttons
+	}
+	if up.Status == "" {
+		return it.Text, up.Buttons
+	}
+	return it.Text + "\n-# " + up.Status, up.Buttons
 }
 
 func fieldLines(fs []card.Field) string {

@@ -66,18 +66,20 @@ var (
 )
 
 type Runner struct {
-	Sonarr *client.ArrClient
-	DB     *db.DB
-	Notify func(context.Context, card.Card) error
-	Now    func() time.Time
-	Sleep  func(context.Context, time.Duration) error
-	Log    *slog.Logger
+	Sonarr  *client.ArrClient
+	DB      *db.DB
+	Notify  func(context.Context, card.Card) error
+	Refresh func(string)
+	Now     func() time.Time
+	Sleep   func(context.Context, time.Duration) error
+	Log     *slog.Logger
 
 	mu       sync.Mutex
 	progress *Progress
 }
 
 type Progress struct {
+	RunID          int64
 	Phase, Current string
 	Counts         db.SweepCounts
 }
@@ -134,6 +136,7 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 		c: db.SweepCounts{MaxGrabs: s.MaxGrabs, MaxLookups: s.MaxLookups, MaxSearches: s.MaxSearches},
 	}
 	x.report("preflight", "")
+	tracked := r.notifyStart(ctx, startCard(id, trigger, dry, s))
 	err = x.sweep(ctx)
 	r.mu.Lock()
 	r.progress = nil
@@ -155,7 +158,12 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 	if ferr := r.DB.FinishSweepRun(fctx, id, status, reason, x.c, end); ferr != nil {
 		return id, errors.Join(err, ferr)
 	}
-	if r.Notify != nil {
+	switch {
+	case tracked:
+		if r.Refresh != nil {
+			r.Refresh(card.SweepSubject(id))
+		}
+	case r.Notify != nil:
 		sr := db.SweepRun{
 			ID:         id,
 			Trigger:    trigger,
@@ -697,7 +705,18 @@ func (x *run) addItem(ctx context.Context, it *db.SweepItem) error {
 func (x *run) report(phase, current string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.progress = &Progress{Phase: phase, Current: current, Counts: x.c}
+	x.progress = &Progress{RunID: x.id, Phase: phase, Current: current, Counts: x.c}
+}
+
+func (r *Runner) notifyStart(ctx context.Context, c card.Card) bool {
+	if r.Notify == nil {
+		return false
+	}
+	err := r.Notify(ctx, c)
+	if err != nil && !errors.Is(err, card.ErrUntracked) {
+		r.logger().WarnContext(ctx, "sweep start DM failed", "subject", c.Subject, "err", err)
+	}
+	return err == nil
 }
 
 func (r *Runner) logger() *slog.Logger {

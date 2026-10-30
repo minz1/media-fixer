@@ -74,6 +74,7 @@ type Update struct {
 	Sections []Field  `json:"sections,omitempty"`
 	Buttons  []Button `json:"buttons,omitempty"`
 	Live     bool     `json:"live,omitempty"`
+	Tone     *Tone    `json:"tone,omitempty"`
 }
 
 type Result struct {

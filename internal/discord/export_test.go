@@ -56,3 +56,7 @@ func CardsDoneForTest(b *Bot) <-chan struct{} { return b.cardsDone }
 func OnInteractionForTest(b *Bot, i *discordgo.InteractionCreate) { b.onInteraction(nil, i) }
 
 func SetClockForTest(b *Bot, now func() time.Time) { b.now = now }
+
+func RenderUpdatesForTest(c card.Card, u map[string]card.Update) []discordgo.MessageComponent {
+	return render(c, u, overlay{}, "")
+}

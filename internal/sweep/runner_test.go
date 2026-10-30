@@ -2,6 +2,8 @@ package sweep_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
@@ -85,8 +88,9 @@ func TestRun_RefusedWhenRedownloadOn(t *testing.T) {
 		t.Errorf("refused run touched sonarr: lookups %d, writes %v",
 			h.fake.lookupCount(seasonKey(1, 1)), h.fake.writeLog())
 	}
-	if len(*h.dms) != 1 {
-		t.Errorf("dms = %v, want one summary", *h.dms)
+	cards, refreshed := h.sent()
+	if len(cards) != 1 || len(refreshed) != 1 {
+		t.Errorf("cards = %v, refreshed = %v, want one start card and one refresh", cards, refreshed)
 	}
 }
 
@@ -127,8 +131,8 @@ func TestRun_SeasonImportedFirstTry(t *testing.T) {
 	if run.Counts.Imported != 1 || run.Counts.Grabs != 1 || run.Counts.Lookups != 1 || run.Counts.MaxGrabs != 5 {
 		t.Errorf("counts = %+v", run.Counts)
 	}
-	if len(*h.dms) != 1 || !strings.Contains((*h.dms)[0], "/media/maintenance") {
-		t.Errorf("dms = %v", *h.dms)
+	if cards, _ := h.sent(); len(cards) != 1 || cards[0].Path != "/maintenance" {
+		t.Errorf("cards = %v", cards)
 	}
 	if _, active := h.runner.Progress(); active {
 		t.Error("Progress reports active after the run")
@@ -672,5 +676,56 @@ func TestRun_SkipsReleaseBlockedThirtyDaysAgo(t *testing.T) {
 	h.run(t, false, settings())
 	if got := h.fake.writeLog(); !slices.Equal(got, []string{"POST /release g2"}) {
 		t.Errorf("writes = %v, want only g2 (g1 was blocked 30 days ago)", got)
+	}
+}
+
+func TestRun_StartCardThenRefresh(t *testing.T) {
+	t.Parallel()
+	for _, dry := range []bool{false, true} {
+		h := newHarness(t)
+		var statusAtRefresh string
+		h.runner.Refresh = func(subject string) {
+			h.mu.Lock()
+			h.refreshed = append(h.refreshed, subject)
+			h.mu.Unlock()
+			id, _ := strconv.ParseInt(strings.TrimPrefix(subject, "sweep:"), 10, 64)
+			if sr, err := h.db.GetSweepRun(context.Background(), id); err == nil {
+				statusAtRefresh = sr.Status
+			}
+		}
+		s := settings()
+		s.MaxGrabs, s.MaxLookups, s.MaxSearches = 3, 7, 9
+		run := h.run(t, dry, s)
+		cards, refreshed := h.sent()
+		title := "Pack sweep started"
+		if dry {
+			title = "Pack sweep dry run started"
+		}
+		if len(cards) != 1 {
+			t.Fatalf("dry=%v: cards = %+v, want only the start card", dry, cards)
+		}
+		c := cards[0]
+		if c.Subject != card.SweepSubject(run.ID) || c.Title != title || c.Tone != card.Info ||
+			c.Path != "/maintenance" || !strings.Contains(c.Plain(), "manual") ||
+			!strings.Contains(c.Plain(), "3 grabs, 7 lookups, 9 searches") {
+			t.Errorf("dry=%v: start card = %+v\n%s", dry, c, c.Plain())
+		}
+		if !slices.Equal(refreshed, []string{card.SweepSubject(run.ID)}) || statusAtRefresh != "done" {
+			t.Errorf("dry=%v: refreshed = %v, status at refresh %q", dry, refreshed, statusAtRefresh)
+		}
+	}
+}
+
+func TestRun_StartSendFailsSummaryAsNewCard(t *testing.T) {
+	t.Parallel()
+	for _, startErr := range []error{errors.New("discord down"), fmt.Errorf("%w", card.ErrUntracked)} {
+		h := newHarness(t)
+		h.startErr = startErr
+		h.run(t, false, settings())
+		cards, refreshed := h.sent()
+		if len(cards) != 2 || cards[1].Subject != "" || !strings.HasPrefix(cards[1].Title, "Pack sweep done") ||
+			len(refreshed) != 0 {
+			t.Errorf("%v: cards = %+v, refreshed = %v", startErr, cards, refreshed)
+		}
 	}
 }

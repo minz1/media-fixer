@@ -125,3 +125,23 @@ func TestRender_CountMatchesComponents(t *testing.T) {
 		}
 	}
 }
+
+func TestRender_UpdateToneSetsAccent(t *testing.T) {
+	t.Parallel()
+	c := card.Card{Subject: "sweep:1", Tone: card.Info, Title: "Pack sweep started"}
+	tone := card.Success
+	for _, tc := range []struct {
+		name string
+		up   card.Update
+		want int
+	}{
+		{"no tone keeps the card's", card.Update{Status: "running"}, 0x5865F2},
+		{"update tone wins", card.Update{Status: "done", Tone: &tone}, 0x57F287},
+	} {
+		got := discord.RenderUpdatesForTest(c, map[string]card.Update{"sweep:1": tc.up})
+		box, ok := got[0].(discordgo.Container)
+		if !ok || box.AccentColor == nil || *box.AccentColor != tc.want {
+			t.Errorf("%s: accent = %v, want %#x", tc.name, box.AccentColor, tc.want)
+		}
+	}
+}

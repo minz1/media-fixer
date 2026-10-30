@@ -8,3 +8,9 @@ import (
 func SummaryCardForTest(sr db.SweepRun) card.Card {
 	return summaryCard(sr)
 }
+
+func SetProgressForTest(r *Runner, p *Progress) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.progress = p
+}
