@@ -277,12 +277,31 @@ func TestRenderer_BeforeFirstRunUnknown(t *testing.T) {
 	}
 }
 
-func TestRenderer_RunActiveUnknown(t *testing.T) {
+func TestRenderer_RunActiveKeepsLast(t *testing.T) {
 	t.Parallel()
 	_, s := newSched(t)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true}), true)
-	if up, ok := render(t, s, card.StuckSubject("s", "abc")); ok {
-		t.Fatalf("rendered %+v during a run", up)
+	it := stuckItem(stuckqueue.AppSonarr, "ABC", stuckqueue.ActionRegrab, stuckqueue.ActionRemove)
+	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{
+		App: stuckqueue.AppSonarr, Configured: true, Items: []stuckqueue.Item{it},
+	}), true)
+	up, ok := render(t, s, card.StuckSubject("s", "abc"))
+	if got := buttonVerbs(t, up.Buttons); !ok || !slices.Equal(got, []string{"regrab", "remove"}) {
+		t.Fatalf("update during a run = %+v, %v; want the last result's buttons", up, ok)
+	}
+}
+
+func TestRenderer_StuckAgainAfterActClearsOutcome(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
+		t.Fatal(err)
+	}
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	e.tickAt(s, time.Minute)
+	up, ok := render(t, s, card.StuckSubject("s", "D"))
+	if !ok || strings.HasPrefix(up.Status, "✅") || len(up.Buttons) == 0 {
+		t.Fatalf("update = %+v, %v; want the still-stuck buttons, not the old outcome", up, ok)
 	}
 }
 

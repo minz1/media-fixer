@@ -103,6 +103,7 @@ func (s *Scheduler) start(now time.Time, set Settings) error {
 		res := s.r.Run(s.base, set)
 		s.smu.Lock()
 		s.last, s.hasLast, s.running = res, true, false
+		s.clearStuckOutcomes(res)
 		s.smu.Unlock()
 		s.refresh(cardPrefix)
 	})

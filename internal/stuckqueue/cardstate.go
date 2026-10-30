@@ -103,9 +103,6 @@ func (s *Scheduler) CardRenderer() card.Renderer {
 		}
 		s.smu.Lock()
 		defer s.smu.Unlock()
-		if s.running {
-			return card.Update{}, false, nil
-		}
 		if o, acted := s.outcomes[subject]; acted {
 			return card.Update{Status: o.line()}, true, nil
 		}
@@ -159,6 +156,14 @@ func (s *Scheduler) recordOutcome(d Download, a Action) {
 		s.outcomes = map[string]outcome{}
 	}
 	s.outcomes[subjectOf(d)] = outcome{action: a, at: s.r.Now()}
+}
+
+func (s *Scheduler) clearStuckOutcomes(res Result) {
+	for _, ar := range res.Apps {
+		for _, it := range slices.Concat(ar.Items, ar.Waiting) {
+			delete(s.outcomes, subjectOf(it.Download))
+		}
+	}
 }
 
 func (s *Scheduler) refresh(subject string) {
