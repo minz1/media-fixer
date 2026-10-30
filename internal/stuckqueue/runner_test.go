@@ -145,6 +145,9 @@ func TestRun_WaitsMinAge(t *testing.T) {
 	if n := len(deletes(e.sonarr.writesCopy())); n != 1 || app(res, stuckqueue.AppSonarr).Cleared != 1 {
 		t.Fatalf("deletes = %d, result = %+v", n, res)
 	}
+	if w := app(res, stuckqueue.AppSonarr).Waiting; w != 0 || res.MinAgeHours != liveSettings().MinAgeHours {
+		t.Fatalf("waiting = %d, min age = %d after the wait", w, res.MinAgeHours)
+	}
 }
 
 func TestRun_DryRun(t *testing.T) {

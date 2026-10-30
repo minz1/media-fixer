@@ -104,7 +104,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		stuckqueue.ActionRegrab, stuckqueue.ActionRemove)
 	refused.ImportRefusal = "refused: more than one file targets the same episode"
 	res := stuckqueue.Result{
-		FinishedAt: time.Date(2026, 10, 29, 22, 0, 0, 0, time.UTC), DryRun: true,
+		FinishedAt: time.Date(2026, 10, 29, 22, 0, 0, 0, time.UTC), DryRun: true, MinAgeHours: 6,
 		Apps: []stuckqueue.AppResult{
 			{App: stuckqueue.AppSonarr, Configured: true, WouldClear: 1, Waiting: 2, Items: []stuckqueue.Item{
 				gap,
@@ -141,7 +141,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		"unreachable: arr GET /api/v3/queue: 500",
 		"dry run",
 		"would clear 1",
-		"2 waiting",
+		"2 waiting out the 6 h delay",
 		`name="download_id" value="LC"`,
 		`name="targets" value="S03E11"`,
 		"/media/maintenance/stuck-queue/import",

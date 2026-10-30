@@ -162,13 +162,13 @@ func (s *Server) stuckCardData(
 	card["CapHit"] = res.CapHit
 	apps := make([]stuckAppView, 0, len(res.Apps))
 	for _, ar := range res.Apps {
-		apps = append(apps, stuckApp(ar))
+		apps = append(apps, stuckApp(ar, res.MinAgeHours))
 	}
 	card["Apps"] = apps
 	return card
 }
 
-func stuckApp(ar stuckqueue.AppResult) stuckAppView {
+func stuckApp(ar stuckqueue.AppResult, minAgeHours int) stuckAppView {
 	v := stuckAppView{Name: ar.App.Name()}
 	switch {
 	case !ar.Configured:
@@ -178,9 +178,8 @@ func stuckApp(ar stuckqueue.AppResult) stuckAppView {
 		v.Error = "unreachable: " + ar.Err
 		return v
 	}
-	v.Summary = fmt.Sprintf(
-		"cleared %d, would clear %d, %d listed, %d waiting", ar.Cleared, ar.WouldClear, len(ar.Items), ar.Waiting,
-	)
+	v.Summary = fmt.Sprintf("cleared %d, would clear %d, %d listed, %d waiting out the %d h delay",
+		ar.Cleared, ar.WouldClear, len(ar.Items), ar.Waiting, minAgeHours)
 	for _, it := range ar.Items {
 		v.Items = append(v.Items, stuckItem(it))
 	}
