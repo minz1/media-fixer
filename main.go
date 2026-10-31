@@ -23,6 +23,7 @@ import (
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
+	"github.com/minz1/mediafixer/internal/stuckread"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
 
@@ -113,10 +114,19 @@ func startStuckQueue(
 	return sch
 }
 
+func newStuckRead(clients *clientset.Set, svc *incident.Service, database *db.DB, log *slog.Logger) *stuckread.Watcher {
+	if clients.MediaAgent == nil {
+		return nil
+	}
+	sr := stuckread.New(clients.MediaAgent, svc, database, log)
+	svc.SetStuckRead(sr)
+	return sr
+}
+
 func startMaintenance(
 	ctx context.Context, stop context.CancelFunc, cfg *config.Config, bundle *agentBundle, database *db.DB,
 	bot *discord.Bot, srv *server.Server, log *slog.Logger,
-	handlers map[string]card.Handler, renderers map[string]card.Renderer,
+	handlers map[string]card.Handler, renderers map[string]card.Renderer, sr *stuckread.Watcher,
 ) func() {
 	clients := bundle.clients
 	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log, renderers)
@@ -127,8 +137,14 @@ func startMaintenance(
 			Model: cfg.LLM.Model, Now: time.Now,
 		})
 	}
+	if sr != nil {
+		sr.Start(ctx)
+	}
 	return func() {
 		stop()
+		if sr != nil {
+			sr.Wait()
+		}
 		if sweepSch != nil {
 			sweepSch.Wait()
 		}
@@ -188,6 +204,7 @@ func run() error {
 	} else {
 		log.Warn("seerr not configured — seerr reporters get no issue updates")
 	}
+	sr := newStuckRead(bundle.clients, svc, database, log)
 	bot.SetService(svc)
 
 	bot.Start(ctx)
@@ -211,7 +228,7 @@ func run() error {
 	}
 	handlers := map[string]card.Handler{"inc": svc.CardHandler()}
 	renderers := map[string]card.Renderer{"inc": svc.CardRenderer()}
-	defer startMaintenance(ctx, stop, cfg, bundle, database, bot, srv, log, handlers, renderers)()
+	defer startMaintenance(ctx, stop, cfg, bundle, database, bot, srv, log, handlers, renderers, sr)()
 	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
