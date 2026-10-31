@@ -203,8 +203,12 @@ func TestClientStuckReadsTimeout(t *testing.T) {
 	c := client.NewMediaAgent(srv.URL, testAPIKey)
 	c.SetStuckReadsTimeoutForTest(50 * time.Millisecond)
 
+	start := time.Now()
 	if _, err := c.StuckReads(context.Background()); err == nil {
 		t.Fatal("expected a timeout error")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("StuckReads took %s, want the 50 ms stuck-reads timeout", d)
 	}
 }
 
@@ -224,7 +228,11 @@ func TestClientStuckReadsTimeoutCoversBody(t *testing.T) {
 	c := client.NewMediaAgent(srv.URL, testAPIKey)
 	c.SetStuckReadsTimeoutForTest(50 * time.Millisecond)
 
+	start := time.Now()
 	if _, err := c.StuckReads(context.Background()); err == nil {
 		t.Fatal("expected a timeout error while reading the body")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("StuckReads took %s, want the 50 ms stuck-reads timeout", d)
 	}
 }
