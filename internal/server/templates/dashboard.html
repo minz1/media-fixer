@@ -750,7 +750,7 @@
         hx-post="{{.BaseURL}}/maintenance/pack-sweep/run"
         hx-target="#pack-sweep"
         hx-swap="outerHTML"
-        hx-confirm="Start a live pack sweep now? It grabs up to {{if .UsageError}}{{.Settings.MaxGrabs}}{{else}}{{.Left.MaxGrabs}}{{end}} releases{{if not .UsageError}} (left today){{end}}."
+        hx-confirm="Start a live pack sweep now? It grabs up to {{if .UsageError}}{{.Settings.MaxGrabs}} releases{{else}}{{.Left.MaxGrabs}} releases (left today){{end}}."
       >
         <button
           type="submit"

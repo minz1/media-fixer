@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -72,15 +73,11 @@ func (d *DB) DeleteSweepTargets(ctx context.Context, targets []string) error {
 	if len(targets) == 0 {
 		return nil
 	}
-	tx, err := d.write.BeginTx(ctx, nil)
+	keys, err := json.Marshal(targets)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	for _, t := range targets {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM sweep_targets WHERE target = ?`, t); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	_, err = d.write.ExecContext(ctx,
+		`DELETE FROM sweep_targets WHERE target IN (SELECT value FROM json_each(?))`, string(keys))
+	return err
 }
