@@ -721,6 +721,7 @@
   <input type="number" name="{{.Name}}" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}"
     class="mt-1 block w-28 bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900"
   />
+  {{with .Used}}<span class="block text-xs text-gray-500 mt-0.5">{{.}}</span>{{end}}
   {{with .Note}}<span class="block text-xs text-gray-500 mt-0.5">{{.}}</span>{{end}}
   {{with .Err}}<span class="block text-xs text-red-600 mt-0.5">{{.}}</span>{{end}}
 </label>
@@ -731,7 +732,7 @@
   <div>
     <h2 class="text-xl font-bold text-gray-900 mb-1">Pack sweep</h2>
     <p class="text-sm text-gray-500">
-      Weekly: grabs season packs for Sonarr seasons with missing episodes, then
+      Every {{.Settings.IntervalHours}} h: grabs season packs for Sonarr seasons with missing episodes, then
       searches the episodes still missing.
     </p>
   </div>
@@ -749,7 +750,7 @@
         hx-post="{{.BaseURL}}/maintenance/pack-sweep/run"
         hx-target="#pack-sweep"
         hx-swap="outerHTML"
-        hx-confirm="Start a live pack sweep now? It grabs up to {{.Settings.MaxGrabs}} releases."
+        hx-confirm="Start a live pack sweep now? It grabs up to {{if .UsageError}}{{.Settings.MaxGrabs}}{{else}}{{.Left.MaxGrabs}}{{end}} releases{{if not .UsageError}} (left today){{end}}."
       >
         <button
           type="submit"
@@ -805,12 +806,18 @@
         Include anime series
       </label>
     </div>
+    {{$ug := ""}}{{$ul := ""}}{{$us := ""}}
+    {{with .Usage}}
+    {{$ug = printf "used today %d / %d" .Grabs $.Settings.MaxGrabs}}
+    {{$ul = printf "used today %d / %d" .Lookups $.Settings.MaxLookups}}
+    {{$us = printf "used today %d / %d" .Searches $.Settings.MaxSearches}}
+    {{end}}
     <div class="flex flex-wrap gap-6">
       {{template "sweep_num" (dict "Label" "Every (hours)" "Name" "interval_hours" "Value" .Settings.IntervalHours "Min" 1 "Max" 168 "Note" "" "Err" (index .Errors "interval_hours"))}}
       {{template "sweep_num" (dict "Label" "Min missing per season" "Name" "min_missing" "Value" .Settings.MinMissing "Min" 1 "Max" 100 "Note" "" "Err" (index .Errors "min_missing"))}}
-      {{template "sweep_num" (dict "Label" "Max grabs" "Name" "max_grabs" "Value" .Settings.MaxGrabs "Min" 0 "Max" 100 "Note" "" "Err" (index .Errors "max_grabs"))}}
-      {{template "sweep_num" (dict "Label" "Max lookups" "Name" "max_lookups" "Value" .Settings.MaxLookups "Min" 0 "Max" 500 "Note" "" "Err" (index .Errors "max_lookups"))}}
-      {{template "sweep_num" (dict "Label" "Max searched episodes" "Name" "max_searches" "Value" .Settings.MaxSearches "Min" 0 "Max" 2000 "Note" "Sonarr may grab from these searches; not counted in max grabs" "Err" (index .Errors "max_searches"))}}
+      {{template "sweep_num" (dict "Label" "Max grabs" "Used" $ug "Name" "max_grabs" "Value" .Settings.MaxGrabs "Min" 0 "Max" 100 "Note" "" "Err" (index .Errors "max_grabs"))}}
+      {{template "sweep_num" (dict "Label" "Max lookups" "Used" $ul "Name" "max_lookups" "Value" .Settings.MaxLookups "Min" 0 "Max" 500 "Note" "" "Err" (index .Errors "max_lookups"))}}
+      {{template "sweep_num" (dict "Label" "Max searched episodes" "Used" $us "Name" "max_searches" "Value" .Settings.MaxSearches "Min" 0 "Max" 2000 "Note" "Sonarr may grab from these searches; not counted in max grabs" "Err" (index .Errors "max_searches"))}}
       {{template "sweep_num" (dict "Label" "Backoff base (hours)" "Name" "backoff_base_hours" "Value" .Settings.BackoffBaseHours "Min" 1 "Max" 168 "Note" "" "Err" (index .Errors "backoff_base_hours"))}}
       {{template "sweep_num" (dict "Label" "Backoff max (days)" "Name" "backoff_max_days" "Value" .Settings.BackoffMaxDays "Min" 1 "Max" 90 "Note" "" "Err" (index .Errors "backoff_max_days"))}}
       {{template "sweep_num" (dict "Label" "Burst failures" "Name" "burst_failures" "Value" .Settings.BurstFailures "Min" 2 "Max" 100 "Note" "" "Err" (index .Errors "burst_failures"))}}
@@ -842,6 +849,39 @@
       Save settings
     </button>
   </form>
+
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Stuck seasons</h3>
+    {{with .StuckSeasonsError}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+    {{if .StuckSeasons}}
+    <table class="w-full text-xs border-collapse">
+      <thead>
+        <tr class="text-left text-gray-400 border-b border-gray-200">
+          <th class="py-1 pr-3">Series</th>
+          <th class="py-1 pr-3">Season</th>
+          <th class="py-1 pr-3">Missing</th>
+          <th class="py-1 pr-3">Attempts</th>
+          <th class="py-1 pr-3">Last attempt</th>
+          <th class="py-1">Next eligible</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .StuckSeasons}}
+        <tr class="border-b border-gray-100 text-gray-700">
+          <td class="py-1 pr-3">{{.SeriesTitle}}</td>
+          <td class="py-1 pr-3">{{printf "S%02d" .Season}}</td>
+          <td class="py-1 pr-3">{{.Missing}}</td>
+          <td class="py-1 pr-3">{{.Attempts}}</td>
+          <td class="py-1 pr-3">{{.LastAttempt.UTC.Format "2006-01-02"}}</td>
+          <td class="py-1">{{.NextEligible.UTC.Format "2006-01-02"}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    {{else if not .StuckSeasonsError}}
+    <p class="text-sm text-gray-400">No seasons are stuck now.</p>
+    {{end}}
+  </div>
 
   <div>
     <h3 class="text-sm font-semibold text-gray-800 mb-2">Last runs</h3>

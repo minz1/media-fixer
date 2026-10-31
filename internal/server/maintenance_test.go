@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -564,5 +566,173 @@ func TestMaintenance_RunAndForgetOnCorruptRowShowTheNotice(t *testing.T) {
 				t.Errorf("POST %s dry=%s: status %d, body %q", path, dry, rec.Code, body)
 			}
 		}
+	}
+}
+
+const sweepSettingsPath = "/media/maintenance/pack-sweep/settings"
+
+func seedUsedToday(t *testing.T, env *maintEnv) {
+	t.Helper()
+	ctx := context.Background()
+	set := sweep.DefaultSettings()
+	set.Enabled, set.MaxGrabs, set.MaxLookups, set.MaxSearches = true, 10, 10, 10
+	if err := sweep.SaveSettings(ctx, env.db, set, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	id, err := env.db.CreateSweepRun(ctx, "scheduled", false, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	season, n := 1, 5
+	for range 3 {
+		if err = env.db.AddSweepItem(ctx, &db.SweepItem{
+			RunID: id, Target: "s:1:1", SeriesID: 1, SeriesTitle: "Severance", Season: &season,
+			ReleaseTitle: "Severance.S01", Indexer: "Zilean", Result: "grabbing", LookupResults: &n, At: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counts := db.SweepCounts{Grabs: 3, Lookups: 3, Searched: 3}
+	if err = env.db.FinishSweepRun(ctx, id, "done", "", counts, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSweepCard_IntervalAndUsage(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	seedUsedToday(t, env)
+
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	next := env.sch.NextRun(time.Now()).UTC().Format("Mon Jan 2 15:04 UTC")
+	mustContain(t, body, "Enabled (every 6 h)", "Next run:", next)
+	if got := strings.Count(body, "used today 3 / 10"); got != 3 {
+		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "used today 3 / 10", got)
+	}
+	if strings.Contains(body, `name="weekday"`) || strings.Contains(body, "Weekly") {
+		t.Errorf("weekday select or weekly wording still rendered:\n%s", body)
+	}
+}
+
+func TestSweepCard_ConfirmLeftToday(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	seedUsedToday(t, env)
+
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	mustContain(t, body, "It grabs up to 7 releases (left today).")
+}
+
+var (
+	formRe  = regexp.MustCompile(`(?s)<form[^>]*` + regexp.QuoteMeta(sweepSettingsPath) + `.*?</form>`)
+	fieldRe = regexp.MustCompile(`<(?:input|select)\b[^>]*>`)
+)
+
+func tagAttr(tag, name string) (string, bool) {
+	m := regexp.MustCompile(`\b` + name + `="([^"]*)"`).FindStringSubmatch(tag)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+func browserForm(form string) url.Values {
+	post := url.Values{}
+	for _, tag := range fieldRe.FindAllString(form, -1) {
+		name, ok := tagAttr(tag, "name")
+		if !ok {
+			continue
+		}
+		if typ, _ := tagAttr(tag, "type"); typ == "checkbox" && !strings.Contains(tag, "checked") {
+			continue
+		}
+		val, has := tagAttr(tag, "value")
+		if !has {
+			val = "on"
+		}
+		post.Add(name, val)
+	}
+	return post
+}
+
+func TestSweepCard_FormRoundTrip(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	ctx := context.Background()
+	set := sweep.DefaultSettings()
+	set.Enabled, set.IntervalHours, set.MaxGrabs, set.StuckAfter = true, 12, 7, 4
+	set.ExcludedSeries = []int{2}
+	if err := sweep.SaveSettings(ctx, env.db, set, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := env.db.GetSetting(ctx, sweep.SettingsKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	form := formRe.FindString(body)
+	if form == "" {
+		t.Fatalf("pack-sweep settings form not found:\n%s", body)
+	}
+	post := browserForm(form)
+
+	read := []string{
+		"enabled", "anime", "interval_hours", "min_missing", "max_grabs", "max_lookups", "max_searches",
+		"backoff_base_hours", "backoff_max_days", "burst_failures", "stuck_after", "digest_hour_utc", "excluded_series",
+	}
+	var rendered []string
+	for k := range post {
+		rendered = append(rendered, k)
+	}
+	for _, k := range read {
+		if !slices.Contains(rendered, k) {
+			t.Errorf("form does not render %q", k)
+		}
+	}
+	for _, k := range rendered {
+		if !slices.Contains(read, k) {
+			t.Errorf("form renders %q, which parseSweepSettings does not read", k)
+		}
+	}
+
+	rec := do(t, env.srv, http.MethodPost, sweepSettingsPath, post)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	mustContain(t, rec.Body.String(), "Saved.")
+	if strings.Contains(rec.Body.String(), "text-red-600 mt-0.5") {
+		t.Errorf("field errors rendered:\n%s", rec.Body.String())
+	}
+	after, err := env.db.GetSetting(ctx, sweep.SettingsKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Errorf("stored row changed:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestSweepCard_StuckList(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	ctx := context.Background()
+
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	mustContain(t, body, "No seasons are stuck now.")
+
+	err := env.db.UpsertSweepTarget(ctx, db.SweepTarget{
+		Target: "s:1:2", SeriesID: 1, SeriesTitle: "Severance", Season: 2, Streak: 3, Missing: 9, Attempts: 5,
+		LastAttempt:  time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC),
+		NextEligible: time.Date(2026, 11, 3, 8, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	mustContain(t, body, "Severance", "S02", ">9<", ">5<", "2026-10-20", "2026-11-03")
+	if strings.Contains(body, "No seasons are stuck now.") {
+		t.Error("empty-state text shown with a stuck season")
 	}
 }

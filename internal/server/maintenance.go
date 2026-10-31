@@ -186,6 +186,17 @@ func (s *Server) sweepCard(
 		card["Runs"] = runs
 	}
 	now := time.Now()
+	if usage, err := s.sweep.Used(now); err != nil {
+		card["UsageError"] = err.Error()
+	} else {
+		card["Usage"] = usage
+		card["Left"] = sweep.Remaining(set, usage)
+	}
+	if targets, err := s.db.ListSweepTargets(ctx); err != nil {
+		card["StuckSeasonsError"] = err.Error()
+	} else {
+		card["StuckSeasons"] = sweep.Stuck(targets, set.StuckAfter)
+	}
 	if refused, err := s.db.ListSweepRefused(ctx, now.Add(-sweep.BlockedMemory)); err != nil {
 		card["RefusedError"] = err.Error()
 	} else {
