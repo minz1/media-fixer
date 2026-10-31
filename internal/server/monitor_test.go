@@ -639,3 +639,30 @@ func TestMonitoring_OldPathsGone(t *testing.T) {
 		t.Errorf("Sonarr saw %d requests from old paths", got-before)
 	}
 }
+
+func TestMonitorList_RowsAreLinks(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	body := do(t, e.srv, http.MethodGet, "/media/monitoring", nil).Body.String()
+	start := strings.Index(body, `id="monitor-list"`)
+	end := strings.Index(body, "<details")
+	if start < 0 || end < start {
+		t.Fatalf("no monitor list in:\n%s", body)
+	}
+	list := body[start:end]
+	mustContain(
+		t,
+		list,
+		`<a class="row" href="/media/monitoring/7"`,
+		"›",
+		"seasons ·",
+		"missing ·",
+		"stuck ·",
+		"in queue",
+		`class="badge tone-red">stuck<`,
+	)
+	if strings.Contains(list, "<table") {
+		t.Error("the Monitoring list is still a table")
+	}
+}

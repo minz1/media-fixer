@@ -39,6 +39,12 @@
     .tone-orange { background-color: oklch(95.4% 0.038 75.164); color: oklch(47% 0.157 37.304); }
     .tone-red { background-color: oklch(93.6% 0.032 17.717); color: oklch(44.4% 0.177 26.899); }
     .tone-purple { background-color: oklch(94.6% 0.033 307.174); color: oklch(43.8% 0.218 303.724); }
+    .row {
+      display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border: 1px solid oklch(92.8% 0.006 264.531);
+      border-radius: 0.5rem; background-color: white; color: inherit; text-decoration: none;
+    }
+    .row:hover { background-color: oklch(98.5% 0.002 247.839); }
+    .empty { color: oklch(55.1% 0.027 264.364); padding: 1rem 0; font-size: 0.875rem; }
     @media (prefers-color-scheme: dark) {
       :root {
         --color-gray-50: oklch(16% 0.02 262);
@@ -81,6 +87,9 @@
       .tone-orange { background-color: oklch(31% 0.08 47); color: oklch(86% 0.09 50); }
       .tone-red { background-color: oklch(30% 0.09 25); color: oklch(85% 0.09 20); }
       .tone-purple { background-color: oklch(30% 0.09 305); color: oklch(85% 0.09 305); }
+      .row { background-color: oklch(21% 0.025 262); border-color: oklch(34% 0.03 260); }
+      .row:hover { background-color: oklch(28% 0.03 257); }
+      .empty { color: oklch(71% 0.02 261); }
       .notice-ok { background-color: oklch(30% 0.07 150); color: oklch(87% 0.11 150); }
       .notice-err { background-color: oklch(30% 0.09 25); color: oklch(85% 0.09 20); }
     }
@@ -155,6 +164,8 @@
 </html>
 {{end}}
 
+{{define "empty"}}<p class="empty">{{.}}</p>{{end}}
+
 {{define "badge"}}<span class="badge tone-{{.Tone}}">{{.Word}}</span>{{end}}
 
 {{define "notice"}}{{if or .Ok .Err}}<div id="notice" hx-swap-oob="innerHTML">{{with .Ok}}<p class="notice notice-ok">{{.}}</p>{{end}}{{with .Err}}<p class="notice notice-err">{{.}}</p>{{end}}</div>{{end}}{{end}}
@@ -200,25 +211,23 @@
 {{define "incidents_list"}}
 <div id="incidents-list" class="space-y-3">
   {{range .Incidents}}
-  <a
-    href="{{$.BaseURL}}/incidents/{{.ID}}"
-    class="block bg-white border border-gray-200 rounded-lg p-4 hover:shadow-xs transition-shadow"
-  >
-    <div class="flex items-start justify-between">
-      <div>
+  <a class="row" href="{{$.BaseURL}}/incidents/{{.ID}}">
+    <div class="min-w-0 flex-1">
+      <div class="flex items-start justify-between gap-4">
         <div class="font-medium text-gray-900">{{.Title}}</div>
-        <div class="text-sm text-gray-500 mt-0.5">
-          {{.What}} · {{.Source}} · {{template "ts" .CreatedAt}}
-        </div>
+        <span class="shrink-0">{{template "badge" (dict "Tone" (statusTone .Status) "Word" (statusWord .Status))}}</span>
       </div>
-      <span class="ml-4 shrink-0">{{template "badge" (dict "Tone" (statusTone .Status) "Word" (statusWord .Status))}}</span>
+      <div class="text-sm text-gray-500 mt-0.5">
+        {{.What}} · {{.Source}} · {{template "ts" .CreatedAt}}
+      </div>
+      {{if .AutonomousLocked}}
+      <div class="mt-2 text-xs text-red-600">🔒 Autonomous actions locked</div>
+      {{end}}
     </div>
-    {{if .AutonomousLocked}}
-    <div class="mt-2 text-xs text-red-600">🔒 Autonomous actions locked</div>
-    {{end}}
+    <span class="text-xl text-gray-500" aria-hidden="true">›</span>
   </a>
   {{else}}
-  <div class="text-center py-16 text-gray-400">No incidents</div>
+  {{template "empty" "No incidents yet."}}
   {{end}}
 </div>
 {{end}}
@@ -423,7 +432,7 @@
     <div class="bg-white border border-gray-200 rounded-sm p-3 text-sm">
       <div class="flex justify-between">
         <span class="font-medium text-gray-800">{{.Action}}</span>
-        <span class="text-xs text-gray-400"
+        <span class="text-xs text-gray-500"
           >{{.TriggeredBy}} · {{.Status}}</span
         >
       </div>
@@ -434,7 +443,7 @@
       {{end}}
     </div>
     {{else}}
-    <div class="text-sm text-gray-400">No actions yet</div>
+    {{template "empty" "No actions yet."}}
     {{end}}
   </div>
 </div>
@@ -463,7 +472,7 @@
   <div class="space-y-2">
     {{range .Transcript}} {{if or $.Full (ne .Role "system")}}
     <div class="bg-white border border-gray-200 rounded-sm p-3 text-sm">
-      <div class="text-xs font-semibold text-gray-400 uppercase mb-1">
+      <div class="text-xs font-semibold text-gray-500 uppercase mb-1">
         {{.Role}}{{if .Round}} · round {{.Round}}{{end}}
       </div>
       {{if .Content}}
@@ -482,7 +491,7 @@
       {{end}}
     </div>
     {{end}} {{else}}
-    <div class="text-sm text-gray-400">No conversation recorded yet</div>
+    {{template "empty" "No conversation recorded yet."}}
     {{end}}
   </div>
 </div>
@@ -591,14 +600,14 @@
             Run checks
           </button>
         </form>
-        <p class="text-xs text-gray-400 mb-4">
+        <p class="text-xs text-gray-500 mb-4">
           Disruptive checks (service restarts, library scans) are CLI-only —
           run <code>media-fixer-check -disruptive</code>.
         </p>
 
         <div id="selftest-results">
           {{if .Report}} {{template "selftest_table" .Report}} {{else}}
-          <p class="text-sm text-gray-400">No checks run yet.</p>
+          {{template "empty" "No checks run yet."}}
           {{end}}
         </div>
         {{end}}
@@ -630,7 +639,7 @@
 
   <table class="w-full mt-3 text-sm border-collapse">
     <thead>
-      <tr class="text-left text-xs text-gray-400 border-b border-gray-200">
+      <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
         <th class="py-1 pr-3">Tool</th>
         <th class="py-1 pr-3">Risk</th>
         <th class="py-1 pr-3">Status</th>
@@ -948,7 +957,7 @@
     {{if .StuckSeasons}}
     <table class="w-full text-xs border-collapse">
       <thead>
-        <tr class="text-left text-gray-400 border-b border-gray-200">
+        <tr class="text-left text-gray-500 border-b border-gray-200">
           <th class="py-1 pr-3">Series</th>
           <th class="py-1 pr-3">Season</th>
           <th class="py-1 pr-3">Missing</th>
@@ -971,7 +980,7 @@
       </tbody>
     </table>
     {{else if not .StuckSeasonsError}}
-    <p class="text-sm text-gray-400">No seasons are stuck now.</p>
+    {{template "empty" "No seasons are stuck now."}}
     {{end}}
   </div>
 
@@ -991,7 +1000,7 @@
       {{if .Items}}
       <table class="w-full mt-2 text-xs border-collapse">
         <thead>
-          <tr class="text-left text-gray-400 border-b border-gray-200">
+          <tr class="text-left text-gray-500 border-b border-gray-200">
             <th class="py-1 pr-3">Series</th>
             <th class="py-1 pr-3">Episodes</th>
             <th class="py-1 pr-3">Release</th>
@@ -1016,11 +1025,11 @@
         </tbody>
       </table>
       {{else}}
-      <p class="mt-1 text-xs text-gray-400">No items.</p>
+      {{template "empty" "No items."}}
       {{end}}
     </details>
     {{else}}
-    <p class="text-sm text-gray-400">No runs yet.</p>
+    {{template "empty" "No runs yet."}}
     {{end}}
   </div>
 
@@ -1045,7 +1054,7 @@
         </button>
       </li>
       {{else}}
-      <li class="text-sm text-gray-400">None.</li>
+      <li>{{template "empty" "None."}}</li>
       {{end}}
     </ul>
   </div>
@@ -1091,36 +1100,23 @@
   </div>
   {{template "notice" (dict "Ok" .Notice "Err" .Failure)}}
   {{with .List.SonarrErr}}<p class="notice notice-err">Sonarr could not be read: {{.}}</p>{{end}}
-  {{if .List.Rows}}
-  <table class="w-full text-sm border-collapse">
-    <thead>
-      <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
-        <th class="py-1 pr-3">Show</th>
-        <th class="py-1 pr-3">Seasons</th>
-        <th class="py-1 pr-3">Missing</th>
-        <th class="py-1 pr-3">Stuck</th>
-        <th class="py-1 pr-3">Queue</th>
-        <th class="py-1">Latest</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range .List.Rows}}
-      <tr class="border-b border-gray-100 align-top">
-        <td class="py-1 pr-3"><a href="{{$.BaseURL}}/monitoring/{{.SeriesID}}" class="text-blue-600 hover:underline">{{.Title}}</a></td>
-        <td class="py-1 pr-3">{{.Seasons}}</td>
-        <td class="py-1 pr-3">{{.Missing}}</td>
-        <td class="py-1 pr-3">{{.StuckSeasons}}</td>
-        <td class="py-1 pr-3">{{.QueueItems}}</td>
-        <td class="py-1 break-all text-gray-700">
-          {{with .Latest}}{{template "ts" .At}} · {{.Result}} · {{.ReleaseTitle}}{{end}}
-        </td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <p class="text-sm text-gray-400">Nothing to monitor.</p>
-  {{end}}
+  <div class="space-y-2">
+    {{range .List.Rows}}
+    <a class="row" href="{{$.BaseURL}}/monitoring/{{.SeriesID}}">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-medium text-gray-900">{{.Title}}</span>
+          {{if .StuckSeasons}}{{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{else if .QueueItems}}{{template "badge" (dict "Tone" "orange" "Word" "stuck download")}}{{else}}{{template "badge" (dict "Tone" "gray" "Word" "watching")}}{{end}}
+        </div>
+        <div class="text-sm text-gray-500">{{.Seasons}} seasons · {{.Missing}} missing · {{.StuckSeasons}} stuck · {{.QueueItems}} in queue</div>
+        {{with .Latest}}<div class="text-xs text-gray-700 break-all">{{template "ts" .At}} · {{.Result}}{{with .ReleaseTitle}} · {{.}}{{end}}</div>{{end}}
+      </div>
+      <span class="text-xl text-gray-500" aria-hidden="true">›</span>
+    </a>
+    {{else}}
+    {{template "empty" "No shows to monitor yet. Shows appear here once the pack sweep or the stuck-queue sweep finds a problem."}}
+    {{end}}
+  </div>
 
   <details{{if or .Notice .Failure}} open{{end}}>
     <summary class="text-sm font-semibold text-gray-800 cursor-pointer">Excluded ({{len .List.Excluded}})</summary>
@@ -1135,7 +1131,7 @@
         </form>
       </li>
       {{else}}
-      <li class="text-sm text-gray-400">None.</li>
+      <li>{{template "empty" "None."}}</li>
       {{end}}
     </ul>
     {{if .List.Pickable}}
@@ -1232,7 +1228,7 @@
           <td class="py-1">next {{template "ts" .NextEligible}}</td>
         </tr>
         {{else}}
-        <tr><td class="text-sm text-gray-400">None.</td></tr>
+        <tr><td>{{template "empty" "None."}}</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -1252,7 +1248,7 @@
           <td class="py-1">{{with .LookupResults}}{{.}} results{{end}}</td>
         </tr>
         {{else}}
-        <tr><td class="text-sm text-gray-400">None.</td></tr>
+        <tr><td>{{template "empty" "None."}}</td></tr>
         {{end}}
       </tbody>
     </table>
@@ -1269,7 +1265,7 @@
         {{range .Messages}}<div class="text-xs text-gray-500 break-all">{{.}}</div>{{end}}
       </li>
       {{else}}
-      <li class="text-sm text-gray-400">None.</li>
+      <li>{{template "empty" "None."}}</li>
       {{end}}
     </ul>
   </div>
@@ -1282,7 +1278,7 @@
   {{template "notice" (dict "Err" .Err)}}
   {{if .Text}}
   <p class="text-xs text-gray-500">Explained {{template "ts" .At}}{{if .Stale}} · history changed since{{end}}</p>
-  <div class="whitespace-pre-wrap text-sm {{if .Stale}}text-gray-400{{else}}text-gray-800{{end}}">{{.Text}}</div>
+  <div class="whitespace-pre-wrap text-sm {{if .Stale}}text-gray-500{{else}}text-gray-800{{end}}">{{.Text}}</div>
   {{end}}
   {{if .Can}}
   <form hx-post="{{.BaseURL}}/monitoring/{{.ID}}/explain" hx-target="#monitor-explain" hx-swap="outerHTML"

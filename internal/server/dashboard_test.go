@@ -522,3 +522,66 @@ func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
 		t.Error("pending outcome KeepSearching = false, want true")
 	}
 }
+
+func TestEmptyStates(t *testing.T) {
+	t.Parallel()
+	srv, _ := newDashboardTestServer(t)
+	mustContain(t, do(t, srv, http.MethodGet, "/media/", nil).Body.String(),
+		`<p class="empty">No incidents yet.</p>`)
+
+	e := newMonitorTestServer(t)
+	body := do(t, e.srv, http.MethodGet, "/media/monitoring", nil).Body.String()
+	mustContain(
+		t,
+		body,
+		`<p class="empty">No shows to monitor yet. Shows appear here once the pack sweep or the stuck-queue sweep finds a problem.</p>`,
+	)
+	if strings.Contains(body, "Nothing to babysit") || strings.Contains(body, "Nothing to monitor") {
+		t.Error("old empty copy still rendered")
+	}
+
+	raw, err := os.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(raw), "text-gray-400"); n != 0 {
+		t.Errorf("%d text-gray-400 left in the template", n)
+	}
+}
+
+func TestStateErrors_OneStyle(t *testing.T) {
+	t.Parallel()
+	inNotice := func(t *testing.T, body, msg string) {
+		t.Helper()
+		i := strings.Index(body, msg)
+		if i < 0 {
+			t.Fatalf("%q not rendered", msg)
+		}
+		open := strings.LastIndex(body[:i], "<")
+		if !strings.HasPrefix(body[open:], `<p class="notice notice-err">`) {
+			t.Errorf("%q not inside a notice-err paragraph: %s", msg, body[max(0, open-40):i+len(msg)])
+		}
+	}
+	srv, _ := newDashboardTestServer(t)
+	inNotice(
+		t,
+		do(t, srv, http.MethodGet, "/media/monitoring", nil).Body.String(),
+		"sweep unavailable (Sonarr not configured)",
+	)
+	inNotice(t, do(t, srv, http.MethodGet, "/media/maintenance", nil).Body.String(), "Stuck queue unavailable")
+
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	e.son.down = true
+	inNotice(t, do(t, e.srv, http.MethodGet, "/media/monitoring", nil).Body.String(), "Sonarr could not be read")
+
+	env := newMaintenanceTestServer(t)
+	if err := env.db.SetSetting(context.Background(), incident.TimersKey, "{"); err != nil {
+		t.Fatal(err)
+	}
+	inNotice(
+		t,
+		do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String(),
+		"Stored incident timers couldn",
+	)
+}
