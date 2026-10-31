@@ -143,6 +143,8 @@ func New(
 		r.Get("/monitoring/{seriesID}", s.monitorShow)
 		r.Post("/monitoring/{seriesID}/search/{pass}", s.monitorSearch)
 		r.Post("/monitoring/{seriesID}/explain", s.monitorExplain)
+		r.Post("/monitoring/{seriesID}/import/propose", s.monitorPropose)
+		r.Post("/monitoring/{seriesID}/import", s.monitorImport)
 		r.Post("/monitoring/exclude", s.monitorSetExcluded(true))
 		r.Post("/monitoring/include", s.monitorSetExcluded(false))
 	})

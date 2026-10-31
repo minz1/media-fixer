@@ -47,3 +47,5 @@ func ConfidenceTone(c string) string        { return confidenceTone(c) }
 func SweepTone(s string) string             { return sweepTone(s) }
 
 func RelTime(now, t time.Time) string { return relTime(now, t) }
+
+func ParseRows(vals []string) ([]stuckqueue.MappedFile, error) { return parseRows(vals) }

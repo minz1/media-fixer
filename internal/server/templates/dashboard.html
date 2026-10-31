@@ -1300,6 +1300,44 @@
 </div>
 {{end}}
 
+{{define "monitor_proposal"}}
+{{if .Err}}<p class="notice notice-err">{{.Err}}</p>{{else}}
+<form hx-post="{{.BaseURL}}/monitoring/{{.ID}}/import" hx-target="#monitor-show" hx-swap="outerHTML"
+  hx-confirm="Import the ticked files of {{.P.Title}} into {{.Show}}? Sonarr moves them into the library."
+  hx-disable="find button" class="mt-2 space-y-2">
+  <input type="hidden" name="download_id" value="{{.P.DownloadID}}">
+  <input type="hidden" name="targets_fp" value="{{.P.TargetsFP}}">
+  <p class="text-xs text-gray-500">Mapping proposed by {{.P.Source}}. Nothing is imported until you confirm.</p>
+  {{with .P.Notice}}<p class="text-xs text-gray-600">{{.}}</p>{{end}}
+  <div class="overflow-x-auto">
+    <table class="min-w-full text-xs">
+      <thead>
+        <tr class="text-left text-gray-500">
+          <th class="py-1 pr-2"></th><th class="py-1 pr-3">File</th><th class="py-1 pr-3">Size</th>
+          <th class="py-1 pr-3">Sonarr</th><th class="py-1 pr-3">Proposed</th><th class="py-1 pr-3">Rejections</th>
+          <th class="py-1">Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .P.Rows}}
+        <tr class="border-t border-gray-100 align-top">
+          <td class="py-1 pr-2">{{if .Episodes}}<input type="checkbox" name="row" value="{{range $i, $e := .Episodes}}{{if $i}},{{end}}{{$e.ID}}{{end}}|{{.Path}}"{{if .Ticked}} checked{{end}}>{{end}}</td>
+          <td class="py-1 pr-3 break-all">{{.Rel}}</td>
+          <td class="py-1 pr-3">{{.Size}} B</td>
+          <td class="py-1 pr-3">{{.SonarrParse}}</td>
+          <td class="py-1 pr-3">{{range .Episodes}}<div>{{printf "S%02dE%02d" .SeasonNumber .EpisodeNumber}}{{with .Title}} {{.}}{{end}}</div>{{end}}</td>
+          <td class="py-1 pr-3">{{range .Rejections}}<div>{{.}}</div>{{end}}</td>
+          <td class="py-1">{{if .Skip}}{{.Skip}}{{else if .Differs}}differs from Sonarr{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <button type="submit" class="btn btn-danger">Import ticked files</button>
+</form>
+{{end}}
+{{end}}
+
 {{define "monitor_explain"}}
 <div id="monitor-explain" class="space-y-2">
   <h3 class="text-sm font-semibold text-gray-800">Explain</h3>

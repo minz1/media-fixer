@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +31,33 @@ type bSonarr struct {
 	down    bool
 	history []map[string]any
 	queue   []map[string]any
+	cands   []map[string]any
+	cmds    []map[string]any
+	posts   []string
+}
+
+func (f *bSonarr) setCandidates(c ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cands = c
+}
+
+func (f *bSonarr) commandPosts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.posts)
+}
+
+func candidate(path string, rejections ...string) map[string]any {
+	rj := make([]map[string]any, 0, len(rejections))
+	for _, r := range rejections {
+		rj = append(rj, map[string]any{"reason": r})
+	}
+	return map[string]any{
+		"path": path, "size": 1000, "downloadId": "d1", "seriesId": 7, "seasonNumber": 1,
+		"episodes": []map[string]any{}, "rejections": rj,
+		"quality": map[string]any{"quality": map[string]any{"id": 1}}, "languages": []any{},
+	}
 }
 
 func (f *bSonarr) setQueue(recs ...map[string]any) {
@@ -52,7 +82,11 @@ func (f *bSonarr) requests() int {
 func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.reqs++
-	down, history, queue := f.down, f.history, f.queue
+	down, history, queue, cands, cmds := f.down, f.history, f.queue, f.cands, f.cmds
+	if r.Method == http.MethodPost && r.URL.Path == "/api/v3/command" {
+		raw, _ := io.ReadAll(r.Body)
+		f.posts = append(f.posts, string(raw))
+	}
 	f.mu.Unlock()
 	if down {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -74,11 +108,19 @@ func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = []client.Episode{
 			{ID: 1, SeriesID: 7, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, AirDateUtc: &aired},
 			{ID: 2, SeriesID: 7, SeasonNumber: 1, EpisodeNumber: 2, Monitored: true, HasFile: true, AirDateUtc: &aired},
+			{ID: 3, SeriesID: 7, SeasonNumber: 1, EpisodeNumber: 3, Monitored: true, AirDateUtc: &aired},
 		}
 	case "/api/v3/queue":
 		body = map[string]any{"totalRecords": len(queue), "records": queue}
 	case "/api/v3/history/series":
 		body = history
+	case "/api/v3/manualimport":
+		body = cands
+	case "/api/v3/command":
+		body = cmds
+		if r.Method == http.MethodPost {
+			body = map[string]any{"id": 5}
+		}
 	case "/api/v3/config/downloadclient":
 		body = client.DownloadClientConfig{AutoRedownloadFailed: true}
 	default:
@@ -139,6 +181,12 @@ func newMonitorTestServer(t *testing.T) *bEnv {
 		sch.Wait()
 	})
 	srv.SetSweep(sch)
+
+	sq := stuckqueue.NewScheduler(ctx, &stuckqueue.Runner{
+		Sonarr: arr, DB: database, Now: time.Now, Log: slog.New(slog.DiscardHandler),
+	}, database)
+	t.Cleanup(sq.Wait)
+	srv.SetStuckQueue(sq)
 
 	e := &bEnv{srv: srv, db: database, sch: sch, son: son, llm: &bLLM{reply: "indexers have nothing"}}
 	e.queue = &stuckqueue.Result{}
