@@ -154,10 +154,6 @@ func (s *Server) stuckCardData(
 	res *stuckqueue.Result, running bool, set stuckqueue.Settings, errs map[string]string,
 	notice, failure, unreadable string,
 ) map[string]any {
-	var started time.Time
-	if s.stuck != nil {
-		started = s.stuck.StartedAt()
-	}
 	card := map[string]any{
 		tplKeyBaseURL: s.baseURL,
 		"Settings":    set,
@@ -167,7 +163,7 @@ func (s *Server) stuckCardData(
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
 		"Running":     running,
-		"StartedAt":   started,
+		"StartedAt":   s.stuck.StartedAt(),
 	}
 	if res == nil {
 		return card

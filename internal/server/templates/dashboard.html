@@ -843,8 +843,6 @@
   <input type="number" name="{{.Name}}" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}"
     class="mt-1 block w-28 bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900"
   />
-  {{with .Used}}<span class="block text-xs text-gray-500 mt-0.5">{{.}}</span>{{end}}
-  {{with .Note}}<span class="block text-xs text-gray-500 mt-0.5">{{.}}</span>{{end}}
   {{with .Err}}<span class="block text-xs text-red-600 mt-0.5">{{.}}</span>{{end}}
 </label>
 {{end}}

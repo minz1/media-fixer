@@ -103,7 +103,6 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	render := func() {
-		paused, _ := s.db.IsAutonomousPaused(ctx)
 		incidents, err := s.db.ListIncidents(ctx, "", dashboardPageSize, 0)
 		if err != nil {
 			return
@@ -111,7 +110,6 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 		var sb strings.Builder
 		_ = s.tmpl.t.ExecuteTemplate(&sb, "incidents_list", map[string]any{
 			"Incidents":   incidents,
-			tplKeyPaused:  paused,
 			tplKeyBaseURL: s.baseURL,
 		})
 		writeSSEEvent(w, flush, hxPartial("incidents-list", sb.String()))

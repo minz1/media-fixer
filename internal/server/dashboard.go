@@ -177,7 +177,6 @@ func (s *Server) redirectIncident(w http.ResponseWriter, r *http.Request, id, do
 }
 
 func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
-	paused, _ := s.db.IsAutonomousPaused(r.Context())
 	incidents, err := s.db.ListIncidents(r.Context(), "", dashboardPageSize, 0)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -187,7 +186,7 @@ func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.Execute(w, map[string]any{
 		"Incidents":   incidents,
-		tplKeyPaused:  paused,
+		tplKeyPaused:  s.isPaused(r.Context()),
 		tplKeyBaseURL: s.baseURL,
 	})
 }
