@@ -1280,16 +1280,20 @@
 
   <div>
     <h3 class="text-sm font-semibold text-gray-800 mb-2">Stuck downloads</h3>
-    {{if not .Show.QueueKnown}}<p class="text-sm text-gray-500">No stuck-queue run since the last restart.</p>{{end}}
     <ul class="space-y-2">
-      {{range .Queue}}
+      {{range $i, $l := .Live}}
       <li class="text-sm text-gray-700">
         <span class="break-all">{{.Title}}</span>
-        <span class="text-gray-500">· {{.Verdict}} · {{.Age}}</span>
+        {{if .Verdict}}<span class="text-gray-500">· {{.Verdict}} · {{.Age}}</span>{{end}}
         {{range .Messages}}<div class="text-xs text-gray-500 break-all">{{.}}</div>{{end}}
+        <form hx-post="{{$.BaseURL}}/monitoring/{{$.ID}}/import/propose" hx-target="#import-{{$i}}" hx-swap="innerHTML" hx-disable="find button" hx-indicator="this, #progress" class="mt-1">
+          <input type="hidden" name="download_id" value="{{.DownloadID}}">
+          <button type="submit" class="btn btn-secondary">Propose mapping</button>
+        </form>
+        <div id="import-{{$i}}"></div>
       </li>
       {{else}}
-      <li>{{template "empty" "None."}}</li>
+      <li>{{template "empty" "Nothing stuck in Sonarr's queue for this show."}}</li>
       {{end}}
     </ul>
   </div>

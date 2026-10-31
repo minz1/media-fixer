@@ -65,11 +65,16 @@ type Show struct {
 	Targets    []db.SweepTarget
 	Items      []db.SweepItem
 	Queue      []stuckqueue.Item
-	QueueKnown bool
+	Live       []LiveStuck
 	Stuck      bool
 	Excluded   bool
 	Cached     *db.BabysitExplanation
 	CacheFresh bool
+}
+
+type LiveStuck struct {
+	Download stuckqueue.Download
+	Last     *stuckqueue.Item
 }
 
 type Explanation struct {
@@ -98,20 +103,19 @@ func itemSeries(it stuckqueue.Item) map[int]bool {
 	return ids
 }
 
-func (s *Service) queueItems() ([]stuckqueue.Item, bool) {
+func (s *Service) queueItems() []stuckqueue.Item {
 	if s.State == nil {
-		return nil, false
+		return nil
 	}
-	res, has, _ := s.State()
-	return sonarrItems(res), has
+	res, _, _ := s.State()
+	return sonarrItems(res)
 }
 
 type local struct {
-	targets    []db.SweepTarget
-	queue      []stuckqueue.Item
-	queueKnown bool
-	stuck      bool
-	excluded   bool
+	targets  []db.SweepTarget
+	queue    []stuckqueue.Item
+	stuck    bool
+	excluded bool
 }
 
 func (s *Service) local(ctx context.Context, seriesID int) (local, error) {
@@ -128,9 +132,7 @@ func (s *Service) local(ctx context.Context, seriesID int) (local, error) {
 		}
 	}
 	slices.SortFunc(l.targets, func(a, b db.SweepTarget) int { return cmp.Compare(a.Season, b.Season) })
-	items, known := s.queueItems()
-	l.queueKnown = known
-	for _, it := range items {
+	for _, it := range s.queueItems() {
 		if itemSeries(it)[seriesID] {
 			l.queue = append(l.queue, it)
 		}
@@ -140,21 +142,23 @@ func (s *Service) local(ctx context.Context, seriesID int) (local, error) {
 	return l, nil
 }
 
-func (s *Service) readSonarr(ctx context.Context, seriesID int) (client.Series, []SeasonCounts, error) {
+func (s *Service) readSonarr(
+	ctx context.Context, seriesID int,
+) (client.Series, []SeasonCounts, []client.QueueEntry, error) {
 	series, err := s.Sonarr.GetSeries(ctx, seriesID)
 	if err != nil {
-		return client.Series{}, nil, err
+		return client.Series{}, nil, nil, err
 	}
 	eps, err := s.Sonarr.GetEpisodes(ctx, seriesID, -1)
 	if err != nil {
-		return client.Series{}, nil, err
+		return client.Series{}, nil, nil, err
 	}
-	details, err := s.Sonarr.QueueDetails(ctx)
+	entries, err := s.Sonarr.QueueEntries(ctx)
 	if err != nil {
-		return client.Series{}, nil, err
+		return client.Series{}, nil, nil, err
 	}
 	queued := map[int]bool{}
-	for _, d := range details {
+	for _, d := range entries {
 		if d.SeriesID == seriesID {
 			queued[d.EpisodeID] = true
 		}
@@ -189,7 +193,7 @@ func (s *Service) readSonarr(ctx context.Context, seriesID int) (client.Series, 
 		out = append(out, *c)
 	}
 	slices.SortFunc(out, func(a, b SeasonCounts) int { return cmp.Compare(a.Season, b.Season) })
-	return series, out, nil
+	return series, out, entries, nil
 }
 
 func (s *Service) facts(
@@ -216,12 +220,11 @@ func (s *Service) Show(ctx context.Context, seriesID int) (Show, error) {
 		return Show{}, err
 	}
 	sh := Show{
-		Targets:    l.targets,
-		Items:      items,
-		Queue:      l.queue,
-		QueueKnown: l.queueKnown,
-		Stuck:      l.stuck,
-		Excluded:   l.excluded,
+		Targets:  l.targets,
+		Items:    items,
+		Queue:    l.queue,
+		Stuck:    l.stuck,
+		Excluded: l.excluded,
 	}
 	if c, getErr := s.DB.GetBabysitExplanation(ctx, seriesID); getErr == nil {
 		sh.Cached = &c
@@ -238,11 +241,12 @@ func (s *Service) Show(ctx context.Context, seriesID int) (Show, error) {
 }
 
 func (s *Service) fillSonarr(ctx context.Context, sh *Show, seriesID int) error {
-	series, seasons, err := s.readSonarr(ctx, seriesID)
+	series, seasons, entries, err := s.readSonarr(ctx, seriesID)
 	if err != nil {
 		return err
 	}
 	sh.Series, sh.Seasons = &series, seasons
+	sh.Live = liveStuck(entries, seriesID, sh.Queue)
 	if !sh.Stuck && sh.Cached == nil {
 		return nil
 	}
@@ -252,6 +256,24 @@ func (s *Service) fillSonarr(ctx context.Context, sh *Show, seriesID int) error 
 	}
 	sh.CacheFresh = sh.Cached != nil && sh.Cached.Fingerprint == fingerprint(s.Model, facts)
 	return nil
+}
+
+func liveStuck(entries []client.QueueEntry, seriesID int, last []stuckqueue.Item) []LiveStuck {
+	var out []LiveStuck
+	for _, d := range stuckqueue.Group(stuckqueue.AppSonarr, entries) {
+		if !d.Stuck() || !d.OwnedBy(seriesID) {
+			continue
+		}
+		l := LiveStuck{Download: d}
+		for i := range last {
+			if strings.EqualFold(last[i].DownloadID, d.DownloadID) {
+				l.Last = &last[i]
+				break
+			}
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 func (s *Service) List(ctx context.Context) (List, error) {
@@ -264,7 +286,7 @@ func (s *Service) List(ctx context.Context) (List, error) {
 		return List{}, err
 	}
 	set, _ := sweep.LoadSettings(ctx, s.DB)
-	queue, _ := s.queueItems()
+	queue := s.queueItems()
 	rows := collectRows(targets, latest, queue, set.StuckAfter)
 
 	var l List

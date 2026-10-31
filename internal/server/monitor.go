@@ -41,12 +41,20 @@ type explainView struct {
 	Can     bool
 }
 
+type liveStuckView struct {
+	DownloadID string
+	Title      string
+	Messages   []string
+	Verdict    string
+	Age        string
+}
+
 type monitorShowView struct {
 	BaseURL        string
 	ID             int
 	Title          string
 	Show           babysit.Show
-	Queue          []stuckItemView
+	Live           []liveStuckView
 	StuckAfter     int
 	Status         sweepStatus
 	ConfirmPacks   string
@@ -135,8 +143,8 @@ func (s *Server) renderMonitorShow(
 		Status: s.sweepStatus(started), Notice: notice, Failure: failure, Paused: s.isPaused(ctx),
 		Explain: explainView{BaseURL: s.baseURL, ID: id},
 	}
-	for _, it := range sh.Queue {
-		v.Queue = append(v.Queue, stuckItem(it))
+	for _, l := range sh.Live {
+		v.Live = append(v.Live, liveStuck(l))
 	}
 	v.ConfirmPacks, v.ConfirmSingles = s.searchConfirms(set, v.Title)
 	e := &v.Explain
@@ -145,6 +153,21 @@ func (s *Server) renderMonitorShow(
 		e.Text, e.At, e.Stale = sh.Cached.Text, sh.Cached.CreatedAt, !sh.CacheFresh && sh.SonarrErr == ""
 	}
 	s.renderMonitor(w, name, v)
+}
+
+func liveStuck(l babysit.LiveStuck) liveStuckView {
+	v := liveStuckView{DownloadID: l.Download.DownloadID, Title: l.Download.Title}
+	for _, r := range l.Download.Records {
+		for _, m := range r.Messages {
+			if m = client.RedactCredentials(m); !slices.Contains(v.Messages, m) {
+				v.Messages = append(v.Messages, m)
+			}
+		}
+	}
+	if l.Last != nil {
+		v.Verdict, v.Age = string(l.Last.Verdict), l.Last.Age.Round(ageRounding).String()
+	}
+	return v
 }
 
 func showTitle(sh babysit.Show, id int) string {

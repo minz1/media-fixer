@@ -25,7 +25,7 @@ type fakeSonarr struct {
 	mu            sync.Mutex
 	series        []client.Series
 	episodes      map[int][]client.Episode
-	queue         []client.QueueDetail
+	queue         []map[string]any
 	history       map[int][]map[string]any
 	listStatus    int
 	seriesStatus  map[int]int
@@ -63,8 +63,8 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/v3/episode":
 		id, _ := strconv.Atoi(r.URL.Query().Get("seriesId"))
 		body = f.episodes[id]
-	case path == "/api/v3/queue/details":
-		body = f.queue
+	case path == "/api/v3/queue":
+		body = map[string]any{"totalRecords": len(f.queue), "records": f.queue}
 	case path == "/api/v3/history/series":
 		id, _ := strconv.Atoi(r.URL.Query().Get("seriesId"))
 		body, status = f.history[id], orOK(f.historyStatus)
@@ -233,4 +233,12 @@ func (e *env) stuckShow() {
 	e.target(7, "Seven", 3, 2)
 	e.son.episodes[7] = []client.Episode{aired(1, 1, 1, true), aired(2, 1, 2, false)}
 	e.son.history[7] = []map[string]any{histRec(1, now0().Add(-48*time.Hour), "grabbed", "Seven.S01.1080p")}
+}
+
+func qrec(id, series, episode int, download, status, state string, msgs ...string) map[string]any {
+	return map[string]any{
+		"id": id, "seriesId": series, "episodeId": episode, "downloadId": download, "title": download,
+		"status": status, "trackedDownloadState": state,
+		"statusMessages": []map[string]any{{"messages": msgs}},
+	}
 }

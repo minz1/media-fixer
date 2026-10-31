@@ -46,7 +46,7 @@ func (s *Service) Explain(ctx context.Context, seriesID int) (Explanation, error
 	if err != nil {
 		return Explanation{}, err
 	}
-	series, seasons, err := s.readSonarr(ctx, seriesID)
+	series, seasons, _, err := s.readSonarr(ctx, seriesID)
 	if err != nil {
 		return Explanation{}, err
 	}

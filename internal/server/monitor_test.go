@@ -27,6 +27,20 @@ type bSonarr struct {
 	reqs    int
 	down    bool
 	history []map[string]any
+	queue   []map[string]any
+}
+
+func (f *bSonarr) setQueue(recs ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queue = recs
+}
+
+func liveRec(id, series int, download, title, msg string) map[string]any {
+	return map[string]any{
+		"id": id, "seriesId": series, "downloadId": download, "title": title, "status": "completed",
+		"trackedDownloadState": "importPending", "statusMessages": []map[string]any{{"messages": []string{msg}}},
+	}
 }
 
 func (f *bSonarr) requests() int {
@@ -38,7 +52,7 @@ func (f *bSonarr) requests() int {
 func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.reqs++
-	down, history := f.down, f.history
+	down, history, queue := f.down, f.history, f.queue
 	f.mu.Unlock()
 	if down {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -61,6 +75,8 @@ func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{ID: 1, SeriesID: 7, SeasonNumber: 1, EpisodeNumber: 1, Monitored: true, AirDateUtc: &aired},
 			{ID: 2, SeriesID: 7, SeasonNumber: 1, EpisodeNumber: 2, Monitored: true, HasFile: true, AirDateUtc: &aired},
 		}
+	case "/api/v3/queue":
+		body = map[string]any{"totalRecords": len(queue), "records": queue}
 	case "/api/v3/history/series":
 		body = history
 	case "/api/v3/config/downloadclient":
@@ -300,10 +316,7 @@ func TestMonitor_ShowRenders(t *testing.T) {
 	t.Parallel()
 	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
-	item := stuckqueue.Item{Verdict: stuckqueue.VerdictGap}
-	item.App, item.DownloadID, item.Title = stuckqueue.AppSonarr, "d1", "Seven.S01E02"
-	item.Records = []client.QueueEntry{{SeriesID: 7, Messages: []string{"no files <i>found"}}}
-	e.queue.Apps = []stuckqueue.AppResult{{App: stuckqueue.AppSonarr, Configured: true, Items: []stuckqueue.Item{item}}}
+	e.son.setQueue(liveRec(1, 7, "d1", "Seven.S01E02", "no files <i>found"))
 	body := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
 	mustContain(t, body, "Seven", "stuck", "S01", "Nyaa", "&lt;script&gt;", "**bold**", "Seven.S01E02",
 		"no files &lt;i&gt;found",
@@ -312,6 +325,34 @@ func TestMonitor_ShowRenders(t *testing.T) {
 		"left today", "counts as an attempt", "one AI call")
 	if strings.Contains(body, "<script>alert") || strings.Contains(body, "<i>found") {
 		t.Error("unescaped untrusted text")
+	}
+}
+
+func TestMonitorShow_LiveStuckList(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	e.son.setQueue(
+		liveRec(1, 7, "d1", "Seven.S01E02", "no files <i>found"),
+		map[string]any{"id": 2, "seriesId": 7, "downloadId": "d2", "title": "Busy", "status": "downloading"},
+	)
+	body := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
+	mustContain(t, body, "Stuck downloads", "Seven.S01E02", "no files &lt;i&gt;found",
+		`hx-post="/media/monitoring/7/import/propose"`, `name="download_id" value="d1"`,
+		"btn btn-secondary", "Propose mapping")
+	if strings.Contains(body, "Busy") || strings.Contains(body, "<i>found") {
+		t.Error("a downloading item is listed, or untrusted text is unescaped")
+	}
+}
+
+func TestMonitorShow_LiveStuckEmpty(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	body := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
+	mustContain(t, body, "Nothing stuck in Sonarr&#39;s queue for this show.")
+	if strings.Contains(body, "Propose mapping") || strings.Contains(body, "No stuck-queue run") {
+		t.Error("propose button or the old stuck-queue line is shown")
 	}
 }
 

@@ -25,7 +25,10 @@ func TestShowSeasonCounts(t *testing.T) {
 	e.son.episodes[7] = []client.Episode{
 		aired(1, 1, 1, true), aired(2, 1, 2, false), aired(3, 1, 3, false), fut, special, aired(5, 2, 1, true),
 	}
-	e.son.queue = []client.QueueDetail{{SeriesID: 7, EpisodeID: 3}, {SeriesID: 8, EpisodeID: 2}}
+	e.son.queue = []map[string]any{
+		qrec(1, 7, 3, "a", "downloading", "downloading"),
+		qrec(2, 8, 2, "b", "downloading", "downloading"),
+	}
 
 	s, err := e.svc.Show(context.Background(), 7)
 	if err != nil {
@@ -86,25 +89,6 @@ func TestShowSonarr500KeepsDBParts(t *testing.T) {
 	}
 }
 
-func TestShowQueueKnown(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	e.addSeries(7, "Seven")
-	e.has = false
-	s, err := e.svc.Show(context.Background(), 7)
-	if err != nil || s.QueueKnown {
-		t.Fatalf("QueueKnown=%v err=%v", s.QueueKnown, err)
-	}
-	e.has = true
-	e.state = stuckqueue.Result{Apps: []stuckqueue.AppResult{{
-		App: stuckqueue.AppSonarr, Items: []stuckqueue.Item{queueItem(7, "q"), queueItem(8, "other")},
-	}}}
-	s, err = e.svc.Show(context.Background(), 7)
-	if err != nil || !s.QueueKnown || len(s.Queue) != 1 || !s.Stuck {
-		t.Fatalf("show = %+v err=%v", s, err)
-	}
-}
-
 func TestShowHistoryLaziness(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
@@ -122,5 +106,70 @@ func TestShowHistoryLaziness(t *testing.T) {
 	}
 	if n := e.son.hit("/api/v3/history/series"); n != 1 {
 		t.Fatalf("history calls for stuck show = %d", n)
+	}
+}
+
+func TestShow_LiveStuck(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.addSeries(7, "Seven")
+	e.son.queue = []map[string]any{
+		qrec(1, 7, 1, "STUCK", "completed", "importPending", "no files found"),
+		qrec(2, 7, 2, "BUSY", "downloading", "downloading"),
+		qrec(3, 7, 3, "SHARED", "completed", "importBlocked"),
+		qrec(4, 99, 9, "SHARED", "completed", "importBlocked"),
+		qrec(5, 0, 0, "NOSERIES", "completed", "importPending"),
+	}
+	e.has = true
+	e.state = stuckqueue.Result{Apps: []stuckqueue.AppResult{{
+		App: stuckqueue.AppSonarr, Items: []stuckqueue.Item{{
+			App: stuckqueue.AppSonarr, DownloadID: "stuck", Title: "STUCK",
+			Records: []client.QueueEntry{{SeriesID: 7}},
+			Verdict: stuckqueue.VerdictGap,
+		}},
+	}}}
+
+	s, err := e.svc.Show(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Stuck || len(s.Live) != 1 || s.Live[0].Download.DownloadID != "STUCK" {
+		t.Fatalf("live = %+v", s.Live)
+	}
+	if s.Live[0].Last == nil || s.Live[0].Last.Verdict != stuckqueue.VerdictGap {
+		t.Fatalf("last = %+v", s.Live[0].Last)
+	}
+	if len(s.Live[0].Download.Records[0].Messages) != 1 {
+		t.Fatalf("messages = %+v", s.Live[0].Download.Records)
+	}
+}
+
+func TestShow_LiveStuckWithoutRun(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.addSeries(7, "Seven")
+	e.has = false
+	e.son.queue = []map[string]any{qrec(1, 7, 1, "STUCK", "completed", "importPending")}
+	s, err := e.svc.Show(context.Background(), 7)
+	if err != nil || len(s.Live) != 1 || s.Live[0].Last != nil {
+		t.Fatalf("live = %+v err=%v", s.Live, err)
+	}
+}
+
+func TestShow_QueuedCountsFromEntries(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.addSeries(7, "Seven")
+	e.son.episodes[7] = []client.Episode{aired(1, 1, 1, false), aired(2, 1, 2, false)}
+	e.son.queue = []map[string]any{
+		qrec(1, 7, 2, "a", "downloading", "downloading"), qrec(2, 8, 1, "b", "downloading", "downloading"),
+	}
+	s, err := e.svc.Show(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := babysit.SeasonCounts{Season: 1, Aired: 2, Missing: 1, Queued: 1}
+	if len(s.Seasons) != 1 || s.Seasons[0] != want {
+		t.Fatalf("seasons = %+v", s.Seasons)
 	}
 }
