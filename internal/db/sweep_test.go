@@ -192,37 +192,6 @@ func TestPruneSweepRuns_CascadesItems(t *testing.T) {
 	}
 }
 
-func TestNoPackTargets_IgnoresDryAndOld(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-	add := func(dry bool, target, result string, at time.Time) {
-		t.Helper()
-		id, err := d.CreateSweepRun(ctx, "schedule", dry, at)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = d.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: target, SeriesID: 1,
-			SeriesTitle: "X", Result: result, At: at}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	since := sweepT0().Add(-30 * 24 * time.Hour)
-	add(false, "s:1:1", "no_pack", sweepT0().Add(-10*24*time.Hour))
-	add(false, "e:5", "no_pack", sweepT0().Add(-29*24*time.Hour))
-	add(true, "s:1:2", "no_pack", sweepT0().Add(-24*time.Hour))
-	add(false, "s:1:3", "no_pack", sweepT0().Add(-31*24*time.Hour))
-	add(false, "s:1:4", "failed", sweepT0().Add(-24*time.Hour))
-
-	got, err := d.NoPackTargets(ctx, since)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || !got["s:1:1"] || !got["e:5"] {
-		t.Errorf("NoPackTargets = %v, want s:1:1 and e:5", got)
-	}
-}
-
 func TestSweepRefused_Window(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)

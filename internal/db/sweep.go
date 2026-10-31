@@ -246,26 +246,6 @@ func (d *DB) UpdateSweepItem(ctx context.Context, id int64, result, downloadID s
 	return err
 }
 
-func (d *DB) NoPackTargets(ctx context.Context, since time.Time) (map[string]bool, error) {
-	rows, err := d.read.QueryContext(ctx,
-		`SELECT DISTINCT i.target FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
-		 WHERE r.dry = 0 AND i.result = 'no_pack' AND i.at >= ?`, since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := map[string]bool{}
-	var s string
-	for rows.Next() {
-		if err = rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		out[s] = true
-	}
-	return out, rows.Err()
-}
-
 func (d *DB) AddSweepRefused(ctx context.Context, r *SweepRefused) error {
 	res, err := d.write.ExecContext(ctx,
 		`INSERT INTO sweep_refused (title_key, release_title, indexer, refused_at, reason) VALUES (?, ?, ?, ?, ?)`,

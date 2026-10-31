@@ -378,30 +378,6 @@ func TestRun_ReleaseNotRetriedOnTimeout(t *testing.T) {
 	}
 }
 
-func TestRun_SkipSet(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	ctx := context.Background()
-	old, err := h.db.CreateSweepRun(ctx, "schedule", false, t0().Add(-10*24*time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = h.db.FinishSweepRun(ctx, old, "done", "", db.SweepCounts{}, t0().Add(-10*24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	season := 1
-	item := db.SweepItem{RunID: old, Target: "s:1:1", SeriesID: 1, SeriesTitle: "Show", Season: &season,
-		Result: "no_pack", At: t0().Add(-10 * 24 * time.Hour)}
-	if err = h.db.AddSweepItem(ctx, &item); err != nil {
-		t.Fatal(err)
-	}
-	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
-	h.run(t, false, settings())
-	if got := h.fake.lookupCount(seasonKey(1, 1)); got != 0 {
-		t.Errorf("lookups = %d, want 0 (no_pack 10 days ago)", got)
-	}
-}
-
 func TestRun_ItemWrittenBeforePost(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -438,10 +414,6 @@ func TestRun_DryRun(t *testing.T) {
 	}
 	if !run.Dry || run.Counts.Grabs != 1 {
 		t.Errorf("dry %v counts %+v", run.Dry, run.Counts)
-	}
-	skip, err := h.db.NoPackTargets(context.Background(), t0().Add(-time.Hour))
-	if err != nil || len(skip) != 0 {
-		t.Errorf("NoPackTargets after dry run = %v, %v", skip, err)
 	}
 }
 
