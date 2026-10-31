@@ -231,7 +231,7 @@ func TestHandle_SystemicLockRealertsAfterConfiguredGap(t *testing.T) {
 	t.Parallel()
 	svc, database, notif := newTestService(t)
 	saveTimers(t, database, func(tm *incident.Timers) { tm.LockAlertGapMinutes = 60 })
-	svc.SetUnitForTest(time.Millisecond)
+	svc.SetUnitForTest(10 * time.Millisecond)
 	ctx := context.Background()
 	report := func(title string) {
 		t.Helper()
@@ -249,7 +249,7 @@ func TestHandle_SystemicLockRealertsAfterConfiguredGap(t *testing.T) {
 	if !strings.Contains(notif.msgs[0], "for the next hour") {
 		t.Errorf("lock alert %q does not name the configured gap", notif.msgs[0])
 	}
-	time.Sleep(70 * time.Millisecond)
+	time.Sleep(650 * time.Millisecond)
 	report("H")
 	if len(notif.cards) != 2 {
 		t.Fatalf("owner cards after the configured gap = %d, want 2", len(notif.cards))
