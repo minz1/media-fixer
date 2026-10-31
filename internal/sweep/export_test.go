@@ -1,7 +1,10 @@
 package sweep
 
 import (
+	"time"
+
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -20,3 +23,15 @@ func CountsTextForTest(c db.SweepCounts, dry bool) string { return countsText(c,
 func StartCardForTest(id int64, trigger string, dry bool, s Settings) card.Card {
 	return startCard(id, trigger, dry, s)
 }
+
+func NextEligibleForTest(last time.Time, streak int, s Settings) time.Time {
+	return nextEligible(last, streak, s)
+}
+
+func AttemptTargetForTest(
+	prev *db.SweepTarget, key string, series client.Series, season, missing int, now time.Time, s Settings,
+) db.SweepTarget {
+	return attemptTarget(prev, key, series, season, missing, now, s)
+}
+
+func EligibleForTest(t db.SweepTarget, ok bool, now time.Time) bool { return eligible(t, ok, now) }

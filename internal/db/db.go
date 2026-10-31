@@ -279,6 +279,7 @@ const (
 	migSweep                            = 16
 	migStuckQueue                       = 17
 	migDiscordCards                     = 18
+	migSweepTargets                     = 19
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -387,7 +388,8 @@ type migration struct {
 // event log (see eventLogMigrations). Split into two functions purely to stay
 // under a reasonable single-function length — they're one logical list.
 func migrations() []migration {
-	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations())
+	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations(),
+		sweepTargetsMigrations())
 }
 
 func legacyMigrations() []migration {
