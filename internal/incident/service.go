@@ -529,10 +529,10 @@ func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory s
 	)
 }
 
-// handleAgentResolved processes a non-approval diagnosis: routes an
-// arr_search_missing fix to durable pending-outcome tracking (a download can
-// take hours — far longer than the generic verify loop's ~10-minute budget),
-// kicks off the generic verification loop for any other fix that needs time,
+// handleAgentResolved processes a non-approval diagnosis: verifies a stuck_read
+// fix through the stuck-read watcher, routes an arr_search_missing fix to
+// durable pending-outcome tracking (a download can take hours — far longer
+// than the generic verify loop's ~10-minute budget), kicks off the generic verification loop for any other fix that needs time,
 // or marks the incident fixed now.
 func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
 	if inc.What == agent.WhatStuckRead {

@@ -487,10 +487,13 @@ func TestRedactCredentialsGaps(t *testing.T) {
 		"quoted secret":  `{"secret": "QT1"}`,
 		"compact secret": "secret:CS1",
 		"header secret":  "X-Secret: HS1",
+		"js secret":      "{ clientSecret: 'JQ1' }",
+		"quoted auth":    `auth: "AQ1"`,
+		"spaced colon":   "secret :SK1",
 	}
 	for name, in := range cases {
 		out := client.RedactCredentials(in)
-		for _, secret := range []string{"NL1", "TB1", "dXNlcjpCQTE", "SC1", "AU1", "SG1", "SD1", "CK1", "CK2", "DE1", "QS1", "QS2", "SQ1", "PW1", "PW2", "EU1", "TK1", "AP1", "UP1", "CQ1", "JT1", "DG1", "DG2", "QT1", "CS1", "HS1"} {
+		for _, secret := range []string{"NL1", "TB1", "dXNlcjpCQTE", "SC1", "AU1", "SG1", "SD1", "CK1", "CK2", "DE1", "QS1", "QS2", "SQ1", "PW1", "PW2", "EU1", "TK1", "AP1", "UP1", "CQ1", "JT1", "DG1", "DG2", "QT1", "CS1", "HS1", "JQ1", "AQ1", "SK1"} {
 			if strings.Contains(out, secret) {
 				t.Errorf("%s: %q leaked %s: %q", name, in, secret, out)
 			}

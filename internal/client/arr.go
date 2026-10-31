@@ -382,7 +382,7 @@ var (
 	)
 	// A bare word followed by ": " is prose ("Secrets: The Movie"), so it needs a quote, "=" or a value glued to ":".
 	arrBareCredentialRE = regexp.MustCompile(
-		`(?i)([a-z]*secret[a-z]*|\b(?:auth|sig|sid))(?:["'] ?: ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)|["']? ?(?:=|%3D|%253D) ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)|:(?:"[^"]*"?|'[^']*'?|[^&\s"]+))`,
+		`(?i)([a-z]*secret[a-z]*|\b(?:auth|sig|sid))(?:["'] ?: ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)|["']? ?(?:=|%3D|%253D) ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)| ?: ?(?:"[^"]*"?|'[^']*'?)| ?:[^&\s"]+)`,
 	)
 	arrURLUserinfoRE = regexp.MustCompile(`://([^/\s:]*):[^/?#\s]+@`)
 )
