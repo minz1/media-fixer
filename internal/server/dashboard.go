@@ -62,6 +62,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		// passing extra data (e.g. a page Title) into {{template "head" ...}}
 		// without every page's own top-level data needing a Title field.
 		"dict":           dictFunc,
+		"size":           humanSize,
 		"trigger":        sweep.TriggerLabel,
 		"utc":            utcStamp,
 		"statusTone":     statusTone,

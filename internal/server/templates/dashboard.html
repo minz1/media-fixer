@@ -1219,14 +1219,23 @@
       <table class="w-full text-xs border-collapse">
         <thead><tr class="text-left text-gray-500 border-b border-gray-200">
           <th class="py-1 pr-3">Season</th><th class="py-1 pr-3">Aired</th><th class="py-1 pr-3">On disk</th>
-          <th class="py-1 pr-3">Missing</th><th class="py-1">Queued</th>
+          <th class="py-1 pr-3">Missing</th><th class="py-1 pr-3">Queued</th><th class="py-1"></th>
         </tr></thead>
         <tbody>
           {{range .Show.Seasons}}
           <tr class="border-b border-gray-100">
             <td class="py-1 pr-3">S{{printf "%02d" .Season}}</td><td class="py-1 pr-3">{{.Aired}}</td>
-            <td class="py-1 pr-3">{{.OnDisk}}</td><td class="py-1 pr-3">{{.Missing}}</td><td class="py-1">{{.Queued}}</td>
+            <td class="py-1 pr-3">{{.OnDisk}}</td><td class="py-1 pr-3">{{.Missing}}</td><td class="py-1 pr-3">{{.Queued}}</td>
+            <td class="py-1">
+              <form hx-post="{{$.BaseURL}}/monitoring/{{$.ID}}/releases" hx-target="#releases-{{.Season}}"
+                hx-confirm="Search every indexer once for {{$.Title}} season {{.Season}}? This doesn't count against the sweep budget."
+                hx-disable="find button" hx-indicator="this, #progress">
+                <input type="hidden" name="season" value="{{.Season}}">
+                <button type="submit" class="btn btn-secondary">Find releases</button>
+              </form>
+            </td>
           </tr>
+          <tr><td colspan="6" id="releases-{{.Season}}" class="pb-2"></td></tr>
           {{end}}
         </tbody>
       </table>
@@ -1335,6 +1344,54 @@
   </div>
   <button type="submit" class="btn btn-danger">Import ticked files</button>
 </form>
+{{end}}
+{{end}}
+
+{{define "monitor_releases"}}
+{{if .Err}}<p class="notice notice-err">{{.Err}}</p>{{else if not .F.Releases}}<p class="empty">No releases found for season {{.F.Season}}.</p>{{else}}
+<div class="overflow-x-auto">
+  <table class="min-w-full text-xs">
+    <thead>
+      <tr class="text-left text-gray-500">
+        <th class="py-1 pr-3">Title</th><th class="py-1 pr-3">Indexer</th><th class="py-1 pr-3">Size</th>
+        <th class="py-1 pr-3">Quality</th><th class="py-1 pr-3">Full season</th><th class="py-1 pr-3">Episodes</th>
+        <th class="py-1 pr-3">Rejections</th><th class="py-1"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .F.Releases}}
+      {{$mapped := len .MappedEpisodeInfo}}
+      <tr class="border-t border-gray-100 align-top">
+        <td class="py-1 pr-3 break-all">{{.Title}}</td>
+        <td class="py-1 pr-3">{{.Indexer}}</td>
+        <td class="py-1 pr-3">{{size .Size}}</td>
+        <td class="py-1 pr-3">{{.Quality.Quality.Name}}</td>
+        <td class="py-1 pr-3">{{if .FullSeason}}yes{{end}}</td>
+        <td class="py-1 pr-3">{{if $mapped}}{{$mapped}}{{end}}</td>
+        <td class="py-1 pr-3">{{range .Rejections}}<div>{{.}}</div>{{end}}</td>
+        <td class="py-1">
+          {{if and (eq $mapped 0) (not $.F.Missing)}}nothing missing in season {{$.F.Season}} to grab it for{{else}}
+          <form hx-post="{{$.BaseURL}}/monitoring/{{$.ID}}/grab" hx-target="#monitor-show" hx-swap="outerHTML"
+            hx-confirm="Grab {{.Title}} ({{size .Size}}) for {{$.Show}} season {{$.F.Season}}?{{with .Rejections}} Sonarr rejects it: {{index . 0}}.{{end}}{{if eq $mapped 0}} Sonarr can't match it to episodes, so it will be queued for the {{len $.F.Missing}} missing aired episodes of season {{$.F.Season}}.{{end}}"
+            hx-disable="find button">
+            <input type="hidden" name="season" value="{{$.F.Season}}">
+            <input type="hidden" name="guid" value="{{.GUID}}">
+            <input type="hidden" name="indexer_id" value="{{.IndexerID}}">
+            <input type="hidden" name="title" value="{{.Title}}">
+            {{if eq $mapped 0}}
+            <input type="hidden" name="override" value="1">
+            <input type="hidden" name="quality" value="{{printf "%s" .QualityJSON}}">
+            <input type="hidden" name="languages" value="{{printf "%s" .Languages}}">
+            {{end}}
+            <button type="submit" class="btn btn-danger">Grab</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
 {{end}}
 {{end}}
 

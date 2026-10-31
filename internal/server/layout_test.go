@@ -214,7 +214,7 @@ func TestForms_DisableWhileRunning(t *testing.T) {
 	t.Parallel()
 	slowActions := []string{
 		"/selftest/run", "/pack-sweep/run", "/stuck-queue/run", "/search/packs", "/search/singles", "/explain",
-		"/escalation-preview", "/import/propose",
+		"/escalation-preview", "/import/propose", "/releases",
 	}
 	raw, err := os.ReadFile("templates/dashboard.html")
 	if err != nil {

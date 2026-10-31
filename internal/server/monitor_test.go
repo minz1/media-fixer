@@ -34,6 +34,36 @@ type bSonarr struct {
 	cands   []map[string]any
 	cmds    []map[string]any
 	posts   []string
+
+	releases   []map[string]any
+	relGets    int
+	grabs      []string
+	grabStatus int
+	grabBody   string
+}
+
+func (f *bSonarr) setReleases(r ...map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = r
+}
+
+func (f *bSonarr) releaseGets() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.relGets
+}
+
+func (f *bSonarr) grabPosts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.grabs)
+}
+
+func (f *bSonarr) failGrab(status int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grabStatus, f.grabBody = status, body
 }
 
 func (f *bSonarr) setCandidates(c ...map[string]any) {
@@ -87,6 +117,21 @@ func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		f.posts = append(f.posts, string(raw))
 	}
+	releases := f.releases
+	if r.URL.Path == "/api/v3/release" && r.Method == http.MethodGet {
+		f.relGets++
+	}
+	if r.URL.Path == "/api/v3/release" && r.Method == http.MethodPost {
+		raw, _ := io.ReadAll(r.Body)
+		f.grabs = append(f.grabs, string(raw))
+		if f.grabStatus != 0 {
+			status, msg := f.grabStatus, f.grabBody
+			f.mu.Unlock()
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(msg))
+			return
+		}
+	}
 	f.mu.Unlock()
 	if down {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -116,6 +161,11 @@ func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = history
 	case "/api/v3/manualimport":
 		body = cands
+	case "/api/v3/release":
+		body = releases
+		if r.Method == http.MethodPost {
+			body = map[string]any{}
+		}
 	case "/api/v3/command":
 		body = cmds
 		if r.Method == http.MethodPost {

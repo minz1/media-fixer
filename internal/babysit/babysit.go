@@ -33,6 +33,7 @@ type Service struct {
 	mu        sync.Mutex
 	running   map[int]bool
 	proposing map[string]bool
+	finding   map[int]bool
 }
 
 var (

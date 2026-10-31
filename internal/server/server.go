@@ -145,6 +145,8 @@ func New(
 		r.Post("/monitoring/{seriesID}/explain", s.monitorExplain)
 		r.Post("/monitoring/{seriesID}/import/propose", s.monitorPropose)
 		r.Post("/monitoring/{seriesID}/import", s.monitorImport)
+		r.Post("/monitoring/{seriesID}/releases", s.monitorReleases)
+		r.Post("/monitoring/{seriesID}/grab", s.monitorGrab)
 		r.Post("/monitoring/exclude", s.monitorSetExcluded(true))
 		r.Post("/monitoring/include", s.monitorSetExcluded(false))
 	})

@@ -32,6 +32,12 @@ type fakeSonarr struct {
 	historyStatus int
 	candidates    map[string][]map[string]any
 	hits          map[string]int
+	releases      []map[string]any
+	grabs         []map[string]any
+	grabStatus    int
+	grabBody      string
+	relEnter      chan struct{}
+	relRelease    chan struct{}
 }
 
 func (f *fakeSonarr) hit(name string) int {
@@ -48,6 +54,25 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body any
 	status := http.StatusOK
 	switch {
+	case path == "/api/v3/release" && r.Method == http.MethodPost:
+		var g map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&g)
+		f.grabs = append(f.grabs, g)
+		if f.grabStatus != 0 {
+			w.WriteHeader(f.grabStatus)
+			_, _ = w.Write([]byte(f.grabBody))
+			return
+		}
+		body = map[string]any{}
+	case path == "/api/v3/release":
+		if f.relEnter != nil {
+			enter, release := f.relEnter, f.relRelease
+			f.mu.Unlock()
+			enter <- struct{}{}
+			<-release
+			f.mu.Lock()
+		}
+		body = f.releases
 	case path == "/api/v3/series":
 		body, status = f.series, orOK(f.listStatus)
 	case strings.HasPrefix(path, "/api/v3/series/"):
