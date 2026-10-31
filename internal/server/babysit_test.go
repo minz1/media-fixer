@@ -531,6 +531,27 @@ func TestBabysit_ExplainErrorShownNotCached(t *testing.T) {
 	}
 }
 
+func TestBabysit_ExplainErrorKeepsCachedAnswer(t *testing.T) {
+	t.Parallel()
+	e := newBabysitTestServer(t)
+	e.stuckSeven(t)
+	if err := e.db.PutBabysitExplanation(context.Background(), db.BabysitExplanation{
+		SeriesID: 7, Fingerprint: "old", Text: "OLD ANSWER", Model: "m", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.llm.err = errors.New("model on fire")
+	rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/explain", url.Values{})
+	mustContain(t, rec.Body.String(), "model on fire", "OLD ANSWER", "history changed since")
+}
+
+func TestBabysit_ExcludedListStaysOpenAfterSave(t *testing.T) {
+	t.Parallel()
+	e := newBabysitTestServer(t)
+	rec := do(t, e.srv, http.MethodPost, "/media/babysit/exclude", url.Values{"series_id": {"7"}})
+	mustContain(t, rec.Body.String(), "<details open>")
+}
+
 func TestBabysit_CrossSitePostsRefused(t *testing.T) {
 	t.Parallel()
 	e := newBabysitTestServer(t)

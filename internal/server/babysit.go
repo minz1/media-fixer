@@ -237,6 +237,9 @@ func (s *Server) babysitExplain(w http.ResponseWriter, r *http.Request) {
 	v := explainView{BaseURL: s.baseURL, ID: id, Confirm: explainConfirm}
 	if err != nil {
 		v.Err, v.Can = err.Error(), !errors.Is(err, babysit.ErrNotStuck)
+		if c, getErr := s.db.GetBabysitExplanation(r.Context(), id); getErr == nil {
+			v.Text, v.At, v.Stale = c.Text, c.CreatedAt, true
+		}
 	} else {
 		v.Text, v.At = ex.Text, ex.CreatedAt
 	}

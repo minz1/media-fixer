@@ -1056,7 +1056,7 @@
   <p class="text-sm text-gray-400">Nothing to babysit.</p>
   {{end}}
 
-  <details>
+  <details{{if or .Notice .Failure}} open{{end}}>
     <summary class="text-sm font-semibold text-gray-800 cursor-pointer">Excluded ({{len .List.Excluded}})</summary>
     <ul class="mt-2 space-y-1">
       {{range .List.Excluded}}
