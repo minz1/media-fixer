@@ -50,11 +50,16 @@ func (s *Summarizer) Summarize(ctx context.Context, messages []openai.ChatComple
 		sb.WriteString("\n")
 	}
 
+	return s.Complete(ctx, summaryPrompt, sb.String())
+}
+
+// Complete runs one tool-less completion: a system message, then a user message.
+func (s *Summarizer) Complete(ctx context.Context, system, user string) (string, error) {
 	resp, err := s.llm.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: s.model,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: summaryPrompt},
-			{Role: openai.ChatMessageRoleUser, Content: sb.String()},
+			{Role: openai.ChatMessageRoleSystem, Content: system},
+			{Role: openai.ChatMessageRoleUser, Content: user},
 		},
 	})
 	if err != nil {
