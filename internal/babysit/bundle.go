@@ -23,7 +23,7 @@ const (
 )
 
 func clean(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(strings.Join(strings.Fields(s), " "), "<", "‹"), ">", "›")
+	return strings.ReplaceAll(strings.ReplaceAll(strings.Join(strings.Fields(client.RedactCredentials(s)), " "), "<", "‹"), ">", "›")
 }
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }

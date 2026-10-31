@@ -370,7 +370,12 @@ type SeriesEvent struct {
 	Message string
 }
 
-var arrCredentialParamRE = regexp.MustCompile(`(?i)\b(apikey|api_key|passkey|token)=[^&\s]*`)
+var arrCredentialParamRE = regexp.MustCompile(`(?i)\b([a-z_]*(?:key|token|pass)[a-z_]*)=[^&\s]*`)
+
+// RedactCredentials replaces the value of every key, token or pass query parameter in s.
+func RedactCredentials(s string) string {
+	return arrCredentialParamRE.ReplaceAllString(s, "${1}=REDACTED")
+}
 
 // SeriesHistory returns every history event of a series.
 func (c *ArrClient) SeriesHistory(ctx context.Context, seriesID int) ([]SeriesEvent, error) {
@@ -393,7 +398,7 @@ func (c *ArrClient) SeriesHistory(ctx context.Context, seriesID int) ([]SeriesEv
 		events[i] = SeriesEvent{
 			HistoryRecord: r.HistoryRecord,
 			Indexer:       r.Data.Indexer,
-			Message:       arrCredentialParamRE.ReplaceAllString(r.Data.Message, "${1}=REDACTED"),
+			Message:       RedactCredentials(r.Data.Message),
 		}
 	}
 	return events, nil

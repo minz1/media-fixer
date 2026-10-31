@@ -212,3 +212,16 @@ func TestExplainQueueOnlyStuckClearsOnRestart(t *testing.T) {
 		t.Fatalf("changed bundle should grey the cache: %+v %v", s.CacheFresh, err)
 	}
 }
+
+func TestExplainRedactsQueueCredentials(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	e.stuckShow()
+	e.state.Apps = append(e.state.Apps, stuckqueueApp(queueItem(7, "Seven.S01E02", "fetch http://t/dl?authkey=AK9&torrent_pass=TP9 failed")))
+	if _, err := e.svc.Explain(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(e.llm.user, "AK9") || strings.Contains(e.llm.user, "TP9") || !strings.Contains(e.llm.user, "torrent_pass=REDACTED") {
+		t.Fatalf("queue credential not redacted:\n%s", e.llm.user)
+	}
+}

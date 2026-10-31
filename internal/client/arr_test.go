@@ -429,7 +429,7 @@ func TestSeriesHistory(t *testing.T) {
  "data":{"indexer":"Nyaa","message":"x","downloadUrl":"http://p/?apikey=SECRET"}},
 {"id":2,"eventType":"seriesFolderImported"},
 {"id":3,"eventType":"downloadFailed",
- "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2"}}]`))
+ "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2 ?access_token=AT9&authkey=AK9&torrent_pass=TP9 rsskey=RK9"}}]`))
 	}))
 	defer srv.Close()
 
@@ -452,7 +452,8 @@ func TestSeriesHistory(t *testing.T) {
 		t.Errorf("message = %q", m)
 	}
 	all := fmt.Sprintf("%+v", events)
-	if strings.Contains(all, "SECRET") || strings.Contains(all, "P2") {
+	if strings.Contains(all, "SECRET") || strings.Contains(all, "P2") || strings.Contains(all, "AT9") ||
+		strings.Contains(all, "AK9") || strings.Contains(all, "TP9") || strings.Contains(all, "RK9") {
 		t.Errorf("secret leaked: %s", all)
 	}
 }
