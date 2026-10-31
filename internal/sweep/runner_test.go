@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -807,6 +808,31 @@ func TestRun_CancelDuringLookupKeepsLookup(t *testing.T) {
 	}
 	if run.Status != "interrupted" {
 		t.Fatalf("status %s, want interrupted", run.Status)
+	}
+	assertLookupsStored(t, h, run)
+}
+
+func TestRun_CancelAfterLookupAnswerKeepsLookup(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	twoGrabbableSeries(h)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var answered atomic.Bool
+	onSecondLookup(h, func() { answered.Store(true) })
+	h.runner.Now = func() time.Time {
+		if answered.Load() {
+			cancel()
+		}
+		return h.clock.Now()
+	}
+	id, err := h.runner.Run(ctx, "manual", false, settings())
+	if err == nil {
+		t.Fatal("Run after cancel returned no error")
+	}
+	run, err := h.db.GetSweepRun(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
 	}
 	assertLookupsStored(t, h, run)
 }

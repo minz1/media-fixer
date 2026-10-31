@@ -449,6 +449,9 @@ func (x *run) lookup(
 	n, ms := len(rels), int(x.Now().Sub(began).Milliseconds())
 	item.LookupResults, item.LookupMS = &n, &ms
 	if err == nil {
+		err = context.Cause(ctx)
+	}
+	if err == nil {
 		return rels, true, nil
 	}
 	if ctx.Err() == nil {
