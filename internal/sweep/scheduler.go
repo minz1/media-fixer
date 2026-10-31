@@ -83,20 +83,11 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil || now.Before(next) {
 		return err
 	}
-	at := now.Add(-24 * time.Hour)
-	grabs, err := s.d.LiveGrabsSince(s.base, at)
+	u, err := s.Used(now)
 	if err != nil {
 		return err
 	}
-	searched, crashed, err := s.d.LiveSearchesSince(s.base, at)
-	if err != nil {
-		return err
-	}
-	set.MaxGrabs = max(0, set.MaxGrabs-grabs)
-	set.MaxSearches = max(0, set.MaxSearches-searched)
-	if crashed {
-		set.MaxSearches = 0
-	}
+	set = Remaining(set, u)
 	return s.start(triggerSchedule, false, set)
 }
 
@@ -108,7 +99,43 @@ func (s *Scheduler) RunNow(trigger string, dry bool) error {
 	if !dry && !set.Enabled {
 		return ErrDisabled
 	}
+	if !dry {
+		u, uerr := s.Used(s.r.Now())
+		if uerr != nil {
+			return uerr
+		}
+		set = Remaining(set, u)
+	}
 	return s.start(trigger, dry, set)
+}
+
+type Usage struct {
+	Grabs, Lookups, Searches int
+	Crashed                  bool
+}
+
+func (s *Scheduler) Used(now time.Time) (Usage, error) {
+	since := now.Add(-24 * time.Hour)
+	var u Usage
+	var err error
+	if u.Grabs, err = s.d.LiveGrabsSince(s.base, since); err != nil {
+		return u, err
+	}
+	if u.Lookups, err = s.d.LiveLookupsSince(s.base, since); err != nil {
+		return u, err
+	}
+	u.Searches, u.Crashed, err = s.d.LiveSearchesSince(s.base, since)
+	return u, err
+}
+
+func Remaining(set Settings, u Usage) Settings {
+	set.MaxGrabs = max(0, set.MaxGrabs-u.Grabs)
+	set.MaxLookups = max(0, set.MaxLookups-u.Lookups)
+	set.MaxSearches = max(0, set.MaxSearches-u.Searches)
+	if u.Crashed {
+		set.MaxSearches = 0
+	}
+	return set
 }
 
 func (s *Scheduler) NextRun(now time.Time) *time.Time {

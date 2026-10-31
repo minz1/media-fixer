@@ -40,10 +40,14 @@ func runTone(sr db.SweepRun) card.Tone {
 	return card.Warn
 }
 
-func countsText(c db.SweepCounts) string {
+func countsText(c db.SweepCounts, dry bool) string {
+	left := ""
+	if !dry {
+		left = " (limits: left today)"
+	}
 	return fmt.Sprintf(
-		"grabs %d/%d, lookups %d/%d, searched %d/%d, imported %d, failed %d, refused %d, still downloading %d",
-		c.Grabs, c.MaxGrabs, c.Lookups, c.MaxLookups, c.Searched, c.MaxSearches,
+		"grabs %d/%d, lookups %d/%d, searched %d/%d%s, imported %d, failed %d, refused %d, still downloading %d",
+		c.Grabs, c.MaxGrabs, c.Lookups, c.MaxLookups, c.Searched, c.MaxSearches, left,
 		c.Imported, c.Failed, c.Refused, c.Downloading,
 	)
 }
@@ -56,6 +60,10 @@ func took(sr db.SweepRun) string {
 }
 
 func startCard(id int64, trigger string, dry bool, s Settings) card.Card {
+	left := ""
+	if !dry {
+		left = " left today"
+	}
 	return card.Card{
 		Subject: card.SweepSubject(id),
 		Tone:    card.Info,
@@ -63,7 +71,7 @@ func startCard(id int64, trigger string, dry bool, s Settings) card.Card {
 		Fields: []card.Field{
 			{Name: "Trigger", Value: trigger},
 			{Name: "Budgets", Value: fmt.Sprintf(
-				"%d grabs, %d lookups, %d searches", s.MaxGrabs, s.MaxLookups, s.MaxSearches,
+				"%d grabs, %d lookups, %d searches%s", s.MaxGrabs, s.MaxLookups, s.MaxSearches, left,
 			)},
 		},
 		Path: maintenancePath,
@@ -74,7 +82,7 @@ func summaryCard(sr db.SweepRun) card.Card {
 	return card.Card{
 		Tone:  runTone(sr),
 		Title: runKind(sr.Dry) + " " + statusText(sr) + ":",
-		Body:  countsText(sr.Counts) + took(sr) + ". /media/maintenance",
+		Body:  countsText(sr.Counts, sr.Dry) + took(sr) + ". /media/maintenance",
 		Path:  maintenancePath,
 	}
 }
@@ -95,8 +103,9 @@ func (r *Runner) CardRenderer() card.Renderer {
 			if p.Current != "" {
 				status += " · " + p.Current
 			}
+			counts := countsText(p.Counts, p.Dry)
 			return card.Update{
-				Status: status, Sections: []card.Field{{Name: "Counts", Value: countsText(p.Counts)}}, Live: true,
+				Status: status, Sections: []card.Field{{Name: "Counts", Value: counts}}, Live: true,
 			}, true, nil
 		}
 		sr, err := r.DB.GetSweepRun(ctx, id)
@@ -109,7 +118,7 @@ func (r *Runner) CardRenderer() card.Renderer {
 		tone := runTone(sr)
 		return card.Update{
 			Status:   statusText(sr) + took(sr),
-			Sections: []card.Field{{Name: "Counts", Value: countsText(sr.Counts)}},
+			Sections: []card.Field{{Name: "Counts", Value: countsText(sr.Counts, sr.Dry)}},
 			Tone:     &tone,
 		}, true, nil
 	}

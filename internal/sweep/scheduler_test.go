@@ -608,21 +608,107 @@ func TestScheduler_ZeroBudgetMakesNoGrab(t *testing.T) {
 	}
 }
 
-func TestRunNow_IgnoresSlotGrabs(t *testing.T) {
-	t.Parallel()
-	h, _ := scheduledAt(t, t0().Add(-time.Hour), settings())
-	used := make([]string, settings().MaxGrabs)
-	for i := range used {
-		used[i] = "imported"
-	}
-	interruptedRun(t, h, t0().Add(time.Minute), used...)
-	sch := h.restart(t0().Add(2 * time.Hour))
-	if err := sch.RunNow("manual", false); err != nil {
+func usageRun(t *testing.T, h *harness, at time.Time, dry bool, c db.SweepCounts, results ...string) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := h.db.CreateSweepRun(ctx, "schedule", dry, at)
+	if err != nil {
 		t.Fatal(err)
 	}
-	sch.Wait()
-	if runs := h.runs(t); runs[0].Counts.MaxGrabs != settings().MaxGrabs {
-		t.Errorf("manual run max_grabs = %d, want the full %d", runs[0].Counts.MaxGrabs, settings().MaxGrabs)
+	for _, res := range results {
+		if err = h.db.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+			ReleaseTitle: "Show.S01", Result: res, At: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = h.db.FinishSweepRun(ctx, id, "interrupted", "", c, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func spend(t *testing.T, h *harness, at time.Time) {
+	t.Helper()
+	usageRun(t, h, at, false, db.SweepCounts{Searched: 50}, "imported", "imported", "failed")
+	for range 10 {
+		lookups := 1
+		if err := h.db.AddSweepItem(context.Background(), &db.SweepItem{RunID: 1, Target: "season", SeriesID: 1,
+			SeriesTitle: "Show", Result: "no_pack", LookupResults: &lookups, At: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func budgetNow() time.Time { return t0().Add(10 * time.Hour) }
+
+func tickBudget(t *testing.T, h *harness) db.SweepCounts {
+	t.Helper()
+	sch := h.restart(budgetNow())
+	h.tick(sch, budgetNow())
+	runs := h.runs(t)
+	if len(runs) < 2 || runs[0].Status != "done" {
+		t.Fatalf("runs = %+v, want a done scheduled run after the seeded ones", runs)
+	}
+	return runs[0].Counts
+}
+
+func TestScheduler_BudgetRolling24h(t *testing.T) {
+	t.Parallel()
+	s := sweep.DefaultSettings()
+	s.Enabled = true
+	h, _ := scheduledAt(t, t0().Add(-48*time.Hour), s)
+	spend(t, h, budgetNow().Add(-2*time.Hour))
+	usageRun(t, h, budgetNow().Add(-time.Hour), true, db.SweepCounts{Searched: 99}, "would_grab", "would_grab")
+	c := tickBudget(t, h)
+	if c.MaxGrabs != 7 || c.MaxLookups != 30 || c.MaxSearches != 150 {
+		t.Errorf("limits = %d/%d/%d, want 7/30/150", c.MaxGrabs, c.MaxLookups, c.MaxSearches)
+	}
+}
+
+func TestScheduler_CrashedRunUsesSearchBudget(t *testing.T) {
+	t.Parallel()
+	s := sweep.DefaultSettings()
+	s.Enabled = true
+	h, _ := scheduledAt(t, t0().Add(-48*time.Hour), s)
+	interruptedRun(t, h, budgetNow().Add(-3*time.Hour))
+	c := tickBudget(t, h)
+	if c.MaxSearches != 0 || c.MaxGrabs != s.MaxGrabs {
+		t.Errorf("limits = %d/%d, want grabs %d and searches 0", c.MaxGrabs, c.MaxSearches, s.MaxGrabs)
+	}
+}
+
+func TestScheduler_BudgetBackAfter25h(t *testing.T) {
+	t.Parallel()
+	s := sweep.DefaultSettings()
+	s.Enabled = true
+	h, _ := scheduledAt(t, t0().Add(-48*time.Hour), s)
+	spend(t, h, budgetNow().Add(-25*time.Hour))
+	c := tickBudget(t, h)
+	if c.MaxGrabs != s.MaxGrabs || c.MaxLookups != s.MaxLookups || c.MaxSearches != s.MaxSearches {
+		t.Errorf("limits = %d/%d/%d, want the full %d/%d/%d", c.MaxGrabs, c.MaxLookups, c.MaxSearches,
+			s.MaxGrabs, s.MaxLookups, s.MaxSearches)
+	}
+}
+
+func TestRunNow_LiveGetsRemaining(t *testing.T) {
+	t.Parallel()
+	s := sweep.DefaultSettings()
+	s.Enabled = true
+	for _, dry := range []bool{false, true} {
+		h, _ := scheduledAt(t, t0(), s)
+		spend(t, h, t0().Add(-time.Hour))
+		sch := h.restart(t0().Add(time.Hour))
+		if err := sch.RunNow("manual", dry); err != nil {
+			t.Fatal(err)
+		}
+		sch.Wait()
+		want := [3]int{7, 30, 150}
+		if dry {
+			want = [3]int{s.MaxGrabs, s.MaxLookups, s.MaxSearches}
+		}
+		c := h.runs(t)[0].Counts
+		if got := [3]int{c.MaxGrabs, c.MaxLookups, c.MaxSearches}; got != want {
+			t.Errorf("dry=%v: limits = %v, want %v", dry, got, want)
+		}
 	}
 }
 

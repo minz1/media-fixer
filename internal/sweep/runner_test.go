@@ -277,6 +277,22 @@ func TestRun_MaxGrabsStopsPackPass(t *testing.T) {
 	}
 }
 
+func TestRun_ZeroGrabBudgetNoLookups(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
+	s := settings()
+	s.MaxGrabs = 0
+	run := h.run(t, false, s)
+	if got := h.fake.countWrites("POST /release"); got != 0 || h.fake.lookupCount(seasonKey(1, 1)) != 0 {
+		t.Errorf("POSTs = %d, lookups = %d, want none", got, h.fake.lookupCount(seasonKey(1, 1)))
+	}
+	if run.Status != "done" || run.Counts.Lookups != 0 {
+		t.Errorf("status %s counts %+v", run.Status, run.Counts)
+	}
+}
+
 func TestRun_MaxLookupsStopsPackPass(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

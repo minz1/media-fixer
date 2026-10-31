@@ -397,6 +397,55 @@ func TestLiveSearchesSince(t *testing.T) {
 	}
 }
 
+func TestDB_LiveLookupsSince(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	one := 1
+	for _, r := range []struct {
+		hours  int
+		dry    bool
+		lookup []*int
+	}{
+		{-25, false, []*int{&one}},
+		{1, false, []*int{&one, &one, nil}},
+		{2, true, []*int{&one, &one}},
+	} {
+		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
+		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range r.lookup {
+			if err = d.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+				Result: "no_pack", LookupResults: l, At: at}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if n, err := d.LiveLookupsSince(ctx, sweepT0().Add(-24*time.Hour)); err != nil || n != 2 {
+		t.Errorf("LiveLookupsSince = %d, %v; want 2", n, err)
+	}
+}
+
+func TestDB_LiveSearchesSince_RunningNotCrashed(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	if _, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0()); err != nil {
+		t.Fatal(err)
+	}
+	if _, crashed, err := d.LiveSearchesSince(ctx, sweepT0()); err != nil || crashed {
+		t.Errorf("running run: crashed = %v, %v; want false", crashed, err)
+	}
+	if _, err := d.InterruptRunningSweeps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, crashed, err := d.LiveSearchesSince(ctx, sweepT0()); err != nil || !crashed {
+		t.Errorf("interrupted run: crashed = %v, %v; want true", crashed, err)
+	}
+}
+
 func TestGetSweepRun(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)

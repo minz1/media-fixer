@@ -14,3 +14,9 @@ func SetProgressForTest(r *Runner, p *Progress) {
 	defer r.mu.Unlock()
 	r.progress = p
 }
+
+func CountsTextForTest(c db.SweepCounts, dry bool) string { return countsText(c, dry) }
+
+func StartCardForTest(id int64, trigger string, dry bool, s Settings) card.Card {
+	return startCard(id, trigger, dry, s)
+}

@@ -23,8 +23,8 @@ func TestSummaryCard(t *testing.T) {
 		want string
 	}{
 		{"done", db.SweepRun{Status: "done", StartedAt: start, FinishedAt: &end, Counts: counts}, card.Success,
-			"Pack sweep done:\ngrabs 1/10, lookups 2/40, searched 3/200, imported 0, failed 0, refused 0, " +
-				"still downloading 0, took 1m23s. /media/maintenance"},
+			"Pack sweep done:\ngrabs 1/10, lookups 2/40, searched 3/200 (limits: left today), imported 0, failed 0, " +
+				"refused 0, still downloading 0, took 1m23s. /media/maintenance"},
 		{
 			"dry refused",
 			db.SweepRun{Dry: true, Status: "refused", Reason: "why", StartedAt: start, FinishedAt: &end},
@@ -33,8 +33,8 @@ func TestSummaryCard(t *testing.T) {
 				"refused 0, still downloading 0, took 1m23s. /media/maintenance",
 		},
 		{"unfinished", db.SweepRun{Status: "failed", StartedAt: start}, card.Warn,
-			"Pack sweep failed:\ngrabs 0/0, lookups 0/0, searched 0/0, imported 0, failed 0, refused 0, " +
-				"still downloading 0. /media/maintenance"},
+			"Pack sweep failed:\ngrabs 0/0, lookups 0/0, searched 0/0 (limits: left today), imported 0, failed 0, " +
+				"refused 0, still downloading 0. /media/maintenance"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,6 +44,34 @@ func TestSummaryCard(t *testing.T) {
 				t.Errorf("card = %+v\nplain %q\nwant  %q", c, c.Plain(), tc.want)
 			}
 		})
+	}
+}
+
+func TestCountsText_LeftToday(t *testing.T) {
+	t.Parallel()
+	c := db.SweepCounts{Grabs: 1, MaxGrabs: 5, Lookups: 4, MaxLookups: 40, MaxSearches: 200}
+	live := "grabs 1/5, lookups 4/40, searched 0/200 (limits: left today), imported 0, failed 0, refused 0, still downloading 0"
+	if got := sweep.CountsTextForTest(c, false); got != live {
+		t.Errorf("live = %q, want %q", got, live)
+	}
+	if got := sweep.CountsTextForTest(c, true); strings.Contains(got, "left today") ||
+		!strings.Contains(got, "searched 0/200, imported 0") {
+		t.Errorf("dry = %q, want no suffix", got)
+	}
+}
+
+func TestStartCard_LeftToday(t *testing.T) {
+	t.Parallel()
+	s := sweep.DefaultSettings()
+	for dry, want := range map[bool]string{false: "5 grabs, 40 lookups, 200 searches left today", true: "10 grabs, 40 lookups, 200 searches"} {
+		s.MaxGrabs = 10
+		if !dry {
+			s.MaxGrabs = 5
+		}
+		c := sweep.StartCardForTest(1, "manual", dry, s)
+		if got := c.Fields[1].Value; got != want {
+			t.Errorf("dry=%v: budgets = %q, want %q", dry, got, want)
+		}
 	}
 }
 
