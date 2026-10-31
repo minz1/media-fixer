@@ -814,25 +814,34 @@ func TestRun_CancelDuringLookupKeepsLookup(t *testing.T) {
 
 func TestRun_CancelAfterLookupAnswerKeepsLookup(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	twoGrabbableSeries(h)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var answered atomic.Bool
-	onSecondLookup(h, func() { answered.Store(true) })
-	h.runner.Now = func() time.Time {
-		if answered.Load() {
-			cancel()
-		}
-		return h.clock.Now()
+	for k := int32(1); k <= 4; k++ {
+		t.Run(strconv.Itoa(int(k)), func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			twoGrabbableSeries(h)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var answered atomic.Bool
+			var reads atomic.Int32
+			onSecondLookup(h, func() { answered.Store(true) })
+			h.runner.Now = func() time.Time {
+				if answered.Load() && reads.Add(1) == k {
+					cancel()
+				}
+				return h.clock.Now()
+			}
+			id, err := h.runner.Run(ctx, "manual", false, settings())
+			if err == nil {
+				t.Fatal("Run after cancel returned no error")
+			}
+			run, err := h.db.GetSweepRun(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Status != "interrupted" {
+				t.Errorf("status %s, want interrupted", run.Status)
+			}
+			assertLookupsStored(t, h, run)
+		})
 	}
-	id, err := h.runner.Run(ctx, "manual", false, settings())
-	if err == nil {
-		t.Fatal("Run after cancel returned no error")
-	}
-	run, err := h.db.GetSweepRun(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertLookupsStored(t, h, run)
 }

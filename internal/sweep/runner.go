@@ -370,7 +370,7 @@ func (x *run) season(ctx context.Context, t seasonTarget) error {
 	}
 	x.looked[key] = true
 	if err = x.attempt(ctx, t.series, t.season); err != nil {
-		return err
+		return x.keepLookup(ctx, item, err)
 	}
 	cands := SeasonCandidates(rels, x.refused)
 	Rank(cands)
@@ -412,7 +412,7 @@ func (x *run) animeSeries(ctx context.Context, s client.Series, burst bool) erro
 		}
 		x.looked[key] = true
 		if err = x.attempt(ctx, s, e.SeasonNumber); err != nil {
-			return err
+			return x.keepLookup(ctx, item, err)
 		}
 		cands := AnimeCandidates(rels, uncovered, x.refused)
 		Rank(cands)
@@ -717,7 +717,7 @@ func (x *run) attempts(
 	}
 	base.Result = resultNoPack
 	x.c.NoPack++
-	return client.Release{}, false, x.addItem(ctx, &base)
+	return client.Release{}, false, x.addItem(context.WithoutCancel(ctx), &base)
 }
 
 func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (bool, error) {
@@ -742,7 +742,7 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 	}
 	item.Result = resultGrabbing
 	if err := x.addItem(ctx, &item); err != nil {
-		return false, err
+		return false, x.keepLookup(ctx, item, err)
 	}
 	x.c.Grabs++
 	x.lastGrab = x.Now()
