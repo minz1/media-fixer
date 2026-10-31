@@ -142,7 +142,11 @@ func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident, t
 	obs, err := s.agent.CheckPendingOutcome(ctx, po)
 	if err != nil {
 		// A transient *arr failure is retried, but the cap checks below are skipped on this path, so bound it here.
-		if time.Since(po.StartedAt) > s.minutes(minutesPerHour*t.TrackCapHours) {
+		capHours := t.TrackCapHours
+		if po.KeepSearching && !po.GrabNotified {
+			capHours += t.KeepSearchingCheckHours
+		}
+		if time.Since(po.StartedAt) > s.minutes(minutesPerHour*capHours) {
 			s.escalatePendingOutcome(ctx, inc, po,
 				"we lost track of the download and could not re-check its state: "+err.Error(), t)
 			return

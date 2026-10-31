@@ -820,6 +820,32 @@ func TestKeepSearching_CheckErrorMeasuredFromLastCheck(t *testing.T) {
 	}
 }
 
+func TestKeepSearching_CheckErrorAllowsOneCheckIntervalPastCap(t *testing.T) {
+	t.Parallel()
+	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(0))
+	tm := incident.DefaultTimers()
+	tm.Set("track_cap_hours", 1)
+	tm.Set("stall_minutes", 59)
+	tm.Set("keep_searching_check_hours", 2)
+	if err := incident.SaveTimers(t.Context(), f.database, tm); err != nil {
+		t.Fatal(err)
+	}
+
+	f.svc.AdvancePendingOutcomes(t.Context())
+	f.ageTrack(t, 2*time.Hour)
+	f.checkErr.Store(true)
+	f.svc.AdvancePendingOutcomes(t.Context())
+	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+		t.Fatalf("status = %q, want verifying: a failed check at the scheduled time is inside check + cap", got)
+	}
+
+	f.ageTrack(t, time.Hour+time.Minute)
+	f.svc.AdvancePendingOutcomes(t.Context())
+	if got := incidentStatus(t, f.database, f.inc.ID); got == db.StatusVerifying {
+		t.Errorf("status = %q, want escalated past check + cap", got)
+	}
+}
+
 func TestKeepSearching_SecondDownloadGetsFreshBudget(t *testing.T) {
 	t.Parallel()
 	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(time.Minute))
@@ -833,6 +859,9 @@ func TestKeepSearching_SecondDownloadGetsFreshBudget(t *testing.T) {
 	f.obs.Store(&agent.PendingOutcomeObservation{})
 	f.ageTrack(t, 0)
 	f.svc.AdvancePendingOutcomes(t.Context())
+	if pct := f.track(t).LastProgressPct; pct != 0 {
+		t.Fatalf("LastProgressPct after an empty check = %v, want 0", pct)
+	}
 	f.ageTrack(t, 2*time.Hour)
 
 	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 5})
