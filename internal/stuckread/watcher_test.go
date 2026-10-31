@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -567,5 +568,12 @@ func TestActiveOtherIncidentLeftAlone(t *testing.T) {
 	}
 	if n := len(h.incidents()); n != 1 {
 		t.Errorf("incidents = %d, want 1 (no stuck_read while another run is active)", n)
+	}
+	reps, err := h.db.ListReporters(t.Context(), other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(reps, "media-agent") {
+		t.Errorf("the stuck read was reported onto the active %s incident", other.What)
 	}
 }

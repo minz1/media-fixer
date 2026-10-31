@@ -211,6 +211,47 @@ func TestHandle_SystemicLockAlertsOncePerEpisode(t *testing.T) {
 	}
 }
 
+func TestHandle_SystemicLockRetriesFailedAlert(t *testing.T) {
+	t.Parallel()
+	svc, _, notif := newTestService(t)
+	ctx := context.Background()
+	notif.ownerFails = 1
+	for _, title := range []string{"A", "B", "C", "D", "E", "F", "G"} {
+		rep := &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title}
+		if _, err := svc.Handle(ctx, rep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(notif.cards) != 1 {
+		t.Fatalf("owner cards = %d, want 1 (the failed alert retried on the next locked incident)", len(notif.cards))
+	}
+}
+
+func TestHandle_SystemicLockRealertsAfterADay(t *testing.T) {
+	t.Parallel()
+	svc, _, notif := newTestService(t)
+	svc.SetUnitForTest(time.Millisecond)
+	ctx := context.Background()
+	report := func(title string) {
+		t.Helper()
+		rep := &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title}
+		if _, err := svc.Handle(ctx, rep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, title := range []string{"A", "B", "C", "D", "E", "F", "G"} {
+		report(title)
+	}
+	if len(notif.cards) != 1 {
+		t.Fatalf("owner cards = %d, want 1", len(notif.cards))
+	}
+	time.Sleep(24 * 60 * time.Millisecond)
+	report("H")
+	if len(notif.cards) != 2 {
+		t.Fatalf("owner cards a day into the lock = %d, want 2", len(notif.cards))
+	}
+}
+
 func TestUnlock(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)

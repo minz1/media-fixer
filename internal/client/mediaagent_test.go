@@ -207,3 +207,24 @@ func TestClientStuckReadsTimeout(t *testing.T) {
 		t.Fatal("expected a timeout error")
 	}
 }
+
+func TestClientStuckReadsTimeoutCoversBody(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"readers":[`))
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	c := client.NewMediaAgent(srv.URL, testAPIKey)
+	c.SetStuckReadsTimeoutForTest(50 * time.Millisecond)
+
+	if _, err := c.StuckReads(context.Background()); err == nil {
+		t.Fatal("expected a timeout error while reading the body")
+	}
+}

@@ -21,6 +21,8 @@ import (
 
 const SystematicIncidentThreshold = 5
 
+const lockRealertMinutes = 24 * 60
+
 const (
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
 	defaultUserETAMinutes = 10
@@ -42,7 +44,7 @@ type Service struct {
 	unit        atomic.Int64
 	timersWarn  atomic.Bool
 	// shortcut: in memory, so a restart during a lock sends one more alert; persist it if that turns out noisy.
-	lockAlerted atomic.Bool
+	lockAlertAt atomic.Int64
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -199,7 +201,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	s.addReporter(ctx, inc, r)
 
 	if openCount < SystematicIncidentThreshold {
-		s.lockAlerted.Store(false)
+		s.lockAlertAt.Store(0)
 		s.launch(inc, nil)
 		return inc, nil
 	}
@@ -207,22 +209,24 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
 	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
-	if s.lockAlerted.Swap(true) {
+	now := time.Now().UnixNano()
+	prev := s.lockAlertAt.Load()
+	recent := prev != 0 && time.Duration(now-prev) < s.minutes(lockRealertMinutes)
+	if recent || !s.lockAlertAt.CompareAndSwap(prev, now) {
 		s.log.WarnContext(ctx, "systemic lock: incident blocked, owner already alerted",
 			"incident", inc.ID, "title", r.Title, "open", openCount)
 		return inc, nil
 	}
 	c := ownerCard(inc, card.Alert, fmt.Sprintf(
 		"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s). "+
-			"Later incidents are blocked without a DM until fewer than %d are open; see the dashboard.",
+			"Later incidents in this lock are blocked without a DM for 24 h; see the dashboard.",
 		openCount+1,
 		r.Title,
 		inc.ID[:8],
-		SystematicIncidentThreshold,
 	), "")
 	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
 	if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil && !errors.Is(notifyErr, card.ErrUntracked) {
-		s.lockAlerted.Store(false)
+		s.lockAlertAt.CompareAndSwap(now, 0)
 		s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
 	}
 	return inc, nil
