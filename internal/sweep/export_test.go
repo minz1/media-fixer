@@ -35,3 +35,5 @@ func AttemptTargetForTest(
 }
 
 func EligibleForTest(t db.SweepTarget, ok bool, now time.Time) bool { return eligible(t, ok, now) }
+
+func DigestCardForTest(stuck []db.SweepTarget) card.Card { return digestCard(stuck) }

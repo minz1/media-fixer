@@ -79,6 +79,14 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil || !set.Enabled {
 		return err
 	}
+	runErr := s.runDue(set, now)
+	if errors.Is(runErr, ErrRunActive) || errors.Is(runErr, ErrPaused) {
+		runErr = nil
+	}
+	return errors.Join(s.digest(set, now), runErr)
+}
+
+func (s *Scheduler) runDue(set Settings, now time.Time) error {
 	next, err := s.next(set, now)
 	if err != nil || now.Before(next) {
 		return err
@@ -87,8 +95,7 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	set = Remaining(set, u)
-	return s.start(triggerSchedule, false, set)
+	return s.start(triggerSchedule, false, Remaining(set, u))
 }
 
 func (s *Scheduler) RunNow(trigger string, dry bool) error {
