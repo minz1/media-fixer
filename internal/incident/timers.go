@@ -32,6 +32,7 @@ type Timers struct {
 	RerunNoteGapMinutes     int `json:"rerun_note_gap_minutes"`
 	ProgressNoteGapMinutes  int `json:"progress_note_gap_minutes"`
 	SeerrAlertGapMinutes    int `json:"seerr_alert_gap_minutes"`
+	LockAlertGapMinutes     int `json:"lock_alert_gap_minutes"`
 	NoReleaseGraceMinutes   int `json:"no_release_grace_minutes"`
 	StallMinutes            int `json:"stall_minutes"`
 	TrackCapHours           int `json:"track_cap_hours"`
@@ -104,6 +105,10 @@ func (t *Timers) table() []timerSpec {
 		s(
 			TimerField{notes, "seerr_alert_gap_minutes", "Gap between Seerr alerts", mins, 15, 1440, 60, 0},
 			&t.SeerrAlertGapMinutes,
+		),
+		s(
+			TimerField{notes, "lock_alert_gap_minutes", "Gap between systemic lock alerts", mins, 60, 10080, 1440, 0},
+			&t.LockAlertGapMinutes,
 		),
 		s(
 			TimerField{

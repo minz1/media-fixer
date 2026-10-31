@@ -21,8 +21,6 @@ import (
 
 const SystematicIncidentThreshold = 5
 
-const lockRealertMinutes = 24 * 60
-
 const (
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
 	defaultUserETAMinutes = 10
@@ -209,9 +207,10 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
 	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
+	gap := s.timers(ctx).LockAlertGapMinutes
 	now := time.Now().UnixNano()
 	prev := s.lockAlertAt.Load()
-	recent := prev != 0 && time.Duration(now-prev) < s.minutes(lockRealertMinutes)
+	recent := prev != 0 && time.Duration(now-prev) < s.minutes(gap)
 	if recent || !s.lockAlertAt.CompareAndSwap(prev, now) {
 		s.log.WarnContext(ctx, "systemic lock: incident blocked, owner already alerted",
 			"incident", inc.ID, "title", r.Title, "open", openCount)
@@ -219,10 +218,11 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	}
 	c := ownerCard(inc, card.Alert, fmt.Sprintf(
 		"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s). "+
-			"Later incidents in this lock are blocked without a DM for 24 h; see the dashboard.",
+			"Later incidents in this lock are blocked without a DM for the next %s; see the dashboard.",
 		openCount+1,
 		r.Title,
 		inc.ID[:8],
+		gapText(gap),
 	), "")
 	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
 	if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil && !errors.Is(notifyErr, card.ErrUntracked) {

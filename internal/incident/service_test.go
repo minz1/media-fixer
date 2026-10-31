@@ -227,9 +227,10 @@ func TestHandle_SystemicLockRetriesFailedAlert(t *testing.T) {
 	}
 }
 
-func TestHandle_SystemicLockRealertsAfterADay(t *testing.T) {
+func TestHandle_SystemicLockRealertsAfterConfiguredGap(t *testing.T) {
 	t.Parallel()
-	svc, _, notif := newTestService(t)
+	svc, database, notif := newTestService(t)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.LockAlertGapMinutes = 60 })
 	svc.SetUnitForTest(time.Millisecond)
 	ctx := context.Background()
 	report := func(title string) {
@@ -245,10 +246,13 @@ func TestHandle_SystemicLockRealertsAfterADay(t *testing.T) {
 	if len(notif.cards) != 1 {
 		t.Fatalf("owner cards = %d, want 1", len(notif.cards))
 	}
-	time.Sleep(24 * 60 * time.Millisecond)
+	if !strings.Contains(notif.msgs[0], "for the next hour") {
+		t.Errorf("lock alert %q does not name the configured gap", notif.msgs[0])
+	}
+	time.Sleep(70 * time.Millisecond)
 	report("H")
 	if len(notif.cards) != 2 {
-		t.Fatalf("owner cards a day into the lock = %d, want 2", len(notif.cards))
+		t.Fatalf("owner cards after the configured gap = %d, want 2", len(notif.cards))
 	}
 }
 

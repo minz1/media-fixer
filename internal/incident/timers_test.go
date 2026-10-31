@@ -24,12 +24,12 @@ func timersDB(t *testing.T) *db.DB {
 func TestDefaultTimers(t *testing.T) {
 	t.Parallel()
 	d := incident.DefaultTimers()
-	want := []int{2, 6, 15, 5, 30, 2, 5, 10, 30, 60, 60, 15, 60, 12, 1, 7, 120}
+	want := []int{2, 6, 15, 5, 30, 2, 5, 10, 30, 60, 60, 15, 60, 12, 1, 7, 120, 1440}
 	got := []int{
 		d.RetryFirstMinutes, d.RetrySecondMinutes, d.StaleRunMinutes, d.CheckEveryMinutes, d.FirstVerifyCapMinutes,
 		d.VerifyGapMinutes, d.VerifyChecks, d.ApprovedVerifyMinutes, d.RerunNoteGapMinutes, d.ProgressNoteGapMinutes,
 		d.SeerrAlertGapMinutes, d.NoReleaseGraceMinutes, d.StallMinutes, d.TrackCapHours, d.KeepSearchingCheckHours,
-		d.KeepSearchingDays, d.ExplainTimeoutSeconds,
+		d.KeepSearchingDays, d.ExplainTimeoutSeconds, d.LockAlertGapMinutes,
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -128,7 +128,7 @@ func TestFields_MatchBoundsAndDefaults(t *testing.T) {
 	t.Parallel()
 	d := incident.DefaultTimers()
 	fields := d.Fields()
-	if len(fields) != 19 {
+	if len(fields) != 20 {
 		t.Fatalf("len = %d", len(fields))
 	}
 	seen := map[string]bool{}
