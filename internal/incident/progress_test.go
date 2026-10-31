@@ -136,3 +136,22 @@ func TestAdvanceReporterProgress_OnlyActiveStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestAdvanceReporterProgress_SavedGap(t *testing.T) {
+	t.Parallel()
+	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.ProgressNoteGapMinutes = 15 })
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := database.ClaimReporterNote(ctx, inc.ID, now.Add(-20*time.Minute), 0); err != nil {
+		t.Fatal(err)
+	}
+	logApplied(t, database, inc.ID, "refresh_decypharr_links")
+
+	svc.AdvanceReporterProgress(ctx, now)
+
+	want := []string{"⏳ Still working on **X**: fixing the media storage."}
+	if strings.Join(notif.msgs, "|") != strings.Join(want, "|") {
+		t.Errorf("msgs = %q, want %q", notif.msgs, want)
+	}
+}

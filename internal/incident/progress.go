@@ -50,7 +50,7 @@ func (s *Service) reportProgress(ctx context.Context, inc *db.Incident, now time
 	}
 	s.noteReporters(ctx, inc,
 		reporterCard(card.Info, fmt.Sprintf("⏳ Still working on **%s**: %s.", inc.Title, strings.Join(phrases, ", "))),
-		now, progressNoteGap)
+		now, s.minutes(s.timers(ctx).ProgressNoteGapMinutes))
 }
 
 func progressPhrases(actions []*db.ActionLog, since time.Time, po *db.PendingOutcome) []string {

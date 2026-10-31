@@ -53,8 +53,12 @@ func (s *Service) BackdateSeerrAlertForTest(d time.Duration) {
 	s.seerrAlertAt = s.seerrAlertAt.Add(-d)
 }
 
-func (s *Service) ClaimSeerrAlertForTest(now time.Time) (time.Time, bool) {
-	return s.claimSeerrAlert(now)
+func (s *Service) ClaimSeerrAlertForTest(now time.Time, gap time.Duration) (time.Time, bool) {
+	return s.claimSeerrAlert(now, gap)
+}
+
+func (s *Service) BackgroundSweepLoopForTest(ctx context.Context) {
+	s.backgroundSweepLoop(ctx)
 }
 
 func (s *Service) ReleaseSeerrAlertForTest(claimed, prev time.Time) {

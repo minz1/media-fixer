@@ -250,6 +250,9 @@ func TestSeerrFailureDM_OncePerHour(t *testing.T) {
 	if len(notif.msgs) != 1 {
 		t.Fatalf("owner msgs = %q, want one Seerr failure DM per hour", notif.msgs)
 	}
+	if !strings.Contains(notif.msgs[0], "in the next 1 hour are only logged") {
+		t.Errorf("DM = %q, want the 1 hour hint", notif.msgs[0])
+	}
 
 	svc.BackdateSeerrAlertForTest(time.Hour)
 	r := seerrReport("9")
@@ -302,15 +305,57 @@ func TestSeerrAlert_FailedDMRetriesNext(t *testing.T) {
 	}
 }
 
+func TestSeerrFailureDM_SavedGap(t *testing.T) {
+	t.Parallel()
+	svc, database, notif := newTestService(t)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.SeerrAlertGapMinutes = 15 })
+	svc.SetSeerr(&fakeSeerr{err: errors.New("seerr down")})
+	ctx := context.Background()
+
+	if _, err := svc.Handle(ctx, seerrReport("7")); err != nil {
+		t.Fatal(err)
+	}
+	if len(notif.msgs) != 1 ||
+		!strings.Contains(notif.msgs[0], "Further Seerr failures in the next 15 minutes are only logged.") {
+		t.Fatalf("owner msgs = %q, want one DM with the 15 minute hint", notif.msgs)
+	}
+
+	svc.BackdateSeerrAlertForTest(16 * time.Minute)
+	if _, err := svc.Handle(ctx, seerrReport("9")); err != nil {
+		t.Fatal(err)
+	}
+	if len(notif.msgs) != 2 {
+		t.Errorf("owner msgs = %q, want a second DM after 16 minutes", notif.msgs)
+	}
+}
+
+func TestRerunNote_SavedGap(t *testing.T) {
+	t.Parallel()
+	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.RerunNoteGapMinutes = 5 })
+	ctx := context.Background()
+	if _, err := database.ClaimReporterNote(ctx, inc.ID, time.Now().Add(-10*time.Minute), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Rerun(ctx, inc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := countMsgs(notif.msgs, "🔁 Taking another look at **X**."); n != 1 {
+		t.Errorf("rerun notes = %d, want 1 with a saved 5 minute gap; msgs %q", n, notif.msgs)
+	}
+}
+
 func TestSeerrAlert_ReleaseKeepsNewerClaim(t *testing.T) {
 	t.Parallel()
 	svc, _, _ := newTestService(t)
 	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	prev, ok := svc.ClaimSeerrAlertForTest(at)
+	prev, ok := svc.ClaimSeerrAlertForTest(at, time.Hour)
 	if !ok {
 		t.Fatal("first claim refused")
 	}
-	if _, ok = svc.ClaimSeerrAlertForTest(at.Add(2 * time.Hour)); !ok {
+	if _, ok = svc.ClaimSeerrAlertForTest(at.Add(2*time.Hour), time.Hour); !ok {
 		t.Fatal("claim two hours later refused")
 	}
 	svc.ReleaseSeerrAlertForTest(at, prev)

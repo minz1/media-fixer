@@ -97,6 +97,26 @@ func TestSweepStaleRuns_RerunsStaleReopenedIncident(t *testing.T) {
 	}
 }
 
+func TestSweepStaleReopened_CardPrintsSavedMinutes(t *testing.T) {
+	t.Parallel()
+	database, inc := newReopenedIncident(t, 41*time.Minute)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.StaleRunMinutes = 40 })
+	ag := newAlwaysFixedAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+
+	svc.SweepStaleRuns(context.Background())
+
+	waitForRun(t, ag)
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	stale := fmt.Sprintf(
+		"⏱️ Incident **Left** (#%s) stopped making progress for 40 min and is being re-run.", inc.ID[:8])
+	if n := countMsgs(notif.msgs, stale); n != 1 {
+		t.Errorf("stale owner DMs = %d, want 1 %q; msgs %q", n, stale, notif.msgs)
+	}
+}
+
 func TestSweepStaleRuns_LeavesFreshReopenedIncident(t *testing.T) {
 	t.Parallel()
 	database, inc := newReopenedIncident(t, time.Minute)

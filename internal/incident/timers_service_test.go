@@ -2,6 +2,8 @@ package incident_test
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -227,5 +229,135 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 		}
 	case <-time.After(timersLate):
 		t.Fatal("seed context never ended")
+	}
+}
+
+func newPendingTracker(t *testing.T, database *db.DB) *db.Incident {
+	t.Helper()
+	inc := &db.Incident{
+		Status: db.StatusVerifying, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Loop Show",
+	}
+	if err := database.CreateIncident(t.Context(), inc); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.AddReporter(t.Context(), inc.ID, "alice", "discord", "discord-alice"); err != nil {
+		t.Fatal(err)
+	}
+	po := &db.PendingOutcome{MediaType: "tv", Title: "Loop Show", Season: 1, Episode: 1, StartedAt: time.Now()}
+	if err := database.SetPendingOutcome(t.Context(), inc.ID, po, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return inc
+}
+
+func TestBackgroundLoop_ResetsToSavedInterval(t *testing.T) {
+	t.Parallel()
+	database := openTimersDB(t)
+	saveTimers(t, database, func(tm *incident.Timers) {
+		tm.CheckEveryMinutes = 60
+		tm.NoReleaseGraceMinutes = 240
+		tm.TrackCapHours = 72
+	})
+	var checks atomic.Int32
+	ag := &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			checks.Add(1)
+			return &agent.PendingOutcomeObservation{}, nil
+		},
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	svc := incident.NewService(cancelled, database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler))
+	svc.SetUnitForTest(20 * time.Millisecond)
+	inc := newPendingTracker(t, database)
+
+	ctx, stop := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		svc.BackgroundSweepLoopForTest(ctx)
+		close(done)
+	}()
+	go func() {
+		po := &db.PendingOutcome{MediaType: "tv", Title: "Loop Show", Season: 1, Episode: 1, StartedAt: time.Now()}
+		for ctx.Err() == nil {
+			_ = database.SetPendingOutcome(ctx, inc.ID, po, time.Now())
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	saveTimers(t, database, func(tm *incident.Timers) {
+		tm.CheckEveryMinutes = 1
+		tm.NoReleaseGraceMinutes = 240
+		tm.TrackCapHours = 72
+	})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for checks.Load() < 5 {
+		if time.Now().After(deadline) {
+			t.Fatalf("checks = %d after 3s, want at least 5 once the saved 1 minute interval applies", checks.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	stop()
+	select {
+	case <-done:
+	case <-time.After(timersLate):
+		t.Fatal("loop did not return after cancel")
+	}
+}
+
+func backdateIncident(t *testing.T, path, id string, age time.Duration) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", path+"?_time_format=sqlite&_timezone=UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err = raw.ExecContext(t.Context(), `UPDATE incidents SET updated_at = ? WHERE id = ?`,
+		time.Now().Add(-age), id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSweepStaleRuns_CardPrintsSavedMinutes(t *testing.T) {
+	t.Parallel()
+	path := t.TempDir() + "/stale.db"
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	saveTimers(t, database, func(tm *incident.Timers) { tm.StaleRunMinutes = 40 })
+	ids := map[string]string{}
+	for title, age := range map[string]time.Duration{"Old": 41 * time.Minute, "Young": 39 * time.Minute} {
+		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
+		if err = database.CreateIncident(t.Context(), inc); err != nil {
+			t.Fatal(err)
+		}
+		if err = database.UpdateIncidentStatus(t.Context(), inc.ID, db.StatusInvestigating); err != nil {
+			t.Fatal(err)
+		}
+		backdateIncident(t, path, inc.ID, age)
+		ids[title] = inc.ID
+	}
+	ag := newAlwaysFixedAgent()
+	notif := newSyncNotifier()
+	svc := incident.NewService(t.Context(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+
+	svc.SweepStaleRuns(t.Context())
+
+	waitForRun(t, ag)
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	card := func(title, id string) string {
+		return fmt.Sprintf(
+			"⏱️ Incident **%s** (#%s) stopped making progress for 40 min and is being re-run.", title, id[:8])
+	}
+	if n := countMsgs(notif.msgs, card("Old", ids["Old"])); n != 1 {
+		t.Errorf("stale cards for the 41 min incident = %d, want 1; msgs %q", n, notif.msgs)
+	}
+	if n := countMsgs(notif.msgs, card("Young", ids["Young"])); n != 0 {
+		t.Errorf("the 39 min incident was rerun; msgs %q", notif.msgs)
 	}
 }

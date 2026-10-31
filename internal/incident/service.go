@@ -21,27 +21,8 @@ import (
 const systematicIncidentThreshold = 5
 
 const (
-	rerunNoteGap    = 30 * time.Minute
-	progressNoteGap = 60 * time.Minute
-	seerrAlertGap   = time.Hour
-)
-
-const (
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
 	defaultUserETAMinutes = 10
-)
-
-const (
-	// staleRunThreshold is how long a run can sit in "investigating" without a
-	// heartbeat before SweepStaleRuns treats it as hung rather than mid-retry.
-	// Comfortably above both retry waits (8 minutes by default), the longest
-	// gap a legitimately-retrying run can go without writing one — Run's own
-	// TransitionStatus keeps status at "investigating" across retries, and
-	// Agent.logTurn (the heartbeat write) doesn't fire again until the next
-	// attempt's first LLM round completes.
-	staleRunThreshold = 15 * time.Minute
-	// staleRunSweepInterval is how often SweepStaleRuns runs in the background.
-	staleRunSweepInterval = 5 * time.Minute
 )
 
 // Service manages incident lifecycle and orchestrates agent runs.
@@ -809,25 +790,36 @@ func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id
 	if err := call(id); err != nil {
 		s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", err)
 		now := time.Now()
-		prev, ok := s.claimSeerrAlert(now)
+		t := s.timers(ctx)
+		prev, ok := s.claimSeerrAlert(now, s.minutes(t.SeerrAlertGapMinutes))
 		if !ok {
 			return
 		}
 		if derr := s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
 			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v",
 			verb, id, inc.Title, inc.ID[:8], err,
-		), "Further Seerr failures in the next hour are only logged.")); derr != nil {
+		), "Further Seerr failures in the next "+gapText(t.SeerrAlertGapMinutes)+" are only logged.")); derr != nil {
 			s.log.ErrorContext(ctx, "seerr alert DM failed", "incident", inc.ID, "error", derr)
 			s.releaseSeerrAlert(now, prev)
 		}
 	}
 }
 
-func (s *Service) claimSeerrAlert(now time.Time) (time.Time, bool) {
+func gapText(minutes int) string {
+	if minutes%minutesPerHour != 0 {
+		return fmt.Sprintf("%d minutes", minutes)
+	}
+	if h := minutes / minutesPerHour; h != 1 {
+		return fmt.Sprintf("%d hours", h)
+	}
+	return "1 hour"
+}
+
+func (s *Service) claimSeerrAlert(now time.Time, gap time.Duration) (time.Time, bool) {
 	s.seerrAlertMu.Lock()
 	defer s.seerrAlertMu.Unlock()
 	prev := s.seerrAlertAt
-	if now.Sub(prev) < seerrAlertGap {
+	if now.Sub(prev) < gap {
 		return prev, false
 	}
 	s.seerrAlertAt = now
@@ -916,7 +908,7 @@ func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status st
 // with a summary of the prior conversation (if any) so the agent knows what
 // it already tried and does not repeat a failed action from scratch.
 func (s *Service) Rerun(ctx context.Context, id string) error {
-	return s.rerun(ctx, id, rerunManual)
+	return s.rerun(ctx, id, rerunManual, 0)
 }
 
 type rerunOrigin int
@@ -927,7 +919,7 @@ const (
 	rerunStale
 )
 
-func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) error {
+func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin, staleMinutes int) error {
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err
@@ -959,12 +951,12 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin) erro
 				fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title),
 			),
 			time.Now(),
-			rerunNoteGap,
+			s.minutes(s.timers(ctx).RerunNoteGapMinutes),
 		)
 	case rerunStale:
 		c := ownerCard(inc, card.Info, fmt.Sprintf(
 			"⏱️ Incident **%s** (#%s) stopped making progress for %d min and is being re-run.",
-			inc.Title, inc.ID[:8], int(staleRunThreshold.Minutes()),
+			inc.Title, inc.ID[:8], staleMinutes,
 		), "")
 		c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbResolve}
 		_ = s.notif.NotifyOwner(ctx, c)
@@ -1026,7 +1018,7 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 		}
 		for _, inc := range incidents {
 			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
-			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart); rerunErr != nil {
+			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil {
 				s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
 			}
 		}
@@ -1034,24 +1026,25 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 }
 
 // SweepStaleRuns reruns any incident stuck in "investigating" whose heartbeat
-// (see Agent.logTurn/db.TouchHeartbeat) is older than staleRunThreshold — a
+// (see Agent.logTurn/db.TouchHeartbeat) is older than the saved stale-run minutes — a
 // run whose goroutine is still alive but stopped making progress.
 func (s *Service) SweepStaleRuns(ctx context.Context) {
-	staleBefore := time.Now().Add(-staleRunThreshold)
+	staleMinutes := s.timers(ctx).StaleRunMinutes
+	staleBefore := time.Now().Add(-s.minutes(staleMinutes))
 	stale, err := s.db.FindStaleInvestigating(ctx, staleBefore)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
 	}
 	for _, inc := range stale {
 		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, rerunStale); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, staleMinutes); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
-	s.sweepStaleReopened(ctx, staleBefore)
+	s.sweepStaleReopened(ctx, staleBefore, staleMinutes)
 }
 
-func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time) {
+func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time, staleMinutes int) {
 	paused, err := s.db.IsAutonomousPaused(ctx)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stale reopened sweep: pause check", "error", err)
@@ -1070,7 +1063,7 @@ func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time)
 			continue
 		}
 		s.log.WarnContext(ctx, "recovering stale reopened incident", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, rerunStale); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, staleMinutes); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale reopened rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
@@ -1083,7 +1076,8 @@ func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time)
 // tied to the same process-lifetime context that owns every other piece of
 // Service's background lifecycle (runManager).
 func (s *Service) backgroundSweepLoop(base context.Context) {
-	ticker := time.NewTicker(staleRunSweepInterval)
+	d := s.minutes(s.timers(base).CheckEveryMinutes)
+	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1093,6 +1087,10 @@ func (s *Service) backgroundSweepLoop(base context.Context) {
 			s.SweepStaleRuns(base)
 			s.AdvancePendingOutcomes(base)
 			s.AdvanceReporterProgress(base, time.Now())
+			if next := s.minutes(s.timers(base).CheckEveryMinutes); next != d {
+				ticker.Reset(next)
+				d = next
+			}
 		}
 	}
 }
