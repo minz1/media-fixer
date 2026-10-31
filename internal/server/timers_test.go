@@ -55,7 +55,7 @@ func TestTimersCard_FormRoundTrip(t *testing.T) {
 			`" max="`+strconv.Itoa(f.Hi)+`"`)
 	}
 	last := -1
-	for _, g := range []string{"Agent runs", "Verification", "Reporter notes", "Download tracking", "Explain"} {
+	for _, g := range []string{"Agent runs", "Verification", "Reporter notes", "Download tracking", "Explain", "Stuck reads"} {
 		i := strings.Index(form, g)
 		if i <= last {
 			t.Errorf("group %q missing or out of order", g)

@@ -19,7 +19,7 @@ import (
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
-const systematicIncidentThreshold = 5
+const SystematicIncidentThreshold = 5
 
 const (
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
@@ -186,7 +186,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	s.recordIncidentCreated(ctx, inc)
 	s.addReporter(ctx, inc, r)
 
-	if openCount >= systematicIncidentThreshold {
+	if openCount >= SystematicIncidentThreshold {
 		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
 		_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
 		s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))

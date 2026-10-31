@@ -38,6 +38,8 @@ type Timers struct {
 	KeepSearchingCheckHours int `json:"keep_searching_check_hours"`
 	KeepSearchingDays       int `json:"keep_searching_days"`
 	ExplainTimeoutSeconds   int `json:"explain_timeout_seconds"`
+	StuckReadTasks          int `json:"stuck_read_tasks"`
+	StuckReadMinutes        int `json:"stuck_read_minutes"`
 }
 
 type TimerField struct {
@@ -57,6 +59,7 @@ func (t *Timers) table() []timerSpec {
 		notes    = "Reporter notes"
 		download = "Download tracking"
 		explain  = "Explain"
+		stuck    = "Stuck reads"
 		mins     = "minutes"
 	)
 	s := func(f TimerField, p *int) timerSpec {
@@ -134,6 +137,14 @@ func (t *Timers) table() []timerSpec {
 		s(
 			TimerField{explain, "explain_timeout_seconds", "Explain: give up after", "seconds", 30, 600, 120, 0},
 			&t.ExplainTimeoutSeconds,
+		),
+		s(
+			TimerField{stuck, "stuck_read_tasks", "Stuck tasks on one torrent", "tasks", 2, 10, 3, 0},
+			&t.StuckReadTasks,
+		),
+		s(
+			TimerField{stuck, "stuck_read_minutes", "One task stuck for", mins, 2, 60, 5, 0},
+			&t.StuckReadMinutes,
 		),
 	}
 }

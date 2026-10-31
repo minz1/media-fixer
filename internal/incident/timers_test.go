@@ -128,7 +128,7 @@ func TestFields_MatchBoundsAndDefaults(t *testing.T) {
 	t.Parallel()
 	d := incident.DefaultTimers()
 	fields := d.Fields()
-	if len(fields) != 17 {
+	if len(fields) != 19 {
 		t.Fatalf("len = %d", len(fields))
 	}
 	seen := map[string]bool{}
@@ -205,5 +205,61 @@ func TestSaveTimers_RoundTrip(t *testing.T) {
 	got, err := incident.LoadTimers(context.Background(), d)
 	if err != nil || got != want {
 		t.Errorf("got %+v, %v", got, err)
+	}
+}
+
+func TestTimersStuckReadFields(t *testing.T) {
+	t.Parallel()
+	d := incident.DefaultTimers()
+	if d.StuckReadTasks != 3 || d.StuckReadMinutes != 5 {
+		t.Errorf("defaults = %d, %d", d.StuckReadTasks, d.StuckReadMinutes)
+	}
+	for _, c := range []struct {
+		name string
+		v    int
+		ok   bool
+	}{
+		{"stuck_read_tasks", 1, false}, {"stuck_read_tasks", 2, true},
+		{"stuck_read_tasks", 10, true}, {"stuck_read_tasks", 11, false},
+		{"stuck_read_minutes", 1, false}, {"stuck_read_minutes", 2, true},
+		{"stuck_read_minutes", 60, true}, {"stuck_read_minutes", 61, false},
+	} {
+		x := incident.DefaultTimers()
+		x.Set(c.name, c.v)
+		if _, bad := x.Validate()[c.name]; bad == c.ok {
+			t.Errorf("%s=%d: invalid=%v", c.name, c.v, bad)
+		}
+	}
+
+	db := timersDB(t)
+	want := incident.DefaultTimers()
+	want.StuckReadTasks, want.StuckReadMinutes = 7, 12
+	if err := incident.SaveTimers(context.Background(), db, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := incident.LoadTimers(context.Background(), db)
+	if err != nil || got != want {
+		t.Errorf("round trip: got %+v, %v", got, err)
+	}
+
+	old := timersDB(t)
+	if setErr := old.SetSetting(context.Background(), incident.TimersKey, `{"stall_minutes":90}`); setErr != nil {
+		t.Fatal(setErr)
+	}
+	got, err = incident.LoadTimers(context.Background(), old)
+	wantOld := incident.DefaultTimers()
+	wantOld.StallMinutes = 90
+	if err != nil || got != wantOld || got.StuckReadTasks != 3 || got.StuckReadMinutes != 5 {
+		t.Errorf("old row: got %+v, %v", got, err)
+	}
+
+	units := map[string]string{}
+	for _, f := range d.Fields() {
+		if f.Group == "Stuck reads" {
+			units[f.Name] = f.Unit
+		}
+	}
+	if len(units) != 2 || units["stuck_read_tasks"] != "tasks" || units["stuck_read_minutes"] != "minutes" {
+		t.Errorf("fields = %v", units)
 	}
 }

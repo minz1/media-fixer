@@ -892,15 +892,27 @@ func activeStatusesJSON() (string, error) {
 // Comparison is case-insensitive and ignores trailing year suffixes like
 // " (2024)". Returns ErrNotFound when no matching active incident exists.
 func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, error) {
+	return d.findByTitle(ctx, title, activeIncidentStatuses())
+}
+
+// FindUnresolvedByTitle is FindOpenByTitle over every status except resolved.
+func (d *DB) FindUnresolvedByTitle(ctx context.Context, title string) (*Incident, error) {
+	return d.findByTitle(ctx, title, []IncidentStatus{
+		StatusOpen, StatusInvestigating, StatusVerifying, StatusReopened,
+		StatusManualTestNeeded, StatusBlocked, StatusAgentFixed,
+	})
+}
+
+func (d *DB) findByTitle(ctx context.Context, title string, in []IncidentStatus) (*Incident, error) {
 	norm := d.normalizeTitle(title)
-	statuses, err := activeStatusesJSON()
+	statuses, err := json.Marshal(in)
 	if err != nil {
 		return nil, err
 	}
 	// ESCAPE '\': norm is caller-supplied, so an unescaped % or _ in a title
 	// ("50% Off") would act as a LIKE wildcard and collapse the report into an
 	// unrelated incident.
-	row := d.read.QueryRowContext(ctx, findOpenByTitleQuery, norm, likeEscape(norm), statuses)
+	row := d.read.QueryRowContext(ctx, findOpenByTitleQuery, norm, likeEscape(norm), string(statuses))
 	inc, err := scanIncident(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

@@ -1055,3 +1055,64 @@ func TestFindStaleReopened(t *testing.T) {
 		t.Fatalf("got %v, want only %q (fresh %q must not match)", titles, stale.Title, fresh.Title)
 	}
 }
+
+func TestFindUnresolvedByTitle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	create := func(d *db.DB, status db.IncidentStatus, title string) *db.Incident {
+		t.Helper()
+		inc := &db.Incident{
+			Status: status, Source: "media-agent", ReportedBy: "media-agent", What: "stuck_read", Title: title,
+		}
+		if err := d.CreateIncident(ctx, inc); err != nil {
+			t.Fatal(err)
+		}
+		return inc
+	}
+
+	for _, st := range []db.IncidentStatus{
+		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
+		db.StatusManualTestNeeded, db.StatusBlocked, db.StatusAgentFixed,
+	} {
+		t.Run(string(st), func(t *testing.T) {
+			t.Parallel()
+			d := openTestDB(t)
+			inc := create(d, st, "The Wire (2002)")
+			got, err := d.FindUnresolvedByTitle(ctx, "the wire")
+			if err != nil || got.ID != inc.ID {
+				t.Errorf("got %v, %v want %s", got, err, inc.ID)
+			}
+		})
+	}
+
+	t.Run("resolved", func(t *testing.T) {
+		t.Parallel()
+		d := openTestDB(t)
+		create(d, db.StatusResolved, "The Wire")
+		if _, err := d.FindUnresolvedByTitle(ctx, "The Wire"); !errors.Is(err, db.ErrNotFound) {
+			t.Errorf("got %v", err)
+		}
+	})
+
+	t.Run("resolved and unresolved", func(t *testing.T) {
+		t.Parallel()
+		d := openTestDB(t)
+		create(d, db.StatusResolved, "The Wire")
+		want := create(d, db.StatusAgentFixed, "The Wire")
+		got, err := d.FindUnresolvedByTitle(ctx, "The Wire")
+		if err != nil || got.ID != want.ID {
+			t.Errorf("got %v, %v want %s", got, err, want.ID)
+		}
+	})
+
+	t.Run("wildcards are literal", func(t *testing.T) {
+		t.Parallel()
+		d := openTestDB(t)
+		create(d, db.StatusOpen, "Fifty Off")
+		for _, q := range []string{"%", "Fifty_Off", "F%"} {
+			if _, err := d.FindUnresolvedByTitle(ctx, q); !errors.Is(err, db.ErrNotFound) {
+				t.Errorf("%q: got %v", q, err)
+			}
+		}
+	})
+}
