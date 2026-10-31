@@ -228,3 +228,78 @@ func TestForms_DisableWhileRunning(t *testing.T) {
 		}
 	}
 }
+
+func scanTags(src, open string) []string {
+	var tags []string
+	for i := 0; ; {
+		j := strings.Index(src[i:], open)
+		if j < 0 {
+			return tags
+		}
+		start := i + j
+		k := start + len(open)
+		var quote byte
+		for k < len(src) {
+			switch {
+			case strings.HasPrefix(src[k:], "{{"):
+				k += strings.Index(src[k:], "}}") + 2
+				continue
+			case quote != 0:
+				if src[k] == quote {
+					quote = 0
+				}
+			case src[k] == '"' || src[k] == '\'':
+				quote = src[k]
+			}
+			if quote == 0 && src[k] == '>' {
+				break
+			}
+			k++
+		}
+		tags = append(tags, src[start:k+1])
+		i = k + 1
+	}
+}
+
+var (
+	classRe   = regexp.MustCompile(`class="([^"]*)"`)
+	variantRe = regexp.MustCompile(`\bbtn-(?:primary|secondary|danger|link)\b`)
+	btnRe     = regexp.MustCompile(`(^|\s)btn(\s|$)`)
+)
+
+func TestButtons_OneSet(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	tags := scanTags(src, "<button")
+	for _, a := range scanTags(src, "<a") {
+		if m := classRe.FindStringSubmatch(a); m != nil && strings.Contains(m[1], "btn") {
+			tags = append(tags, a)
+		}
+	}
+	if len(tags) == 0 {
+		t.Fatal("no buttons found")
+	}
+	for _, tag := range tags {
+		m := classRe.FindStringSubmatch(tag)
+		if m == nil {
+			t.Errorf("button without a class: %s", tag)
+			continue
+		}
+		class := m[1]
+		if !btnRe.MatchString(class) {
+			t.Errorf("no btn class: %s", tag)
+		}
+		if n := len(variantRe.FindAllString(class, -1)); n != 1 {
+			t.Errorf("%d btn variants, want 1: %s", n, tag)
+		}
+		for _, bad := range []string{"bg-", "px-", "py-", "rounded"} {
+			if strings.Contains(class, bad) {
+				t.Errorf("button carries %q: %s", bad, tag)
+			}
+		}
+	}
+}
