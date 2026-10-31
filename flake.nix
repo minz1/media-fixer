@@ -82,6 +82,15 @@
               golangci-lint
             ];
           };
+
+          devShells.e2e = pkgs.mkShell {
+            packages = [
+              (pkgs.python3.withPackages (p: [ p.playwright ]))
+              pkgs.go_1_27
+            ];
+            PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+            PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+          };
         };
 
       flake = {

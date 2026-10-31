@@ -13,3 +13,5 @@ dev-run.sh
 docs/
 .autopilot/runs/
 .autopilot/rules.md
+e2e/shots/
+e2e/state/
