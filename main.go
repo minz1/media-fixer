@@ -134,7 +134,7 @@ func startMaintenance(
 	if sweepSch != nil && stuckSch != nil {
 		srv.SetBabysit(&babysit.Service{
 			DB: database, Sonarr: clients.Sonarr, State: stuckSch.State, LLM: bundle.summary,
-			Model: cfg.LLM.Model, Now: time.Now,
+			Model: cfg.LLM.Model, Now: time.Now, Log: log,
 		})
 	}
 	if sr != nil {

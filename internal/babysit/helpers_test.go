@@ -30,6 +30,7 @@ type fakeSonarr struct {
 	listStatus    int
 	seriesStatus  map[int]int
 	historyStatus int
+	candidates    map[string][]map[string]any
 	hits          map[string]int
 }
 
@@ -65,6 +66,8 @@ func (f *fakeSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body = f.episodes[id]
 	case path == "/api/v3/queue":
 		body = map[string]any{"totalRecords": len(f.queue), "records": f.queue}
+	case path == "/api/v3/manualimport":
+		body = f.candidates[r.URL.Query().Get("downloadId")]
 	case path == "/api/v3/history/series":
 		id, _ := strconv.Atoi(r.URL.Query().Get("seriesId"))
 		body, status = f.history[id], orOK(f.historyStatus)

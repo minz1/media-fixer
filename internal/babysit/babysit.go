@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -27,15 +28,42 @@ type Service struct {
 	LLM    Completer
 	Model  string
 	Now    func() time.Time
+	Log    *slog.Logger
 
-	mu      sync.Mutex
-	running map[int]bool
+	mu        sync.Mutex
+	running   map[int]bool
+	proposing map[string]bool
 }
 
 var (
 	ErrNotStuck       = errors.New("this show is not stuck")
 	ErrExplainRunning = errors.New("an explanation for this show is already running")
+	ErrProposeRunning = errors.New("a proposal for this download is already running")
 )
+
+func (s *Service) logger() *slog.Logger {
+	if s.Log == nil {
+		return slog.Default()
+	}
+	return s.Log
+}
+
+func claim[K comparable](mu *sync.Mutex, m *map[K]bool, k K) (func(), bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	if (*m)[k] {
+		return nil, false
+	}
+	if *m == nil {
+		*m = map[K]bool{}
+	}
+	(*m)[k] = true
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		delete(*m, k)
+	}, true
+}
 
 type Row struct {
 	SeriesID     int
