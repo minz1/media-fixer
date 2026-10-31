@@ -135,7 +135,7 @@ func validSettingsForm() url.Values {
 		"enabled": {"on"}, "interval_hours": {"12"}, "min_missing": {"2"}, "max_grabs": {"4"},
 		"max_lookups": {"40"}, "max_searches": {"10"}, "backoff_base_hours": {"48"}, "backoff_max_days": {"20"},
 		"burst_failures": {"6"}, "stuck_after": {"4"}, "digest_hour_utc": {"8"}, "anime": {"on"},
-		"excluded_series": {"2"},
+		"excluded_series": {"9"},
 	}
 }
 
@@ -151,8 +151,10 @@ func TestMaintenance_RendersTabsAndCard(t *testing.T) {
 		`href="/media/"`, `href="/media/maintenance"`, `href="/media/selftest"`,
 		`name="max_grabs" value="10"`, `name="max_lookups" value="40"`, `name="interval_hours" value="6"`,
 		`name="max_searches" value="200"`, "not counted in max grabs",
-		"Severance", "Andor", `name="excluded_series" value="2"`,
-		"Run now", "Dry run")
+		`0 excluded, edit on <a href="/media/babysit"`, "Run now", "Dry run")
+	if strings.Contains(rec.Body.String(), "excluded_series") {
+		t.Error("form still renders excluded_series")
+	}
 }
 
 func TestMaintenance_FlagWarning(t *testing.T) {
@@ -180,7 +182,7 @@ func TestDashboardIndex_HasTabBar(t *testing.T) {
 func TestSweepSave_NewFields(t *testing.T) {
 	t.Parallel()
 	env := newMaintenanceTestServer(t)
-	raw := `{"enabled":false,"weekday":3,"hour_utc":7}`
+	raw := `{"enabled":false,"weekday":3,"hour_utc":7,"excluded_series":[4,6]}`
 	if err := env.db.SetSetting(context.Background(), sweep.SettingsKey, raw); err != nil {
 		t.Fatal(err)
 	}
@@ -201,14 +203,26 @@ func TestSweepSave_NewFields(t *testing.T) {
 	want := sweep.Settings{
 		Enabled: true, Weekday: 3, HourUTC: 7, IntervalHours: 12, MinMissing: 2, MaxGrabs: 4, MaxLookups: 40,
 		MaxSearches: 10, BackoffBaseHours: 48, BackoffMaxDays: 20, BurstFailures: 6, StuckAfter: 4, DigestHourUTC: 8,
-		Anime: true, ExcludedSeries: []int{2},
+		Anime: true, ExcludedSeries: []int{4, 6},
 	}
 	gotJSON, _ := json.Marshal(got)
 	wantJSON, _ := json.Marshal(want)
 	if string(gotJSON) != string(wantJSON) {
 		t.Errorf("stored %s, want %s", gotJSON, wantJSON)
 	}
-	mustContain(t, rec.Body.String(), "Saved")
+	mustContain(t, rec.Body.String(), "Saved", "2 excluded, edit on")
+}
+
+func TestSweepSave_ValidationErrorShowsStoredCount(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	if err := sweep.SetExcluded(context.Background(), env.db, 4, true); err != nil {
+		t.Fatal(err)
+	}
+	form := validSettingsForm()
+	form.Set("max_grabs", "101")
+	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", form)
+	mustContain(t, rec.Body.String(), "must be between", "1 excluded, edit on")
 }
 
 func TestSweepSave_BadValues(t *testing.T) {
@@ -662,9 +676,13 @@ func TestSweepCard_FormRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	set := sweep.DefaultSettings()
 	set.Enabled, set.IntervalHours, set.MaxGrabs, set.StuckAfter = true, 12, 7, 4
-	set.ExcludedSeries = []int{2}
 	if err := sweep.SaveSettings(ctx, env.db, set, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+	for _, id := range []int{2, 3} {
+		if err := sweep.SetExcluded(ctx, env.db, id, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	before, err := env.db.GetSetting(ctx, sweep.SettingsKey)
 	if err != nil {
@@ -680,7 +698,7 @@ func TestSweepCard_FormRoundTrip(t *testing.T) {
 
 	read := []string{
 		"enabled", "anime", "interval_hours", "min_missing", "max_grabs", "max_lookups", "max_searches",
-		"backoff_base_hours", "backoff_max_days", "burst_failures", "stuck_after", "digest_hour_utc", "excluded_series",
+		"backoff_base_hours", "backoff_max_days", "burst_failures", "stuck_after", "digest_hour_utc",
 	}
 	var rendered []string
 	for k := range post {

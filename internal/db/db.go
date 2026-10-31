@@ -1304,6 +1304,26 @@ func (d *DB) SetSetting(ctx context.Context, key, value string) error {
 	return err
 }
 
+// UpdateSetting rewrites key with fn's result in one write transaction; fn's error writes nothing.
+func (d *DB) UpdateSetting(ctx context.Context, key string, fn func(raw string, found bool) (string, error)) error {
+	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		var raw string
+		err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&raw)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		v, err := fn(raw, err == nil)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO settings (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			key, v)
+		return err
+	})
+}
+
 // IsAutonomousPaused returns true when the autonomous_paused setting is "true".
 func (d *DB) IsAutonomousPaused(ctx context.Context) (bool, error) {
 	v, err := d.GetSetting(ctx, "autonomous_paused")

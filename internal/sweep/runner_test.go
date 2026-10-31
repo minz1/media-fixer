@@ -60,16 +60,15 @@ func TestSettings_LoadSaveRoundTrip(t *testing.T) {
 		t.Errorf("absent settings MaxGrabs = %d, want default 10", got.MaxGrabs)
 	}
 	got.MaxGrabs = 2
-	got.ExcludedSeries = []int{7}
 	if err = sweep.SaveSettings(ctx, h.db, got, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := h.db.GetSetting(ctx, sweep.SettingsKey)
-	if !strings.Contains(raw, `"max_grabs":2`) || !strings.Contains(raw, `"excluded_series":[7]`) {
+	if !strings.Contains(raw, `"max_grabs":2`) || !strings.Contains(raw, `"excluded_series":[]`) {
 		t.Errorf("stored = %s", raw)
 	}
 	again, err := sweep.LoadSettings(ctx, h.db)
-	if err != nil || again.MaxGrabs != 2 || !slices.Equal(again.ExcludedSeries, []int{7}) {
+	if err != nil || again.MaxGrabs != 2 || len(again.ExcludedSeries) != 0 {
 		t.Errorf("reload = %+v, %v", again, err)
 	}
 }

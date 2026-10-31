@@ -159,7 +159,7 @@ func TestRunSeriesRefused(t *testing.T) {
 		want  error
 	}{
 		{"disabled", func(_ *client.Series, s *sweep.Settings) { s.Enabled = false }, false, sweep.ErrDisabled},
-		{"excluded", func(_ *client.Series, s *sweep.Settings) { s.ExcludedSeries = []int{1} }, false, sweep.ErrExcluded},
+		{"excluded", func(*client.Series, *sweep.Settings) {}, false, sweep.ErrExcluded},
 		{"unmonitored", func(sr *client.Series, _ *sweep.Settings) { sr.Monitored = false }, false, sweep.ErrUnmonitored},
 		{"anime off", anime, false, sweep.ErrAnimeOff},
 		{"paused", func(*client.Series, *sweep.Settings) {}, true, sweep.ErrPaused},
@@ -172,6 +172,11 @@ func TestRunSeriesRefused(t *testing.T) {
 			tc.edit(&sr, &s)
 			if err := sweep.SaveSettings(context.Background(), h.db, s, t0()); err != nil {
 				t.Fatal(err)
+			}
+			if tc.name == "excluded" {
+				if err := sweep.SetExcluded(context.Background(), h.db, 1, true); err != nil {
+					t.Fatal(err)
+				}
 			}
 			h.setPaused(t, tc.pause)
 			if err := sch.RunSeries(sr, sweep.PassPacks); !errors.Is(err, tc.want) {

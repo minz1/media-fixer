@@ -851,24 +851,9 @@
       {{template "sweep_num" (dict "Label" "Stuck after (misses)" "Name" "stuck_after" "Value" .Settings.StuckAfter "Min" 1 "Max" 20 "Note" "" "Err" (index .Errors "stuck_after"))}}
       {{template "sweep_num" (dict "Label" "Digest hour (UTC)" "Name" "digest_hour_utc" "Value" .Settings.DigestHourUTC "Min" 0 "Max" 23 "Note" "" "Err" (index .Errors "digest_hour_utc"))}}
     </div>
-    <fieldset>
-      <legend class="text-sm text-gray-700 mb-1">Excluded series</legend>
-      {{with .SeriesError}}
-      <p class="text-xs text-amber-700 mb-1">Sonarr series list unavailable: {{.}}</p>
-      {{range $.Settings.ExcludedSeries}}<input type="hidden" name="excluded_series" value="{{.}}" />{{end}}
-      {{else}}
-      <div
-        class="max-h-56 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 border border-gray-200 rounded-sm p-2"
-      >
-        {{range .Series}}
-        <label class="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" name="excluded_series" value="{{.ID}}" {{if .Excluded}}checked{{end}} />
-          {{.Title}}
-        </label>
-        {{end}}
-      </div>
-      {{end}}
-    </fieldset>
+    <p class="text-sm text-gray-700">
+      {{.ExcludedCount}} excluded, edit on <a href="{{.BaseURL}}/babysit" class="text-blue-600 hover:underline">Babysit</a>
+    </p>
     <button
       type="submit"
       class="px-4 py-2 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700"

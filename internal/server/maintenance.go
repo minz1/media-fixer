@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,12 +20,6 @@ const (
 	triggerManual           = "manual"
 	lookupRounding          = 100 * time.Millisecond
 )
-
-type sweepSeries struct {
-	ID       int
-	Title    string
-	Excluded bool
-}
 
 type sweepStatus struct {
 	BaseURL  string
@@ -164,18 +156,8 @@ func (s *Server) sweepCard(
 		"Status":      s.sweepStatus(started),
 	}
 	sonarr := s.sweep.Runner().Sonarr
-	if series, err := sonarr.ListSeries(ctx); err != nil {
-		card["SeriesError"] = err.Error()
-	} else {
-		list := make([]sweepSeries, 0, len(series))
-		for _, x := range series {
-			list = append(list, sweepSeries{x.ID, x.Title, slices.Contains(set.ExcludedSeries, x.ID)})
-		}
-		slices.SortFunc(list, func(a, b sweepSeries) int {
-			return strings.Compare(strings.ToLower(a.Title), strings.ToLower(b.Title))
-		})
-		card["Series"] = list
-	}
+	stored, _ := sweep.LoadSettings(ctx, s.db)
+	card["ExcludedCount"] = len(stored.ExcludedSeries)
 	if flags, err := sonarr.DownloadClientConfig(ctx); err != nil {
 		card["FlagsError"] = err.Error()
 	} else {
@@ -219,9 +201,8 @@ func (s *Server) sweepStatus(started bool) sweepStatus {
 
 func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 	set := sweep.Settings{
-		Enabled:        r.FormValue("enabled") == "on",
-		Anime:          r.FormValue("anime") == "on",
-		ExcludedSeries: []int{},
+		Enabled: r.FormValue("enabled") == "on",
+		Anime:   r.FormValue("anime") == "on",
 	}
 	errs := map[string]string{}
 	for _, f := range []struct {
@@ -245,11 +226,6 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 			continue
 		}
 		*f.dst = n
-	}
-	for _, v := range r.PostForm["excluded_series"] {
-		if id, err := strconv.Atoi(v); err == nil {
-			set.ExcludedSeries = append(set.ExcludedSeries, id)
-		}
 	}
 	for k, v := range set.Validate() {
 		if _, seen := errs[k]; !seen {

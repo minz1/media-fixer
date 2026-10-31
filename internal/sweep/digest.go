@@ -43,7 +43,7 @@ func Stuck(rows map[string]db.SweepTarget, after int) []db.SweepTarget {
 }
 
 func digestCard(stuck []db.SweepTarget) card.Card {
-	c := card.Card{Path: maintenancePath, Title: "Stuck seasons"}
+	c := card.Card{Path: "/babysit", Title: "Stuck seasons"}
 	if len(stuck) == 0 {
 		c.Tone, c.Body = card.Info, "No seasons are stuck now."
 		return c

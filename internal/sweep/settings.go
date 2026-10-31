@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
@@ -86,42 +87,73 @@ func (s Settings) Validate() map[string]string {
 var ErrCorruptSettings = errors.New("stored sweep settings are unreadable")
 
 func LoadSettings(ctx context.Context, d *db.DB) (Settings, error) {
-	s := DefaultSettings()
 	raw, err := d.GetSetting(ctx, SettingsKey)
 	if errors.Is(err, sql.ErrNoRows) {
-		return s, nil
+		return parseSettings("", false)
 	}
 	if err != nil {
-		return s, err
+		return DefaultSettings(), err
+	}
+	return parseSettings(raw, true)
+}
+
+func parseSettings(raw string, found bool) (Settings, error) {
+	s := DefaultSettings()
+	if !found {
+		return s, nil
 	}
 	s.IntervalHours = legacyIntervalHours
-	if err = json.Unmarshal([]byte(raw), &s); err != nil {
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
 		return DefaultSettings(), fmt.Errorf("%w: %w", ErrCorruptSettings, err)
 	}
 	return s, nil
 }
 
+func updateSettings(ctx context.Context, d *db.DB, edit func(Settings, error) (Settings, error)) error {
+	return d.UpdateSetting(ctx, SettingsKey, func(raw string, found bool) (string, error) {
+		s, err := edit(parseSettings(raw, found))
+		if err != nil {
+			return "", err
+		}
+		if s.ExcludedSeries == nil {
+			s.ExcludedSeries = []int{}
+		}
+		b, err := json.Marshal(s)
+		return string(b), err
+	})
+}
+
+func SetExcluded(ctx context.Context, d *db.DB, seriesID int, excluded bool) error {
+	return updateSettings(ctx, d, func(s Settings, err error) (Settings, error) {
+		if err != nil {
+			return s, err
+		}
+		s.ExcludedSeries = slices.DeleteFunc(slices.Clone(s.ExcludedSeries), func(id int) bool {
+			return id == seriesID
+		})
+		if excluded {
+			s.ExcludedSeries = append(s.ExcludedSeries, seriesID)
+		}
+		slices.Sort(s.ExcludedSeries)
+		return s, nil
+	})
+}
+
 func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) error {
-	prev, err := LoadSettings(ctx, d)
-	if err != nil && !errors.Is(err, ErrCorruptSettings) {
-		return err
-	}
-	s.Weekday, s.HourUTC = prev.Weekday, prev.HourUTC
-	switch {
-	case !s.Enabled:
-		s.EnabledAt = nil
-	case prev.Enabled && prev.IntervalHours == s.IntervalHours:
-		s.EnabledAt = prev.EnabledAt
-	default:
-		now = now.UTC()
-		s.EnabledAt = &now
-	}
-	if s.ExcludedSeries == nil {
-		s.ExcludedSeries = []int{}
-	}
-	b, err := json.Marshal(s)
-	if err != nil {
-		return err
-	}
-	return d.SetSetting(ctx, SettingsKey, string(b))
+	return updateSettings(ctx, d, func(prev Settings, err error) (Settings, error) {
+		if err != nil && !errors.Is(err, ErrCorruptSettings) {
+			return s, err
+		}
+		s.Weekday, s.HourUTC, s.ExcludedSeries = prev.Weekday, prev.HourUTC, prev.ExcludedSeries
+		switch {
+		case !s.Enabled:
+			s.EnabledAt = nil
+		case prev.Enabled && prev.IntervalHours == s.IntervalHours:
+			s.EnabledAt = prev.EnabledAt
+		default:
+			at := now.UTC()
+			s.EnabledAt = &at
+		}
+		return s, nil
+	})
 }

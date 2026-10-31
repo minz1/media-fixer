@@ -59,7 +59,7 @@ func TestDigestCard(t *testing.T) {
 	if want := "Show S01: 4 missing, 4 attempts, last 2026-10-20, next 2026-11-03"; lines[0] != want {
 		t.Errorf("line = %q, want %q", lines[0], want)
 	}
-	if c.Subject != "" || c.Title != "Stuck seasons" || c.Tone != card.Warn || c.Path != "/maintenance" {
+	if c.Subject != "" || c.Title != "Stuck seasons" || c.Tone != card.Warn || c.Path != "/babysit" {
 		t.Errorf("card = %+v", c)
 	}
 	e := sweep.DigestCardForTest(nil)
