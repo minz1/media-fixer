@@ -19,21 +19,11 @@ Never claim an action was taken.
 Say so when the facts do not explain it.`
 
 func (s *Service) Explain(ctx context.Context, seriesID int) (Explanation, error) {
-	s.mu.Lock()
-	if s.running[seriesID] {
-		s.mu.Unlock()
+	release, ok := claim(&s.mu, &s.running, seriesID)
+	if !ok {
 		return Explanation{}, ErrExplainRunning
 	}
-	if s.running == nil {
-		s.running = map[int]bool{}
-	}
-	s.running[seriesID] = true
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.running, seriesID)
-		s.mu.Unlock()
-	}()
+	defer release()
 
 	loc, err := s.local(ctx, seriesID)
 	if err != nil {
