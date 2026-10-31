@@ -218,7 +218,6 @@ func TestStuckReadsNoSchedstat(t *testing.T) {
 func TestStuckReadsStartAfterContainerUptime(t *testing.T) {
 	t.Parallel()
 	proc, mount := fakeProc(t)
-	writeFile(t, filepath.Join(proc, "uptime"), "20.00 5.00\n")
 	task(t, proc, 10, 10, "t", "D", 500000, 1, "0 0x3 0x0")
 	fd(t, proc, 10, 3, mount+"/a.mkv")
 	res, err := mediaagent.NewProcOps(proc, []string{mount}).StuckReads()
