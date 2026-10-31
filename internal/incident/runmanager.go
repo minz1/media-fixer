@@ -49,7 +49,10 @@ type runManager struct {
 
 // runToken identifies a specific run so end() only clears the registration if a
 // later supersede() has not already replaced it.
-type runToken struct{ cancel context.CancelFunc }
+type runToken struct {
+	cancel     context.CancelFunc
+	staleFloor int
+}
 
 // newRunManager builds a runManager whose runs are all cancelled once base is
 // done (e.g. the process-lifetime context from signal.NotifyContext). base is
@@ -141,4 +144,20 @@ func (m *runManager) acquireGlobal(ctx context.Context) error {
 // for every successful acquireGlobal.
 func (m *runManager) releaseGlobal() {
 	m.globalSlot <- struct{}{}
+}
+
+// setStaleFloor keeps a run sleeping on its retry waits from being judged by lowered saved timers.
+func (m *runManager) setStaleFloor(tok *runToken, minutes int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tok.staleFloor = minutes
+}
+
+func (m *runManager) staleFloor(id string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if tok, ok := m.active[id]; ok {
+		return tok.staleFloor
+	}
+	return 0
 }

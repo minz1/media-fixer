@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ type Service struct {
 	runs        *runManager
 	seedTimeout time.Duration
 	unit        atomic.Int64
+	timersWarn  atomic.Bool
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -91,7 +93,10 @@ func (s *Service) minutes(n int) time.Duration {
 
 func (s *Service) timers(ctx context.Context) Timers {
 	t, err := LoadTimers(ctx, s.db)
-	if err != nil && ctx.Err() == nil {
+	switch {
+	case err == nil:
+		s.timersWarn.Store(false)
+	case ctx.Err() == nil && !s.timersWarn.Swap(true):
 		s.log.WarnContext(ctx, "incident timers unreadable, using defaults", "error", err)
 	}
 	return t
@@ -124,6 +129,7 @@ func (s *Service) startRun(
 	go func() {
 		defer s.runs.end(inc.ID, tok)
 		t := s.timers(ctx)
+		s.runs.setStaleFloor(tok, t.RetryFirstMinutes+t.RetrySecondMinutes+staleMargin)
 		seedTimeout := s.seedTimeout
 		if seedTimeout == 0 {
 			seedTimeout = s.minutes(t.StaleRunMinutes)
@@ -255,7 +261,11 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 
 	for attempt, delay := range retryDelays {
 		if delay > 0 {
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
 		}
 
 		result, conversation, runErr := s.runDiagnosis(ctx, inc, seed)
@@ -1030,18 +1040,32 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 // run whose goroutine is still alive but stopped making progress.
 func (s *Service) SweepStaleRuns(ctx context.Context) {
 	staleMinutes := s.timers(ctx).StaleRunMinutes
-	staleBefore := time.Now().Add(-s.minutes(staleMinutes))
+	now := time.Now()
+	staleBefore := now.Add(-s.minutes(staleMinutes))
 	stale, err := s.db.FindStaleInvestigating(ctx, staleBefore)
 	if err != nil {
 		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
 	}
 	for _, inc := range stale {
+		minutes := max(staleMinutes, s.runs.staleFloor(inc.ID))
+		if minutes > staleMinutes && !s.staleSince(ctx, inc.ID, now.Add(-s.minutes(minutes))) {
+			continue
+		}
 		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, staleMinutes); rerunErr != nil {
+		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, minutes); rerunErr != nil {
 			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
 		}
 	}
 	s.sweepStaleReopened(ctx, staleBefore, staleMinutes)
+}
+
+func (s *Service) staleSince(ctx context.Context, id string, before time.Time) bool {
+	stale, err := s.db.FindStaleInvestigating(ctx, before)
+	if err != nil {
+		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
+		return false
+	}
+	return slices.ContainsFunc(stale, func(inc *db.Incident) bool { return inc.ID == id })
 }
 
 func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time, staleMinutes int) {

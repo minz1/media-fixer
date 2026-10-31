@@ -684,6 +684,7 @@
   </div>
   {{with .Notice}}<p class="text-sm text-green-700">{{.}}</p>{{end}}
   {{with .Unreadable}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+  {{with .Failure}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
   <form hx-post="{{.BaseURL}}/maintenance/incident-timers/settings" hx-target="#incident-timers" hx-swap="outerHTML"
     class="space-y-4">
     {{range .Groups}}
@@ -692,7 +693,9 @@
       {{range .Fields}}{{template "sweep_num" .}}{{end}}
     </div>
     {{end}}
+    {{if not .Failure}}
     <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Save</button>
+    {{end}}
   </form>
 </div>
 {{end}}

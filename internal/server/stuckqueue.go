@@ -158,7 +158,7 @@ func (s *Server) stuckCardData(
 		"Settings":    set,
 		"Errors":      errs,
 		tplKeyNotice:  notice,
-		"Failure":     failure,
+		tplKeyFailure: failure,
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
 		"Running":     running,

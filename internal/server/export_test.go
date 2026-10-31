@@ -34,3 +34,5 @@ func (s *Server) StuckCardDataForTest(
 ) map[string]any {
 	return s.stuckCardData(&res, false, set, nil, "", "", unreadable)
 }
+
+func (s *Server) TimersCardForTest(ctx context.Context) map[string]any { return s.timersCardFor(ctx) }

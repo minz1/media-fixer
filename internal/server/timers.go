@@ -10,7 +10,10 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 )
 
-const timersUnreadable = "Stored incident timers couldn't be read; saving replaces them."
+const (
+	timersUnreadable = "Stored incident timers couldn't be read; saving replaces them."
+	timersReadFailed = "Saved incident timers couldn't be read (%v); showing defaults, Save is hidden until they load."
+)
 
 type timersGroup struct {
 	Name   string
@@ -28,19 +31,23 @@ func (s *Server) timersSettingsSave(w http.ResponseWriter, r *http.Request) {
 		notice = msgSaved
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.t.ExecuteTemplate(w, "timers_card", s.timersCard(t, errs, notice, ""))
+	_ = s.tmpl.t.ExecuteTemplate(w, "timers_card", s.timersCard(t, errs, notice, "", ""))
 }
 
 func (s *Server) timersCardFor(ctx context.Context) map[string]any {
 	t, err := incident.LoadTimers(ctx, s.db)
-	unreadable := ""
+	unreadable, failure := "", ""
 	if errors.Is(err, incident.ErrCorruptTimers) {
 		unreadable = timersUnreadable
+	} else if err != nil {
+		failure = fmt.Sprintf(timersReadFailed, err)
 	}
-	return s.timersCard(t, nil, "", unreadable)
+	return s.timersCard(t, nil, "", unreadable, failure)
 }
 
-func (s *Server) timersCard(t incident.Timers, errs map[string]string, notice, unreadable string) map[string]any {
+func (s *Server) timersCard(
+	t incident.Timers, errs map[string]string, notice, unreadable, failure string,
+) map[string]any {
 	var groups []timersGroup
 	for _, f := range t.Fields() {
 		if len(groups) == 0 || groups[len(groups)-1].Name != f.Group {
@@ -57,6 +64,7 @@ func (s *Server) timersCard(t incident.Timers, errs map[string]string, notice, u
 		"Groups":      groups,
 		tplKeyNotice:  notice,
 		"Unreadable":  unreadable,
+		tplKeyFailure: failure,
 	}
 }
 

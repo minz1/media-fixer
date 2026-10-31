@@ -30,6 +30,7 @@ const dashboardPageSize = 50
 const (
 	tplKeyBaseURL  = "BaseURL"
 	tplKeyNotice   = "Notice"
+	tplKeyFailure  = "Failure"
 	msgSaved       = "Saved."
 	msgWholeNumber = "must be a whole number"
 )

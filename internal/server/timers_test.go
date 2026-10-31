@@ -178,3 +178,19 @@ func TestIncidentPage_KeepSearchingDays(t *testing.T) {
 	}
 	mustContain(t, mustExecuteIncidentTemplate(t, srv, inc.ID), "re-checks periodically for up to 3 days")
 }
+
+func TestTimersCard_ReadErrorHidesSave(t *testing.T) {
+	t.Parallel()
+	srv, _ := newDashboardTestServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var b strings.Builder
+	if err := srv.ExecuteTemplateForTest(&b, "timers_card", srv.TimersCardForTest(ctx)); err != nil {
+		t.Fatal(err)
+	}
+	body := b.String()
+	mustContain(t, body, "Saved incident timers couldn", "context canceled")
+	if strings.Contains(body, "Save</button>") {
+		t.Errorf("Save offered while the saved timers are unreadable:\n%s", body)
+	}
+}

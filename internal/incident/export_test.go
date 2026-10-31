@@ -84,3 +84,5 @@ func ErrNotAwaitingDecisionForTest() error { return errNotAwaitingDecision }
 func ErrPlanChangedForTest() error { return errPlanChanged }
 
 func ErrPlanExpiredForTest() error { return errPlanExpired }
+
+func (s *Service) RunningForTest(id string) bool { return s.runs.running(id) }

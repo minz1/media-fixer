@@ -160,7 +160,7 @@ func (s *Server) sweepCard(
 		"Settings":    set,
 		"Errors":      errs,
 		tplKeyNotice:  notice,
-		"Failure":     failure,
+		tplKeyFailure: failure,
 		"Status":      s.sweepStatus(started),
 	}
 	sonarr := s.sweep.Runner().Sonarr
