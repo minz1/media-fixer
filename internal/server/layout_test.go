@@ -303,3 +303,71 @@ func TestButtons_OneSet(t *testing.T) {
 		}
 	}
 }
+
+func TestButtons_DangerOnlyDestructive(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	for _, word := range []string{"Pause agent", "Mark resolved", "Forget"} {
+		i := strings.Index(src, word)
+		if i < 0 {
+			t.Fatalf("%q not found", word)
+		}
+		tag := src[strings.LastIndex(src[:i], "<button"):i]
+		if !strings.Contains(tag, "btn-secondary") {
+			t.Errorf("%q is not btn-secondary: %s", word, tag)
+		}
+	}
+	if !strings.Contains(src, `class="btn btn-danger">`+"\n      Approve &amp; Run") {
+		t.Error("Approve & Run is no longer danger")
+	}
+}
+
+func TestTables_ScrollWrapped(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	for i := 0; ; {
+		j := strings.Index(src[i:], "<table")
+		if j < 0 {
+			break
+		}
+		at := i + j
+		before := strings.TrimRight(src[:at], " \t\n")
+		if !strings.HasSuffix(before, `<div class="overflow-x-auto">`) {
+			line := strings.Count(src[:at], "\n") + 1
+			t.Errorf("dashboard.html:%d: <table> not directly inside <div class=\"overflow-x-auto\">", line)
+		}
+		i = at + 1
+	}
+}
+
+var cssRuleRe = regexp.MustCompile(`(?m)^\s*(\.[\w-]+)[\s,{:]`)
+
+func TestDarkOverrides_AfterLightRules(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	style := src[strings.Index(src, "<style>"):strings.Index(src, "</style>")]
+	start := strings.Index(style, "@media (prefers-color-scheme: dark)")
+	end := start + strings.Index(style[start:], "\n    }\n")
+	if start < 0 || end < start {
+		t.Fatal("dark media block not found")
+	}
+	light := style[:start] + style[end:]
+	for _, m := range cssRuleRe.FindAllStringSubmatch(style[start:end], -1) {
+		sel := m[1]
+		if i := strings.Index(light, "\n    "+sel+" "); i >= 0 && i > start {
+			t.Errorf("light %s rule sits after the dark block, so it wins in dark mode", sel)
+		}
+	}
+}

@@ -621,8 +621,8 @@ func TestSweepCard_IntervalAndUsage(t *testing.T) {
 	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
 	next := `title="` + env.sch.NextRun(time.Now()).UTC().Format("2006-01-02 15:04") + ` UTC"`
 	mustContain(t, body, "Enabled (every 6 h)", "Next run:", next)
-	if got := strings.Count(body, "used today 3 / 10"); got != 3 {
-		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "used today 3 / 10", got)
+	if got := strings.Count(body, "Used today 3 / 10."); got != 3 {
+		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "Used today 3 / 10.", got)
 	}
 	if strings.Contains(body, `name="weekday"`) || strings.Contains(body, "Weekly") {
 		t.Errorf("weekday select or weekly wording still rendered:\n%s", body)
@@ -766,4 +766,27 @@ func TestSweepLastRuns_MonitorTrigger(t *testing.T) {
 	if strings.Contains(body, "babysit: NOVA") {
 		t.Error("raw trigger shown")
 	}
+}
+
+func TestSweepForm_Layout(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	form := formRe.FindString(body)
+	if form == "" {
+		t.Fatalf("pack-sweep settings form not found:\n%s", body)
+	}
+	if strings.Contains(form, "flex-wrap") {
+		t.Error("pack-sweep form still uses flex-wrap")
+	}
+	d := sweep.DefaultSettings()
+	for name, def := range map[string]int{
+		"interval_hours": d.IntervalHours, "min_missing": d.MinMissing, "max_grabs": d.MaxGrabs,
+		"max_lookups": d.MaxLookups, "max_searches": d.MaxSearches, "backoff_base_hours": d.BackoffBaseHours,
+		"backoff_max_days": d.BackoffMaxDays, "burst_failures": d.BurstFailures, "stuck_after": d.StuckAfter,
+		"digest_hour_utc": d.DigestHourUTC,
+	} {
+		mustContain(t, form, `data-reset="`+name+`" data-default="`+strconv.Itoa(def)+`"`, `for="timer-`+name+`"`)
+	}
+	mustContain(t, form, `class="timer-grid`, "Used today", `name="enabled"`, `name="anime"`, "Save settings")
 }

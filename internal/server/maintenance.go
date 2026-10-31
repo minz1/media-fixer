@@ -152,6 +152,7 @@ func (s *Server) sweepCard(
 	card := map[string]any{
 		tplKeyBaseURL: s.baseURL,
 		"Settings":    set,
+		"Defaults":    sweep.DefaultSettings(),
 		"Errors":      errs,
 		tplKeyNotice:  notice,
 		tplKeyFailure: failure,
