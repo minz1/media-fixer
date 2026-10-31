@@ -206,6 +206,17 @@ func (x *run) sweep(ctx context.Context) error {
 	if x.targets, err = x.DB.ListSweepTargets(ctx); err != nil {
 		return err
 	}
+	failed, err := retry(ctx, x, false, func() ([]client.HistoryRecord, error) {
+		return x.Sonarr.FailuresSince(ctx, now.Add(-burstWindow))
+	})
+	switch {
+	case err == nil:
+		x.burst = Bursts(failed, x.targets, now, x.s.BurstFailures)
+	case ctx.Err() != nil:
+		return err
+	default:
+		x.logger().WarnContext(ctx, "sweep failure history unavailable", "err", err)
+	}
 	queue, err := retry(ctx, x, false, func() ([]client.QueueDetail, error) { return x.Sonarr.QueueDetails(ctx) })
 	if err != nil {
 		return err
@@ -235,14 +246,34 @@ func (x *run) sweep(ctx context.Context) error {
 }
 
 func (x *run) packPasses(ctx context.Context, series []client.Series) error {
-	if err := x.seasonPass(ctx, series); err != nil {
+	if len(x.burst) > 0 {
+		withBurst := slices.DeleteFunc(slices.Clone(series), func(s client.Series) bool { return !x.hasBurst(s.ID) })
+		if err := x.packRound(ctx, withBurst, true); err != nil {
+			return err
+		}
+	}
+	return x.packRound(ctx, series, false)
+}
+
+func (x *run) hasBurst(seriesID int) bool {
+	prefix := "s:" + strconv.Itoa(seriesID) + ":"
+	for key := range x.burst {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (x *run) packRound(ctx context.Context, series []client.Series, burst bool) error {
+	if err := x.seasonPass(ctx, series, burst); err != nil {
 		return err
 	}
 	for _, s := range series {
 		if s.SeriesType != seriesAnime {
 			continue
 		}
-		if err := x.animeSeries(ctx, s); err != nil {
+		if err := x.animeSeries(ctx, s, burst); err != nil {
 			return err
 		}
 	}
@@ -263,7 +294,7 @@ func (x *run) missing(ctx context.Context, s client.Series) ([]client.Episode, e
 	return slices.DeleteFunc(missing, func(e client.Episode) bool { return x.handled[e.ID] }), nil
 }
 
-func (x *run) seasonPass(ctx context.Context, series []client.Series) error {
+func (x *run) seasonPass(ctx context.Context, series []client.Series, burst bool) error {
 	x.report("season pass", "")
 	var targets []seasonTarget
 	for _, s := range series {
@@ -280,7 +311,8 @@ func (x *run) seasonPass(ctx context.Context, series []client.Series) error {
 		}
 		var group []seasonTarget
 		for season, missing := range bySeason {
-			if len(missing) >= x.s.MinMissing && x.eligibleKey(seasonTargetKey(s.ID, season)) {
+			key := seasonTargetKey(s.ID, season)
+			if (burst || len(missing) >= x.s.MinMissing) && x.burst[key] == burst && x.eligibleKey(key) {
 				group = append(group, seasonTarget{series: s, season: season, eps: missing})
 			}
 		}
@@ -324,7 +356,7 @@ func (x *run) season(ctx context.Context, t seasonTarget) error {
 	return err
 }
 
-func (x *run) animeSeries(ctx context.Context, s client.Series) error {
+func (x *run) animeSeries(ctx context.Context, s client.Series, burst bool) error {
 	missing, err := x.missing(ctx, s)
 	if err != nil {
 		return err
@@ -337,7 +369,7 @@ func (x *run) animeSeries(ctx context.Context, s client.Series) error {
 	}
 	for _, e := range missing {
 		key := seasonTargetKey(s.ID, e.SeasonNumber)
-		if !uncovered[e.ID] || !x.eligibleKey(key) {
+		if !uncovered[e.ID] || x.burst[key] != burst || !x.eligibleKey(key) {
 			continue
 		}
 		item := db.SweepItem{
@@ -411,17 +443,27 @@ func (x *run) episodePass(ctx context.Context, series []client.Series) error {
 		return err
 	}
 	x.queued = QueuedEpisodes(queue)
-	var batches []searchBatch
+	var first, batches []searchBatch
 	for _, s := range series {
 		missing, merr := x.missing(ctx, s)
 		if merr != nil {
 			return merr
 		}
 		missing = slices.DeleteFunc(missing, func(e client.Episode) bool {
-			return !x.eligibleKey(seasonTargetKey(s.ID, e.SeasonNumber))
+			key := seasonTargetKey(s.ID, e.SeasonNumber)
+			return !x.eligibleKey(key) || x.burst[key] && !x.looked[key]
 		})
-		batches = append(batches, searchBatches(x.id, s, missing)...)
+		for _, b := range searchBatches(x.id, s, missing) {
+			if slices.ContainsFunc(b.eps, func(e client.Episode) bool {
+				return x.burst[seasonTargetKey(s.ID, e.SeasonNumber)]
+			}) {
+				first = append(first, b)
+			} else {
+				batches = append(batches, b)
+			}
+		}
 	}
+	batches = append(first, batches...)
 	for _, b := range batches {
 		if x.c.Searched >= x.s.MaxSearches {
 			return nil

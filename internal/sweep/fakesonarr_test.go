@@ -85,6 +85,8 @@ type fakeSonarr struct {
 	nextID        int
 	beforePost    func()
 	beforeLookup  func()
+	beforeHistory func()
+	historyStatus int
 }
 
 func newFakeSonarr(t *testing.T, clock *fakeClock) *fakeSonarr {
@@ -301,6 +303,16 @@ func (f *fakeSonarr) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeSonarr) serveHistory(w http.ResponseWriter, q map[string][]string) {
+	f.mu.Lock()
+	hook, status := f.beforeHistory, f.historyStatus
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if status != 0 {
+		http.Error(w, "history down", status)
+		return
+	}
 	since, err := time.Parse(time.RFC3339, q["date"][0])
 	if err != nil {
 		f.t.Errorf("history date %q: %v", q["date"], err)
