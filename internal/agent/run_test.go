@@ -297,3 +297,33 @@ func TestRun_ActionBudgetCountsActionsRecordedOutsideThisRun(t *testing.T) {
 		t.Fatalf("logged %d actions, want 1: two were already counted in the DB", len(actions))
 	}
 }
+
+func TestRunSkipsImmediateVerifyForStuckRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		what         string
+		wantApproval bool
+		wantAction   string
+	}{
+		{"cant_play", true, agent.EscalateManualInvestigation},
+		{agent.WhatStuckRead, false, ""},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			llm := &scriptedLLM{responses: []string{toolCallResponse("complete_diagnosis",
+				`{"root_cause":"x","confidence":"high","primary_action":"decypharr_recheck",`+
+					`"primary_reason":"x","requires_approval":false}`)}}
+			ag, database := newRunTestAgent(t, llm)
+			inc := seedRunIncident(t, database)
+			inc.What = tc.what
+			result, _, err := ag.Run(context.Background(), inc, nil)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if result.RequiresApproval != tc.wantApproval || result.EscalateAction != tc.wantAction {
+				t.Errorf("RequiresApproval=%v EscalateAction=%q, want %v %q",
+					result.RequiresApproval, result.EscalateAction, tc.wantApproval, tc.wantAction)
+			}
+		})
+	}
+}

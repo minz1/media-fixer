@@ -60,7 +60,7 @@ func (a *stubEscalationAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *stubEscalationAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *stubEscalationAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return a.planResult, a.planErr
 }
 

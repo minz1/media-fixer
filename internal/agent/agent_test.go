@@ -676,3 +676,19 @@ func TestParseDiagnosticResult_NilFinding(t *testing.T) {
 		t.Error("expected ok=false for a nil finding")
 	}
 }
+
+func TestSystemPromptStuckReadSection(t *testing.T) {
+	t.Parallel()
+	const header = "--- Stuck read (what=stuck_read) ---"
+	prompt := agent.SystemPromptForTest()
+	_, rest, ok := strings.Cut(prompt, header)
+	if !ok {
+		t.Fatalf("system prompt has no %q section", header)
+	}
+	section, _, _ := strings.Cut(rest, "\n---")
+	for _, want := range []string{"dd_readability_test", "decypharr_recheck", "refresh_decypharr_links", "delete_torrent_readd"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("stuck_read section does not mention %s", want)
+		}
+	}
+}

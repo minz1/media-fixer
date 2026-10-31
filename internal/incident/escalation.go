@@ -44,7 +44,7 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string
 	if err != nil {
 		return nil, "", err
 	}
-	plan, err := s.agent.PlanEscalation(ctx, result)
+	plan, err := s.agent.PlanEscalation(ctx, result, inc.What)
 	if err != nil {
 		return nil, "", err
 	}

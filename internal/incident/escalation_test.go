@@ -62,7 +62,7 @@ func (a *escalationAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *escalationAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *escalationAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return map[string]any{"Title": "Previewed"}, nil
 }
 

@@ -61,7 +61,11 @@ func (a *scriptedPendingOutcomeAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *scriptedPendingOutcomeAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *scriptedPendingOutcomeAgent) PlanEscalation(
+	_ context.Context,
+	_ *agent.DiagnosticResult,
+	_ string,
+) (any, error) {
 	return map[string]any{}, nil
 }
 

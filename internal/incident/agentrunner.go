@@ -30,7 +30,7 @@ type AgentRunner interface {
 	BuildSummarySeed(ctx context.Context, inc *db.Incident, summary string) []openai.ChatCompletionMessage
 	// PlanEscalation previews a diagnostic result's recommended escalation
 	// without making any changes.
-	PlanEscalation(ctx context.Context, result *agent.DiagnosticResult) (any, error)
+	PlanEscalation(ctx context.Context, result *agent.DiagnosticResult, what string) (any, error)
 	// ExecuteApprovedPlan executes exactly the plan PreviewEscalation stored,
 	// so an owner's approval applies to the files they were shown.
 	ExecuteApprovedPlan(ctx context.Context, result *agent.DiagnosticResult, planJSON []byte) (any, error)

@@ -682,3 +682,86 @@ func TestDispatchRestartDecypharr_WaitsForReady(t *testing.T) {
 		t.Errorf("result = %+v, want status=restarted", result)
 	}
 }
+
+func countingMediaAgent(t *testing.T) (*client.MediaAgentClient, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"bytes_read": 1024})
+	}))
+	t.Cleanup(srv.Close)
+	return client.NewMediaAgent(srv.URL, ""), &hits
+}
+
+func TestDDReadabilityRefusesStuckRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		what     string
+		wantErr  bool
+		wantHits int64
+	}{
+		{agent.WhatStuckRead, true, 0},
+		{"cant_play", false, 1},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			ma, hits := countingMediaAgent(t)
+			disp := &agent.Dispatcher{MediaAgent: ma, IncidentWhat: tc.what}
+			_, err := disp.Call(
+				context.Background(),
+				"dd_readability_test",
+				map[string]any{"file_path": "/mnt/decypharr/x.mkv"},
+			)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got := hits.Load(); got != tc.wantHits {
+				t.Errorf("media-agent saw %d requests, want %d", got, tc.wantHits)
+			}
+		})
+	}
+}
+
+func TestPlanEscalationSkipsProbeOnStuckRead(t *testing.T) {
+	t.Parallel()
+	result := &agent.DiagnosticResult{
+		EscalateAction: agent.EscalateRemoveAndSearch,
+		EscalateParams: map[string]any{
+			"media_type": "tv", "title": "The Boys", "scope": "series",
+			"reason": client.ReplaceReasonUnreadable,
+		},
+	}
+	for _, tc := range []struct {
+		what        string
+		wantChecked bool
+		wantHits    bool
+	}{
+		{agent.WhatStuckRead, false, false},
+		{"cant_play", true, true},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			ma, hits := countingMediaAgent(t)
+			arr := httptest.NewServer(arrStubWithFiles(t, 3))
+			defer arr.Close()
+			ag := agent.New(nil, "stub", &agent.Dispatcher{
+				Sonarr: client.NewArr(arr.URL, "key"), MediaAgent: ma,
+			}, nil, nil, slog.New(slog.DiscardHandler))
+			raw, err := ag.PlanEscalation(context.Background(), result, tc.what)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, ok := raw.(*client.ReplacePlan)
+			if !ok || plan.Readability == nil {
+				t.Fatalf("plan = %#v, want a ReplacePlan with Readability", raw)
+			}
+			if plan.Readability.Checked != tc.wantChecked {
+				t.Errorf("Checked = %v, want %v", plan.Readability.Checked, tc.wantChecked)
+			}
+			if (hits.Load() > 0) != tc.wantHits {
+				t.Errorf("media-agent saw %d requests", hits.Load())
+			}
+		})
+	}
+}

@@ -759,8 +759,9 @@ type Dispatcher struct {
 	// recent-disruption signal Agent.disruptionNote reads) to the event log —
 	// see logAction. Nil in the same contexts DB is nil (the live-check CLI
 	// has no incident to attach anything to).
-	Journal    *journal.Journal
-	IncidentID string
+	Journal      *journal.Journal
+	IncidentID   string
+	IncidentWhat string
 	// IncidentTime anchors loki_query's default window (around_incident=true)
 	// on when the incident was reported rather than time.Now(), so
 	// re-diagnosing an incident that's hours or days old still greps logs
@@ -819,8 +820,15 @@ func (d *Dispatcher) readJellyfinScanStatus(ctx context.Context, _ map[string]an
 	return d.Jellyfin.ScanStatus(ctx)
 }
 
+var errStuckReadNoProbe = errors.New(
+	"dd_readability_test is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
+		"use list_directory and get_torrent_state instead")
+
 func (d *Dispatcher) readDDReadability(ctx context.Context, args map[string]any) (any, error) {
 	filePath, _ := args["file_path"].(string)
+	if d.IncidentWhat == WhatStuckRead {
+		return nil, errStuckReadNoProbe
+	}
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
 	}
@@ -1333,6 +1341,10 @@ func (d *Dispatcher) findSonarrEpisodeID(ctx context.Context, seriesID, season, 
 // remove-and-re-search — never deletes anything. This is the tool's Handler,
 // so it is what a live-check (and the dashboard's Preview button) both call.
 func (d *Dispatcher) readArrRemoveAndSearchPlan(ctx context.Context, args map[string]any) (any, error) {
+	return d.planRemoveAndSearch(ctx, args, d.IncidentWhat != WhatStuckRead)
+}
+
+func (d *Dispatcher) planRemoveAndSearch(ctx context.Context, args map[string]any, probe bool) (any, error) {
 	req, arrClient, err := d.buildReplaceRequest(args)
 	if err != nil {
 		return nil, err
@@ -1341,7 +1353,11 @@ func (d *Dispatcher) readArrRemoveAndSearchPlan(ctx context.Context, args map[st
 	if err != nil {
 		return nil, err
 	}
-	plan.Readability = d.probeReplaceReadability(ctx, plan)
+	if probe {
+		plan.Readability = d.probeReplaceReadability(ctx, plan)
+	} else {
+		plan.Readability = &client.ReadabilityProbe{}
+	}
 	return plan, nil
 }
 

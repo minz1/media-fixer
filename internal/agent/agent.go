@@ -16,6 +16,8 @@ import (
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
+const WhatStuckRead = "stuck_read"
+
 const systemPrompt = `You are a media stack diagnostic agent. You help troubleshoot problems
 in a self-hosted Jellyfin + decypharr (debrid FUSE mount) setup.
 
@@ -124,6 +126,16 @@ Step 5 — Log review (always required).
   as the root cause, no matter how relevant-sounding the error looks.
 
 After all five steps, call complete_diagnosis.
+
+--- Stuck read (what=stuck_read) ---
+
+The media-agent saw tasks stuck in uninterruptible reads on this release's files. The mount is
+wedged, so a read of the stuck file would wedge too.
+  - Do NOT run dd_readability_test on the stuck path: the read would hang in the same state and
+    park a media-agent goroutine. list_directory on its folder and get_torrent_state are safe.
+  - Go to get_repair_status, then decypharr_recheck by name, then refresh_decypharr_links. If
+    those were already tried on this incident, escalate delete_torrent_readd (the existing
+    approval flow).
 
 --- Buffering / low quality (what=buffering) ---
 
@@ -445,6 +457,7 @@ func (a *Agent) Run(
 	a.log.InfoContext(ctx, "starting diagnostic", "incident", inc.ID, "title", inc.Title)
 
 	a.disp.IncidentID = inc.ID
+	a.disp.IncidentWhat = inc.What
 	a.disp.IncidentTime = inc.CreatedAt
 
 	// Gate on the transition (not a raw status write) so a stale, superseded run
@@ -738,7 +751,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	// case Discord-reported incidents ever hit. Guarding on itemID here meant
 	// a missing-media report with no deferred verification was returned as a
 	// clean success with nothing checked at all.
-	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 {
+	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 && inc.What != WhatStuckRead {
 		if !a.VerifyResolved(ctx, itemID, inc.Title, preFix) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
@@ -956,10 +969,10 @@ var errNoEscalationPlan = errors.New("escalate_action has no automated plan; act
 // PlanEscalation resolves what an approved escalation would do for a diagnostic
 // result's recommended escalation, without making any changes. Used by the
 // dashboard's Preview button and by live-check tooling.
-func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult) (any, error) {
+func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult, what string) (any, error) {
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
-		return a.disp.readArrRemoveAndSearchPlan(ctx, result.EscalateParams)
+		return a.disp.planRemoveAndSearch(ctx, result.EscalateParams, what != WhatStuckRead)
 	case EscalateDeleteTorrentReadd:
 		return a.disp.readDecypharrReaddPlan(ctx, result.EscalateParams)
 	default:

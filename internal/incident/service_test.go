@@ -385,7 +385,7 @@ func (a *blockingAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *blockingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *blockingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -528,7 +528,7 @@ func (a *sequencedAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *sequencedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *sequencedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -707,7 +707,7 @@ func (a *alwaysFixedAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *alwaysFixedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *alwaysFixedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -851,7 +851,7 @@ func (a *concurrencyTrackingAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *concurrencyTrackingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *concurrencyTrackingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -1117,7 +1117,7 @@ func (a *lowConfidenceOnceAgent) BuildSummarySeed(
 	return nil
 }
 
-func (a *lowConfidenceOnceAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult) (any, error) {
+func (a *lowConfidenceOnceAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
 	return map[string]any{}, nil
 }
 
