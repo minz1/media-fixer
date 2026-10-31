@@ -35,6 +35,7 @@ type Service struct {
 	summarizer  *agent.Summarizer
 	notif       Notifier
 	seerr       SeerrIssues
+	stuckRead   StuckReadChecker
 	log         *slog.Logger
 	runs        *runManager
 	seedTimeout time.Duration
@@ -104,6 +105,15 @@ func (s *Service) timers(ctx context.Context) Timers {
 
 func (s *Service) SetSeerr(seerr SeerrIssues) {
 	s.seerr = seerr
+}
+
+// StuckReadChecker reports whether a title's stuck reads have cleared.
+type StuckReadChecker interface{ Clear(title string) bool }
+
+const stuckReadVerifyFloorMinutes = 3
+
+func (s *Service) SetStuckRead(c StuckReadChecker) {
+	s.stuckRead = c
 }
 
 // launch starts a background agent run for an incident with a fixed seed (nil
@@ -529,7 +539,7 @@ func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, res
 		s.startPendingOutcomeTracking(ctx, inc, result)
 		return
 	}
-	if result.VerifyAfterSeconds > 0 {
+	if result.VerifyAfterSeconds > 0 || inc.What == agent.WhatStuckRead {
 		s.runVerification(ctx, inc, result)
 		return
 	}
@@ -598,6 +608,10 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 
 	t := s.timers(ctx)
 	firstDelay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, s.minutes(t.FirstVerifyCapMinutes))
+	stuckRead := inc.What == agent.WhatStuckRead
+	if stuckRead {
+		firstDelay = max(firstDelay, s.minutes(stuckReadVerifyFloorMinutes))
+	}
 
 	for i := range t.VerifyChecks {
 		delay := s.minutes(t.VerifyGapMinutes)
@@ -609,7 +623,13 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 		case <-ctx.Done():
 			return
 		}
-		if s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix) {
+		var fixed bool
+		if stuckRead {
+			fixed = s.stuckRead != nil && s.stuckRead.Clear(inc.Title)
+		} else {
+			fixed = s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix)
+		}
+		if fixed {
 			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
 			return
 		}
@@ -617,7 +637,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 
 	// Exhausted the verification budget. If a scan is still in progress, the fix
 	// is likely still landing — give the reporter an ETA instead of escalating.
-	if s.agent.ScanRunning(ctx) {
+	if !stuckRead && s.agent.ScanRunning(ctx) {
 		eta := result.UserETAMinutes
 		if eta <= 0 {
 			eta = defaultUserETAMinutes
@@ -1014,19 +1034,23 @@ func (s *Service) buildReinvestigateSeed(
 }
 
 // RecoverZombies is called on startup to resume any incidents left in
-// "investigating" or "reopened" status from a previous process run — a crashed process
+// "investigating" or "reopened" status, or a stuck_read incident left in
+// "verifying", from a previous process run — a crashed process
 // with nothing left running to check. SweepStaleRuns is the companion for a
 // process that never crashed at all: a run whose goroutine is still alive
 // but has stopped making progress, which this cannot see (nothing here is
 // wrong from the process's point of view).
 func (s *Service) RecoverZombies(ctx context.Context) {
-	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened} {
+	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened, db.StatusVerifying} {
 		incidents, err := s.db.FindByStatus(ctx, status)
 		if err != nil {
 			s.log.ErrorContext(ctx, "zombie recovery query", "status", status, "error", err)
 			continue
 		}
 		for _, inc := range incidents {
+			if status == db.StatusVerifying && inc.What != agent.WhatStuckRead {
+				continue
+			}
 			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
 			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil {
 				s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
