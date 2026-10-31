@@ -239,7 +239,11 @@ func (s *Server) actionResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setPaused(w http.ResponseWriter, r *http.Request, paused bool, notice string) {
-	_ = s.svc.SetAutonomousPaused(r.Context(), paused)
+	if err := s.svc.SetAutonomousPaused(r.Context(), paused); err != nil {
+		s.log.ErrorContext(r.Context(), "set autonomous paused", "paused", paused, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if r.Header.Get("Hx-Request") == "" {
 		http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
 		return

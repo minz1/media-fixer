@@ -14,6 +14,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
@@ -108,6 +109,11 @@ func TestNotice_OneRegionOnErrorPage(t *testing.T) {
 		}
 		if n := strings.Count(body, `class="notice notice-err"`); n < 2 {
 			t.Errorf("%s: %d inline error notices, want at least 2:\n%s", name, n, body)
+		}
+		_, stuck, _ := strings.Cut(body, `id="stuck-queue"`)
+		stuck, _, _ = strings.Cut(stuck, `id="incident-timers"`)
+		if !strings.Contains(stuck, `class="notice notice-err"`) {
+			t.Errorf("%s: the stuck card shows no error for its settings:\n%s", name, stuck)
 		}
 	}
 }
@@ -369,5 +375,43 @@ func TestDarkOverrides_AfterLightRules(t *testing.T) {
 		if i := strings.Index(light, "\n    "+sel+" "); i >= 0 && i > start {
 			t.Errorf("light %s rule sits after the dark block, so it wins in dark mode", sel)
 		}
+	}
+}
+
+func TestFormDisable_TargetsOnlyTheSubmit(t *testing.T) {
+	t.Parallel()
+	var body strings.Builder
+	for _, srv := range []*server.Server{newStuckEnv(t).srv, newMaintenanceTestServer(t).srv} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/media/maintenance", nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		body.WriteString(rec.Body.String())
+	}
+	forms := 0
+	for _, part := range strings.Split(body.String(), "<form")[1:] {
+		form, _, _ := strings.Cut(part, "</form>")
+		head, _, _ := strings.Cut(form, ">")
+		if !strings.Contains(head, `hx-disable="find button"`) {
+			continue
+		}
+		forms++
+		if n := strings.Count(form, "<button"); n != 1 {
+			t.Errorf(`form with hx-disable="find button" has %d buttons, so it may disable the wrong one:%s`, n, head)
+		}
+	}
+	if forms == 0 {
+		t.Fatal("no find-button forms found")
+	}
+}
+
+func TestPause_WriteFailureIsAnError(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := doWith(t, srv, http.MethodPost, "/media/pause", url.Values{}, map[string]string{"HX-Request": "true"})
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "paused.") {
+		t.Errorf("status %d, body %q; want 500 with no success notice", rec.Code, rec.Body.String())
 	}
 }

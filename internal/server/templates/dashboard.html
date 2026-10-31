@@ -26,7 +26,7 @@
     .btn-link { background-color: transparent; border: 0; padding: 0; color: oklch(54.6% 0.245 262.881); }
     .btn-link:hover { text-decoration: underline; }
     .btn:disabled { opacity: 0.6; cursor: progress; }
-    form.htmx-request .btn::before, .btn.htmx-request::before {
+    form.htmx-request .btn:disabled::before, .btn.htmx-request::before {
       content: ""; width: 0.75rem; height: 0.75rem; box-sizing: border-box; border-radius: 50%;
       border: 2px solid currentColor; border-top-color: transparent; animation: btn-spin 0.8s linear infinite;
     }
@@ -744,6 +744,7 @@
   {{else}}
   {{template "notice" (dict "Ok" .Notice "Err" .Failure)}}
   {{with .Unreadable}}<p class="notice notice-err">{{.}}</p>{{end}}
+  {{with .StateErr}}<p class="notice notice-err">{{.}}</p>{{end}}
   {{template "stuck_results" .}}
   <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/settings" hx-target="#stuck-queue" hx-swap="outerHTML"
     hx-disable="find button" class="flex flex-wrap items-end gap-4">
@@ -769,7 +770,7 @@
   {{with .Unreadable}}<p class="notice notice-err">{{.}}</p>{{end}}
   {{with .StateErr}}<p class="notice notice-err">{{.}}</p>{{end}}
   <form hx-post="{{.BaseURL}}/maintenance/incident-timers/settings" hx-target="#incident-timers" hx-swap="outerHTML"
-    hx-disable="find button" class="space-y-4">
+    hx-disable="find button[type=submit]" class="space-y-4">
     {{range .Groups}}
     <h3 class="text-sm font-semibold text-gray-800">{{.Name}}</h3>
     <div class="timer-grid">
@@ -915,7 +916,7 @@
     hx-post="{{.BaseURL}}/maintenance/pack-sweep/settings"
     hx-target="#pack-sweep"
     hx-swap="outerHTML"
-    hx-disable="find button"
+    hx-disable="find button[type=submit]"
     class="space-y-4"
   >
     <h3 class="text-sm font-semibold text-gray-800">Settings</h3>
