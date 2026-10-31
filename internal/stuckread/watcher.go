@@ -169,9 +169,7 @@ func (w *Watcher) handleFinding(ctx context.Context, title string, rs []mediaage
 	case err != nil:
 		w.log.WarnContext(ctx, "look up stuck-read incident", "title", title, "error", err)
 	case inc.What != agent.WhatStuckRead:
-		if !slices.Contains([]db.IncidentStatus{
-			db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
-		}, inc.Status) {
+		if !slices.Contains(db.ActiveIncidentStatuses(), inc.Status) {
 			w.open(ctx, title, rs, now)
 		}
 	case inc.Status == db.StatusAgentFixed:

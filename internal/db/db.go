@@ -861,7 +861,7 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 	return scanIncident(row)
 }
 
-// activeIncidentStatuses are the statuses in which an incident is still being
+// ActiveIncidentStatuses are the statuses in which an incident is still being
 // worked on by the system itself. Deliberately excludes manual_test_needed and
 // blocked: both mean "waiting for a human", so an incident sitting in either
 // is making no progress and must not absorb new reports. It previously did —
@@ -873,26 +873,26 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 //
 // reopened is included because a reopened incident IS active; its previous
 // exclusion meant duplicate reports never collapsed into one.
-func activeIncidentStatuses() []IncidentStatus {
+func ActiveIncidentStatuses() []IncidentStatus {
 	return []IncidentStatus{StatusOpen, StatusInvestigating, StatusVerifying, StatusReopened}
 }
 
-// activeStatusesJSON is activeIncidentStatuses as one JSON-array bind
+// activeStatusesJSON is ActiveIncidentStatuses as one JSON-array bind
 // parameter, for `status IN (SELECT value FROM json_each(?))` — the same
 // fixed-query-text pattern TransitionStatus uses, so no query below has to
 // concatenate a placeholder list into its SQL.
 func activeStatusesJSON() (string, error) {
-	b, err := json.Marshal(activeIncidentStatuses())
+	b, err := json.Marshal(ActiveIncidentStatuses())
 	return string(b), err
 }
 
 // FindOpenByTitle returns the first actively-worked incident for this title so
-// duplicate reports collapse into it (see activeIncidentStatuses for what
+// duplicate reports collapse into it (see ActiveIncidentStatuses for what
 // counts as active, and why an escalated incident deliberately does not).
 // Comparison is case-insensitive and ignores trailing year suffixes like
 // " (2024)". Returns ErrNotFound when no matching active incident exists.
 func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, error) {
-	return d.findByTitle(ctx, title, activeIncidentStatuses())
+	return d.findByTitle(ctx, title, ActiveIncidentStatuses())
 }
 
 // FindUnresolvedByTitle is FindOpenByTitle over every status except resolved.
@@ -956,7 +956,7 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 }
 
 // CountOpenIncidents returns the number of incidents currently being worked on
-// (see activeIncidentStatuses). It backs the "several things are broken at
+// (see ActiveIncidentStatuses). It backs the "several things are broken at
 // once, stop acting autonomously" guard, so it must count incidents that are
 // actively failing right now — not every incident that was ever escalated.
 // Counting all non-resolved rows made the guard latch permanently: escalated
