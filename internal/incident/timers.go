@@ -52,11 +52,19 @@ type TimerField struct {
 type timerDef struct {
 	group, name, label, unit string
 	lo, hi, def              int
+	help                     string
 }
 
 type timerSpec struct {
 	f TimerField
 	p *int
+}
+
+func spec(p *int, d timerDef) timerSpec {
+	return timerSpec{TimerField{
+		Group: d.group, Name: d.name, Label: d.label, Unit: d.unit,
+		Lo: d.lo, Hi: d.hi, Default: d.def, Value: *p, Help: d.help,
+	}, p}
 }
 
 func (t *Timers) table() []timerSpec {
@@ -69,86 +77,87 @@ func (t *Timers) table() []timerSpec {
 		stuck    = "Stuck reads"
 		mins     = "minutes"
 	)
-	s := func(d timerDef, p *int) timerSpec {
-		return timerSpec{TimerField{
-			Group: d.group, Name: d.name, Label: d.label, Unit: d.unit,
-			Lo: d.lo, Hi: d.hi, Default: d.def, Value: *p,
-		}, p}
-	}
 	return []timerSpec{
-		s(timerDef{runs, "retry_first_minutes", "Wait before the first retry", mins, 1, 30, 2}, &t.RetryFirstMinutes),
-		s(
-			timerDef{runs, "retry_second_minutes", "Wait before the second retry", mins, 1, 60, 6},
-			&t.RetrySecondMinutes,
-		),
-		s(
-			timerDef{runs, "stale_run_minutes", "Rerun a run with no heartbeat after", mins, 10, 240, 15},
-			&t.StaleRunMinutes,
-		),
-		s(timerDef{runs, "check_every_minutes", "Stale-run check interval", mins, 1, 60, 5}, &t.CheckEveryMinutes),
-		s(
-			timerDef{verify, "first_verify_cap_minutes", "First verification wait cap", mins, 5, 120, 30},
-			&t.FirstVerifyCapMinutes,
-		),
-		s(
-			timerDef{verify, "verify_gap_minutes", "Gap between verification checks", mins, 1, 30, 2},
-			&t.VerifyGapMinutes,
-		),
-		s(timerDef{verify, "verify_checks", "Verification checks", "checks", 1, 20, 5}, &t.VerifyChecks),
-		s(
-			timerDef{verify, "approved_verify_minutes", "Verify after an approved fix", mins, 1, 120, 10},
-			&t.ApprovedVerifyMinutes,
-		),
-		s(
-			timerDef{notes, "rerun_note_gap_minutes", "Gap between rerun notes", mins, 5, 1440, 30},
-			&t.RerunNoteGapMinutes,
-		),
-		s(
-			timerDef{notes, "progress_note_gap_minutes", "Gap between progress notes", mins, 15, 1440, 60},
-			&t.ProgressNoteGapMinutes,
-		),
-		s(
-			timerDef{notes, "seerr_alert_gap_minutes", "Gap between Seerr alerts", mins, 15, 1440, 60},
-			&t.SeerrAlertGapMinutes,
-		),
-		s(
-			timerDef{notes, "lock_alert_gap_minutes", "Gap between systemic lock alerts", mins, 60, 10080, 1440},
-			&t.LockAlertGapMinutes,
-		),
-		s(
-			timerDef{
-				download,
-				"no_release_grace_minutes",
-				"Grace for a release that hasn't appeared",
-				mins,
-				5,
-				240,
-				15,
-			},
-			&t.NoReleaseGraceMinutes,
-		),
-		s(
-			timerDef{download, "stall_minutes", "Escalate a download with no progress after", mins, 15, 720, 60},
-			&t.StallMinutes,
-		),
-		s(
-			timerDef{download, "track_cap_hours", "Stop tracking a download after", "hours", 1, 72, 12},
-			&t.TrackCapHours,
-		),
-		s(
-			timerDef{download, "keep_searching_check_hours", "Keep searching: check every", "hours", 1, 24, 1},
-			&t.KeepSearchingCheckHours,
-		),
-		s(
-			timerDef{download, "keep_searching_days", "Keep searching: give up after", "days", 1, 30, 7},
-			&t.KeepSearchingDays,
-		),
-		s(
-			timerDef{explain, "explain_timeout_seconds", "Explain: give up after", "seconds", 30, 600, 120},
-			&t.ExplainTimeoutSeconds,
-		),
-		s(timerDef{stuck, "stuck_read_tasks", "Stuck tasks on one torrent", "tasks", 2, 10, 3}, &t.StuckReadTasks),
-		s(timerDef{stuck, "stuck_read_minutes", "One task stuck for", mins, 2, 60, 5}, &t.StuckReadMinutes),
+		spec(&t.RetryFirstMinutes, timerDef{
+			runs, "retry_first_minutes", "Wait before the first retry", mins, 1, 30, 2,
+			"After a failed agent run, wait this long before retrying it.",
+		}),
+		spec(&t.RetrySecondMinutes, timerDef{
+			runs, "retry_second_minutes", "Wait before the second retry", mins, 1, 60, 6,
+			"If the retry fails too, wait this long before the second and last retry.",
+		}),
+		spec(&t.StaleRunMinutes, timerDef{
+			runs, "stale_run_minutes", "Rerun a run with no heartbeat after", mins, 10, 240, 15,
+			"A run with no heartbeat for this long is treated as dead and rerun.",
+		}),
+		spec(&t.CheckEveryMinutes, timerDef{
+			runs, "check_every_minutes", "Stale-run check interval", mins, 1, 60, 5,
+			"How often to look for dead runs and check tracked downloads.",
+		}),
+		spec(&t.FirstVerifyCapMinutes, timerDef{
+			verify, "first_verify_cap_minutes", "First verification wait cap", mins, 5, 120, 30,
+			"Longest wait before the first check that a fix worked.",
+		}),
+		spec(&t.VerifyGapMinutes, timerDef{
+			verify, "verify_gap_minutes", "Gap between verification checks", mins, 1, 30, 2,
+			"Longest wait between the later verification checks.",
+		}),
+		spec(&t.VerifyChecks, timerDef{
+			verify, "verify_checks", "Verification checks", "checks", 1, 20, 5,
+			"How many checks a fix gets before it counts as failed.",
+		}),
+		spec(&t.ApprovedVerifyMinutes, timerDef{
+			verify, "approved_verify_minutes", "Verify after an approved fix", mins, 1, 120, 10,
+			"After you approve an escalation, wait this long before verifying it.",
+		}),
+		spec(&t.RerunNoteGapMinutes, timerDef{
+			notes, "rerun_note_gap_minutes", "Gap between rerun notes", mins, 5, 1440, 30,
+			"At most one re-running note to the reporter per this gap.",
+		}),
+		spec(&t.ProgressNoteGapMinutes, timerDef{
+			notes, "progress_note_gap_minutes", "Gap between progress notes", mins, 15, 1440, 60,
+			"At most one progress note to the reporter per this gap.",
+		}),
+		spec(&t.SeerrAlertGapMinutes, timerDef{
+			notes, "seerr_alert_gap_minutes", "Gap between Seerr alerts", mins, 15, 1440, 60,
+			"After a Seerr failure alert, later Seerr failures in this gap are only logged.",
+		}),
+		spec(&t.LockAlertGapMinutes, timerDef{
+			notes, "lock_alert_gap_minutes", "Gap between systemic lock alerts", mins, 60, 10080, 1440,
+			"While the systemic lock holds, alert you again after this long.",
+		}),
+		spec(&t.NoReleaseGraceMinutes, timerDef{
+			download, "no_release_grace_minutes", "Grace for a release that hasn't appeared", mins, 5, 240, 15,
+			"Escalate when a search has found no release after this long.",
+		}),
+		spec(&t.StallMinutes, timerDef{
+			download, "stall_minutes", "Escalate a download with no progress after", mins, 15, 720, 60,
+			"Escalate a tracked download that makes no progress for this long.",
+		}),
+		spec(&t.TrackCapHours, timerDef{
+			download, "track_cap_hours", "Stop tracking a download after", "hours", 1, 72, 12,
+			"Stop tracking a download after this long, finished or not.",
+		}),
+		spec(&t.KeepSearchingCheckHours, timerDef{
+			download, "keep_searching_check_hours", "Keep searching: check every", "hours", 1, 24, 1,
+			"With keep searching on, look for a release this often.",
+		}),
+		spec(&t.KeepSearchingDays, timerDef{
+			download, "keep_searching_days", "Keep searching: give up after", "days", 1, 30, 7,
+			"With keep searching on, escalate again after this many days.",
+		}),
+		spec(&t.ExplainTimeoutSeconds, timerDef{
+			explain, "explain_timeout_seconds", "Explain: give up after", "seconds", 30, 600, 120,
+			"Stop waiting for an Explain answer after this long.",
+		}),
+		spec(&t.StuckReadTasks, timerDef{
+			stuck, "stuck_read_tasks", "Stuck tasks on one torrent", "tasks", 2, 10, 3,
+			"Open a stuck-read incident when this many tasks are stuck on one torrent.",
+		}),
+		spec(&t.StuckReadMinutes, timerDef{
+			stuck, "stuck_read_minutes", "One task stuck for", mins, 2, 60, 5,
+			"Or when one task has been stuck reading for this long.",
+		}),
 	}
 }
 
@@ -162,37 +171,10 @@ func DefaultTimers() Timers {
 
 func (t *Timers) Fields() []TimerField {
 	var out []TimerField
-	help := t.help()
 	for _, f := range t.table() {
-		f.f.Help = help[f.p]
 		out = append(out, f.f)
 	}
 	return out
-}
-
-func (t *Timers) help() map[*int]string {
-	return map[*int]string{
-		&t.RetryFirstMinutes:       "After a failed agent run, wait this long before retrying it.",
-		&t.RetrySecondMinutes:      "If the retry fails too, wait this long before the second and last retry.",
-		&t.StaleRunMinutes:         "A run with no heartbeat for this long is treated as dead and rerun.",
-		&t.CheckEveryMinutes:       "How often to look for dead runs and check tracked downloads.",
-		&t.FirstVerifyCapMinutes:   "Longest wait before the first check that a fix worked.",
-		&t.VerifyGapMinutes:        "Longest wait between the later verification checks.",
-		&t.VerifyChecks:            "How many checks a fix gets before it counts as failed.",
-		&t.ApprovedVerifyMinutes:   "After you approve an escalation, wait this long before verifying it.",
-		&t.RerunNoteGapMinutes:     "At most one re-running note to the reporter per this gap.",
-		&t.ProgressNoteGapMinutes:  "At most one progress note to the reporter per this gap.",
-		&t.SeerrAlertGapMinutes:    "After a Seerr failure alert, later Seerr failures in this gap are only logged.",
-		&t.LockAlertGapMinutes:     "While the systemic lock holds, alert you again after this long.",
-		&t.NoReleaseGraceMinutes:   "Escalate when a search has found no release after this long.",
-		&t.StallMinutes:            "Escalate a tracked download that makes no progress for this long.",
-		&t.TrackCapHours:           "Stop tracking a download after this long, finished or not.",
-		&t.KeepSearchingCheckHours: "With keep searching on, look for a release this often.",
-		&t.KeepSearchingDays:       "With keep searching on, escalate again after this many days.",
-		&t.ExplainTimeoutSeconds:   "Stop waiting for an Explain answer after this long.",
-		&t.StuckReadTasks:          "Open a stuck-read incident when this many tasks are stuck on one torrent.",
-		&t.StuckReadMinutes:        "Or when one task has been stuck reading for this long.",
-	}
 }
 
 func (t *Timers) Set(name string, v int) {
