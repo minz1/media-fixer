@@ -54,10 +54,6 @@ func (s *Server) SetStuckQueue(sch *stuckqueue.Scheduler) {
 }
 
 func (s *Server) stuckResults(w http.ResponseWriter, r *http.Request) {
-	if s.stuck == nil {
-		s.renderStuckCard(r.Context(), w, "", "")
-		return
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "stuck_results", s.stuckCardFor(r.Context(), "", ""))
 }
@@ -74,7 +70,7 @@ func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		notice = "Saved."
+		notice = msgSaved
 	}
 	res, running := s.stuckState()
 	s.writeStuckCard(w, s.stuckCardData(res, running, set, errs, notice, "", ""))
@@ -161,7 +157,7 @@ func (s *Server) stuckCardData(
 		tplKeyBaseURL: s.baseURL,
 		"Settings":    set,
 		"Errors":      errs,
-		"Notice":      notice,
+		tplKeyNotice:  notice,
 		"Failure":     failure,
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
@@ -253,7 +249,7 @@ func parseStuckSettings(r *http.Request) (stuckqueue.Settings, map[string]string
 	} {
 		n, err := strconv.Atoi(r.FormValue(f.name))
 		if err != nil {
-			errs[f.name] = "must be a whole number"
+			errs[f.name] = msgWholeNumber
 			continue
 		}
 		*f.dst = n

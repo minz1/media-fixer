@@ -136,6 +136,7 @@ func New(
 		r.Post("/maintenance/stuck-queue/settings", s.stuckSettingsSave)
 		r.Post("/maintenance/stuck-queue/run", s.stuckRun)
 		r.Post("/maintenance/stuck-queue/{action}", s.stuckAction)
+		r.Post("/maintenance/incident-timers/settings", s.timersSettingsSave)
 	})
 
 	s.http = &http.Server{

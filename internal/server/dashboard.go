@@ -27,7 +27,12 @@ var templateFS embed.FS
 const dashboardPageSize = 50
 
 // tplKeyBaseURL is the template data key every page passes s.baseURL under.
-const tplKeyBaseURL = "BaseURL"
+const (
+	tplKeyBaseURL  = "BaseURL"
+	tplKeyNotice   = "Notice"
+	msgSaved       = "Saved."
+	msgWholeNumber = "must be a whole number"
+)
 
 // Shared Tailwind badge classes, reused across statusColor, checkColor, and
 // confidenceColor.
@@ -183,14 +188,17 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		}
 	}
 
+	timers, _ := incident.LoadTimers(ctx, s.db)
+
 	return map[string]any{
-		"Incident":       inc,
-		"Actions":        actions,
-		"PendingOutcome": pendingOutcome,
-		"Finding":        diagnosticResultOrNil(inc.Finding),
-		"Transcript":     turns,
-		"Full":           full,
-		tplKeyBaseURL:    s.baseURL,
+		"KeepSearchingSpan": keepSearchingSpan(timers.KeepSearchingDays),
+		"Incident":          inc,
+		"Actions":           actions,
+		"PendingOutcome":    pendingOutcome,
+		"Finding":           diagnosticResultOrNil(inc.Finding),
+		"Transcript":        turns,
+		"Full":              full,
+		tplKeyBaseURL:       s.baseURL,
 	}, nil
 }
 

@@ -52,6 +52,7 @@ func (s *Server) maintenanceIndex(w http.ResponseWriter, r *http.Request) {
 		data["Card"] = s.sweepCard(r.Context(), set, nil, "", unreadable, false)
 	}
 	data["Stuck"] = s.stuckCardFor(r.Context(), "", "")
+	data["Timers"] = s.timersCardFor(r.Context())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "maintenance", data)
 }
@@ -70,7 +71,7 @@ func (s *Server) sweepSettingsSave(w http.ResponseWriter, r *http.Request) {
 		if !set.Enabled {
 			s.sweep.CancelLive(sweep.ErrDisabled)
 		}
-		notice = "Saved."
+		notice = msgSaved
 	}
 	s.renderSweepCard(r.Context(), w, set, errs, notice, "", false)
 }
@@ -158,7 +159,7 @@ func (s *Server) sweepCard(
 		tplKeyBaseURL: s.baseURL,
 		"Settings":    set,
 		"Errors":      errs,
-		"Notice":      notice,
+		tplKeyNotice:  notice,
 		"Failure":     failure,
 		"Status":      s.sweepStatus(started),
 	}
@@ -240,7 +241,7 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 	} {
 		n, err := strconv.Atoi(r.FormValue(f.name))
 		if err != nil {
-			errs[f.name] = "must be a whole number"
+			errs[f.name] = msgWholeNumber
 			continue
 		}
 		*f.dst = n

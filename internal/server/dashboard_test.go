@@ -127,14 +127,14 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 		if err := database.CreateIncident(context.Background(), inc); err != nil {
 			t.Fatal(err)
 		}
-		mustExecuteIncidentTemplate(t, srv, inc.ID, false)
+		mustExecuteIncidentTemplate(t, srv, inc.ID)
 	})
 
 	t.Run("remove_and_search escalation recommended", func(t *testing.T) {
 		t.Parallel()
 		srv, database := newDashboardTestServer(t)
 		inc := newManualTestNeededIncident(t, database)
-		body := mustExecuteIncidentTemplate(t, srv, inc.ID, false)
+		body := mustExecuteIncidentTemplate(t, srv, inc.ID)
 		if !strings.Contains(body, "remove_and_search") || !strings.Contains(body, "/escalation-preview") {
 			t.Errorf("expected the escalation card to render, got:\n%s", body)
 		}
@@ -155,7 +155,7 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 		if err := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
 			t.Fatal(err)
 		}
-		body := mustExecuteIncidentTemplate(t, srv, inc.ID, false)
+		body := mustExecuteIncidentTemplate(t, srv, inc.ID)
 		if !strings.Contains(body, "Keep searching") {
 			t.Errorf("expected the keep-searching card to render, got:\n%s", body)
 		}
@@ -182,9 +182,9 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 // mustExecuteIncidentTemplate builds the incident page's data and executes
 // the "incident" template directly, failing the test on any execution error,
 // and returns the rendered body for content assertions.
-func mustExecuteIncidentTemplate(t *testing.T, srv *server.Server, incidentID string, full bool) string {
+func mustExecuteIncidentTemplate(t *testing.T, srv *server.Server, incidentID string) string {
 	t.Helper()
-	data, err := srv.BuildIncidentPageDataForTest(context.Background(), incidentID, full)
+	data, err := srv.BuildIncidentPageDataForTest(context.Background(), incidentID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

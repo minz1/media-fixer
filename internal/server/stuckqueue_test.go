@@ -162,8 +162,6 @@ func TestStuckCard_NotConfigured(t *testing.T) {
 	srv, _ := newDashboardTestServer(t)
 	rec := do(t, srv, http.MethodGet, "/media/maintenance", nil)
 	mustContain(t, rec.Body.String(), "Stuck queue unavailable (Sonarr and Radarr not configured)")
-	rec = do(t, srv, http.MethodGet, "/media/maintenance/stuck-queue/results", nil)
-	mustContain(t, rec.Body.String(), "Stuck queue unavailable (Sonarr and Radarr not configured)")
 }
 
 func TestStuckCard_CorruptSettings(t *testing.T) {

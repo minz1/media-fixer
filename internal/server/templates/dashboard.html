@@ -309,7 +309,7 @@
     </h3>
     <p class="text-sm text-gray-600 mb-2">
       This can just mean brand-new content with no release available yet.
-      Keep searching re-checks periodically for up to a week instead of
+      Keep searching re-checks periodically for {{.KeepSearchingSpan}} instead of
       giving up now.
     </p>
     <button
@@ -640,6 +640,7 @@
       </div>
       {{end}}
       <div class="mt-6">{{template "stuck_card" .Stuck}}</div>
+      <div class="mt-6">{{template "timers_card" .Timers}}</div>
     </div>
   </body>
 </html>
@@ -670,6 +671,29 @@
     <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Save</button>
   </form>
   {{end}}
+</div>
+{{end}}
+
+{{define "timers_card"}}
+<div id="incident-timers" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+  <div>
+    <h2 class="text-xl font-bold text-gray-900 mb-1">Incident timers</h2>
+    <p class="text-sm text-gray-500">
+      How long the incident pipeline waits, retries and tracks. A saved value applies the next time it is used.
+    </p>
+  </div>
+  {{with .Notice}}<p class="text-sm text-green-700">{{.}}</p>{{end}}
+  {{with .Unreadable}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
+  <form hx-post="{{.BaseURL}}/maintenance/incident-timers/settings" hx-target="#incident-timers" hx-swap="outerHTML"
+    class="space-y-4">
+    {{range .Groups}}
+    <h3 class="text-sm font-semibold text-gray-800">{{.Name}}</h3>
+    <div class="flex flex-wrap gap-6">
+      {{range .Fields}}{{template "sweep_num" .}}{{end}}
+    </div>
+    {{end}}
+    <button type="submit" class="px-3 py-1 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Save</button>
+  </form>
 </div>
 {{end}}
 
