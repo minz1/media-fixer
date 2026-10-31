@@ -180,7 +180,7 @@
 
 {{define "pause_response"}}{{template "pause_toggle" .}}{{template "notice" (dict "Ok" .Notice)}}{{end}}
 
-{{define "ts"}}<time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}" title="{{.UTC.Format "2006-01-02 15:04"}} UTC">{{timeAgo .}}</time>{{end}}
+{{define "ts"}}{{with utc .}}<time datetime="{{.ISO}}" title="{{.Exact}}">{{.Rel}}</time>{{else}}never{{end}}{{end}}
 
 {{template "page_top" (dict "Title" "Media Fixer" "BaseURL" .BaseURL "Active" "issues" "Paused" .Paused)}}
       <!-- Connects but never itself swaps (hx-swap="none"); incoming
@@ -200,7 +200,7 @@
       <div>
         <div class="font-medium text-gray-900">{{.Title}}</div>
         <div class="text-sm text-gray-500 mt-0.5">
-          {{.What}} · {{.Source}} · {{timeAgo .CreatedAt}}
+          {{.What}} · {{.Source}} · {{template "ts" .CreatedAt}}
         </div>
       </div>
       <span class="ml-4 shrink-0">{{template "badge" (dict "Tone" (statusTone .Status) "Word" (statusWord .Status))}}</span>
@@ -604,7 +604,7 @@
 {{define "selftest_table"}}
 <div>
   <p class="text-xs text-gray-500 mb-2">
-    {{.StartedAt.Format "Jan 2 15:04:05"}} · write={{.Options.AllowWrite}}
+    {{template "ts" .StartedAt}} · write={{.Options.AllowWrite}}
     disruptive={{.Options.AllowDisruptive}}
   </p>
 
@@ -764,7 +764,7 @@
   {{if .Running}}hx-get="{{.BaseURL}}/maintenance/stuck-queue/results" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
   <div class="flex items-center gap-4 text-sm text-gray-700">
     {{if .Running}}<span>{{template "badge" (dict "Tone" "blue" "Word" "Running…")}} {{if .StartedAt.IsZero}}starting…{{else}}started {{template "ts" .StartedAt}}{{end}} · checking the Sonarr and Radarr queues</span>{{end}}
-    {{with .LastRun}}<span>Last run {{.}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
+    {{with .LastRun}}<span>Last run {{template "ts" .}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
     {{else}}<span>No run yet.</span>{{end}}
     <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/run" hx-target="#stuck-queue" hx-swap="outerHTML"
       hx-disable="find button" hx-indicator="this, #progress">
@@ -779,7 +779,7 @@
     <div class="mt-3 border border-gray-200 rounded-sm p-3 text-sm">
       <div class="flex justify-between gap-4">
         <span class="font-medium text-gray-900">{{.Title}}</span>
-        <span class="text-gray-500">{{.Verdict}} · {{.Targets}} · {{.Age}}{{with .Due}} · due {{.}}{{end}}</span>
+        <span class="text-gray-500">{{.Verdict}} · {{.Targets}} · {{.Age}}{{if not .Due.IsZero}} · due {{template "ts" .Due}}{{end}}</span>
       </div>
       {{range .Messages}}<p class="text-gray-600">{{.}}</p>{{end}}
       {{with .Rejections}}<p class="text-gray-600">Import check: {{range $i, $r := .}}{{if $i}}; {{end}}{{$r}}{{end}}</p>{{end}}
@@ -946,8 +946,8 @@
           <td class="py-1 pr-3">{{printf "S%02d" .Season}}</td>
           <td class="py-1 pr-3">{{.Missing}}</td>
           <td class="py-1 pr-3">{{.Attempts}}</td>
-          <td class="py-1 pr-3">{{.LastAttempt.UTC.Format "2006-01-02"}}</td>
-          <td class="py-1">{{.NextEligible.UTC.Format "2006-01-02"}}</td>
+          <td class="py-1 pr-3">{{template "ts" .LastAttempt}}</td>
+          <td class="py-1">{{template "ts" .NextEligible}}</td>
         </tr>
         {{end}}
       </tbody>
@@ -963,7 +963,7 @@
     {{range .Runs}}
     <details class="border-b border-gray-100 py-2">
       <summary class="text-sm text-gray-800 cursor-pointer">
-        #{{.ID}} {{.StartedAt.UTC.Format "Mon Jan 2 15:04 UTC"}} · {{trigger .Trigger}}{{if .Dry}} · dry{{end}} ·
+        #{{.ID}} {{template "ts" .StartedAt}} · {{trigger .Trigger}}{{if .Dry}} · dry{{end}} ·
         {{template "badge" (dict "Tone" (sweepTone .Status) "Word" .Status)}}
         {{with .Reason}}<span class="text-gray-500">({{.}})</span>{{end}}
         <span class="text-gray-500"
@@ -1014,7 +1014,7 @@
       <li class="flex items-start justify-between gap-4 text-sm text-gray-700">
         <span class="break-all"
           >{{.ReleaseTitle}} <span class="text-gray-500">· {{.Indexer}} · {{.Reason}} ·
-            {{timeAgo .RefusedAt}}</span></span
+            {{template "ts" .RefusedAt}}</span></span
         >
         <button
           hx-post="{{$.BaseURL}}/maintenance/pack-sweep/refused/{{.ID}}/forget"
@@ -1049,7 +1049,7 @@
   </div>
   {{else}}
   {{template "badge" (dict "Tone" "gray" "Word" "Idle")}}
-  Next run: {{with .Next}}{{.UTC.Format "Mon Jan 2 15:04 UTC"}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}
+  Next run: {{with .Next}}{{template "ts" .}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}
   {{end}}
 </div>
 {{end}}
@@ -1094,7 +1094,7 @@
         <td class="py-1 pr-3">{{.StuckSeasons}}</td>
         <td class="py-1 pr-3">{{.QueueItems}}</td>
         <td class="py-1 break-all text-gray-700">
-          {{with .Latest}}{{.At.UTC.Format "Jan 2 15:04"}} · {{.Result}} · {{.ReleaseTitle}}{{end}}
+          {{with .Latest}}{{template "ts" .At}} · {{.Result}} · {{.ReleaseTitle}}{{end}}
         </td>
       </tr>
       {{end}}
@@ -1210,8 +1210,8 @@
           <td class="py-1 pr-3">missing {{.Missing}}</td>
           <td class="py-1 pr-3">streak {{.Streak}}{{if ge .Streak $.StuckAfter}} {{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}</td>
           <td class="py-1 pr-3">attempts {{.Attempts}}</td>
-          <td class="py-1 pr-3">last {{.LastAttempt.UTC.Format "Jan 2 15:04"}}</td>
-          <td class="py-1">next {{.NextEligible.UTC.Format "Jan 2 15:04"}}</td>
+          <td class="py-1 pr-3">last {{template "ts" .LastAttempt}}</td>
+          <td class="py-1">next {{template "ts" .NextEligible}}</td>
         </tr>
         {{else}}
         <tr><td class="text-sm text-gray-400">None.</td></tr>
@@ -1226,7 +1226,7 @@
       <tbody>
         {{range .Show.Items}}
         <tr class="border-b border-gray-100 align-top">
-          <td class="py-1 pr-3 whitespace-nowrap">{{.At.UTC.Format "Jan 2 15:04"}}</td>
+          <td class="py-1 pr-3 whitespace-nowrap">{{template "ts" .At}}</td>
           <td class="py-1 pr-3">{{season .Season}}</td>
           <td class="py-1 pr-3">{{.Result}}</td>
           <td class="py-1 pr-3 break-all">{{.ReleaseTitle}}</td>
@@ -1263,7 +1263,7 @@
   <h3 class="text-sm font-semibold text-gray-800">Explain</h3>
   {{template "notice" (dict "Err" .Err)}}
   {{if .Text}}
-  <p class="text-xs text-gray-500">Explained {{.At.UTC.Format "Jan 2 15:04"}} UTC{{if .Stale}} · history changed since{{end}}</p>
+  <p class="text-xs text-gray-500">Explained {{template "ts" .At}}{{if .Stale}} · history changed since{{end}}</p>
   <div class="whitespace-pre-wrap text-sm {{if .Stale}}text-gray-400{{else}}text-gray-800{{end}}">{{.Text}}</div>
   {{end}}
   {{if .Can}}

@@ -17,7 +17,6 @@ import (
 const (
 	stuckUnavailable        = "Stuck queue unavailable (Sonarr and Radarr not configured)"
 	stuckSettingsUnreadable = "Stored stuck-queue settings couldn't be read; saving replaces them."
-	stuckTimeLayout         = "2006-01-02 15:04 MST"
 	ageRounding             = time.Minute
 )
 
@@ -33,7 +32,7 @@ type stuckItemView struct {
 	Title         string
 	Verdict       string
 	Age           string
-	Due           string
+	Due           time.Time
 	Targets       string
 	TargetsFP     string
 	Messages      []string
@@ -173,7 +172,7 @@ func (s *Server) stuckCardData(
 	if res == nil {
 		return card
 	}
-	card["LastRun"] = res.FinishedAt.UTC().Format(stuckTimeLayout)
+	card["LastRun"] = res.FinishedAt
 	card["DryRun"] = res.DryRun
 	card["CapHit"] = res.CapHit
 	apps := make([]stuckAppView, 0, len(res.Apps))
@@ -206,10 +205,7 @@ func stuckItem(it stuckqueue.Item) stuckItemView {
 	v := stuckItemView{
 		App: string(it.App), DownloadID: it.DownloadID, Title: it.Title, Verdict: string(it.Verdict),
 		Age: it.Age.Round(ageRounding).String(), Targets: it.Targets(), TargetsFP: it.TargetsFP(),
-		ImportRefusal: it.ImportRefusal, Rejections: it.Rejections,
-	}
-	if !it.Due.IsZero() {
-		v.Due = it.Due.UTC().Format(stuckTimeLayout)
+		ImportRefusal: it.ImportRefusal, Rejections: it.Rejections, Due: it.Due,
 	}
 	for _, r := range it.Records {
 		for _, m := range r.Messages {

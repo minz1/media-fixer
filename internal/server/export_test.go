@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/livecheck"
@@ -44,3 +45,5 @@ func StatusTone(s db.IncidentStatus) string { return statusTone(s) }
 func CheckTone(s livecheck.Status) string   { return checkTone(s) }
 func ConfidenceTone(c string) string        { return confidenceTone(c) }
 func SweepTone(s string) string             { return sweepTone(s) }
+
+func RelTime(now, t time.Time) string { return relTime(now, t) }

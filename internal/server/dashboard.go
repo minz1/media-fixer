@@ -61,21 +61,9 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		// dict builds a map[string]any from alternating key/value pairs, for
 		// passing extra data (e.g. a page Title) into {{template "head" ...}}
 		// without every page's own top-level data needing a Title field.
-		"dict":    dictFunc,
-		"trigger": sweep.TriggerLabel,
-		"timeAgo": func(t time.Time) string {
-			d := time.Since(t)
-			switch {
-			case d < time.Minute:
-				return "just now"
-			case d < time.Hour:
-				return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
-			case d < 24*time.Hour:
-				return d.Round(time.Hour).String()
-			default:
-				return t.Format("Jan 2")
-			}
-		},
+		"dict":           dictFunc,
+		"trigger":        sweep.TriggerLabel,
+		"utc":            utcStamp,
 		"statusTone":     statusTone,
 		"statusWord":     func(st db.IncidentStatus) string { return strings.ReplaceAll(string(st), "_", " ") },
 		"checkTone":      checkTone,
@@ -397,5 +385,63 @@ func confidenceTone(confidence string) string {
 		return toneRed
 	default:
 		return toneGray
+	}
+}
+
+const (
+	justNowSpan = 5 * time.Second
+	day         = 24 * time.Hour
+	dateSpan    = 30 * day
+)
+
+func relTime(now, t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	d := t.Sub(now).Abs()
+	var n string
+	switch {
+	case d < justNowSpan:
+		return "just now"
+	case d < time.Minute:
+		n = fmt.Sprintf("%ds", int(d/time.Second))
+	case d < time.Hour:
+		n = fmt.Sprintf("%dm", int(d/time.Minute))
+	case d < day:
+		n = fmt.Sprintf("%dh", int(d/time.Hour))
+	case d < dateSpan:
+		n = fmt.Sprintf("%dd", int(d/day))
+	case t.UTC().Year() == now.UTC().Year():
+		return t.UTC().Format("Jan 2")
+	default:
+		return t.UTC().Format("Jan 2, 2006")
+	}
+	if t.After(now) {
+		return "in " + n
+	}
+	return n + " ago"
+}
+
+type stamp struct{ ISO, Exact, Rel string }
+
+// utcStamp feeds the "ts" define; nil or zero renders "never".
+func utcStamp(v any) *stamp {
+	var t time.Time
+	switch x := v.(type) {
+	case time.Time:
+		t = x
+	case *time.Time:
+		if x != nil {
+			t = *x
+		}
+	}
+	if t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &stamp{
+		ISO:   u.Format(time.RFC3339),
+		Exact: u.Format("2006-01-02 15:04") + " UTC",
+		Rel:   relTime(time.Now(), t),
 	}
 }

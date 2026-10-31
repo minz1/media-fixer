@@ -149,7 +149,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		"would clear 1",
 		"1 waiting out the 6 h delay",
 		"AHS",
-		"due 2026-10-30 05:07 UTC",
+		`due <time datetime="2026-10-30T05:07:00Z" title="2026-10-30 05:07 UTC">`,
 		`name="download_id" value="AH"`,
 		`name="download_id" value="LC"`,
 		`name="targets_fp" value="`+card.Fingerprint([]byte("S03E11"))+`"`,

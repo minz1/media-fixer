@@ -359,7 +359,7 @@ func TestMaintenanceStatus_Fragment(t *testing.T) {
 		if next == nil {
 			t.Fatal("NextRun nil with the sweep enabled")
 		}
-		mustContain(t, body, "Idle", next.Format("Mon Jan 2 15:04 UTC"))
+		mustContain(t, body, "Idle", `title="`+next.UTC().Format("2006-01-02 15:04")+` UTC"`)
 		if strings.Contains(body, "hx-trigger") {
 			t.Errorf("idle fragment polls:\n%s", body)
 		}
@@ -619,7 +619,7 @@ func TestSweepCard_IntervalAndUsage(t *testing.T) {
 	seedUsedToday(t, env)
 
 	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
-	next := env.sch.NextRun(time.Now()).UTC().Format("Mon Jan 2 15:04 UTC")
+	next := `title="` + env.sch.NextRun(time.Now()).UTC().Format("2006-01-02 15:04") + ` UTC"`
 	mustContain(t, body, "Enabled (every 6 h)", "Next run:", next)
 	if got := strings.Count(body, "used today 3 / 10"); got != 3 {
 		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "used today 3 / 10", got)
