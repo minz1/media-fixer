@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
-	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
@@ -378,29 +378,89 @@ func TestDarkOverrides_AfterLightRules(t *testing.T) {
 	}
 }
 
+var (
+	actionRe     = regexp.MustCompile(`\{\{-?\s*(if|range|with|define|block|end)\b`)
+	includeRe    = regexp.MustCompile(`\{\{-?\s*template\s+"([^"]+)"[^}]*\}\}`)
+	findButtonRe = regexp.MustCompile(`hx-disable="(find button[^"]*)"`)
+	buttonTagRe  = regexp.MustCompile(`<button\b[^>]*>`)
+	typeAttrRe   = regexp.MustCompile(`\stype=`)
+)
+
+func inRange(text string, at int) bool {
+	var open []string
+	for _, m := range actionRe.FindAllStringSubmatchIndex(text[:at], -1) {
+		if kind := text[m[2]:m[3]]; kind != "end" {
+			open = append(open, kind)
+		} else if len(open) > 0 {
+			open = open[:len(open)-1]
+		}
+	}
+	return slices.Contains(open, "range")
+}
+
+func defineBody(src, name string) string {
+	open := `{{define "` + name + `"}}`
+	start := strings.Index(src, open)
+	if start < 0 {
+		return ""
+	}
+	start += len(open)
+	depth := 1
+	for _, m := range actionRe.FindAllStringSubmatchIndex(src[start:], -1) {
+		if src[start+m[2]:start+m[3]] != "end" {
+			depth++
+			continue
+		}
+		if depth--; depth == 0 {
+			return src[start : start+m[0]]
+		}
+	}
+	return ""
+}
+
+func expandIncludes(src, text string) string {
+	return includeRe.ReplaceAllStringFunc(text, func(call string) string {
+		return expandIncludes(src, defineBody(src, includeRe.FindStringSubmatch(call)[1]))
+	})
+}
+
 func TestFormDisable_TargetsOnlyTheSubmit(t *testing.T) {
 	t.Parallel()
-	var body strings.Builder
-	for _, srv := range []*server.Server{newStuckEnv(t).srv, newMaintenanceTestServer(t).srv} {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/media/maintenance", nil)
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, req)
-		body.WriteString(rec.Body.String())
+	raw, err := os.ReadFile("templates/dashboard.html")
+	if err != nil {
+		t.Fatal(err)
 	}
+	src := string(raw)
 	forms := 0
-	for _, part := range strings.Split(body.String(), "<form")[1:] {
+	for _, part := range strings.Split(src, "<form")[1:] {
 		form, _, _ := strings.Cut(part, "</form>")
 		head, _, _ := strings.Cut(form, ">")
-		if !strings.Contains(head, `hx-disable="find button"`) {
+		m := findButtonRe.FindStringSubmatch(head)
+		if m == nil {
 			continue
 		}
 		forms++
-		if n := strings.Count(form, "<button"); n != 1 {
-			t.Errorf(`form with hx-disable="find button" has %d buttons, so it may disable the wrong one:%s`, n, head)
+		body := expandIncludes(src, form)
+		var submits []int
+		buttons := buttonTagRe.FindAllStringIndex(body, -1)
+		for _, b := range buttons {
+			tag := body[b[0]:b[1]]
+			if m[1] == "find button" || strings.Contains(tag, `type="submit"`) || !typeAttrRe.MatchString(tag) {
+				submits = append(submits, b[0])
+			}
+		}
+		switch {
+		case m[1] != "find button" && m[1] != "find button[type=submit]":
+			t.Errorf("unknown hx-disable selector %q:%s", m[1], head)
+		case len(submits) != 1:
+			t.Errorf("form with hx-disable=%q has %d matching buttons, so it may disable the wrong one:%s",
+				m[1], len(submits), head)
+		case inRange(body, submits[0]):
+			t.Errorf("form with hx-disable=%q repeats its button in a range:%s", m[1], head)
 		}
 	}
-	if forms == 0 {
-		t.Fatal("no find-button forms found")
+	if want := strings.Count(src, `hx-disable="find button`); forms != want {
+		t.Fatalf("checked %d find-button forms, template has %d", forms, want)
 	}
 }
 
