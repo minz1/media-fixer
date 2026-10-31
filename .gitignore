@@ -15,3 +15,4 @@ docs/
 .autopilot/rules.md
 e2e/shots/
 e2e/state/
+__pycache__/
