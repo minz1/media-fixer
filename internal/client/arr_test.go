@@ -462,6 +462,46 @@ func TestSeriesHistory(t *testing.T) {
 	}
 }
 
+func TestRedactCredentialsGaps(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"newline":        "fetch apikey=\nNL1 failed",
+		"tab":            "fetch apikey:\t\tTB1 failed",
+		"basic auth":     "Authorization: Basic dXNlcjpCQTE=",
+		"secret param":   "?client_secret=SC1&x=1",
+		"auth param":     "?auth=AU1&x=1",
+		"sig param":      "?sig=SG1&x=1",
+		"sid param":      "?sid=SD1&x=1",
+		"cookie header":  "Cookie: session=CK1; other=CK2",
+		"double encoded": "u=%3Fapikey%253DDE1",
+		"quoted spaces":  `token: "QS1 QS2"`,
+		"single quoted":  `{'apikey': 'SQ1'}`,
+		"raw @ password": "http://user:PW1@PW2@host/x",
+		"empty user":     "http://:EU1@host/x",
+		"token scheme":   "Authorization: Token TK1",
+		"apostrophe":     "apikey=abc'AP1",
+		"@ in username":  "http://me@mail.com:UP1@host/x",
+		"quoted cookie":  `Cookie: "a=CQ1"`,
+		"quoted header":  `{"Authorization": "Token JT1"}`,
+	}
+	for name, in := range cases {
+		out := client.RedactCredentials(in)
+		for _, secret := range []string{"NL1", "TB1", "dXNlcjpCQTE", "SC1", "AU1", "SG1", "SD1", "CK1", "CK2", "DE1", "QS1", "QS2", "SQ1", "PW1", "PW2", "EU1", "TK1", "AP1", "UP1", "CQ1", "JT1"} {
+			if strings.Contains(out, secret) {
+				t.Errorf("%s: %q leaked %s: %q", name, in, secret, out)
+			}
+		}
+	}
+	for _, plain := range []string{"No files found are eligible for import in /data/x", "Found inside: the folder", "design: done",
+		"Indexer returned 401 Unauthorized: invalid api key", "Authentication: failed", "Author: John",
+		"Basic authentication failed for indexer", "http://sonarr:8989?email=me@x.com",
+	} {
+		if got := client.RedactCredentials(plain); got != plain {
+			t.Errorf("plain message changed: %q -> %q", plain, got)
+		}
+	}
+}
+
 func TestSeriesGrabHistoryUnchanged(t *testing.T) {
 	t.Parallel()
 	var raw []string

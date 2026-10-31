@@ -228,29 +228,30 @@ func (s *Service) Show(ctx context.Context, seriesID int) (Show, error) {
 	} else if !errors.Is(getErr, db.ErrNotFound) {
 		return Show{}, getErr
 	}
-	if s.fillSonarr(ctx, &sh, seriesID) {
-		return Show{}, client.ErrNotFound
+	switch err = s.fillSonarr(ctx, &sh, seriesID); {
+	case errors.Is(err, client.ErrNotFound):
+		return Show{}, err
+	case err != nil:
+		sh.SonarrErr = err.Error()
 	}
 	return sh, nil
 }
 
-func (s *Service) fillSonarr(ctx context.Context, sh *Show, seriesID int) bool {
+func (s *Service) fillSonarr(ctx context.Context, sh *Show, seriesID int) error {
 	series, seasons, err := s.readSonarr(ctx, seriesID)
 	if err != nil {
-		sh.SonarrErr = err.Error()
-		return errors.Is(err, client.ErrNotFound)
+		return err
 	}
 	sh.Series, sh.Seasons = &series, seasons
 	if !sh.Stuck && sh.Cached == nil {
-		return false
+		return nil
 	}
 	facts, err := s.facts(ctx, series, seasons, sh.Targets, sh.Items)
 	if err != nil {
-		sh.SonarrErr = err.Error()
-		return false
+		return err
 	}
 	sh.CacheFresh = sh.Cached != nil && sh.Cached.Fingerprint == fingerprint(s.Model, facts)
-	return false
+	return nil
 }
 
 func (s *Service) List(ctx context.Context) (List, error) {

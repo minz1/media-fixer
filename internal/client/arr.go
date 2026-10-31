@@ -371,16 +371,24 @@ type SeriesEvent struct {
 }
 
 var (
-	arrCredentialParamRE = regexp.MustCompile(
-		`(?i)([a-z_-]*(?:key|token|pass)[a-z_-]*|[?&]r)"?[ \t]*(?:=|%3D|:)[ \t]*"?[^&\s"]*`,
+	arrAuthHeaderRE = regexp.MustCompile(`(?i)\b((?:proxy-)?authorization)["']? ?[:=] ?["']?(?:[a-z]+ )?[^&\s"']+`)
+	arrBearerRE     = regexp.MustCompile(`(?i)\bbearer [^&\s"']+`)
+	arrCookieRE     = regexp.MustCompile(
+		`(?i)\b((?:set-)?cookie)["']? ?[:=] ?["']?[^&\s"';]+(?:; ?[^&\s"';]+)*["']?`,
 	)
-	arrBearerRE      = regexp.MustCompile(`(?i)\bbearer[ \t]+[^&\s"]+`)
-	arrURLUserinfoRE = regexp.MustCompile(`://([^/\s:@]+):[^/\s@]+@`)
+	arrCredentialParamRE = regexp.MustCompile(
+		`(?i)([a-z_-]*(?:key|token|pass|secret|[_-]auth)[a-z_-]*|\b(?:auth|sig|sid)|[?&]r)["']? ?(?:=|%3D|%253D|:) ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)`,
+	)
+	arrURLUserinfoRE = regexp.MustCompile(`://([^/\s:]*):[^/?#\s]+@`)
 )
 
-// RedactCredentials replaces every key, token or pass parameter or header value, bearer token and URL password in s.
+// RedactCredentials collapses whitespace, then replaces every authorization header, bearer token, cookie, key, token,
+// pass, secret or auth parameter or header value and URL password in s.
 func RedactCredentials(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	s = arrAuthHeaderRE.ReplaceAllString(s, "${1}: REDACTED")
 	s = arrBearerRE.ReplaceAllString(s, "Bearer REDACTED")
+	s = arrCookieRE.ReplaceAllString(s, "${1}: REDACTED")
 	s = arrCredentialParamRE.ReplaceAllString(s, "${1}=REDACTED")
 	return arrURLUserinfoRE.ReplaceAllString(s, "://${1}:REDACTED@")
 }
