@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,8 +209,9 @@ func TestRunSeriesRefusedSettingsAndRun(t *testing.T) {
 		t.Parallel()
 		h, sch := twoShows(t, settings())
 		entered, release := make(chan struct{}), make(chan struct{})
+		enter := sync.OnceFunc(func() { close(entered) })
 		h.fake.beforePost = func() {
-			close(entered)
+			enter()
 			<-release
 		}
 		if err := sch.RunNow("manual", false); err != nil {
