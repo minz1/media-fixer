@@ -75,6 +75,10 @@ func (s *Service) SetSeedTimeoutForTest(d time.Duration) {
 	s.seedTimeout = d
 }
 
+func (s *Service) EndLockEpisodeForTest(ctx context.Context) {
+	s.endLockEpisode(ctx)
+}
+
 func (s *Service) SetUnitForTest(d time.Duration) {
 	s.unit.Store(int64(d))
 }

@@ -211,6 +211,42 @@ func TestHandle_SystemicLockAlertsOncePerEpisode(t *testing.T) {
 	}
 }
 
+func TestHandle_SystemicLockEndsWhenActiveCountDrops(t *testing.T) {
+	t.Parallel()
+	svc, database, notif := newTestService(t)
+	ctx := context.Background()
+	report := func(title string) *db.Incident {
+		t.Helper()
+		inc, err := svc.Handle(ctx, &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inc
+	}
+	a, b := report("A"), report("B")
+	for _, title := range []string{"C", "D", "E", "F"} {
+		report(title)
+	}
+	if len(notif.cards) != 1 {
+		t.Fatalf("owner cards = %d, want 1 lock alert", len(notif.cards))
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		if err := database.UpdateIncidentStatus(ctx, id, db.StatusResolved); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc.EndLockEpisodeForTest(ctx)
+	for _, id := range []string{a.ID, b.ID} {
+		if err := database.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report("G")
+	if len(notif.cards) != 2 {
+		t.Fatalf("owner cards after the count dropped under the lock and rose again = %d, want 2", len(notif.cards))
+	}
+}
+
 func TestHandle_SystemicLockRetriesFailedAlert(t *testing.T) {
 	t.Parallel()
 	svc, _, notif := newTestService(t)

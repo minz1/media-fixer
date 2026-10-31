@@ -1153,11 +1153,28 @@ func (s *Service) backgroundSweepLoop(base context.Context) {
 			s.SweepStaleRuns(base)
 			s.AdvancePendingOutcomes(base)
 			s.AdvanceReporterProgress(base, time.Now())
+			s.endLockEpisode(base)
 			if next := s.minutes(s.timers(base).CheckEveryMinutes); next != d {
 				ticker.Reset(next)
 				d = next
 			}
 		}
+	}
+}
+
+// endLockEpisode re-arms the lock alert once under the threshold, since reopen and rerun raise the count without Handle.
+func (s *Service) endLockEpisode(ctx context.Context) {
+	prev := s.lockAlertAt.Load()
+	if prev == 0 {
+		return
+	}
+	n, err := s.db.CountOpenIncidents(ctx)
+	if err != nil {
+		s.log.WarnContext(ctx, "count active incidents", "error", err)
+		return
+	}
+	if n < SystematicIncidentThreshold {
+		s.lockAlertAt.CompareAndSwap(prev, 0)
 	}
 }
 
