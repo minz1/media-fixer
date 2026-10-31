@@ -237,18 +237,18 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 	return set, errs
 }
 
-func sweepColor(status string) string {
+func sweepTone(status string) string {
 	switch status {
 	case "done":
-		return badgeGreen
+		return toneGreen
 	case "running":
-		return "bg-blue-100 text-blue-800"
+		return toneBlue
 	case "failed", "refused":
-		return badgeRed
+		return toneRed
 	case "paused", "interrupted":
-		return badgeYellow
+		return toneYellow
 	default:
-		return badgeGray
+		return toneGray
 	}
 }
 

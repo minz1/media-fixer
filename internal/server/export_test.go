@@ -5,6 +5,9 @@ import (
 	"io"
 	"net"
 
+	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/livecheck"
+
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -36,3 +39,8 @@ func (s *Server) StuckCardDataForTest(
 }
 
 func (s *Server) TimersCardForTest(ctx context.Context) map[string]any { return s.timersCardFor(ctx) }
+
+func StatusTone(s db.IncidentStatus) string { return statusTone(s) }
+func CheckTone(s livecheck.Status) string   { return checkTone(s) }
+func ConfidenceTone(c string) string        { return confidenceTone(c) }
+func SweepTone(s string) string             { return sweepTone(s) }

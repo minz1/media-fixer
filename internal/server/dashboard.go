@@ -38,13 +38,13 @@ const (
 	msgWholeNumber = "must be a whole number"
 )
 
-// Shared Tailwind badge classes, reused across statusColor, checkColor, and
-// confidenceColor.
 const (
-	badgeGray   = "bg-gray-100 text-gray-600"
-	badgeRed    = "bg-red-100 text-red-800"
-	badgeYellow = "bg-yellow-100 text-yellow-800"
-	badgeGreen  = "bg-green-100 text-green-800"
+	toneGray   = "gray"
+	toneRed    = "red"
+	toneYellow = "yellow"
+	toneGreen  = "green"
+	toneBlue   = "blue"
+	toneOrange = "orange"
 )
 
 // dashboardTemplates holds the parsed template set.
@@ -76,59 +76,13 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 				return t.Format("Jan 2")
 			}
 		},
-		"statusColor": func(s db.IncidentStatus) string {
-			switch s {
-			case db.StatusOpen:
-				return badgeYellow
-			case db.StatusInvestigating:
-				return "bg-blue-100 text-blue-800"
-			case db.StatusAgentFixed:
-				return badgeGreen
-			case db.StatusManualTestNeeded:
-				return "bg-orange-100 text-orange-800"
-			case db.StatusResolved:
-				return badgeGray
-			case db.StatusReopened:
-				return badgeRed
-			case db.StatusBlocked:
-				return badgeRed
-			case db.StatusVerifying:
-				return "bg-purple-100 text-purple-800"
-			default:
-				return badgeGray
-			}
-		},
-		"checkColor": func(s livecheck.Status) string {
-			switch s {
-			case livecheck.StatusOK:
-				return badgeGreen
-			case livecheck.StatusDegraded:
-				return badgeYellow
-			case livecheck.StatusFail, livecheck.StatusMissing:
-				return badgeRed
-			case livecheck.StatusUnconfigured:
-				return "bg-orange-100 text-orange-800"
-			case livecheck.StatusSkipped:
-				return "bg-gray-100 text-gray-500"
-			default:
-				return badgeGray
-			}
-		},
-		"sweepColor": sweepColor,
-		"season":     seasonLabel,
-		"ms":         lookupDuration,
-		"confidenceColor": func(confidence string) string {
-			switch strings.ToLower(confidence) {
-			case "high":
-				return badgeGreen
-			case "medium":
-				return badgeYellow
-			case "low":
-				return badgeRed
-			default:
-				return badgeGray
-			}
-		},
+		"statusTone":     statusTone,
+		"statusWord":     func(st db.IncidentStatus) string { return strings.ReplaceAll(string(st), "_", " ") },
+		"checkTone":      checkTone,
+		"sweepTone":      sweepTone,
+		"season":         seasonLabel,
+		"ms":             lookupDuration,
+		"confidenceTone": confidenceTone,
 	}).ParseFS(templateFS, "templates/dashboard.html")
 	if err != nil {
 		return nil, err
@@ -393,4 +347,55 @@ func parseUUIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return parsed.String(), true
+}
+
+func statusTone(s db.IncidentStatus) string {
+	switch s {
+	case db.StatusOpen:
+		return toneYellow
+	case db.StatusInvestigating:
+		return toneBlue
+	case db.StatusAgentFixed:
+		return toneGreen
+	case db.StatusManualTestNeeded:
+		return toneOrange
+	case db.StatusReopened, db.StatusBlocked:
+		return toneRed
+	case db.StatusVerifying:
+		return "purple"
+	case db.StatusResolved:
+		return toneGray
+	default:
+		return toneGray
+	}
+}
+
+func checkTone(s livecheck.Status) string {
+	switch s {
+	case livecheck.StatusOK:
+		return toneGreen
+	case livecheck.StatusDegraded:
+		return toneYellow
+	case livecheck.StatusFail, livecheck.StatusMissing:
+		return toneRed
+	case livecheck.StatusUnconfigured:
+		return toneOrange
+	case livecheck.StatusSkipped:
+		return toneGray
+	default:
+		return toneGray
+	}
+}
+
+func confidenceTone(confidence string) string {
+	switch strings.ToLower(confidence) {
+	case "high":
+		return toneGreen
+	case "medium":
+		return toneYellow
+	case "low":
+		return toneRed
+	default:
+		return toneGray
+	}
 }

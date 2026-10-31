@@ -31,6 +31,14 @@
       border: 2px solid currentColor; border-top-color: transparent; animation: btn-spin 0.8s linear infinite;
     }
     @keyframes btn-spin { to { transform: rotate(360deg); } }
+    .badge { display: inline-block; padding: 0.125rem 0.5rem; font-size: 0.75rem; line-height: 1rem; font-weight: 500; border-radius: 9999px; white-space: nowrap; }
+    .tone-gray { background-color: oklch(96.7% 0.003 264.542); color: oklch(44.6% 0.03 256.802); }
+    .tone-blue { background-color: oklch(93.2% 0.032 255.585); color: oklch(42.4% 0.199 265.638); }
+    .tone-green { background-color: oklch(96.2% 0.044 156.743); color: oklch(44.8% 0.119 151.328); }
+    .tone-yellow { background-color: oklch(97.3% 0.071 103.193); color: oklch(47.6% 0.114 61.907); }
+    .tone-orange { background-color: oklch(95.4% 0.038 75.164); color: oklch(47% 0.157 37.304); }
+    .tone-red { background-color: oklch(93.6% 0.032 17.717); color: oklch(44.4% 0.177 26.899); }
+    .tone-purple { background-color: oklch(94.6% 0.033 307.174); color: oklch(43.8% 0.218 303.724); }
     @media (prefers-color-scheme: dark) {
       :root {
         --color-gray-50: oklch(16% 0.02 262);
@@ -66,6 +74,13 @@
       .btn-secondary { background-color: oklch(21% 0.025 262); border-color: oklch(45% 0.03 260); color: oklch(92% 0.006 264); }
       .btn-secondary:hover { background-color: oklch(28% 0.03 257); }
       .btn-link { background-color: transparent; color: oklch(74% 0.13 255); }
+      .tone-gray { background-color: oklch(28% 0.03 257); color: oklch(80% 0.015 260); }
+      .tone-blue { background-color: oklch(30% 0.08 260); color: oklch(86% 0.08 255); }
+      .tone-green { background-color: oklch(30% 0.07 150); color: oklch(87% 0.11 150); }
+      .tone-yellow { background-color: oklch(32% 0.07 86); color: oklch(90% 0.1 95); }
+      .tone-orange { background-color: oklch(31% 0.08 47); color: oklch(86% 0.09 50); }
+      .tone-red { background-color: oklch(30% 0.09 25); color: oklch(85% 0.09 20); }
+      .tone-purple { background-color: oklch(30% 0.09 305); color: oklch(85% 0.09 305); }
       .notice-ok { background-color: oklch(30% 0.07 150); color: oklch(87% 0.11 150); }
       .notice-err { background-color: oklch(30% 0.09 25); color: oklch(85% 0.09 20); }
     }
@@ -132,6 +147,8 @@
 </html>
 {{end}}
 
+{{define "badge"}}<span class="badge tone-{{.Tone}}">{{.Word}}</span>{{end}}
+
 {{define "notice"}}{{if or .Ok .Err}}<div id="notice" hx-swap-oob="innerHTML">{{with .Ok}}<p class="notice notice-ok">{{.}}</p>{{end}}{{with .Err}}<p class="notice notice-err">{{.}}</p>{{end}}</div>{{end}}{{end}}
 
 {{define "pause_toggle"}}
@@ -186,11 +203,7 @@
           {{.What}} · {{.Source}} · {{timeAgo .CreatedAt}}
         </div>
       </div>
-      <span
-        class="ml-4 shrink-0 px-2 py-0.5 text-xs font-medium rounded-full {{statusColor .Status}}"
-      >
-        {{.Status}}
-      </span>
+      <span class="ml-4 shrink-0">{{template "badge" (dict "Tone" (statusTone .Status) "Word" (statusWord .Status))}}</span>
     </div>
     {{if .AutonomousLocked}}
     <div class="mt-2 text-xs text-red-600">🔒 Autonomous actions locked</div>
@@ -233,11 +246,7 @@
         {{.Incident.ReportedBy}}
       </p>
     </div>
-    <span
-      class="px-2 py-0.5 text-xs font-medium rounded-full {{statusColor .Incident.Status}}"
-    >
-      {{.Incident.Status}}
-    </span>
+    {{template "badge" (dict "Tone" (statusTone .Incident.Status) "Word" (statusWord .Incident.Status))}}
   </div>
 
   {{if .Incident.Details}}
@@ -253,19 +262,14 @@
     <div class="bg-gray-50 border border-gray-200 rounded-sm p-4">
       <div class="flex items-start justify-between gap-3">
         <p class="text-sm text-gray-800">{{.Finding.RootCause}}</p>
-        <span
-          class="shrink-0 px-2 py-0.5 text-xs font-medium rounded-full {{confidenceColor .Finding.Confidence}}"
-          >{{.Finding.Confidence}} confidence</span
-        >
+        <span class="shrink-0">{{template "badge" (dict "Tone" (confidenceTone .Finding.Confidence) "Word" (printf "%s confidence" .Finding.Confidence))}}</span>
       </div>
       <div class="mt-3 flex flex-wrap items-center gap-2">
         <code class="px-2 py-0.5 bg-gray-200 text-gray-800 text-xs rounded-sm"
           >{{.Finding.PrimaryAction}}</code
         >
         {{if .Finding.RequiresApproval}}
-        <span class="text-xs font-medium text-amber-700"
-          >requires owner approval</span
-        >
+        {{template "badge" (dict "Tone" "orange" "Word" "requires owner approval")}}
         {{end}}
       </div>
       <p class="mt-2 text-xs text-gray-600">{{.Finding.PrimaryReason}}</p>
@@ -632,10 +636,7 @@
         <td class="py-1.5 pr-3 font-medium text-gray-800">{{.Tool}}</td>
         <td class="py-1.5 pr-3 text-gray-500">{{.Risk}}</td>
         <td class="py-1.5 pr-3">
-          <span
-            class="px-2 py-0.5 text-xs font-medium rounded-full {{checkColor .Status}}"
-            >{{.Status}}</span
-          >
+          {{template "badge" (dict "Tone" (checkTone .Status) "Word" .Status)}}
         </td>
         <td class="py-1.5 pr-3 text-gray-500">
           {{if .LatencyMS}}{{.LatencyMS}}ms{{else}}-{{end}}
@@ -656,10 +657,7 @@
       <tr class="border-b border-gray-100">
         <td class="py-1.5 pr-3 font-medium text-gray-800">{{.Tool}}</td>
         <td class="py-1.5 pr-3">
-          <span
-            class="px-2 py-0.5 text-xs font-medium rounded-full {{checkColor .Status}}"
-            >{{.Status}}</span
-          >
+          {{template "badge" (dict "Tone" (checkTone .Status) "Word" .Status)}}
         </td>
         <td class="py-1.5 text-gray-600">
           {{if .Error}}{{.Error}}{{else}}{{.Detail}}{{end}}
@@ -765,7 +763,7 @@
 <div id="stuck-results" class="space-y-6"
   {{if .Running}}hx-get="{{.BaseURL}}/maintenance/stuck-queue/results" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
   <div class="flex items-center gap-4 text-sm text-gray-700">
-    {{if .Running}}<span><span class="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Running…</span> {{if .StartedAt.IsZero}}starting…{{else}}started {{template "ts" .StartedAt}}{{end}} · checking the Sonarr and Radarr queues</span>{{end}}
+    {{if .Running}}<span>{{template "badge" (dict "Tone" "blue" "Word" "Running…")}} {{if .StartedAt.IsZero}}starting…{{else}}started {{template "ts" .StartedAt}}{{end}} · checking the Sonarr and Radarr queues</span>{{end}}
     {{with .LastRun}}<span>Last run {{.}}{{if $.DryRun}} · dry run{{end}}{{if $.CapHit}} · stopped at the clear limit{{end}}</span>
     {{else}}<span>No run yet.</span>{{end}}
     <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/run" hx-target="#stuck-queue" hx-swap="outerHTML"
@@ -966,7 +964,7 @@
     <details class="border-b border-gray-100 py-2">
       <summary class="text-sm text-gray-800 cursor-pointer">
         #{{.ID}} {{.StartedAt.UTC.Format "Mon Jan 2 15:04 UTC"}} · {{trigger .Trigger}}{{if .Dry}} · dry{{end}} ·
-        <span class="px-2 py-0.5 text-xs font-medium rounded-full {{sweepColor .Status}}">{{.Status}}</span>
+        {{template "badge" (dict "Tone" (sweepTone .Status) "Word" .Status)}}
         {{with .Reason}}<span class="text-gray-500">({{.}})</span>{{end}}
         <span class="text-gray-500"
           >· grabs {{.Counts.Grabs}}/{{.Counts.MaxGrabs}} · lookups {{.Counts.Lookups}}/{{.Counts.MaxLookups}} · searches {{.Counts.Searched}}/{{.Counts.MaxSearches}}</span
@@ -1043,14 +1041,14 @@
   {{if .Active}}hx-get="{{.BaseURL}}/maintenance/pack-sweep/status" hx-trigger="every 10s" hx-swap="outerHTML"{{end}}
 >
   {{if .Active}}
-  <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Running…</span>
+  {{template "badge" (dict "Tone" "blue" "Word" "Running…")}}
   {{if .Progress.Started.IsZero}}starting…{{else}}started {{template "ts" .Progress.Started}}{{end}}
   {{with .Progress.Phase}} · {{.}}{{end}}{{with .Progress.Current}} · {{.}}{{end}}
   <div class="text-gray-500 mt-1">
     grabs {{.Progress.Counts.Grabs}}/{{.Progress.Counts.MaxGrabs}} · lookups {{.Progress.Counts.Lookups}}/{{.Progress.Counts.MaxLookups}} · searches {{.Progress.Counts.Searched}}/{{.Progress.Counts.MaxSearches}}
   </div>
   {{else}}
-  <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Idle</span>
+  {{template "badge" (dict "Tone" "gray" "Word" "Idle")}}
   Next run: {{with .Next}}{{.UTC.Format "Mon Jan 2 15:04 UTC"}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}
   {{end}}
 </div>
@@ -1144,8 +1142,8 @@
 <div id="monitor-show" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
   <div class="flex items-center gap-3">
     <h2 class="text-xl font-bold text-gray-900">{{.Title}}</h2>
-    {{if .Show.Stuck}}<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800">stuck</span>{{end}}
-    {{if .Show.Excluded}}<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">excluded</span>{{end}}
+    {{if .Show.Stuck}}{{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}
+    {{if .Show.Excluded}}{{template "badge" (dict "Tone" "gray" "Word" "excluded")}}{{end}}
   </div>
   {{template "notice" (dict "Ok" .Notice "Err" .Failure)}}
   {{with .Show.SonarrErr}}<p class="notice notice-err">Sonarr could not be read: {{.}}</p>{{end}}
@@ -1210,7 +1208,7 @@
         <tr class="border-b border-gray-100">
           <td class="py-1 pr-3">S{{printf "%02d" .Season}}</td>
           <td class="py-1 pr-3">missing {{.Missing}}</td>
-          <td class="py-1 pr-3">streak {{.Streak}}{{if ge .Streak $.StuckAfter}} <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800">stuck</span>{{end}}</td>
+          <td class="py-1 pr-3">streak {{.Streak}}{{if ge .Streak $.StuckAfter}} {{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}</td>
           <td class="py-1 pr-3">attempts {{.Attempts}}</td>
           <td class="py-1 pr-3">last {{.LastAttempt.UTC.Format "Jan 2 15:04"}}</td>
           <td class="py-1">next {{.NextEligible.UTC.Format "Jan 2 15:04"}}</td>
