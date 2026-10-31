@@ -131,8 +131,9 @@ After all five steps, call complete_diagnosis.
 
 The media-agent saw tasks stuck in uninterruptible reads on this release's files. The mount is
 wedged, so a read of the stuck file would wedge too.
-  - Do NOT run dd_readability_test on the stuck path: the read would hang in the same state and
-    park a media-agent goroutine. list_directory on its folder and get_torrent_state are safe.
+  - Do NOT run dd_readability_test or list_directory: a read or a stat of the stuck file would
+    hang in the same state and park a media-agent goroutine, so both are refused on this incident.
+    get_torrent_state and get_repair_status are safe.
   - Go to get_repair_status, then decypharr_recheck by name, then refresh_decypharr_links. If
     those were already tried on this incident, escalate delete_torrent_readd (the existing
     approval flow).

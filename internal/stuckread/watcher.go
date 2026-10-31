@@ -187,13 +187,18 @@ func (w *Watcher) rerunFixed(ctx context.Context, inc *db.Incident) {
 		return
 	}
 	open, err := w.db.CountOpenIncidents(ctx)
-	if err != nil || open >= incident.SystematicIncidentThreshold {
+	if err != nil {
+		w.log.WarnContext(ctx, "count open incidents", "error", err)
+		return
+	}
+	if open >= incident.SystematicIncidentThreshold {
+		return
+	}
+	if err = w.svc.Rerun(ctx, inc.ID); err != nil {
+		w.log.WarnContext(ctx, "rerun stuck-read incident", "incident", inc.ID, "error", err)
 		return
 	}
 	w.rerun[inc.ID] = true
-	if err = w.svc.Rerun(ctx, inc.ID); err != nil {
-		w.log.WarnContext(ctx, "rerun stuck-read incident", "incident", inc.ID, "error", err)
-	}
 }
 
 func (w *Watcher) details(rs []mediaagentapi.StuckReader, now time.Time) string {

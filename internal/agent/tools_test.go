@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -720,6 +721,44 @@ func TestDDReadabilityRefusesStuckRead(t *testing.T) {
 				t.Errorf("media-agent saw %d requests, want %d", got, tc.wantHits)
 			}
 		})
+	}
+}
+
+func TestListDirectoryRefusesStuckRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		what     string
+		wantErr  bool
+		wantHits int64
+	}{
+		{agent.WhatStuckRead, true, 0},
+		{"cant_play", false, 1},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			t.Parallel()
+			ma, hits := countingMediaAgent(t)
+			disp := &agent.Dispatcher{MediaAgent: ma, IncidentWhat: tc.what}
+			_, err := disp.Call(
+				context.Background(),
+				"list_directory",
+				map[string]any{"path": "/mnt/decypharr/__all__/T"},
+			)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got := hits.Load(); got != tc.wantHits {
+				t.Errorf("media-agent saw %d requests, want %d", got, tc.wantHits)
+			}
+		})
+	}
+}
+
+func TestDDRefusalDoesNotSuggestListDirectory(t *testing.T) {
+	t.Parallel()
+	disp := &agent.Dispatcher{IncidentWhat: agent.WhatStuckRead}
+	_, err := disp.Call(context.Background(), "dd_readability_test", map[string]any{"file_path": "/x"})
+	if err == nil || strings.Contains(err.Error(), "list_directory") {
+		t.Errorf("dd refusal = %v, want an error that does not point at list_directory", err)
 	}
 }
 

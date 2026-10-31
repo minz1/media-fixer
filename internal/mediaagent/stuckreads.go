@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -144,7 +145,7 @@ func (o *RealOps) taskFile(pid int, taskDir string) (string, string) {
 	}
 	var found []string
 	for _, e := range entries {
-		if p := o.mediaLink(filepath.Join(fdDir, e.Name())); p != "" {
+		if p := o.mediaLink(filepath.Join(fdDir, e.Name())); p != "" && !slices.Contains(found, p) {
 			found = append(found, p)
 		}
 	}

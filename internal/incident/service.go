@@ -535,11 +535,15 @@ func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory s
 // kicks off the generic verification loop for any other fix that needs time,
 // or marks the incident fixed now.
 func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+	if inc.What == agent.WhatStuckRead {
+		s.runVerification(ctx, inc, result)
+		return
+	}
 	if result.PrimaryAction == agent.ToolArrSearchMissing {
 		s.startPendingOutcomeTracking(ctx, inc, result)
 		return
 	}
-	if result.VerifyAfterSeconds > 0 || inc.What == agent.WhatStuckRead {
+	if result.VerifyAfterSeconds > 0 {
 		s.runVerification(ctx, inc, result)
 		return
 	}

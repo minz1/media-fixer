@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
@@ -322,6 +323,9 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 		if rp, isReplace := plan.(*client.ReplacePlan); isReplace && rp.Readability != nil {
 			data["ReadableFile"] = rp.Readability.ReadableFile
 			data["ReadabilityUnknown"] = !rp.Readability.Checked
+			if inc, incErr := s.db.GetIncident(r.Context(), id); incErr == nil && inc.What == agent.WhatStuckRead {
+				data["StuckRead"] = true
+			}
 			data["Reason"] = rp.Reason
 		}
 	}

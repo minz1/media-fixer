@@ -3,6 +3,7 @@ package stuckread_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -73,6 +74,7 @@ type harness struct {
 	feed  *feed
 	svc   *incident.Service
 	db    *db.DB
+	path  string
 	notif *recordingNotifier
 	logs  *bytes.Buffer
 	clock time.Time
@@ -91,7 +93,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { database.Close() })
 	h := &harness{
-		t: t, feed: &feed{}, db: database, notif: &recordingNotifier{}, logs: &bytes.Buffer{},
+		t: t, feed: &feed{}, db: database, path: f.Name(), notif: &recordingNotifier{}, logs: &bytes.Buffer{},
 		clock: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC),
 	}
 	h.svc = incident.NewService(
@@ -288,6 +290,33 @@ func TestAgentFixedRerunOnce(t *testing.T) {
 	}
 	if n := h.count("WARN"); n != 1 {
 		t.Fatalf("warn lines = %d, want 1:\n%s", n, h.logs)
+	}
+}
+
+func TestRerunErrorKeepsOnce(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	inc := openOne(t, h)
+	h.setStatus(inc.ID, db.StatusAgentFixed)
+	raw, err := sql.Open("sqlite", h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err = raw.ExecContext(t.Context(), `CREATE TRIGGER no_reopen BEFORE UPDATE OF status ON incidents
+		WHEN NEW.status = 'reopened' BEGIN SELECT RAISE(ABORT, 'db busy'); END`); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(three("T", 7)...)
+	if got := h.status(inc.ID); got != db.StatusAgentFixed {
+		t.Fatalf("status = %s, want agent_fixed after the failed rerun", got)
+	}
+	if _, err = raw.ExecContext(t.Context(), `DROP TRIGGER no_reopen`); err != nil {
+		t.Fatal(err)
+	}
+	h.poll(three("T", 7)...)
+	if got := h.status(inc.ID); got != db.StatusReopened {
+		t.Fatalf("status = %s, want reopened: a failed rerun must not use up the once", got)
 	}
 }
 

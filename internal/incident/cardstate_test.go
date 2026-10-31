@@ -618,3 +618,27 @@ func TestSystemicLock_UntrackedIsDelivered(t *testing.T) {
 		t.Errorf("logs = %q, want no notify owner error for an untracked card", logs.String())
 	}
 }
+
+func TestRenderer_PlanSectionStuckReadNotProbed(t *testing.T) {
+	t.Parallel()
+	svc, d, _ := newCardService(t, &cardNotifier{}, nil)
+	ctx := context.Background()
+	inc := &db.Incident{Status: db.StatusOpen, Source: "media-agent", What: agent.WhatStuckRead, Title: "The Boys"}
+	if err := d.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	finding := agent.DiagnosticResult{RootCause: "stuck read", EscalateAction: agent.EscalateRemoveAndSearch}
+	if err := d.SetIncidentFinding(ctx, inc.ID, finding, finding); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
+		t.Fatal(err)
+	}
+	p := readablePlan(1)
+	p.Readability = &client.ReadabilityProbe{}
+	storePlan(t, d, inc.ID, p)
+
+	if got := renderInc(t, svc, inc.ID).Sections[0].Value; got != "Not probed: reading a stuck file would hang" {
+		t.Errorf("readability = %q, want the not-probed line", got)
+	}
+}

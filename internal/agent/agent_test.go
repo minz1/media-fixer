@@ -691,4 +691,7 @@ func TestSystemPromptStuckReadSection(t *testing.T) {
 			t.Errorf("stuck_read section does not mention %s", want)
 		}
 	}
+	if strings.Contains(section, "list_directory on its folder") {
+		t.Error("stuck_read section calls list_directory safe; it stats every file in the folder")
+	}
 }

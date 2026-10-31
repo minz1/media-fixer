@@ -92,7 +92,7 @@ func (s *Service) escalationSpecs(ctx context.Context, inc *db.Incident) ([]butt
 	if action == "" {
 		return nil, nil, nil
 	}
-	plan, fresh, err := s.freshPlan(ctx, inc.ID, action)
+	plan, fresh, err := s.freshPlan(ctx, inc, action)
 	if err != nil || !fresh {
 		return []buttonSpec{{"Preview plan", card.Primary, verbPreview, nil}}, nil, err
 	}
@@ -140,8 +140,8 @@ func escalatable(inc *db.Incident) string {
 	return ""
 }
 
-func (s *Service) freshPlan(ctx context.Context, id, action string) (cardPlan, bool, error) {
-	planJSON, at, err := s.db.GetEscalationPlan(ctx, id)
+func (s *Service) freshPlan(ctx context.Context, inc *db.Incident, action string) (cardPlan, bool, error) {
+	planJSON, at, err := s.db.GetEscalationPlan(ctx, inc.ID)
 	if errors.Is(err, db.ErrNoEscalationPlan) {
 		return cardPlan{}, false, nil
 	}
@@ -170,7 +170,7 @@ func (s *Service) freshPlan(ctx context.Context, id, action string) (cardPlan, b
 		if err = json.Unmarshal(planJSON, &p); err != nil {
 			return cardPlan{}, false, fmt.Errorf("decode replace plan: %w", err)
 		}
-		secs = replaceSections(&p)
+		secs = replaceSections(&p, inc.What)
 		lines = len(p.Files)
 	}
 	secs = append(secs, card.Field{Name: "Expires", Value: fmt.Sprintf("<t:%d:t>", expires.Unix())})
@@ -185,8 +185,11 @@ func (s *Service) freshPlan(ctx context.Context, id, action string) (cardPlan, b
 	return plan, true, nil
 }
 
-func replaceSections(p *client.ReplacePlan) []card.Field {
+func replaceSections(p *client.ReplacePlan, what string) []card.Field {
 	readability := "Unknown: no media-agent tested these files"
+	if what == agent.WhatStuckRead {
+		readability = "Not probed: reading a stuck file would hang"
+	}
 	switch r := p.Readability; {
 	case r == nil || !r.Checked:
 	case r.ReadableFile != "":

@@ -451,6 +451,10 @@
       wider than the problem.
     </p>
   </div>
+  {{else if and .ReadabilityUnknown .StuckRead}}
+  <p class="mb-2 text-xs text-gray-600">
+    Not probed: reading a stuck file would hang.
+  </p>
   {{else if .ReadabilityUnknown}}
   <p class="mb-2 text-xs text-gray-600">
     Readability unknown &mdash; no media-agent configured, so the files this

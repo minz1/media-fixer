@@ -820,9 +820,14 @@ func (d *Dispatcher) readJellyfinScanStatus(ctx context.Context, _ map[string]an
 	return d.Jellyfin.ScanStatus(ctx)
 }
 
-var errStuckReadNoProbe = errors.New(
-	"dd_readability_test is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
-		"use list_directory and get_torrent_state instead")
+var (
+	errStuckReadNoProbe = errors.New(
+		"dd_readability_test is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
+			"use get_torrent_state and get_repair_status instead")
+	errStuckReadNoList = errors.New(
+		"list_directory is disabled for stuck_read incidents: it stats every file in the folder, " +
+			"and a stat of the stuck file would wedge too; use get_torrent_state and get_repair_status instead")
+)
 
 func (d *Dispatcher) readDDReadability(ctx context.Context, args map[string]any) (any, error) {
 	filePath, _ := args["file_path"].(string)
@@ -899,6 +904,9 @@ func escapeLogQLString(s string) string {
 
 func (d *Dispatcher) readListDirectory(ctx context.Context, args map[string]any) (any, error) {
 	path, _ := args["path"].(string)
+	if d.IncidentWhat == WhatStuckRead {
+		return nil, errStuckReadNoList
+	}
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
 	}

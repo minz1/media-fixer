@@ -157,6 +157,14 @@ func TestStuckReadsFDFallback(t *testing.T) {
 	if len(res.Readers) != 1 || res.Readers[0].Via != "fd" || res.Readers[0].Path != mount+"/a.mkv" {
 		t.Fatalf("readers = %+v", res.Readers)
 	}
+	fd(t, proc, 10, 9, mount+"/a.mkv")
+	res, err = ops.StuckReads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Readers) != 1 || res.Readers[0].Path != mount+"/a.mkv" {
+		t.Fatalf("one file on two fds: readers = %+v, want one", res.Readers)
+	}
 	fd(t, proc, 10, 8, mount+"/b.mkv")
 	res, err = ops.StuckReads()
 	if err != nil {

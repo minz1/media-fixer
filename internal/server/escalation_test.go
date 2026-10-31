@@ -18,6 +18,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -122,8 +123,13 @@ func newEscalationTestServer(t *testing.T, ag incident.AgentRunner) (*server.Ser
 // already diagnosed and escalated it.
 func newManualTestNeededIncident(t *testing.T, database *db.DB) *db.Incident {
 	t.Helper()
+	return newManualTestNeededIncidentWhat(t, database, "cant_play")
+}
+
+func newManualTestNeededIncidentWhat(t *testing.T, database *db.DB, what string) *db.Incident {
+	t.Helper()
 	ctx := context.Background()
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "The Boys"}
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: what, Title: "The Boys"}
 	if err := database.CreateIncident(ctx, inc); err != nil {
 		t.Fatal(err)
 	}
@@ -514,5 +520,24 @@ func TestResolve_AlreadyResolvedRedirects(t *testing.T) {
 	}
 	if loc := rec.Header().Get("Location"); loc != "/media/incidents/"+inc.ID {
 		t.Errorf("Location = %q, want the incident page", loc)
+	}
+}
+
+func TestEscalationPreview_StuckReadNotProbed(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{
+		planResult: &client.ReplacePlan{Title: "The Boys", Readability: &client.ReadabilityProbe{}},
+	}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncidentWhat(t, database, agent.WhatStuckRead)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview", nil,
+	))
+	body := rec.Body.String()
+	if !strings.Contains(body, "Not probed: reading a stuck file would hang") ||
+		strings.Contains(body, "no media-agent configured") {
+		t.Errorf("stuck_read preview readability line wrong:\n%s", body)
 	}
 }

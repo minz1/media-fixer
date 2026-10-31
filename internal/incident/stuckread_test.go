@@ -39,6 +39,8 @@ type stuckReadAgent struct {
 	*lowConfidenceOnceAgent
 
 	t       *testing.T
+	action  string
+	logTo   *db.DB
 	mu      sync.Mutex
 	ranAt   time.Time
 	scans   int
@@ -47,19 +49,25 @@ type stuckReadAgent struct {
 
 func newStuckReadAgent(t *testing.T) *stuckReadAgent {
 	return &stuckReadAgent{
-		lowConfidenceOnceAgent: newLowConfidenceOnceAgent(), t: t, started: make(chan string, 8),
+		lowConfidenceOnceAgent: newLowConfidenceOnceAgent(), t: t, action: "run-a", started: make(chan string, 8),
 	}
 }
 
 func (a *stuckReadAgent) Run(
-	_ context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage,
 ) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	if a.logTo != nil {
+		_ = a.logTo.LogAction(ctx, &db.ActionLog{
+			IncidentID: inc.ID, Action: a.action, TriggeredBy: "agent", Status: db.ActionApplied,
+			Params: map[string]any{"media_type": "series", "title": inc.Title, "season": 1, "episode": 1},
+		})
+	}
 	a.mu.Lock()
 	a.ranAt = time.Now()
 	a.mu.Unlock()
 	a.started <- inc.ID
 	return &agent.DiagnosticResult{
-		RootCause: "test", Confidence: "high", PrimaryAction: "run-a", PrimaryReason: "test",
+		RootCause: "test", Confidence: "high", PrimaryAction: a.action, PrimaryReason: "test",
 	}, nil, nil
 }
 
@@ -142,6 +150,22 @@ func TestStuckReadFixWaitsForClear(t *testing.T) {
 	}
 	if chk.titles[0] != "Stuck Show" {
 		t.Fatalf("Clear title = %q", chk.titles[0])
+	}
+}
+
+func TestStuckReadSearchMissingWaitsForClear(t *testing.T) {
+	t.Parallel()
+	ag := newStuckReadAgent(t)
+	ag.action = agent.ToolArrSearchMissing
+	svc, database := newStuckReadService(t, ag, 3, 20*time.Millisecond)
+	ag.logTo = database
+	chk := &fakeStuckChecker{clear: func(int) bool { return true }}
+	svc.SetStuckRead(chk)
+
+	inc := handleKind(t, svc, agent.WhatStuckRead, "Search Show")
+	waitForStatus(t, database, inc.ID, db.StatusAgentFixed)
+	if n := chk.calls(); n != 1 {
+		t.Fatalf("Clear calls = %d, want 1: a stuck_read fix is verified by the watcher", n)
 	}
 }
 
