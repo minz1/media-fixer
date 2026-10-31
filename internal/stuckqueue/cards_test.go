@@ -290,6 +290,15 @@ func TestRenderer_RunActiveKeepsLast(t *testing.T) {
 	}
 }
 
+func TestRenderer_RunActiveNewSubjectUnknown(t *testing.T) {
+	t.Parallel()
+	_, s := newSched(t)
+	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true}), true)
+	if up, ok := render(t, s, card.StuckSubject("s", "new")); ok {
+		t.Fatalf("a subject only the active run knows rendered %+v", up)
+	}
+}
+
 func TestRenderer_StuckAgainAfterActClearsOutcome(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)

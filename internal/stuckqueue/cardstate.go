@@ -125,6 +125,9 @@ func (s *Scheduler) CardRenderer() card.Renderer {
 				Buttons: itemButtons(w.Download, w.Actions),
 			}, true, nil
 		}
+		if s.running {
+			return card.Update{}, false, nil
+		}
 		return card.Update{Status: goneLine}, true, nil
 	}
 }
