@@ -3,9 +3,11 @@ package sweep
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -17,6 +19,11 @@ const (
 var (
 	ErrRunActive = errors.New("a run is already active")
 	ErrDisabled  = errors.New("the sweep is disabled; only a Dry run can start")
+
+	ErrExcluded    = errors.New("this show is excluded from the sweep; include it first")
+	ErrUnmonitored = errors.New("this show is not monitored in Sonarr")
+	ErrAnimeOff    = errors.New("this show is anime and the sweep's anime setting is off")
+	ErrNoBudget    = errors.New("nothing is left of today's budget for this search")
 )
 
 type Scheduler struct {
@@ -95,7 +102,7 @@ func (s *Scheduler) runDue(set Settings, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	return s.start(triggerSchedule, false, Remaining(set, u))
+	return s.start(triggerSchedule, false, Remaining(set, u), scope{})
 }
 
 func (s *Scheduler) RunNow(trigger string, dry bool) error {
@@ -113,7 +120,41 @@ func (s *Scheduler) RunNow(trigger string, dry bool) error {
 		}
 		set = Remaining(set, u)
 	}
-	return s.start(trigger, dry, set)
+	return s.start(trigger, dry, set, scope{})
+}
+
+func (s *Scheduler) RunSeries(series client.Series, pass Pass) error {
+	set, err := LoadSettings(s.base, s.d)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !set.Enabled:
+		return ErrDisabled
+	case slices.Contains(set.ExcludedSeries, series.ID):
+		return ErrExcluded
+	case !series.Monitored:
+		return ErrUnmonitored
+	case series.SeriesType == seriesAnime && !set.Anime:
+		return ErrAnimeOff
+	}
+	u, err := s.Used(s.r.Now())
+	if err != nil {
+		return err
+	}
+	set = Remaining(set, u)
+	if pass == PassPacks {
+		set.MaxSearches = 0
+		if set.MaxLookups == 0 || set.MaxGrabs == 0 {
+			return ErrNoBudget
+		}
+	} else {
+		set.MaxGrabs, set.MaxLookups = 0, 0
+		if set.MaxSearches == 0 {
+			return ErrNoBudget
+		}
+	}
+	return s.start(db.BabysitTrigger+" "+series.Title, false, set, scope{series: &series, pass: pass})
 }
 
 type Usage struct {
@@ -193,7 +234,7 @@ func (s *Scheduler) next(set Settings, now time.Time) (time.Time, error) {
 	return at, nil
 }
 
-func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
+func (s *Scheduler) start(trigger string, dry bool, set Settings, sc scope) error {
 	if !s.mu.TryLock() {
 		return ErrRunActive
 	}
@@ -222,7 +263,7 @@ func (s *Scheduler) start(trigger string, dry bool, set Settings) error {
 			s.cmu.Unlock()
 			cancel(nil)
 		}()
-		if _, rerr := s.r.Run(ctx, trigger, dry, set); rerr != nil {
+		if _, rerr := s.r.runScoped(ctx, trigger, dry, set, sc); rerr != nil {
 			s.r.logger().ErrorContext(s.base, "pack sweep run", "trigger", trigger, "err", rerr)
 		}
 	})

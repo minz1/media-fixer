@@ -99,6 +99,7 @@ type run struct {
 	id         int64
 	dry        bool
 	s          Settings
+	sc         scope
 	c          db.SweepCounts
 	refused    map[string]bool
 	queued     map[int]bool
@@ -115,6 +116,18 @@ type run struct {
 	lastSearch time.Time
 }
 
+type Pass string
+
+const (
+	PassPacks   Pass = "packs"
+	PassSingles Pass = "singles"
+)
+
+type scope struct {
+	series *client.Series
+	pass   Pass
+}
+
 type seasonTarget struct {
 	series client.Series
 	season int
@@ -129,6 +142,10 @@ type searchBatch struct {
 }
 
 func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) (int64, error) {
+	return r.runScoped(ctx, trigger, dry, s, scope{})
+}
+
+func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Settings, sc scope) (int64, error) {
 	if err := r.DB.PruneSweepRuns(ctx, keepRuns, r.Now().AddDate(0, 0, -8)); err != nil {
 		return 0, err
 	}
@@ -138,7 +155,7 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 		return 0, err
 	}
 	x := &run{
-		Runner: r, id: id, dry: dry, s: s, tried: map[string]bool{}, handled: map[int]bool{}, start: start,
+		Runner: r, id: id, dry: dry, s: s, sc: sc, tried: map[string]bool{}, handled: map[int]bool{}, start: start,
 		burst: map[string]bool{}, attempted: map[string]bool{}, looked: map[string]bool{},
 		seasonMiss: map[int]map[int]int{},
 		c:          db.SweepCounts{MaxGrabs: s.MaxGrabs, MaxLookups: s.MaxLookups, MaxSearches: s.MaxSearches},
@@ -205,6 +222,42 @@ func (x *run) sweep(ctx context.Context) error {
 	if x.targets, err = x.DB.ListSweepTargets(ctx); err != nil {
 		return err
 	}
+	if err = x.loadBursts(ctx, now); err != nil {
+		return err
+	}
+	queue, err := retry(ctx, x, false, func() ([]client.QueueDetail, error) { return x.Sonarr.QueueDetails(ctx) })
+	if err != nil {
+		return err
+	}
+	x.queued = QueuedEpisodes(queue)
+	var active []client.Series
+	if x.sc.series != nil {
+		active = []client.Series{*x.sc.series}
+	} else {
+		series, lerr := retry(ctx, x, false, func() ([]client.Series, error) { return x.Sonarr.ListSeries(ctx) })
+		if lerr != nil {
+			return lerr
+		}
+		for _, s := range series {
+			if s.Monitored && !slices.Contains(x.s.ExcludedSeries, s.ID) && (s.SeriesType != seriesAnime || x.s.Anime) {
+				active = append(active, s)
+			}
+		}
+	}
+	slices.SortFunc(active, func(a, b client.Series) int { return cmp.Or(b.Added.Compare(a.Added), a.ID-b.ID) })
+	if err = x.packPasses(ctx, active); err != nil && !errors.Is(err, errCapReached) {
+		return err
+	}
+	if err = x.episodePass(ctx, active); err != nil {
+		return err
+	}
+	return errors.Join(x.cleanup(ctx), x.dropResolved(ctx, active))
+}
+
+func (x *run) loadBursts(ctx context.Context, now time.Time) error {
+	if x.sc.pass == PassSingles {
+		return nil
+	}
 	failed, err := retry(ctx, x, false, func() ([]client.HistoryRecord, error) {
 		return x.Sonarr.FailuresSince(ctx, now.Add(-burstWindow))
 	})
@@ -216,29 +269,7 @@ func (x *run) sweep(ctx context.Context) error {
 	default:
 		x.logger().WarnContext(ctx, "sweep failure history unavailable", "err", err)
 	}
-	queue, err := retry(ctx, x, false, func() ([]client.QueueDetail, error) { return x.Sonarr.QueueDetails(ctx) })
-	if err != nil {
-		return err
-	}
-	x.queued = QueuedEpisodes(queue)
-	series, err := retry(ctx, x, false, func() ([]client.Series, error) { return x.Sonarr.ListSeries(ctx) })
-	if err != nil {
-		return err
-	}
-	var active []client.Series
-	for _, s := range series {
-		if s.Monitored && !slices.Contains(x.s.ExcludedSeries, s.ID) && (s.SeriesType != seriesAnime || x.s.Anime) {
-			active = append(active, s)
-		}
-	}
-	slices.SortFunc(active, func(a, b client.Series) int { return cmp.Or(b.Added.Compare(a.Added), a.ID-b.ID) })
-	if err = x.packPasses(ctx, active); err != nil && !errors.Is(err, errCapReached) {
-		return err
-	}
-	if err = x.episodePass(ctx, active); err != nil {
-		return err
-	}
-	return errors.Join(x.cleanup(ctx), x.dropResolved(ctx, active))
+	return nil
 }
 
 func (x *run) packPasses(ctx context.Context, series []client.Series) error {
@@ -573,7 +604,7 @@ func (x *run) waitCommand(ctx context.Context, id int) error {
 
 func (x *run) eligibleKey(key string) bool {
 	t, ok := x.targets[key]
-	return x.burst[key] || eligible(t, ok, x.start)
+	return x.sc.series != nil || x.burst[key] || eligible(t, ok, x.start)
 }
 
 func (x *run) attempt(ctx context.Context, s client.Series, season int) error {
@@ -608,6 +639,9 @@ func (x *run) dropResolved(ctx context.Context, series []client.Series) error {
 	}
 	var drop []string
 	for key, t := range x.targets {
+		if x.sc.series != nil && t.SeriesID != x.sc.series.ID {
+			continue
+		}
 		counts, seen := x.seasonMiss[t.SeriesID]
 		if !x.attempted[key] && (!live[t.SeriesID] || seen && counts[t.Season] == 0) {
 			drop = append(drop, key)
