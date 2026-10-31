@@ -483,10 +483,14 @@ func TestRedactCredentialsGaps(t *testing.T) {
 		"@ in username":  "http://me@mail.com:UP1@host/x",
 		"quoted cookie":  `Cookie: "a=CQ1"`,
 		"quoted header":  `{"Authorization": "Token JT1"}`,
+		"digest":         `Authorization: Digest username="u", realm="r", nonce="n", uri="/x", response="DG1", cnonce="DG2"`,
+		"quoted secret":  `{"secret": "QT1"}`,
+		"compact secret": "secret:CS1",
+		"header secret":  "X-Secret: HS1",
 	}
 	for name, in := range cases {
 		out := client.RedactCredentials(in)
-		for _, secret := range []string{"NL1", "TB1", "dXNlcjpCQTE", "SC1", "AU1", "SG1", "SD1", "CK1", "CK2", "DE1", "QS1", "QS2", "SQ1", "PW1", "PW2", "EU1", "TK1", "AP1", "UP1", "CQ1", "JT1"} {
+		for _, secret := range []string{"NL1", "TB1", "dXNlcjpCQTE", "SC1", "AU1", "SG1", "SD1", "CK1", "CK2", "DE1", "QS1", "QS2", "SQ1", "PW1", "PW2", "EU1", "TK1", "AP1", "UP1", "CQ1", "JT1", "DG1", "DG2", "QT1", "CS1", "HS1"} {
 			if strings.Contains(out, secret) {
 				t.Errorf("%s: %q leaked %s: %q", name, in, secret, out)
 			}
@@ -495,6 +499,7 @@ func TestRedactCredentialsGaps(t *testing.T) {
 	for _, plain := range []string{"No files found are eligible for import in /data/x", "Found inside: the folder", "design: done",
 		"Indexer returned 401 Unauthorized: invalid api key", "Authentication: failed", "Author: John",
 		"Basic authentication failed for indexer", "http://sonarr:8989?email=me@x.com",
+		"Import of Secrets: The Movie failed", "sid: 5 episodes", "Digest authentication failed",
 	} {
 		if got := client.RedactCredentials(plain); got != plain {
 			t.Errorf("plain message changed: %q -> %q", plain, got)

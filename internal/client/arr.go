@@ -376,8 +376,13 @@ var (
 	arrCookieRE     = regexp.MustCompile(
 		`(?i)\b((?:set-)?cookie)["']? ?[:=] ?["']?[^&\s"';]+(?:; ?[^&\s"';]+)*["']?`,
 	)
+	arrDigestRE          = regexp.MustCompile(`(?i)\bdigest (?:[a-z]+=(?:"[^"]*"|[^,\s]*),? ?)+`)
 	arrCredentialParamRE = regexp.MustCompile(
-		`(?i)([a-z_-]*(?:key|token|pass|secret|[_-]auth)[a-z_-]*|\b(?:auth|sig|sid)|[?&]r)["']? ?(?:=|%3D|%253D|:) ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)`,
+		`(?i)([a-z_-]*(?:key|token|pass|[_-]auth|[_-]secret)[a-z_-]*|[?&]r)["']? ?(?:=|%3D|%253D|:) ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)`,
+	)
+	// A bare word followed by ": " is prose ("Secrets: The Movie"), so it needs a quote, "=" or a value glued to ":".
+	arrBareCredentialRE = regexp.MustCompile(
+		`(?i)([a-z]*secret[a-z]*|\b(?:auth|sig|sid))(?:["'] ?: ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)|["']? ?(?:=|%3D|%253D) ?(?:"[^"]*"?|'[^']*'?|[^&\s"]*)|:(?:"[^"]*"?|'[^']*'?|[^&\s"]+))`,
 	)
 	arrURLUserinfoRE = regexp.MustCompile(`://([^/\s:]*):[^/?#\s]+@`)
 )
@@ -386,10 +391,12 @@ var (
 // pass, secret or auth parameter or header value and URL password in s.
 func RedactCredentials(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
+	s = arrDigestRE.ReplaceAllString(s, "Digest REDACTED")
 	s = arrAuthHeaderRE.ReplaceAllString(s, "${1}: REDACTED")
 	s = arrBearerRE.ReplaceAllString(s, "Bearer REDACTED")
 	s = arrCookieRE.ReplaceAllString(s, "${1}: REDACTED")
 	s = arrCredentialParamRE.ReplaceAllString(s, "${1}=REDACTED")
+	s = arrBareCredentialRE.ReplaceAllString(s, "${1}=REDACTED")
 	return arrURLUserinfoRE.ReplaceAllString(s, "://${1}:REDACTED@")
 }
 
