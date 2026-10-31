@@ -161,7 +161,6 @@ func (s *Server) sweepCard(
 		"Notice":      notice,
 		"Failure":     failure,
 		"Status":      s.sweepStatus(started),
-		"Weekdays":    weekdayNames(),
 	}
 	sonarr := s.sweep.Runner().Sonarr
 	if series, err := sonarr.ListSeries(ctx); err != nil {
@@ -217,12 +216,16 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 		name string
 		dst  *int
 	}{
-		{"weekday", &set.Weekday},
-		{"hour_utc", &set.HourUTC},
+		{"interval_hours", &set.IntervalHours},
 		{"min_missing", &set.MinMissing},
 		{"max_grabs", &set.MaxGrabs},
 		{"max_lookups", &set.MaxLookups},
 		{"max_searches", &set.MaxSearches},
+		{"backoff_base_hours", &set.BackoffBaseHours},
+		{"backoff_max_days", &set.BackoffMaxDays},
+		{"burst_failures", &set.BurstFailures},
+		{"stuck_after", &set.StuckAfter},
+		{"digest_hour_utc", &set.DigestHourUTC},
 	} {
 		n, err := strconv.Atoi(r.FormValue(f.name))
 		if err != nil {
@@ -242,14 +245,6 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 		}
 	}
 	return set, errs
-}
-
-func weekdayNames() []string {
-	var names []string
-	for d := time.Sunday; d <= time.Saturday; d++ {
-		names = append(names, d.String())
-	}
-	return names
 }
 
 func sweepColor(status string) string {

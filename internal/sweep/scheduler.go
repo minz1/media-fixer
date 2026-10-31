@@ -11,7 +11,6 @@ import (
 
 const (
 	triggerSchedule = "schedule"
-	week            = 7
 	maxRetries      = 2
 )
 
@@ -84,7 +83,7 @@ func (s *Scheduler) tick(now time.Time) error {
 	if err != nil || now.Before(next) {
 		return err
 	}
-	at := slot(set, now)
+	at := now.Add(-24 * time.Hour)
 	grabs, err := s.d.LiveGrabsSince(s.base, at)
 	if err != nil {
 		return err
@@ -119,24 +118,34 @@ func (s *Scheduler) NextRun(now time.Time) *time.Time {
 	}
 	next, err := s.next(set, now)
 	if err != nil {
-		next = slot(set, now).AddDate(0, 0, week)
+		next = now.Add(set.Interval())
 	}
 	return &next
 }
 
 func (s *Scheduler) next(set Settings, now time.Time) (time.Time, error) {
-	at := slot(set, now)
-	following := at.AddDate(0, 0, week)
-	if set.EnabledAt != nil && at.Before(*set.EnabledAt) {
-		return following, nil
-	}
+	iv := set.Interval()
+	var anchor time.Time
 	last, err := s.d.LastSweepRunStart(s.base, []string{statusPaused, statusInterrupted, statusFailed})
-	if err == nil && !last.Before(at) {
-		return following, nil
-	}
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return time.Time{}, err
 	}
+	if last != nil {
+		anchor = *last
+	}
+	if set.EnabledAt != nil && set.EnabledAt.After(anchor) {
+		anchor = *set.EnabledAt
+	}
+	var at time.Time
+	switch {
+	case anchor.IsZero():
+		at = now.Truncate(iv)
+	case now.Before(anchor.Add(iv)):
+		return anchor.Add(iv), nil
+	default:
+		at = anchor.Add(now.Sub(anchor).Truncate(iv))
+	}
+	following := at.Add(iv)
 	n, latest, err := s.d.RetryableSweepRunsSince(s.base, at)
 	if err != nil {
 		return time.Time{}, err
@@ -192,16 +201,6 @@ func (s *Scheduler) CancelLive(cause error) {
 	if s.cancel != nil {
 		s.cancel(cause)
 	}
-}
-
-func slot(s Settings, now time.Time) time.Time {
-	now = now.UTC()
-	at := time.Date(now.Year(), now.Month(), now.Day(), s.HourUTC, 0, 0, 0, time.UTC)
-	at = at.AddDate(0, 0, -((int(now.Weekday()) - s.Weekday + week) % week))
-	if at.After(now) {
-		at = at.AddDate(0, 0, -week)
-	}
-	return at
 }
 
 func Sleep(ctx context.Context, d time.Duration) error {

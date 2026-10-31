@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 func settings() sweep.Settings {
 	s := sweep.DefaultSettings()
 	s.Enabled = true
+	s.MaxSearches, s.MaxGrabs, s.MaxLookups = 0, 5, 60
 	return s
 }
 
@@ -27,23 +29,22 @@ func TestSettings_DefaultsAndValidate(t *testing.T) {
 	t.Parallel()
 	s := sweep.DefaultSettings()
 	want := sweep.Settings{
-		Weekday: 0, HourUTC: 12, MinMissing: 1, MaxGrabs: 5, MaxLookups: 60, MaxSearches: 0,
+		HourUTC: 12, MinMissing: 1, MaxGrabs: 10, MaxLookups: 40, MaxSearches: 200, IntervalHours: 6,
+		BackoffBaseHours: 24, BackoffMaxDays: 30, BurstFailures: 5, StuckAfter: 3, DigestHourUTC: 9,
 		Anime: true, ExcludedSeries: []int{},
 	}
-	if s.Enabled || s.Weekday != want.Weekday || s.HourUTC != want.HourUTC || s.MinMissing != want.MinMissing ||
-		s.MaxGrabs != want.MaxGrabs || s.MaxLookups != want.MaxLookups || s.MaxSearches != want.MaxSearches ||
-		!s.Anime || s.ExcludedSeries == nil || len(s.ExcludedSeries) != 0 {
-		t.Errorf("defaults = %+v", s)
+	if !reflect.DeepEqual(s, want) {
+		t.Errorf("defaults = %+v, want %+v", s, want)
 	}
 	if errs := s.Validate(); len(errs) != 0 {
 		t.Errorf("defaults invalid: %v", errs)
 	}
 	bad := s
-	bad.MaxGrabs = 0
-	bad.HourUTC = 24
+	bad.MinMissing = 0
+	bad.DigestHourUTC = 24
 	errs := bad.Validate()
-	if errs["max_grabs"] == "" || errs["hour_utc"] == "" || len(errs) != 2 {
-		t.Errorf("Validate = %v, want max_grabs and hour_utc", errs)
+	if errs["min_missing"] == "" || errs["digest_hour_utc"] == "" || len(errs) != 2 {
+		t.Errorf("Validate = %v, want min_missing and digest_hour_utc", errs)
 	}
 }
 
@@ -55,8 +56,8 @@ func TestSettings_LoadSaveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MaxGrabs != 5 {
-		t.Errorf("absent settings MaxGrabs = %d, want default 5", got.MaxGrabs)
+	if got.MaxGrabs != 10 {
+		t.Errorf("absent settings MaxGrabs = %d, want default 10", got.MaxGrabs)
 	}
 	got.MaxGrabs = 2
 	got.ExcludedSeries = []int{7}

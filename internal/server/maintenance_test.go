@@ -130,8 +130,10 @@ func mustContain(t *testing.T, body string, wants ...string) {
 
 func validSettingsForm() url.Values {
 	return url.Values{
-		"enabled": {"on"}, "weekday": {"3"}, "hour_utc": {"7"}, "min_missing": {"2"}, "max_grabs": {"4"},
-		"max_lookups": {"40"}, "max_searches": {"10"}, "anime": {"on"}, "excluded_series": {"2"},
+		"enabled": {"on"}, "interval_hours": {"12"}, "min_missing": {"2"}, "max_grabs": {"4"},
+		"max_lookups": {"40"}, "max_searches": {"10"}, "backoff_base_hours": {"48"}, "backoff_max_days": {"20"},
+		"burst_failures": {"6"}, "stuck_after": {"4"}, "digest_hour_utc": {"8"}, "anime": {"on"},
+		"excluded_series": {"2"},
 	}
 }
 
@@ -145,8 +147,8 @@ func TestMaintenance_RendersTabsAndCard(t *testing.T) {
 	}
 	mustContain(t, rec.Body.String(),
 		`href="/media/"`, `href="/media/maintenance"`, `href="/media/selftest"`,
-		`name="max_grabs" value="5"`, `name="max_lookups" value="60"`, `name="hour_utc" value="12"`,
-		`name="max_searches" value="0"`, "not counted in max grabs",
+		`name="max_grabs" value="10"`, `name="max_lookups" value="40"`, `name="interval_hours" value="6"`,
+		`name="max_searches" value="200"`, "not counted in max grabs",
 		"Severance", "Andor", `name="excluded_series" value="2"`,
 		"Run now", "Dry run")
 }
@@ -173,9 +175,13 @@ func TestDashboardIndex_HasTabBar(t *testing.T) {
 	mustContain(t, rec.Body.String(), `href="/media/"`, `href="/media/maintenance"`, `href="/media/selftest"`)
 }
 
-func TestMaintenanceSettings_SaveValid(t *testing.T) {
+func TestSweepSave_NewFields(t *testing.T) {
 	t.Parallel()
 	env := newMaintenanceTestServer(t)
+	raw := `{"enabled":false,"weekday":3,"hour_utc":7}`
+	if err := env.db.SetSetting(context.Background(), sweep.SettingsKey, raw); err != nil {
+		t.Fatal(err)
+	}
 
 	before := time.Now()
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", validSettingsForm())
@@ -191,7 +197,8 @@ func TestMaintenanceSettings_SaveValid(t *testing.T) {
 	}
 	got.EnabledAt = nil
 	want := sweep.Settings{
-		Enabled: true, Weekday: 3, HourUTC: 7, MinMissing: 2, MaxGrabs: 4, MaxLookups: 40, MaxSearches: 10,
+		Enabled: true, Weekday: 3, HourUTC: 7, IntervalHours: 12, MinMissing: 2, MaxGrabs: 4, MaxLookups: 40,
+		MaxSearches: 10, BackoffBaseHours: 48, BackoffMaxDays: 20, BurstFailures: 6, StuckAfter: 4, DigestHourUTC: 8,
 		Anime: true, ExcludedSeries: []int{2},
 	}
 	gotJSON, _ := json.Marshal(got)
@@ -202,21 +209,37 @@ func TestMaintenanceSettings_SaveValid(t *testing.T) {
 	mustContain(t, rec.Body.String(), "Saved")
 }
 
-func TestMaintenanceSettings_Invalid(t *testing.T) {
+func TestSweepSave_BadValues(t *testing.T) {
 	t.Parallel()
-	env := newMaintenanceTestServer(t)
-	form := validSettingsForm()
-	form.Set("max_grabs", "0")
-	form.Set("hour_utc", "24")
-
-	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", form)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d", rec.Code)
+	fields := map[string]string{
+		"interval_hours": "169", "min_missing": "0", "max_grabs": "101", "max_lookups": "501", "max_searches": "2001",
+		"backoff_base_hours": "0", "backoff_max_days": "91", "burst_failures": "1", "stuck_after": "21",
+		"digest_hour_utc": "24",
 	}
-	mustContain(t, rec.Body.String(),
-		"must be between 1 and 50", "must be between 0 and 23", `name="max_grabs" value="0"`)
-	if _, err := env.db.GetSetting(context.Background(), sweep.SettingsKey); err == nil {
-		t.Error("invalid settings were stored")
+	for name, bad := range fields {
+		for _, v := range []string{bad, "x"} {
+			t.Run(name+"="+v, func(t *testing.T) {
+				t.Parallel()
+				env := newMaintenanceTestServer(t)
+				form := validSettingsForm()
+				form.Set(name, v)
+
+				rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", form)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status %d", rec.Code)
+				}
+				body := rec.Body.String()
+				if !strings.Contains(body, "must be between") && !strings.Contains(body, "must be a whole number") {
+					t.Errorf("no field error shown:\n%s", body)
+				}
+				if v == bad {
+					mustContain(t, body, `name="`+name+`" value="`+v+`"`)
+				}
+				if _, err := env.db.GetSetting(context.Background(), sweep.SettingsKey); err == nil {
+					t.Error("invalid settings were stored")
+				}
+			})
+		}
 	}
 }
 
@@ -303,7 +326,7 @@ func TestMaintenanceStatus_Fragment(t *testing.T) {
 		env := newMaintenanceTestServer(t)
 		env.startHeldRun(t)
 		body := do(t, env.srv, http.MethodGet, "/media/maintenance/pack-sweep/status", nil).Body.String()
-		mustContain(t, body, "season pass", "Severance S01", "lookups 1/60", "grabs 0/5", "searches 0/0",
+		mustContain(t, body, "season pass", "Severance S01", "lookups 1/40", "grabs 0/10", "searches 0/200",
 			`hx-trigger="every 10s"`)
 	})
 
@@ -311,7 +334,7 @@ func TestMaintenanceStatus_Fragment(t *testing.T) {
 		t.Parallel()
 		env := newMaintenanceTestServer(t)
 		set := sweep.DefaultSettings()
-		set.Enabled, set.Weekday, set.HourUTC = true, 2, 9
+		set.Enabled, set.IntervalHours = true, 12
 		if err := sweep.SaveSettings(context.Background(), env.db, set, time.Now()); err != nil {
 			t.Fatal(err)
 		}
