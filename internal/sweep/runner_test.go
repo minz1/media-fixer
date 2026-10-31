@@ -750,7 +750,7 @@ func assertLookupsStored(t *testing.T, h *harness, run db.SweepRun) {
 	}
 }
 
-func TestRun_PauseInGrabGapKeepsLookup(t *testing.T) {
+func TestRun_PauseBeforeGrabKeepsLookup(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	twoGrabbableSeries(h)
@@ -787,6 +787,27 @@ func TestRun_CancelInGrabGapKeepsLookup(t *testing.T) {
 	}
 	if run.Status != "interrupted" || slices.Contains(h.fake.writeLog(), "POST /release g2") {
 		t.Fatalf("status %s writes %v; want interrupted before g2", run.Status, h.fake.writeLog())
+	}
+	assertLookupsStored(t, h, run)
+}
+
+func TestRun_CancelDuringLookupKeepsLookup(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	twoGrabbableSeries(h)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	onSecondLookup(h, cancel)
+	id, err := h.runner.Run(ctx, "manual", false, settings())
+	if err == nil {
+		t.Fatal("Run after cancel returned no error")
+	}
+	run, err := h.db.GetSweepRun(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "interrupted" {
+		t.Fatalf("status %s, want interrupted", run.Status)
 	}
 	assertLookupsStored(t, h, run)
 }
