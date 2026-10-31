@@ -17,12 +17,12 @@ import (
 
 const (
 	viewShow         = "show"
-	tplBabysitList   = "babysit_list"
-	tplBabysitCard   = "babysit_show_card"
+	tplMonitorList   = "monitor_list"
+	tplMonitorCard   = "monitor_show_card"
 	searchConfirmEnd = "Each season searched counts as an attempt and doubles its backoff."
 )
 
-type babysitListView struct {
+type monitorListView struct {
 	BaseURL     string
 	Unavailable string
 	List        babysit.List
@@ -40,7 +40,7 @@ type explainView struct {
 	Can     bool
 }
 
-type babysitShowView struct {
+type monitorShowView struct {
 	BaseURL        string
 	ID             int
 	Title          string
@@ -64,7 +64,7 @@ func parseSeriesID(raw string) (int, bool) {
 	return n, err == nil && n > 0
 }
 
-func (s *Server) babysitReady(w http.ResponseWriter) bool {
+func (s *Server) monitorReady(w http.ResponseWriter) bool {
 	if s.babysit == nil || s.sweep == nil {
 		http.Error(w, sweepUnavailable, http.StatusServiceUnavailable)
 		return false
@@ -72,7 +72,7 @@ func (s *Server) babysitReady(w http.ResponseWriter) bool {
 	return true
 }
 
-func (s *Server) babysitSeriesID(w http.ResponseWriter, r *http.Request) (int, bool) {
+func (s *Server) monitorSeriesID(w http.ResponseWriter, r *http.Request) (int, bool) {
 	id, ok := parseSeriesID(chi.URLParam(r, "seriesID"))
 	if !ok {
 		http.NotFound(w, r)
@@ -80,38 +80,38 @@ func (s *Server) babysitSeriesID(w http.ResponseWriter, r *http.Request) (int, b
 	return id, ok
 }
 
-func (s *Server) renderBabysit(w http.ResponseWriter, name string, data any) {
+func (s *Server) renderMonitor(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, name, data)
 }
 
-func (s *Server) babysitIndex(w http.ResponseWriter, r *http.Request) {
+func (s *Server) monitorIndex(w http.ResponseWriter, r *http.Request) {
 	if s.babysit == nil || s.sweep == nil {
-		s.renderBabysit(w, "babysit", babysitListView{BaseURL: s.baseURL, Unavailable: sweepUnavailable})
+		s.renderMonitor(w, "monitor", monitorListView{BaseURL: s.baseURL, Unavailable: sweepUnavailable})
 		return
 	}
-	s.renderBabysitList(w, r, "babysit", "", "")
+	s.renderMonitorList(w, r, "monitor", "", "")
 }
 
-func (s *Server) renderBabysitList(w http.ResponseWriter, r *http.Request, name, notice, failure string) {
+func (s *Server) renderMonitorList(w http.ResponseWriter, r *http.Request, name, notice, failure string) {
 	l, err := s.babysit.List(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.renderBabysit(w, name, babysitListView{BaseURL: s.baseURL, List: l, Notice: notice, Failure: failure})
+	s.renderMonitor(w, name, monitorListView{BaseURL: s.baseURL, List: l, Notice: notice, Failure: failure})
 }
 
-func (s *Server) babysitShow(w http.ResponseWriter, r *http.Request) {
-	if !s.babysitReady(w) {
+func (s *Server) monitorShow(w http.ResponseWriter, r *http.Request) {
+	if !s.monitorReady(w) {
 		return
 	}
-	if id, ok := s.babysitSeriesID(w, r); ok {
-		s.renderBabysitShow(w, r, id, "babysit_show", "", "", false)
+	if id, ok := s.monitorSeriesID(w, r); ok {
+		s.renderMonitorShow(w, r, id, "monitor_show", "", "", false)
 	}
 }
 
-func (s *Server) renderBabysitShow(
+func (s *Server) renderMonitorShow(
 	w http.ResponseWriter, r *http.Request, id int, name, notice, failure string, started bool,
 ) {
 	ctx := r.Context()
@@ -125,7 +125,7 @@ func (s *Server) renderBabysitShow(
 		return
 	}
 	set, _ := sweep.LoadSettings(ctx, s.db)
-	v := babysitShowView{
+	v := monitorShowView{
 		BaseURL: s.baseURL, ID: id, Title: showTitle(sh, id), Show: sh, StuckAfter: set.StuckAfter,
 		Status: s.sweepStatus(started), Notice: notice, Failure: failure,
 		Explain: explainView{BaseURL: s.baseURL, ID: id},
@@ -139,7 +139,7 @@ func (s *Server) renderBabysitShow(
 	if sh.Cached != nil {
 		e.Text, e.At, e.Stale = sh.Cached.Text, sh.Cached.CreatedAt, !sh.CacheFresh && sh.SonarrErr == ""
 	}
-	s.renderBabysit(w, name, v)
+	s.renderMonitor(w, name, v)
 }
 
 func showTitle(sh babysit.Show, id int) string {
@@ -166,11 +166,11 @@ func (s *Server) searchConfirms(set sweep.Settings, title string) (string, strin
 		fmt.Sprintf(format, "missing episodes", title, singlesLeft, searchConfirmEnd)
 }
 
-func (s *Server) babysitSearch(w http.ResponseWriter, r *http.Request) {
-	if !s.babysitReady(w) {
+func (s *Server) monitorSearch(w http.ResponseWriter, r *http.Request) {
+	if !s.monitorReady(w) {
 		return
 	}
-	id, ok := s.babysitSeriesID(w, r)
+	id, ok := s.monitorSeriesID(w, r)
 	if !ok {
 		return
 	}
@@ -188,15 +188,15 @@ func (s *Server) babysitSearch(w http.ResponseWriter, r *http.Request) {
 		err = s.sweep.RunSeries(series, pass)
 	}
 	if err != nil {
-		s.renderBabysitShow(w, r, id, tplBabysitCard, "", err.Error(), false)
+		s.renderMonitorShow(w, r, id, tplMonitorCard, "", err.Error(), false)
 		return
 	}
-	s.renderBabysitShow(w, r, id, tplBabysitCard, "Search started.", "", true)
+	s.renderMonitorShow(w, r, id, tplMonitorCard, "Search started.", "", true)
 }
 
-func (s *Server) babysitSetExcluded(excluded bool) http.HandlerFunc {
+func (s *Server) monitorSetExcluded(excluded bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.babysitReady(w) {
+		if !s.monitorReady(w) {
 			return
 		}
 		id, ok := parseSeriesID(r.FormValue("series_id"))
@@ -212,18 +212,18 @@ func (s *Server) babysitSetExcluded(excluded bool) http.HandlerFunc {
 			return
 		}
 		if r.FormValue("view") == viewShow {
-			s.renderBabysitShow(w, r, id, tplBabysitCard, notice, failure, false)
+			s.renderMonitorShow(w, r, id, tplMonitorCard, notice, failure, false)
 			return
 		}
-		s.renderBabysitList(w, r, tplBabysitList, notice, failure)
+		s.renderMonitorList(w, r, tplMonitorList, notice, failure)
 	}
 }
 
-func (s *Server) babysitExplain(w http.ResponseWriter, r *http.Request) {
-	if !s.babysitReady(w) {
+func (s *Server) monitorExplain(w http.ResponseWriter, r *http.Request) {
+	if !s.monitorReady(w) {
 		return
 	}
-	id, ok := s.babysitSeriesID(w, r)
+	id, ok := s.monitorSeriesID(w, r)
 	if !ok {
 		return
 	}
@@ -241,5 +241,5 @@ func (s *Server) babysitExplain(w http.ResponseWriter, r *http.Request) {
 	} else {
 		v.Text, v.At = ex.Text, ex.CreatedAt
 	}
-	s.renderBabysit(w, "babysit_explain", v)
+	s.renderMonitor(w, "monitor_explain", v)
 }

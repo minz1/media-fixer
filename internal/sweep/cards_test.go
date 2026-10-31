@@ -75,6 +75,23 @@ func TestStartCard_LeftToday(t *testing.T) {
 	}
 }
 
+func TestStartCard_SeriesTrigger(t *testing.T) {
+	t.Parallel()
+	c := sweep.StartCardForTest(1, db.BabysitTrigger+" NOVA", false, sweep.DefaultSettings())
+	if got := c.Fields[0].Value; got != "Monitoring: NOVA" {
+		t.Errorf("trigger = %q, want Monitoring: NOVA", got)
+	}
+}
+
+func TestTriggerLabel(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{"babysit: NOVA": "Monitoring: NOVA", "manual": "manual", "": ""} {
+		if got := sweep.TriggerLabel(in); got != want {
+			t.Errorf("TriggerLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func renderSweep(t *testing.T, r *sweep.Runner, id int64) (card.Update, bool) {
 	t.Helper()
 	up, ok, err := r.CardRenderer()(context.Background(), card.SweepSubject(id))

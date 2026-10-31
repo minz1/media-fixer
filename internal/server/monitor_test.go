@@ -104,7 +104,7 @@ type bEnv struct {
 	queue *stuckqueue.Result
 }
 
-func newBabysitTestServer(t *testing.T) *bEnv {
+func newMonitorTestServer(t *testing.T) *bEnv {
 	t.Helper()
 	srv, database := newDashboardTestServer(t)
 	son := &bSonarr{}
@@ -223,48 +223,55 @@ func doWith(
 	return rec
 }
 
-func TestBabysit_TabOnEveryPage(t *testing.T) {
+func TestMonitor_TabOnEveryPage(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
-	for _, p := range []string{"/media/", "/media/maintenance", "/media/babysit", "/media/babysit/7"} {
+	e := newMonitorTestServer(t)
+	for _, p := range []string{"/media/", "/media/maintenance", "/media/monitoring", "/media/monitoring/7"} {
 		rec := do(t, e.srv, http.MethodGet, p, nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s: %d", p, rec.Code)
 		}
-		mustContain(t, rec.Body.String(), `href="/media/babysit"`, "Babysit")
+		body := rec.Body.String()
+		mustContain(t, body, `href="/media/monitoring"`, ">Monitoring<")
+		if strings.Contains(body, "Babysit") {
+			t.Errorf("GET %s mentions Babysit", p)
+		}
+		if p != "/media/" && p != "/media/maintenance" {
+			mustContain(t, body, "<title>Monitoring · Media Fixer</title>")
+		}
 	}
 }
 
-func TestBabysit_NotConfigured(t *testing.T) {
+func TestMonitor_NotConfigured(t *testing.T) {
 	t.Parallel()
 	srv, _ := newDashboardTestServer(t)
-	rec := do(t, srv, http.MethodGet, "/media/babysit", nil)
+	rec := do(t, srv, http.MethodGet, "/media/monitoring", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
-	mustContain(t, rec.Body.String(), "sweep unavailable (Sonarr not configured)", `href="/media/babysit"`)
+	mustContain(t, rec.Body.String(), "sweep unavailable (Sonarr not configured)", `href="/media/monitoring"`)
 	for _, p := range []string{
-		"/media/babysit/7/search/packs", "/media/babysit/7/explain", "/media/babysit/exclude", "/media/babysit/include",
+		"/media/monitoring/7/search/packs", "/media/monitoring/7/explain", "/media/monitoring/exclude", "/media/monitoring/include",
 	} {
 		got := do(t, srv, http.MethodPost, p, url.Values{"series_id": {"7"}})
 		if got.Code != http.StatusServiceUnavailable {
 			t.Errorf("POST %s: %d, want 503", p, got.Code)
 		}
 	}
-	if got := do(t, srv, http.MethodGet, "/media/babysit/7", nil); got.Code != http.StatusServiceUnavailable {
+	if got := do(t, srv, http.MethodGet, "/media/monitoring/7", nil); got.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET show: %d, want 503", got.Code)
 	}
 }
 
-func TestBabysit_ListRenders(t *testing.T) {
+func TestMonitor_ListRenders(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	if err := sweep.SetExcluded(context.Background(), e.db, 8, true); err != nil {
 		t.Fatal(err)
 	}
-	body := do(t, e.srv, http.MethodGet, "/media/babysit", nil).Body.String()
-	mustContain(t, body, `href="/media/babysit/7"`, "Seven", "Eight", "grabbed", "&lt;script&gt;",
+	body := do(t, e.srv, http.MethodGet, "/media/monitoring", nil).Body.String()
+	mustContain(t, body, `href="/media/monitoring/7"`, "Seven", "Eight", "grabbed", "&lt;script&gt;",
 		`hx-confirm="Include`, `hx-confirm="Exclude`, `<option value="7"`, `name="series_id"`)
 	if strings.Contains(body, `<option value="8"`) {
 		t.Error("an excluded series is in the picker")
@@ -274,12 +281,12 @@ func TestBabysit_ListRenders(t *testing.T) {
 	}
 }
 
-func TestBabysit_ListSonarrDown(t *testing.T) {
+func TestMonitor_ListSonarrDown(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	e.son.down = true
-	rec := do(t, e.srv, http.MethodGet, "/media/babysit", nil)
+	rec := do(t, e.srv, http.MethodGet, "/media/monitoring", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -289,31 +296,31 @@ func TestBabysit_ListSonarrDown(t *testing.T) {
 	}
 }
 
-func TestBabysit_ShowRenders(t *testing.T) {
+func TestMonitor_ShowRenders(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	item := stuckqueue.Item{Verdict: stuckqueue.VerdictGap}
 	item.App, item.DownloadID, item.Title = stuckqueue.AppSonarr, "d1", "Seven.S01E02"
 	item.Records = []client.QueueEntry{{SeriesID: 7, Messages: []string{"no files <i>found"}}}
 	e.queue.Apps = []stuckqueue.AppResult{{App: stuckqueue.AppSonarr, Configured: true, Items: []stuckqueue.Item{item}}}
-	body := do(t, e.srv, http.MethodGet, "/media/babysit/7", nil).Body.String()
+	body := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
 	mustContain(t, body, "Seven", "stuck", "S01", "Nyaa", "&lt;script&gt;", "**bold**", "Seven.S01E02",
 		"no files &lt;i&gt;found",
-		`hx-post="/media/babysit/7/search/packs"`, `hx-post="/media/babysit/7/search/singles"`,
-		`hx-post="/media/babysit/exclude"`, `hx-post="/media/babysit/7/explain"`,
+		`hx-post="/media/monitoring/7/search/packs"`, `hx-post="/media/monitoring/7/search/singles"`,
+		`hx-post="/media/monitoring/exclude"`, `hx-post="/media/monitoring/7/explain"`,
 		"left today", "counts as an attempt", "one AI call")
 	if strings.Contains(body, "<script>alert") || strings.Contains(body, "<i>found") {
 		t.Error("unescaped untrusted text")
 	}
 }
 
-func TestBabysit_ShowSonarrDown(t *testing.T) {
+func TestMonitor_ShowSonarrDown(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	e.son.down = true
-	rec := do(t, e.srv, http.MethodGet, "/media/babysit/7", nil)
+	rec := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
 	}
@@ -326,14 +333,14 @@ func TestBabysit_ShowSonarrDown(t *testing.T) {
 	}
 }
 
-func TestBabysit_BadSeriesID(t *testing.T) {
+func TestMonitor_BadSeriesID(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	for _, id := range []string{"abc", "0", "-1"} {
 		for _, c := range []struct{ method, path string }{
-			{http.MethodGet, "/media/babysit/" + id},
-			{http.MethodPost, "/media/babysit/" + id + "/search/packs"},
-			{http.MethodPost, "/media/babysit/" + id + "/explain"},
+			{http.MethodGet, "/media/monitoring/" + id},
+			{http.MethodPost, "/media/monitoring/" + id + "/search/packs"},
+			{http.MethodPost, "/media/monitoring/" + id + "/explain"},
 		} {
 			if rec := do(t, e.srv, c.method, c.path, url.Values{}); rec.Code != http.StatusNotFound {
 				t.Errorf("%s %s: %d, want 404", c.method, c.path, rec.Code)
@@ -343,19 +350,19 @@ func TestBabysit_BadSeriesID(t *testing.T) {
 	if n := e.son.requests(); n != 0 {
 		t.Errorf("%d Sonarr requests for bad ids", n)
 	}
-	if rec := do(t, e.srv, http.MethodGet, "/media/babysit/99", nil); rec.Code != http.StatusNotFound {
+	if rec := do(t, e.srv, http.MethodGet, "/media/monitoring/99", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown series: %d, want 404", rec.Code)
 	}
 }
 
-func TestBabysit_Search(t *testing.T) {
+func TestMonitor_Search(t *testing.T) {
 	t.Parallel()
 	for _, pass := range []string{"packs", "singles"} {
 		t.Run(pass, func(t *testing.T) {
 			t.Parallel()
-			e := newBabysitTestServer(t)
+			e := newMonitorTestServer(t)
 			e.enableSweep(t)
-			rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/search/"+pass, url.Values{})
+			rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/search/"+pass, url.Values{})
 			mustContain(t, rec.Body.String(), "/media/maintenance/pack-sweep/status", `hx-trigger="every 10s"`)
 			e.waitIdle(t)
 			runs := e.runs(t)
@@ -366,11 +373,11 @@ func TestBabysit_Search(t *testing.T) {
 	}
 }
 
-func TestBabysit_SearchBogusPass(t *testing.T) {
+func TestMonitor_SearchBogusPass(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.enableSweep(t)
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/search/bogus", url.Values{})
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/search/bogus", url.Values{})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status %d, want 404", rec.Code)
 	}
@@ -379,7 +386,7 @@ func TestBabysit_SearchBogusPass(t *testing.T) {
 	}
 }
 
-func TestBabysit_SearchRefusals(t *testing.T) {
+func TestMonitor_SearchRefusals(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name  string
@@ -402,10 +409,10 @@ func TestBabysit_SearchRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			e := newBabysitTestServer(t)
+			e := newMonitorTestServer(t)
 			c.setup(t, e)
 			before := e.settingsRaw(t)
-			rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/search/packs", url.Values{})
+			rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/search/packs", url.Values{})
 			mustContain(t, rec.Body.String(), c.want)
 			if strings.Contains(rec.Body.String(), `hx-trigger="every 10s"`) {
 				t.Error("status polling started for a refused search")
@@ -420,12 +427,12 @@ func TestBabysit_SearchRefusals(t *testing.T) {
 	}
 }
 
-func TestBabysit_ExcludeInclude(t *testing.T) {
+func TestMonitor_ExcludeInclude(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	form := url.Values{"series_id": {"7"}}
 
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/exclude", form)
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/exclude", form)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("exclude: %d", rec.Code)
 	}
@@ -433,21 +440,21 @@ func TestBabysit_ExcludeInclude(t *testing.T) {
 		t.Fatalf("excluded = %v", got)
 	}
 	form.Set("view", "show")
-	rec = do(t, e.srv, http.MethodPost, "/media/babysit/include", form)
+	rec = do(t, e.srv, http.MethodPost, "/media/monitoring/include", form)
 	mustContain(t, rec.Body.String(), "Seven")
 	if got := e.excluded(t); len(got) != 0 {
 		t.Fatalf("excluded = %v", got)
 	}
 }
 
-func TestBabysit_ExcludeBadSeriesID(t *testing.T) {
+func TestMonitor_ExcludeBadSeriesID(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.enableSweep(t)
 	before := e.settingsRaw(t)
 	for _, id := range []string{"0", "-3", "abc", ""} {
 		for _, p := range []string{"exclude", "include"} {
-			rec := do(t, e.srv, http.MethodPost, "/media/babysit/"+p, url.Values{"series_id": {id}})
+			rec := do(t, e.srv, http.MethodPost, "/media/monitoring/"+p, url.Values{"series_id": {id}})
 			if rec.Code != http.StatusBadRequest {
 				t.Errorf("%s id %q: %d, want 400", p, id, rec.Code)
 			}
@@ -458,14 +465,14 @@ func TestBabysit_ExcludeBadSeriesID(t *testing.T) {
 	}
 }
 
-func TestBabysit_ExcludeCorruptSettings(t *testing.T) {
+func TestMonitor_ExcludeCorruptSettings(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	if err := e.db.SetSetting(context.Background(), sweep.SettingsKey, "{nope"); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"exclude", "include"} {
-		rec := do(t, e.srv, http.MethodPost, "/media/babysit/"+p, url.Values{"series_id": {"7"}})
+		rec := do(t, e.srv, http.MethodPost, "/media/monitoring/"+p, url.Values{"series_id": {"7"}})
 		mustContain(t, rec.Body.String(), "unreadable")
 		if e.settingsRaw(t) != "{nope" {
 			t.Fatalf("%s overwrote the corrupt row", p)
@@ -473,13 +480,13 @@ func TestBabysit_ExcludeCorruptSettings(t *testing.T) {
 	}
 }
 
-func TestBabysit_ExplainRendersEscapedAndCaches(t *testing.T) {
+func TestMonitor_ExplainRendersEscapedAndCaches(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	e.llm.reply = hostile
 
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/explain", url.Values{})
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/explain", url.Values{})
 	body := rec.Body.String()
 	mustContain(t, body, "&lt;script&gt;alert(1)&lt;/script&gt; **bold**")
 	if strings.Contains(body, "<script>alert") {
@@ -489,7 +496,7 @@ func TestBabysit_ExplainRendersEscapedAndCaches(t *testing.T) {
 		t.Fatalf("llm calls = %d", e.llm.count())
 	}
 
-	fresh := do(t, e.srv, http.MethodGet, "/media/babysit/7", nil).Body.String()
+	fresh := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
 	mustContain(t, fresh, "&lt;script&gt;alert(1)&lt;/script&gt; **bold**")
 	if strings.Contains(fresh, "/explain") || strings.Contains(fresh, "history changed since") {
 		t.Error("fresh cache offers a button or says stale")
@@ -501,39 +508,39 @@ func TestBabysit_ExplainRendersEscapedAndCaches(t *testing.T) {
 		"sourceTitle": "Seven.S01", "data": map[string]any{},
 	})
 	e.son.mu.Unlock()
-	stale := do(t, e.srv, http.MethodGet, "/media/babysit/7", nil).Body.String()
-	mustContain(t, stale, "history changed since", `hx-post="/media/babysit/7/explain"`, "&lt;script&gt;")
+	stale := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
+	mustContain(t, stale, "history changed since", `hx-post="/media/monitoring/7/explain"`, "&lt;script&gt;")
 }
 
-func TestBabysit_ExplainRefusedWhenNotStuck(t *testing.T) {
+func TestMonitor_ExplainRefusedWhenNotStuck(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/8/explain", url.Values{})
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/8/explain", url.Values{})
 	mustContain(t, rec.Body.String(), "not stuck")
 	if e.llm.count() != 0 {
 		t.Error("llm called for a show that is not stuck")
 	}
-	if strings.Contains(do(t, e.srv, http.MethodGet, "/media/babysit/8", nil).Body.String(), "/explain") {
+	if strings.Contains(do(t, e.srv, http.MethodGet, "/media/monitoring/8", nil).Body.String(), "/explain") {
 		t.Error("Explain offered for a show that is not stuck")
 	}
 }
 
-func TestBabysit_ExplainErrorShownNotCached(t *testing.T) {
+func TestMonitor_ExplainErrorShownNotCached(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	e.llm.err = errors.New("model on fire")
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/explain", url.Values{})
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/explain", url.Values{})
 	mustContain(t, rec.Body.String(), "model on fire")
 	if _, err := e.db.GetBabysitExplanation(context.Background(), 7); !errors.Is(err, db.ErrNotFound) {
 		t.Errorf("an explanation was cached: %v", err)
 	}
 }
 
-func TestBabysit_ExplainErrorKeepsCachedAnswer(t *testing.T) {
+func TestMonitor_ExplainErrorKeepsCachedAnswer(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.stuckSeven(t)
 	if err := e.db.PutBabysitExplanation(context.Background(), db.BabysitExplanation{
 		SeriesID: 7, Fingerprint: "old", Text: "OLD ANSWER", Model: "m", CreatedAt: time.Now(),
@@ -541,26 +548,26 @@ func TestBabysit_ExplainErrorKeepsCachedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.llm.err = errors.New("model on fire")
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/7/explain", url.Values{})
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/explain", url.Values{})
 	mustContain(t, rec.Body.String(), "model on fire", "OLD ANSWER", "history changed since")
 }
 
-func TestBabysit_ExcludedListStaysOpenAfterSave(t *testing.T) {
+func TestMonitor_ExcludedListStaysOpenAfterSave(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
-	rec := do(t, e.srv, http.MethodPost, "/media/babysit/exclude", url.Values{"series_id": {"7"}})
+	e := newMonitorTestServer(t)
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/exclude", url.Values{"series_id": {"7"}})
 	mustContain(t, rec.Body.String(), "<details open>")
 }
 
-func TestBabysit_CrossSitePostsRefused(t *testing.T) {
+func TestMonitor_CrossSitePostsRefused(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.enableSweep(t)
 	e.stuckSeven(t)
 	before := e.settingsRaw(t)
 	posts := []string{
-		"/media/babysit/7/search/packs", "/media/babysit/7/search/singles", "/media/babysit/7/explain",
-		"/media/babysit/exclude", "/media/babysit/include",
+		"/media/monitoring/7/search/packs", "/media/monitoring/7/search/singles", "/media/monitoring/7/explain",
+		"/media/monitoring/exclude", "/media/monitoring/include",
 	}
 	headers := []map[string]string{
 		{"Sec-Fetch-Site": "cross-site"},
@@ -582,9 +589,9 @@ func TestBabysit_CrossSitePostsRefused(t *testing.T) {
 	}
 }
 
-func TestBabysit_GetsDoNotMutate(t *testing.T) {
+func TestMonitor_GetsDoNotMutate(t *testing.T) {
 	t.Parallel()
-	e := newBabysitTestServer(t)
+	e := newMonitorTestServer(t)
 	e.enableSweep(t)
 	e.stuckSeven(t)
 	snapshot := func() []any {
@@ -593,7 +600,7 @@ func TestBabysit_GetsDoNotMutate(t *testing.T) {
 		return []any{len(e.runs(t)), len(targets), expErr == nil, e.settingsRaw(t)}
 	}
 	before := snapshot()
-	for _, p := range []string{"/media/babysit", "/media/babysit/7", "/media/babysit/8", "/media/maintenance"} {
+	for _, p := range []string{"/media/monitoring", "/media/monitoring/7", "/media/monitoring/8", "/media/maintenance"} {
 		do(t, e.srv, http.MethodGet, p, nil)
 	}
 	after := snapshot()
@@ -604,5 +611,31 @@ func TestBabysit_GetsDoNotMutate(t *testing.T) {
 	}
 	if e.llm.count() != 0 {
 		t.Error("a GET called the LLM")
+	}
+}
+
+func TestMonitoring_OldPathsGone(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.enableSweep(t)
+	e.stuckSeven(t)
+	before := e.son.requests()
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/media/babysit"},
+		{http.MethodGet, "/media/babysit/3"},
+		{http.MethodPost, "/media/babysit/exclude"},
+		{http.MethodPost, "/media/babysit/3/search/season"},
+	} {
+		hdr := map[string]string{"Origin": "http://example.com"}
+		rec := doWith(t, e.srv, c.method, c.path, url.Values{"series_id": {"3"}}, hdr)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s: %d, want 404", c.method, c.path, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "" {
+			t.Errorf("%s %s: Location %q", c.method, c.path, loc)
+		}
+	}
+	if got := e.son.requests(); got != before {
+		t.Errorf("Sonarr saw %d requests from old paths", got-before)
 	}
 }

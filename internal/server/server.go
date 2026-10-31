@@ -139,12 +139,12 @@ func New(
 		r.Post("/maintenance/stuck-queue/run", s.stuckRun)
 		r.Post("/maintenance/stuck-queue/{action}", s.stuckAction)
 		r.Post("/maintenance/incident-timers/settings", s.timersSettingsSave)
-		r.Get("/babysit", s.babysitIndex)
-		r.Get("/babysit/{seriesID}", s.babysitShow)
-		r.Post("/babysit/{seriesID}/search/{pass}", s.babysitSearch)
-		r.Post("/babysit/{seriesID}/explain", s.babysitExplain)
-		r.Post("/babysit/exclude", s.babysitSetExcluded(true))
-		r.Post("/babysit/include", s.babysitSetExcluded(false))
+		r.Get("/monitoring", s.monitorIndex)
+		r.Get("/monitoring/{seriesID}", s.monitorShow)
+		r.Post("/monitoring/{seriesID}/search/{pass}", s.monitorSearch)
+		r.Post("/monitoring/{seriesID}/explain", s.monitorExplain)
+		r.Post("/monitoring/exclude", s.monitorSetExcluded(true))
+		r.Post("/monitoring/include", s.monitorSetExcluded(false))
 	})
 
 	s.http = &http.Server{

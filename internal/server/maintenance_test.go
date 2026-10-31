@@ -151,7 +151,7 @@ func TestMaintenance_RendersTabsAndCard(t *testing.T) {
 		`href="/media/"`, `href="/media/maintenance"`, `href="/media/selftest"`,
 		`name="max_grabs" value="10"`, `name="max_lookups" value="40"`, `name="interval_hours" value="6"`,
 		`name="max_searches" value="200"`, "not counted in max grabs",
-		`0 excluded, edit on <a href="/media/babysit"`, "Run now", "Dry run")
+		`0 excluded, edit on <a href="/media/monitoring"`, "Run now", "Dry run")
 	if strings.Contains(rec.Body.String(), "excluded_series") {
 		t.Error("form still renders excluded_series")
 	}
@@ -752,5 +752,18 @@ func TestSweepCard_StuckList(t *testing.T) {
 	mustContain(t, body, "Severance", "S02", ">9<", ">5<", "2026-10-20", "2026-11-03")
 	if strings.Contains(body, "No seasons are stuck now.") {
 		t.Error("empty-state text shown with a stuck season")
+	}
+}
+
+func TestSweepLastRuns_MonitorTrigger(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	if _, err := env.db.CreateSweepRun(context.Background(), db.BabysitTrigger+" NOVA", false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	mustContain(t, body, "Monitoring: NOVA")
+	if strings.Contains(body, "babysit: NOVA") {
+		t.Error("raw trigger shown")
 	}
 }

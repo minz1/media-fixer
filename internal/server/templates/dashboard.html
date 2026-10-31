@@ -624,9 +624,9 @@
     >Maintenance</a
   >
   <a
-    href="{{.BaseURL}}/babysit"
-    class="pb-2 {{if eq .Active "babysit"}}border-b-2 border-blue-600 font-medium text-gray-900{{else}}text-gray-500 hover:text-gray-800{{end}}"
-    >Babysit</a
+    href="{{.BaseURL}}/monitoring"
+    class="pb-2 {{if eq .Active "monitor"}}border-b-2 border-blue-600 font-medium text-gray-900{{else}}text-gray-500 hover:text-gray-800{{end}}"
+    >Monitoring</a
   >
   <a href="{{.BaseURL}}/selftest" class="pb-2 text-gray-500 hover:text-gray-800"
     >Live tool check</a
@@ -861,7 +861,7 @@
       {{template "sweep_num" (dict "Label" "Digest hour (UTC)" "Name" "digest_hour_utc" "Value" .Settings.DigestHourUTC "Min" 0 "Max" 23 "Note" "" "Err" (index .Errors "digest_hour_utc"))}}
     </div>
     <p class="text-sm text-gray-700">
-      {{.ExcludedCount}} excluded, edit on <a href="{{.BaseURL}}/babysit" class="text-blue-600 hover:underline">Babysit</a>
+      {{.ExcludedCount}} excluded, edit on <a href="{{.BaseURL}}/monitoring" class="text-blue-600 hover:underline">Monitoring</a>
     </p>
     <button
       type="submit"
@@ -910,7 +910,7 @@
     {{range .Runs}}
     <details class="border-b border-gray-100 py-2">
       <summary class="text-sm text-gray-800 cursor-pointer">
-        #{{.ID}} {{.StartedAt.UTC.Format "Mon Jan 2 15:04 UTC"}} · {{.Trigger}}{{if .Dry}} · dry{{end}} ·
+        #{{.ID}} {{.StartedAt.UTC.Format "Mon Jan 2 15:04 UTC"}} · {{trigger .Trigger}}{{if .Dry}} · dry{{end}} ·
         <span class="px-2 py-0.5 text-xs font-medium rounded-full {{sweepColor .Status}}">{{.Status}}</span>
         {{with .Reason}}<span class="text-gray-500">({{.}})</span>{{end}}
         <span class="text-gray-500"
@@ -999,29 +999,29 @@
 </div>
 {{end}}
 
-{{define "babysit"}}
+{{define "monitor"}}
 <!doctype html>
 <html lang="en">
-  {{template "head" (dict "Title" "Babysit · Media Fixer")}}
+  {{template "head" (dict "Title" "Monitoring · Media Fixer")}}
   <body class="bg-gray-50 font-sans">
     <div class="max-w-5xl mx-auto px-4 py-8">
       <h1 class="text-2xl font-bold text-gray-900 mb-6">Media Fixer</h1>
-      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "babysit")}}
+      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "monitor")}}
       {{if .Unavailable}}
       <div class="bg-white border border-gray-200 rounded-lg p-6">
-        <h2 class="text-xl font-bold text-gray-900 mb-1">Babysit</h2>
+        <h2 class="text-xl font-bold text-gray-900 mb-1">Monitoring</h2>
         <p class="text-sm text-red-600">{{.Unavailable}}</p>
       </div>
-      {{else}}{{template "babysit_list" .}}{{end}}
+      {{else}}{{template "monitor_list" .}}{{end}}
     </div>
   </body>
 </html>
 {{end}}
 
-{{define "babysit_list"}}
-<div id="babysit-list" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+{{define "monitor_list"}}
+<div id="monitor-list" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
   <div>
-    <h2 class="text-xl font-bold text-gray-900 mb-1">Babysit</h2>
+    <h2 class="text-xl font-bold text-gray-900 mb-1">Monitoring</h2>
     <p class="text-sm text-gray-500">
       Shows the pack sweep and the stuck-queue sweep know about: stuck seasons first, then shows with stuck downloads.
     </p>
@@ -1044,7 +1044,7 @@
     <tbody>
       {{range .List.Rows}}
       <tr class="border-b border-gray-100 align-top">
-        <td class="py-1 pr-3"><a href="{{$.BaseURL}}/babysit/{{.SeriesID}}" class="text-blue-600 hover:underline">{{.Title}}</a></td>
+        <td class="py-1 pr-3"><a href="{{$.BaseURL}}/monitoring/{{.SeriesID}}" class="text-blue-600 hover:underline">{{.Title}}</a></td>
         <td class="py-1 pr-3">{{.Seasons}}</td>
         <td class="py-1 pr-3">{{.Missing}}</td>
         <td class="py-1 pr-3">{{.StuckSeasons}}</td>
@@ -1057,7 +1057,7 @@
     </tbody>
   </table>
   {{else}}
-  <p class="text-sm text-gray-400">Nothing to babysit.</p>
+  <p class="text-sm text-gray-400">Nothing to monitor.</p>
   {{end}}
 
   <details{{if or .Notice .Failure}} open{{end}}>
@@ -1066,7 +1066,7 @@
       {{range .List.Excluded}}
       <li class="flex items-center justify-between gap-4 text-sm text-gray-700">
         <span>{{.Title}}</span>
-        <form hx-post="{{$.BaseURL}}/babysit/include" hx-target="#babysit-list" hx-swap="outerHTML"
+        <form hx-post="{{$.BaseURL}}/monitoring/include" hx-target="#monitor-list" hx-swap="outerHTML"
           hx-confirm="Include {{.Title}} in the sweep again?">
           <input type="hidden" name="series_id" value="{{.ID}}" />
           <button type="submit" class="text-xs text-blue-600 hover:underline">Include</button>
@@ -1077,7 +1077,7 @@
       {{end}}
     </ul>
     {{if .List.Pickable}}
-    <form hx-post="{{.BaseURL}}/babysit/exclude" hx-target="#babysit-list" hx-swap="outerHTML"
+    <form hx-post="{{.BaseURL}}/monitoring/exclude" hx-target="#monitor-list" hx-swap="outerHTML"
       hx-confirm="Exclude this series from the sweep?" class="mt-3 flex gap-2">
       <select name="series_id" class="text-sm border border-gray-300 rounded-sm px-2 py-1">
         {{range .List.Pickable}}<option value="{{.ID}}">{{.Title}}</option>{{end}}
@@ -1089,23 +1089,23 @@
 </div>
 {{end}}
 
-{{define "babysit_show"}}
+{{define "monitor_show"}}
 <!doctype html>
 <html lang="en">
-  {{template "head" (dict "Title" "Babysit · Media Fixer")}}
+  {{template "head" (dict "Title" "Monitoring · Media Fixer")}}
   <body class="bg-gray-50 font-sans">
     <div class="max-w-5xl mx-auto px-4 py-8">
       <h1 class="text-2xl font-bold text-gray-900 mb-6">Media Fixer</h1>
-      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "babysit")}}
-      <p class="text-sm mb-4"><a href="{{.BaseURL}}/babysit" class="text-blue-600 hover:underline">All shows</a></p>
-      {{template "babysit_show_card" .}}
+      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "monitor")}}
+      <p class="text-sm mb-4"><a href="{{.BaseURL}}/monitoring" class="text-blue-600 hover:underline">All shows</a></p>
+      {{template "monitor_show_card" .}}
     </div>
   </body>
 </html>
 {{end}}
 
-{{define "babysit_show_card"}}
-<div id="babysit-show" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+{{define "monitor_show_card"}}
+<div id="monitor-show" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
   <div class="flex items-center gap-3">
     <h2 class="text-xl font-bold text-gray-900">{{.Title}}</h2>
     {{if .Show.Stuck}}<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800">stuck</span>{{end}}
@@ -1119,24 +1119,24 @@
 
   <div class="flex flex-wrap gap-2">
     {{if .Show.Series}}
-    <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/search/packs" hx-target="#babysit-show" hx-swap="outerHTML"
+    <form hx-post="{{.BaseURL}}/monitoring/{{.ID}}/search/packs" hx-target="#monitor-show" hx-swap="outerHTML"
       hx-confirm="{{.ConfirmPacks}}">
       <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Search pack now</button>
     </form>
-    <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/search/singles" hx-target="#babysit-show" hx-swap="outerHTML"
+    <form hx-post="{{.BaseURL}}/monitoring/{{.ID}}/search/singles" hx-target="#monitor-show" hx-swap="outerHTML"
       hx-confirm="{{.ConfirmSingles}}">
       <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Search singles now</button>
     </form>
     {{end}}
     {{if .Show.Excluded}}
-    <form hx-post="{{.BaseURL}}/babysit/include" hx-target="#babysit-show" hx-swap="outerHTML"
+    <form hx-post="{{.BaseURL}}/monitoring/include" hx-target="#monitor-show" hx-swap="outerHTML"
       hx-confirm="Include {{.Title}} in the sweep again?">
       <input type="hidden" name="series_id" value="{{.ID}}" />
       <input type="hidden" name="view" value="show" />
       <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Include</button>
     </form>
     {{else}}
-    <form hx-post="{{.BaseURL}}/babysit/exclude" hx-target="#babysit-show" hx-swap="outerHTML"
+    <form hx-post="{{.BaseURL}}/monitoring/exclude" hx-target="#monitor-show" hx-swap="outerHTML"
       hx-confirm="Exclude {{.Title}} from the sweep?">
       <input type="hidden" name="series_id" value="{{.ID}}" />
       <input type="hidden" name="view" value="show" />
@@ -1145,7 +1145,7 @@
     {{end}}
   </div>
 
-  {{if or .Show.Stuck .Explain.Text}}{{template "babysit_explain" .Explain}}{{end}}
+  {{if or .Show.Stuck .Explain.Text}}{{template "monitor_explain" .Explain}}{{end}}
 
   {{if .Show.Seasons}}
   <div>
@@ -1225,8 +1225,8 @@
 </div>
 {{end}}
 
-{{define "babysit_explain"}}
-<div id="babysit-explain" class="space-y-2">
+{{define "monitor_explain"}}
+<div id="monitor-explain" class="space-y-2">
   <h3 class="text-sm font-semibold text-gray-800">Explain</h3>
   {{with .Err}}<p class="text-sm text-red-800 bg-red-100 rounded-sm px-3 py-2">{{.}}</p>{{end}}
   {{if .Text}}
@@ -1234,7 +1234,7 @@
   <div class="whitespace-pre-wrap text-sm {{if .Stale}}text-gray-400{{else}}text-gray-800{{end}}">{{.Text}}</div>
   {{end}}
   {{if .Can}}
-  <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/explain" hx-target="#babysit-explain" hx-swap="outerHTML"
+  <form hx-post="{{.BaseURL}}/monitoring/{{.ID}}/explain" hx-target="#monitor-explain" hx-swap="outerHTML"
     hx-confirm="Explain makes one AI call over this show's history. Continue?">
     <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Explain</button>
   </form>

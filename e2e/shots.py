@@ -16,8 +16,8 @@ PAGES = {
     "transcript": f"/incidents/{IDS['incident']}/transcript",
     "selftest": "/selftest",
     "maintenance": "/maintenance",
-    "monitoring": "/babysit",
-    "monitoring-show": "/babysit/3",
+    "monitoring": "/monitoring",
+    "monitoring-show": "/monitoring/3",
 }
 SCHEMES = ("light", "dark")
 VIEWPORTS = (("desk", 1280), ("phone", 390))

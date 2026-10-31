@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/livecheck"
+	"github.com/minz1/mediafixer/internal/sweep"
 )
 
 //go:embed templates/dashboard.html
@@ -59,7 +60,8 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		// dict builds a map[string]any from alternating key/value pairs, for
 		// passing extra data (e.g. a page Title) into {{template "head" ...}}
 		// without every page's own top-level data needing a Title field.
-		"dict": dictFunc,
+		"dict":    dictFunc,
+		"trigger": sweep.TriggerLabel,
 		"timeAgo": func(t time.Time) string {
 			d := time.Since(t)
 			switch {

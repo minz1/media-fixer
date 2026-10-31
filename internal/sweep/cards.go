@@ -69,7 +69,7 @@ func startCard(id int64, trigger string, dry bool, s Settings) card.Card {
 		Tone:    card.Info,
 		Title:   runKind(dry) + " started",
 		Fields: []card.Field{
-			{Name: "Trigger", Value: trigger},
+			{Name: "Trigger", Value: TriggerLabel(trigger)},
 			{Name: "Budgets", Value: fmt.Sprintf(
 				"%d grabs, %d lookups, %d searches%s", s.MaxGrabs, s.MaxLookups, s.MaxSearches, left,
 			)},
@@ -122,4 +122,11 @@ func (r *Runner) CardRenderer() card.Renderer {
 			Tone:     &tone,
 		}, true, nil
 	}
+}
+
+func TriggerLabel(trigger string) string {
+	if rest, ok := strings.CutPrefix(trigger, db.BabysitTrigger); ok {
+		return "Monitoring:" + rest
+	}
+	return trigger
 }
