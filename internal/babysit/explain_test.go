@@ -219,12 +219,14 @@ func TestExplainRedactsQueueCredentials(t *testing.T) {
 	e.stuckShow()
 	e.state.Apps = append(
 		e.state.Apps,
-		stuckqueueApp(queueItem(7, "Seven.S01E02", "fetch http://t/dl?authkey=AK9&torrent_pass=TP9 failed")),
+		stuckqueueApp(queueItem(7, "Seven.S01E02", "fetch http://t/dl?authkey=AK9&torrent_pass=TP9 failed",
+			"u=%3Fapikey%3DEN9 header api-key: HD9")),
 	)
 	if _, err := e.svc.Explain(context.Background(), 7); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(e.llm.user, "AK9") || strings.Contains(e.llm.user, "TP9") ||
+		strings.Contains(e.llm.user, "EN9") || strings.Contains(e.llm.user, "HD9") ||
 		!strings.Contains(e.llm.user, "torrent_pass=REDACTED") {
 		t.Fatalf("queue credential not redacted:\n%s", e.llm.user)
 	}

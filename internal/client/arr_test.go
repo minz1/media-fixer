@@ -429,7 +429,7 @@ func TestSeriesHistory(t *testing.T) {
  "data":{"indexer":"Nyaa","message":"x","downloadUrl":"http://p/?apikey=SECRET"}},
 {"id":2,"eventType":"seriesFolderImported"},
 {"id":3,"eventType":"downloadFailed",
- "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2 ?access_token=AT9&authkey=AK9&torrent_pass=TP9 rsskey=RK9"}}]`))
+ "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2 ?access_token=AT9&authkey=AK9&torrent_pass=TP9 rsskey=RK9 u=%3Fapikey%3DEN9 X-Api-Key: HD9"}}]`))
 	}))
 	defer srv.Close()
 
@@ -453,7 +453,8 @@ func TestSeriesHistory(t *testing.T) {
 	}
 	all := fmt.Sprintf("%+v", events)
 	if strings.Contains(all, "SECRET") || strings.Contains(all, "P2") || strings.Contains(all, "AT9") ||
-		strings.Contains(all, "AK9") || strings.Contains(all, "TP9") || strings.Contains(all, "RK9") {
+		strings.Contains(all, "AK9") || strings.Contains(all, "TP9") || strings.Contains(all, "RK9") ||
+		strings.Contains(all, "EN9") || strings.Contains(all, "HD9") {
 		t.Errorf("secret leaked: %s", all)
 	}
 }

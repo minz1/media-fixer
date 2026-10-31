@@ -370,9 +370,9 @@ type SeriesEvent struct {
 	Message string
 }
 
-var arrCredentialParamRE = regexp.MustCompile(`(?i)\b([a-z_]*(?:key|token|pass)[a-z_]*)=[^&\s]*`)
+var arrCredentialParamRE = regexp.MustCompile(`(?i)([a-z_-]*(?:key|token|pass)[a-z_-]*)(?:=|%3D|:\s*)[^&\s]*`)
 
-// RedactCredentials replaces the value of every key, token or pass query parameter in s.
+// RedactCredentials replaces the value of every key, token or pass parameter or header in s.
 func RedactCredentials(s string) string {
 	return arrCredentialParamRE.ReplaceAllString(s, "${1}=REDACTED")
 }
