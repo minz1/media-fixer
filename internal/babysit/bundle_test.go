@@ -188,3 +188,14 @@ func TestExplainDryItemsAndQueueOutOfFingerprint(t *testing.T) {
 		t.Fatalf("streak change kept cache: %+v %v", r, err)
 	}
 }
+
+func TestBundleKeepsTitlesThatLookLikeHeaders(t *testing.T) {
+	t.Parallel()
+	in := sampleInput(1)
+	in.Series.Title = "Key: The Metal Idol"
+	in.History[0].SourceTitle = "Monkey: Journey to the West"
+	facts := babysit.BuildFacts(in)
+	if !strings.Contains(facts, "Key: The Metal Idol") || !strings.Contains(facts, "Monkey: Journey to the West") {
+		t.Fatalf("title redacted:\n%s", facts)
+	}
+}

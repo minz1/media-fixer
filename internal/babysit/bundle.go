@@ -23,7 +23,7 @@ const (
 )
 
 func clean(s string) string {
-	s = strings.Join(strings.Fields(client.RedactCredentials(s)), " ")
+	s = strings.Join(strings.Fields(s), " ")
 	return strings.NewReplacer("<", "‹", ">", "›").Replace(s)
 }
 
@@ -144,7 +144,7 @@ func buildQueue(items []stuckqueue.Item) string {
 		slices.Sort(msgs)
 		msgs = slices.Compact(msgs)
 		for i := range msgs {
-			msgs[i] = clean(msgs[i])
+			msgs[i] = clean(client.RedactCredentials(msgs[i]))
 		}
 		fmt.Fprintf(&b, "%s | verdict=%s | %s\n", clean(it.Title), clean(string(it.Verdict)), strings.Join(msgs, " ; "))
 	}

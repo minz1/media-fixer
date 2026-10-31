@@ -372,7 +372,7 @@ type SeriesEvent struct {
 
 var (
 	arrCredentialParamRE = regexp.MustCompile(
-		`(?i)([a-z_-]*(?:key|token|pass)[a-z_-]*)"?[ \t]*(?:=|%3D|:)[ \t]*"?[^&\s"]*`,
+		`(?i)([a-z_-]*(?:key|token|pass)[a-z_-]*|[?&]r)"?[ \t]*(?:=|%3D|:)[ \t]*"?[^&\s"]*`,
 	)
 	arrBearerRE      = regexp.MustCompile(`(?i)\bbearer[ \t]+[^&\s"]+`)
 	arrURLUserinfoRE = regexp.MustCompile(`://([^/\s:@]+):[^/\s@]+@`)
@@ -380,8 +380,8 @@ var (
 
 // RedactCredentials replaces every key, token or pass parameter or header value, bearer token and URL password in s.
 func RedactCredentials(s string) string {
-	s = arrCredentialParamRE.ReplaceAllString(s, "${1}=REDACTED")
 	s = arrBearerRE.ReplaceAllString(s, "Bearer REDACTED")
+	s = arrCredentialParamRE.ReplaceAllString(s, "${1}=REDACTED")
 	return arrURLUserinfoRE.ReplaceAllString(s, "://${1}:REDACTED@")
 }
 

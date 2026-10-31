@@ -429,7 +429,7 @@ func TestSeriesHistory(t *testing.T) {
  "data":{"indexer":"Nyaa","message":"x","downloadUrl":"http://p/?apikey=SECRET"}},
 {"id":2,"eventType":"seriesFolderImported"},
 {"id":3,"eventType":"downloadFailed",
- "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2 ?access_token=AT9&authkey=AK9&torrent_pass=TP9 rsskey=RK9 u=%3Fapikey%3DEN9 X-Api-Key: HD9 {\"apikey\":\"JS9\"} apikey = SP9 apikey%3dLC9 Authorization: Bearer BR9 http://user:UI9@host/x"}}]`))
+ "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2 ?access_token=AT9&authkey=AK9&torrent_pass=TP9 rsskey=RK9 u=%3Fapikey%3DEN9 X-Api-Key: HD9 {\"apikey\":\"JS9\"} apikey = SP9 apikey%3dLC9 Authorization: Bearer BR9 http://user:UI9@host/x X-Api-Key: Bearer BR1 https://nzb/getnzb/a.nzb&i=1&r=NZ9"}}]`))
 	}))
 	defer srv.Close()
 
@@ -452,7 +452,7 @@ func TestSeriesHistory(t *testing.T) {
 		t.Errorf("message = %q", m)
 	}
 	all := fmt.Sprintf("%+v", events)
-	for _, secret := range []string{"SECRET", "P2", "AT9", "AK9", "TP9", "RK9", "EN9", "HD9", "JS9", "SP9", "LC9", "BR9", "UI9"} {
+	for _, secret := range []string{"SECRET", "P2", "AT9", "AK9", "TP9", "RK9", "EN9", "HD9", "JS9", "SP9", "LC9", "BR9", "UI9", "BR1", "NZ9"} {
 		if strings.Contains(all, secret) {
 			t.Errorf("secret %s leaked: %s", secret, all)
 		}
