@@ -452,12 +452,13 @@ func TestSeriesHistory(t *testing.T) {
 		t.Errorf("message = %q", m)
 	}
 	all := fmt.Sprintf("%+v", events)
-	if strings.Contains(all, "SECRET") || strings.Contains(all, "P2") || strings.Contains(all, "AT9") ||
-		strings.Contains(all, "AK9") || strings.Contains(all, "TP9") || strings.Contains(all, "RK9") ||
-		strings.Contains(all, "EN9") || strings.Contains(all, "HD9") || strings.Contains(all, "JS9") ||
-		strings.Contains(all, "SP9") || strings.Contains(all, "LC9") || strings.Contains(all, "BR9") ||
-		strings.Contains(all, "UI9") || !strings.Contains(all, "X-Api-Key=REDACTED") {
-		t.Errorf("secret leaked: %s", all)
+	for _, secret := range []string{"SECRET", "P2", "AT9", "AK9", "TP9", "RK9", "EN9", "HD9", "JS9", "SP9", "LC9", "BR9", "UI9"} {
+		if strings.Contains(all, secret) {
+			t.Errorf("secret %s leaked: %s", secret, all)
+		}
+	}
+	if !strings.Contains(all, "X-Api-Key=REDACTED") {
+		t.Errorf("header form not redacted: %s", all)
 	}
 }
 
