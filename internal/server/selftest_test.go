@@ -58,7 +58,7 @@ func TestSelftestRun_Unconfigured(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), `<p class="text-sm text-red-600">`) {
+	if !strings.Contains(string(body), `class="notice notice-err"`) {
 		t.Errorf("expected a styled error fragment, got: %s", body)
 	}
 	if !strings.Contains(string(body), "not configured") {

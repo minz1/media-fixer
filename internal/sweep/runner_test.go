@@ -845,3 +845,19 @@ func TestRun_CancelAfterLookupAnswerKeepsLookup(t *testing.T) {
 		})
 	}
 }
+
+func TestRun_ProgressStartedIsRunStart(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	var seen sweep.Progress
+	notify := h.runner.Notify
+	h.runner.Notify = func(ctx context.Context, c card.Card) error {
+		seen, _ = h.runner.Progress()
+		return notify(ctx, c)
+	}
+	run := h.run(t, false, settings())
+	if seen.RunID == 0 || !seen.Started.Equal(run.StartedAt) {
+		t.Errorf("Progress.Started = %v (run %d), want %v", seen.Started, seen.RunID, run.StartedAt)
+	}
+}

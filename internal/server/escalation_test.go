@@ -518,7 +518,7 @@ func TestResolve_AlreadyResolvedRedirects(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303; body: %s", rec.Code, rec.Body.String())
 	}
-	if loc := rec.Header().Get("Location"); loc != "/media/incidents/"+inc.ID {
+	if loc := rec.Header().Get("Location"); loc != "/media/incidents/"+inc.ID+"?done=resolve" {
 		t.Errorf("Location = %q, want the incident page", loc)
 	}
 }

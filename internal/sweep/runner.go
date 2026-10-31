@@ -81,6 +81,7 @@ type Progress struct {
 	RunID          int64
 	Phase, Current string
 	Dry            bool
+	Started        time.Time
 	Counts         db.SweepCounts
 }
 
@@ -870,7 +871,7 @@ func (x *run) addItem(ctx context.Context, it *db.SweepItem) error {
 func (x *run) report(phase, current string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.progress = &Progress{RunID: x.id, Phase: phase, Current: current, Dry: x.dry, Counts: x.c}
+	x.progress = &Progress{RunID: x.id, Phase: phase, Current: current, Dry: x.dry, Started: x.start, Counts: x.c}
 }
 
 func (r *Runner) notifyStart(ctx context.Context, c card.Card) bool {

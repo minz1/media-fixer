@@ -34,14 +34,16 @@ func (s *Server) SetSweep(sch *sweep.Scheduler) {
 }
 
 func (s *Server) maintenanceIndex(w http.ResponseWriter, r *http.Request) {
-	data := map[string]any{tplKeyBaseURL: s.baseURL}
+	data := map[string]any{tplKeyBaseURL: s.baseURL, tplKeyPaused: s.isPaused(r.Context())}
 	if s.sweep != nil {
 		set, unreadable, err := s.loadSweepSettings(r.Context())
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		data["Card"] = s.sweepCard(r.Context(), set, nil, "", unreadable, false)
+		card := s.sweepCard(r.Context(), set, nil, "", "", false)
+		card["Unreadable"] = unreadable
+		data["Card"] = card
 	}
 	data["Stuck"] = s.stuckCardFor(r.Context(), "", "")
 	data["Timers"] = s.timersCardFor(r.Context())

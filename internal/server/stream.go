@@ -111,7 +111,7 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 		var sb strings.Builder
 		_ = s.tmpl.t.ExecuteTemplate(&sb, "incidents_list", map[string]any{
 			"Incidents":   incidents,
-			"Paused":      paused,
+			tplKeyPaused:  paused,
 			tplKeyBaseURL: s.baseURL,
 		})
 		writeSSEEvent(w, flush, hxPartial("incidents-list", sb.String()))

@@ -28,6 +28,7 @@ type monitorListView struct {
 	List        babysit.List
 	Notice      string
 	Failure     string
+	Paused      bool
 }
 
 type explainView struct {
@@ -53,6 +54,7 @@ type monitorShowView struct {
 	Explain        explainView
 	Notice         string
 	Failure        string
+	Paused         bool
 }
 
 func (s *Server) SetBabysit(b *babysit.Service) {
@@ -87,7 +89,9 @@ func (s *Server) renderMonitor(w http.ResponseWriter, name string, data any) {
 
 func (s *Server) monitorIndex(w http.ResponseWriter, r *http.Request) {
 	if s.babysit == nil || s.sweep == nil {
-		s.renderMonitor(w, "monitor", monitorListView{BaseURL: s.baseURL, Unavailable: sweepUnavailable})
+		s.renderMonitor(w, "monitor", monitorListView{
+			BaseURL: s.baseURL, Unavailable: sweepUnavailable, Paused: s.isPaused(r.Context()),
+		})
 		return
 	}
 	s.renderMonitorList(w, r, "monitor", "", "")
@@ -99,7 +103,8 @@ func (s *Server) renderMonitorList(w http.ResponseWriter, r *http.Request, name,
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.renderMonitor(w, name, monitorListView{BaseURL: s.baseURL, List: l, Notice: notice, Failure: failure})
+	s.renderMonitor(w, name, monitorListView{BaseURL: s.baseURL, List: l, Notice: notice, Failure: failure,
+		Paused: s.isPaused(r.Context())})
 }
 
 func (s *Server) monitorShow(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +132,7 @@ func (s *Server) renderMonitorShow(
 	set, _ := sweep.LoadSettings(ctx, s.db)
 	v := monitorShowView{
 		BaseURL: s.baseURL, ID: id, Title: showTitle(sh, id), Show: sh, StuckAfter: set.StuckAfter,
-		Status: s.sweepStatus(started), Notice: notice, Failure: failure,
+		Status: s.sweepStatus(started), Notice: notice, Failure: failure, Paused: s.isPaused(ctx),
 		Explain: explainView{BaseURL: s.baseURL, ID: id},
 	}
 	for _, it := range sh.Queue {

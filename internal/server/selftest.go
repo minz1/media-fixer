@@ -9,7 +9,7 @@ import (
 // selftestIndex renders the /selftest page: the last cached report (if any)
 // plus the run form. Nothing is executed on a plain page load, so opening
 // the page never itself hits the live services.
-func (s *Server) selftestIndex(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) selftestIndex(w http.ResponseWriter, r *http.Request) {
 	s.reportMu.Lock()
 	report := s.lastReport
 	s.reportMu.Unlock()
@@ -19,6 +19,7 @@ func (s *Server) selftestIndex(w http.ResponseWriter, _ *http.Request) {
 		tplKeyBaseURL: s.baseURL,
 		"Configured":  s.checker != nil,
 		"Report":      report,
+		tplKeyPaused:  s.isPaused(r.Context()),
 	})
 }
 

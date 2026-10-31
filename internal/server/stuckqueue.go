@@ -139,20 +139,26 @@ func (s *Server) stuckCardFor(ctx context.Context, notice, failure string) map[s
 		return map[string]any{tplKeyBaseURL: s.baseURL, "Unavailable": stuckUnavailable}
 	}
 	set, err := stuckqueue.LoadSettings(ctx, s.db)
-	unreadable := ""
+	unreadable, stateErr := "", ""
 	if errors.Is(err, stuckqueue.ErrCorruptSettings) {
 		unreadable = stuckSettingsUnreadable
 	} else if err != nil {
-		failure = err.Error()
+		stateErr = err.Error()
 	}
 	res, running := s.stuckState()
-	return s.stuckCardData(res, running, set, nil, notice, failure, unreadable)
+	card := s.stuckCardData(res, running, set, nil, notice, failure, unreadable)
+	card["StateErr"] = stateErr
+	return card
 }
 
 func (s *Server) stuckCardData(
 	res *stuckqueue.Result, running bool, set stuckqueue.Settings, errs map[string]string,
 	notice, failure, unreadable string,
 ) map[string]any {
+	var started time.Time
+	if s.stuck != nil {
+		started = s.stuck.StartedAt()
+	}
 	card := map[string]any{
 		tplKeyBaseURL: s.baseURL,
 		"Settings":    set,
@@ -162,6 +168,7 @@ func (s *Server) stuckCardData(
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
 		"Running":     running,
+		"StartedAt":   started,
 	}
 	if res == nil {
 		return card

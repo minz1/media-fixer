@@ -204,3 +204,20 @@ func TestState_ResultAndRunningTogether(t *testing.T) {
 		t.Fatalf("finished run: ok=%v running=%v apps=%d", ok, running, len(res.Apps))
 	}
 }
+
+func TestSchedulerStartedAt(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	if !s.StartedAt().IsZero() {
+		t.Fatal("StartedAt before any run is not zero")
+	}
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	at := e.clock.Now()
+	if err := s.RunNow(); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	if got := s.StartedAt(); !got.Equal(at) {
+		t.Errorf("StartedAt = %v, want %v", got, at)
+	}
+}

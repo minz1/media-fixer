@@ -85,6 +85,12 @@ func (s *Scheduler) State() (Result, bool, bool) {
 	return s.last, s.hasLast, s.running
 }
 
+func (s *Scheduler) StartedAt() time.Time {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.lastStart
+}
+
 func (s *Scheduler) start(now time.Time, set Settings) error {
 	if !s.mu.TryLock() {
 		return ErrRunActive

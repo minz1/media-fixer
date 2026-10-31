@@ -33,6 +33,7 @@ const (
 	tplKeyBaseURL  = "BaseURL"
 	tplKeyNotice   = "Notice"
 	tplKeyFailure  = "Failure"
+	tplKeyPaused   = "Paused"
 	msgSaved       = "Saved."
 	msgWholeNumber = "must be a whole number"
 )
@@ -202,8 +203,35 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		"Finding":           diagnosticResultOrNil(inc.Finding),
 		"Transcript":        turns,
 		"Full":              full,
+		tplKeyPaused:        s.isPaused(ctx),
 		tplKeyBaseURL:       s.baseURL,
 	}, nil
+}
+
+func (s *Server) isPaused(ctx context.Context) bool {
+	paused, _ := s.db.IsAutonomousPaused(ctx)
+	return paused
+}
+
+func incidentDoneNotice(key string) string {
+	switch key {
+	case "resolve":
+		return "Marked resolved."
+	case "rerun":
+		return "Rerun started."
+	case "keep":
+		return "Keep searching started."
+	case "unlock":
+		return "Unlocked."
+	case "approve":
+		return "Escalation approved; running it now."
+	}
+	return ""
+}
+
+func (s *Server) redirectIncident(w http.ResponseWriter, r *http.Request, id, done string) {
+	target, _ := url.JoinPath(s.baseURL, "incidents", id)
+	http.Redirect(w, r, target+"?done="+done, http.StatusSeeOther)
 }
 
 func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +245,7 @@ func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.Execute(w, map[string]any{
 		"Incidents":   incidents,
-		"Paused":      paused,
+		tplKeyPaused:  paused,
 		tplKeyBaseURL: s.baseURL,
 	})
 }
@@ -230,6 +258,7 @@ func (s *Server) dashboardIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	data["Done"] = incidentDoneNotice(r.URL.Query().Get("done"))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "incident", data)
 }
@@ -244,8 +273,7 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	s.redirectIncident(w, r, id, "resolve")
 }
 
 func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
@@ -257,18 +285,27 @@ func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	s.redirectIncident(w, r, id, "rerun")
 }
 
 func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
-	_ = s.svc.SetAutonomousPaused(r.Context(), true)
-	http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
+	s.setPaused(w, r, true, "Autonomous actions paused.")
 }
 
 func (s *Server) actionResume(w http.ResponseWriter, r *http.Request) {
-	_ = s.svc.SetAutonomousPaused(r.Context(), false)
-	http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
+	s.setPaused(w, r, false, "Autonomous actions resumed.")
+}
+
+func (s *Server) setPaused(w http.ResponseWriter, r *http.Request, paused bool, notice string) {
+	_ = s.svc.SetAutonomousPaused(r.Context(), paused)
+	if r.Header.Get("Hx-Request") == "" {
+		http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.tmpl.t.ExecuteTemplate(w, "pause_response", map[string]any{
+		tplKeyBaseURL: s.baseURL, tplKeyPaused: s.isPaused(r.Context()), tplKeyNotice: notice,
+	})
 }
 
 // actionKeepSearching re-arms a pending arr_search_missing outcome that was
@@ -282,8 +319,7 @@ func (s *Server) actionKeepSearching(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	s.redirectIncident(w, r, id, "keep")
 }
 
 func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
@@ -295,8 +331,7 @@ func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	s.redirectIncident(w, r, id, "unlock")
 }
 
 // escalationPreview renders a read-only plan preview for the incident's
@@ -346,8 +381,7 @@ func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	target, _ := url.JoinPath(s.baseURL, "incidents", id)
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	s.redirectIncident(w, r, id, "approve")
 }
 
 // parseUUIDParam extracts the "id" URL param and validates it as a UUID.

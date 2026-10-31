@@ -64,7 +64,7 @@ func (s *Server) timersCard(
 		"Groups":      groups,
 		tplKeyNotice:  notice,
 		"Unreadable":  unreadable,
-		tplKeyFailure: failure,
+		"StateErr":    failure,
 	}
 }
 
