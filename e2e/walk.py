@@ -1,5 +1,6 @@
 import sys
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 from shots import BASE, PAGES, SCHEMES, SEED, VIEWPORTS
@@ -9,6 +10,16 @@ EXPECT = {
     "monitoring": ["Samurai Champloo"],
     "maintenance": ["Pack sweep", "Stuck queue", "Incident timers"],
 }
+
+POLL_JS = """
+(url) => {
+  const el = document.getElementById("stuck-results");
+  el.setAttribute("hx-get", url);
+  el.setAttribute("hx-trigger", "every 1s");
+  el.setAttribute("hx-swap", "outerHTML");
+  htmx.process(el);
+}
+"""
 
 CONTRAST_JS = r"""
 () => {
@@ -99,6 +110,17 @@ def interactions(br):
     pg.wait_for_selector("#notice p.notice-err")
     check("could not reach" in pg.inner_text("#notice"), "aborted request shows no 'could not reach'")
     pg.unroute("**/stuck-queue/run")
+
+    pg.goto(BASE + "/maintenance", wait_until="load")
+    pg.route("**/stuck-queue/results", lambda r: r.abort())
+    pg.evaluate(POLL_JS, BASE + "/maintenance/stuck-queue/results")
+    pg.wait_for_selector("#notice p.notice-err")
+    pg.unroute("**/stuck-queue/results")
+    try:
+        pg.wait_for_selector("#notice p", state="detached", timeout=5000)
+    except PlaywrightTimeout:
+        pass
+    check(pg.locator("#notice p").count() == 0, "a poll's own error notice stays after the poll recovers")
 
     pg.goto(BASE + "/maintenance", wait_until="load")
     sent = []

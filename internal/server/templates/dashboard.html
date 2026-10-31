@@ -115,12 +115,14 @@
   <script>
     (function () {
       var notice = function () { return document.getElementById("notice"); };
-      var show = function (text) {
+      var key = function (ctx) { return ctx && ctx.request ? ctx.request.method + " " + ctx.request.action : ""; };
+      var show = function (text, ctx) {
         var n = notice();
         if (!n) return;
         var p = document.createElement("p");
         p.className = "notice notice-err";
         p.textContent = text;
+        p.dataset.src = key(ctx);
         n.replaceChildren(p);
       };
       document.addEventListener("htmx:before:request", function (e) {
@@ -129,13 +131,18 @@
       });
       document.addEventListener("htmx:before:swap", function (e) {
         var ctx = e.detail.ctx;
-        if (!ctx.response || ctx.response.status < 400) return;
+        if (!ctx.response) return;
+        if (ctx.response.status < 400) {
+          var n = notice(), p = n && n.querySelector("p.notice-err");
+          if (p && p.dataset.src === key(ctx)) n.replaceChildren();
+          return;
+        }
         e.preventDefault();
         var text = new DOMParser().parseFromString(ctx.text || "", "text/html").body.textContent.trim();
-        show(text || "Request failed (" + ctx.response.status + ")");
+        show(text || "Request failed (" + ctx.response.status + ")", ctx);
       });
-      document.addEventListener("htmx:error", function () {
-        show("Request failed: could not reach Media Fixer.");
+      document.addEventListener("htmx:error", function (e) {
+        show("Request failed: could not reach Media Fixer.", e.detail && e.detail.ctx);
       });
       document.addEventListener("click", function (e) {
         var b = e.target.closest && e.target.closest("[data-reset]");
