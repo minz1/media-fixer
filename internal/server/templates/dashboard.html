@@ -1231,7 +1231,7 @@
   {{end}}
   {{if .Can}}
   <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/explain" hx-target="#babysit-explain" hx-swap="outerHTML"
-    hx-confirm="{{.Confirm}}">
+    hx-confirm="Explain makes one AI call over this show's history. Continue?">
     <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Explain</button>
   </form>
   {{end}}

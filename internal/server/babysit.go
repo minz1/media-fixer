@@ -19,7 +19,6 @@ const (
 	viewShow         = "show"
 	tplBabysitList   = "babysit_list"
 	tplBabysitCard   = "babysit_show_card"
-	explainConfirm   = "Explain makes one AI call over this show's history. Continue?"
 	searchConfirmEnd = "Each season searched counts as an attempt and doubles its backoff."
 )
 
@@ -39,7 +38,6 @@ type explainView struct {
 	Stale   bool
 	Err     string
 	Can     bool
-	Confirm string
 }
 
 type babysitShowView struct {
@@ -130,7 +128,7 @@ func (s *Server) renderBabysitShow(
 	v := babysitShowView{
 		BaseURL: s.baseURL, ID: id, Title: showTitle(sh, id), Show: sh, StuckAfter: set.StuckAfter,
 		Status: s.sweepStatus(started), Notice: notice, Failure: failure,
-		Explain: explainView{BaseURL: s.baseURL, ID: id, Confirm: explainConfirm},
+		Explain: explainView{BaseURL: s.baseURL, ID: id},
 	}
 	for _, it := range sh.Queue {
 		v.Queue = append(v.Queue, stuckItem(it))
@@ -234,7 +232,7 @@ func (s *Server) babysitExplain(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	v := explainView{BaseURL: s.baseURL, ID: id, Confirm: explainConfirm}
+	v := explainView{BaseURL: s.baseURL, ID: id}
 	if err != nil {
 		v.Err, v.Can = err.Error(), !errors.Is(err, babysit.ErrNotStuck)
 		if c, getErr := s.db.GetBabysitExplanation(r.Context(), id); getErr == nil {

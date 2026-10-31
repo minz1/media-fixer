@@ -246,8 +246,8 @@ func (d *DB) LastSweepRunStart(ctx context.Context, excludeStatus []string) (*ti
 	var at time.Time
 	err = d.read.QueryRowContext(ctx,
 		`SELECT started_at FROM sweep_runs
-		 WHERE dry = 0 AND trigger NOT LIKE 'babysit:%' AND status NOT IN (SELECT value FROM json_each(?))
-		 ORDER BY id DESC LIMIT 1`, string(exclude)).Scan(&at)
+		 WHERE dry = 0 AND trigger NOT LIKE ? AND status NOT IN (SELECT value FROM json_each(?))
+		 ORDER BY id DESC LIMIT 1`, BabysitTrigger+"%", string(exclude)).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -324,7 +324,8 @@ func (d *DB) DeleteSweepRefused(ctx context.Context, id int64) error {
 func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int, time.Time, error) {
 	rows, err := d.read.QueryContext(ctx,
 		`SELECT started_at, finished_at FROM sweep_runs
-		 WHERE dry = 0 AND trigger NOT LIKE 'babysit:%' AND status IN ('failed', 'interrupted') AND started_at >= ?`, since)
+		 WHERE dry = 0 AND trigger NOT LIKE ? AND status IN ('failed', 'interrupted') AND started_at >= ?`,
+		BabysitTrigger+"%", since)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
