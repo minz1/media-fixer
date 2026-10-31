@@ -372,12 +372,12 @@ func TestWedgeStopsAtSystematicLock(t *testing.T) {
 			blocked++
 		}
 	}
-	if len(list) != 8 || blocked != 3 || h.notif.alertCount() != 3 {
-		t.Fatalf("incidents=%d blocked=%d alerts=%d, want 8/3/3", len(list), blocked, h.notif.alertCount())
+	if len(list) != 8 || blocked != 3 || h.notif.alertCount() != 1 {
+		t.Fatalf("incidents=%d blocked=%d alerts=%d, want 8/3/1", len(list), blocked, h.notif.alertCount())
 	}
 	h.poll(wedge()...)
 	h.poll(wedge()...)
-	if len(h.incidents()) != 8 || h.notif.alertCount() != 3 {
+	if len(h.incidents()) != 8 || h.notif.alertCount() != 1 {
 		t.Fatalf("later polls changed state: incidents=%d alerts=%d", len(h.incidents()), h.notif.alertCount())
 	}
 	for _, inc := range h.incidents() {

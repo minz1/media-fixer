@@ -180,6 +180,37 @@ func TestHandle_SystemicLock(t *testing.T) {
 	}
 }
 
+func TestHandle_SystemicLockAlertsOncePerEpisode(t *testing.T) {
+	t.Parallel()
+	svc, database, notif := newTestService(t)
+	ctx := context.Background()
+	report := func(title string) *db.Incident {
+		t.Helper()
+		inc, err := svc.Handle(ctx, &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inc
+	}
+
+	first := report("A")
+	for _, title := range []string{"B", "C", "D", "E", "F", "G", "H"} {
+		report(title)
+	}
+	if len(notif.cards) != 1 {
+		t.Fatalf("owner cards after 8 titles = %d, want 1 lock alert", len(notif.cards))
+	}
+
+	if err := database.UpdateIncidentStatus(ctx, first.ID, db.StatusResolved); err != nil {
+		t.Fatal(err)
+	}
+	report("I")
+	report("J")
+	if len(notif.cards) != 2 {
+		t.Fatalf("owner cards after the lock ended and started again = %d, want 2", len(notif.cards))
+	}
+}
+
 func TestUnlock(t *testing.T) {
 	t.Parallel()
 	svc, database, _ := newTestService(t)

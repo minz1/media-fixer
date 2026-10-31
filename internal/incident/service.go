@@ -41,6 +41,8 @@ type Service struct {
 	seedTimeout time.Duration
 	unit        atomic.Int64
 	timersWarn  atomic.Bool
+	// shortcut: in memory, so a restart during a lock sends one more alert; persist it if that turns out noisy.
+	lockAlerted atomic.Bool
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -196,25 +198,33 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	s.recordIncidentCreated(ctx, inc)
 	s.addReporter(ctx, inc, r)
 
-	if openCount >= SystematicIncidentThreshold {
-		_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
-		_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
-		s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
-		c := ownerCard(inc, card.Alert, fmt.Sprintf(
-			"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s)",
-			openCount+1,
-			r.Title,
-			inc.ID[:8],
-		), "")
-		c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
-		if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil && !errors.Is(notifyErr, card.ErrUntracked) {
-			s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
-		}
+	if openCount < SystematicIncidentThreshold {
+		s.lockAlerted.Store(false)
+		s.launch(inc, nil)
 		return inc, nil
 	}
 
-	s.launch(inc, nil)
-
+	_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
+	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
+	s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
+	if s.lockAlerted.Swap(true) {
+		s.log.WarnContext(ctx, "systemic lock: incident blocked, owner already alerted",
+			"incident", inc.ID, "title", r.Title, "open", openCount)
+		return inc, nil
+	}
+	c := ownerCard(inc, card.Alert, fmt.Sprintf(
+		"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s). "+
+			"Later incidents are blocked without a DM until fewer than %d are open; see the dashboard.",
+		openCount+1,
+		r.Title,
+		inc.ID[:8],
+		SystematicIncidentThreshold,
+	), "")
+	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
+	if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil && !errors.Is(notifyErr, card.ErrUntracked) {
+		s.lockAlerted.Store(false)
+		s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
+	}
 	return inc, nil
 }
 
