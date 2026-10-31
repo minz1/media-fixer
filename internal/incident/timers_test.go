@@ -128,7 +128,7 @@ func TestFields_MatchBoundsAndDefaults(t *testing.T) {
 	t.Parallel()
 	d := incident.DefaultTimers()
 	fields := d.Fields()
-	if len(fields) != 20 {
+	if len(fields) != 21 {
 		t.Fatalf("len = %d", len(fields))
 	}
 	seen := map[string]bool{}
@@ -151,6 +151,40 @@ func TestFields_MatchBoundsAndDefaults(t *testing.T) {
 	x := incident.DefaultTimers()
 	if x.Set("nope", 1); x != incident.DefaultTimers() {
 		t.Error("Set of unknown name changed a field")
+	}
+}
+
+func TestMapTimeoutSeconds(t *testing.T) {
+	t.Parallel()
+	d := incident.DefaultTimers()
+	if d.MapTimeoutSeconds != 300 {
+		t.Fatalf("default = %d, want 300", d.MapTimeoutSeconds)
+	}
+	var f incident.TimerField
+	for _, g := range d.Fields() {
+		if g.Name == "map_timeout_seconds" {
+			f = g
+		}
+	}
+	if f.Lo != 30 || f.Hi != 600 || f.Group != "Explain" || f.Unit != "seconds" ||
+		f.Label != "Import mapping: give up after" ||
+		f.Help != "Stop waiting for the agent's file-to-episode mapping after this long." {
+		t.Errorf("field = %+v", f)
+	}
+	for _, v := range []int{29, 601} {
+		x := incident.DefaultTimers()
+		x.Set("map_timeout_seconds", v)
+		if _, has := x.Validate()["map_timeout_seconds"]; !has {
+			t.Errorf("%d passed validation", v)
+		}
+	}
+	db := timersDB(t)
+	if err := db.SetSetting(context.Background(), incident.TimersKey, `{"stall_minutes":90}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := incident.LoadTimers(context.Background(), db)
+	if err != nil || got.MapTimeoutSeconds != 300 {
+		t.Errorf("got %d, %v", got.MapTimeoutSeconds, err)
 	}
 }
 

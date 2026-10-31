@@ -39,6 +39,7 @@ type Timers struct {
 	KeepSearchingCheckHours int `json:"keep_searching_check_hours"`
 	KeepSearchingDays       int `json:"keep_searching_days"`
 	ExplainTimeoutSeconds   int `json:"explain_timeout_seconds"`
+	MapTimeoutSeconds       int `json:"map_timeout_seconds"`
 	StuckReadTasks          int `json:"stuck_read_tasks"`
 	StuckReadMinutes        int `json:"stuck_read_minutes"`
 }
@@ -149,6 +150,10 @@ func (t *Timers) table() []timerSpec {
 		spec(&t.ExplainTimeoutSeconds, timerDef{
 			explain, "explain_timeout_seconds", "Explain: give up after", "seconds", 30, 600, 120,
 			"Stop waiting for an Explain answer after this long.",
+		}),
+		spec(&t.MapTimeoutSeconds, timerDef{
+			explain, "map_timeout_seconds", "Import mapping: give up after", "seconds", 30, 600, 300,
+			"Stop waiting for the agent's file-to-episode mapping after this long.",
 		}),
 		spec(&t.StuckReadTasks, timerDef{
 			stuck, "stuck_read_tasks", "Stuck tasks on one torrent", "tasks", 2, 10, 3,
