@@ -230,6 +230,11 @@ func TestHandle_SystemicLockEndsWhenActiveCountDrops(t *testing.T) {
 	if len(notif.cards) != 1 {
 		t.Fatalf("owner cards = %d, want 1 lock alert", len(notif.cards))
 	}
+	svc.EndLockEpisodeForTest(ctx)
+	report("X")
+	if len(notif.cards) != 1 {
+		t.Fatalf("owner cards after a tick with 5 still active = %d, want 1", len(notif.cards))
+	}
 	for _, id := range []string{a.ID, b.ID} {
 		if err := database.UpdateIncidentStatus(ctx, id, db.StatusResolved); err != nil {
 			t.Fatal(err)
