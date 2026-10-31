@@ -86,10 +86,3 @@ func parseTimers(r *http.Request) (incident.Timers, map[string]string) {
 	}
 	return t, errs
 }
-
-func keepSearchingSpan(days int) string {
-	if days == 1 {
-		return "up to a day"
-	}
-	return fmt.Sprintf("up to %d days", days)
-}

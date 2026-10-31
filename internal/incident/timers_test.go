@@ -131,23 +131,17 @@ func TestFields_MatchBoundsAndDefaults(t *testing.T) {
 	if len(fields) != 16 {
 		t.Fatalf("len = %d", len(fields))
 	}
-	bounds := incident.TimerBounds()
 	seen := map[string]bool{}
 	for i, f := range fields {
 		if seen[f.Name] {
 			t.Errorf("duplicate %s", f.Name)
 		}
 		seen[f.Name] = true
-		if b := bounds[f.Name]; b != [2]int{f.Lo, f.Hi} {
-			t.Errorf("%s bounds = %v", f.Name, b)
-		}
 		if f.Value != f.Default {
 			t.Errorf("%s value %d != default %d", f.Name, f.Value, f.Default)
 		}
 		x := incident.DefaultTimers()
-		if !x.Set(f.Name, f.Default+1) {
-			t.Fatalf("Set(%s) = false", f.Name)
-		}
+		x.Set(f.Name, f.Default+1)
 		for j, g := range x.Fields() {
 			if (g.Value != g.Default) != (j == i) {
 				t.Errorf("Set(%s) changed field %s", f.Name, g.Name)
@@ -155,8 +149,8 @@ func TestFields_MatchBoundsAndDefaults(t *testing.T) {
 		}
 	}
 	x := incident.DefaultTimers()
-	if x.Set("nope", 1) {
-		t.Error("Set of unknown name returned true")
+	if x.Set("nope", 1); x != incident.DefaultTimers() {
+		t.Error("Set of unknown name changed a field")
 	}
 }
 

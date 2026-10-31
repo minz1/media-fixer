@@ -148,23 +148,12 @@ func (t *Timers) Fields() []TimerField {
 	return out
 }
 
-func TimerBounds() map[string][2]int {
-	var t Timers
-	out := map[string][2]int{}
-	for _, f := range t.table() {
-		out[f.f.Name] = [2]int{f.f.Lo, f.f.Hi}
-	}
-	return out
-}
-
-func (t *Timers) Set(name string, v int) bool {
+func (t *Timers) Set(name string, v int) {
 	for _, f := range t.table() {
 		if f.f.Name == name {
 			*f.p = v
-			return true
 		}
 	}
-	return false
 }
 
 func (t *Timers) Validate() map[string]string {

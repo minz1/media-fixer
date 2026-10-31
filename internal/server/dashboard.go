@@ -192,7 +192,7 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 	timers, _ := incident.LoadTimers(ctx, s.db)
 
 	return map[string]any{
-		"KeepSearchingSpan": keepSearchingSpan(timers.KeepSearchingDays),
+		"KeepSearchingSpan": "up to " + incident.KeepSearchingSpan(timers.KeepSearchingDays),
 		"Incident":          inc,
 		"Actions":           actions,
 		"PendingOutcome":    pendingOutcome,

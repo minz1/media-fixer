@@ -538,7 +538,7 @@ func TestKeepSearching_SavedDurationAndText(t *testing.T) {
 		t.Error("next check is not 2 h out")
 	}
 
-	for days, want := range map[int]string{3: "over the next 3 days", 1: "over the next day"} {
+	for days, want := range map[int]string{3: "for up to 3 days", 1: "for up to a day"} {
 		saveTimers(t, database, func(tm *incident.Timers) { tm.KeepSearchingDays = days })
 		started = time.Now().Add(-time.Hour)
 		esc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{

@@ -47,14 +47,12 @@ func TestTimersCard_FormRoundTrip(t *testing.T) {
 	if len(post) != len(fields) {
 		t.Errorf("form has %d inputs, want %d: %v", len(post), len(fields), post)
 	}
-	bounds := incident.TimerBounds()
 	for _, f := range fields {
 		if _, ok := post[f.Name]; !ok {
 			t.Errorf("form does not render %q", f.Name)
 		}
-		b := bounds[f.Name]
-		mustContain(t, form, `name="`+f.Name+`" value="`+strconv.Itoa(f.Default)+`" min="`+strconv.Itoa(b[0])+
-			`" max="`+strconv.Itoa(b[1])+`"`)
+		mustContain(t, form, `name="`+f.Name+`" value="`+strconv.Itoa(f.Default)+`" min="`+strconv.Itoa(f.Lo)+
+			`" max="`+strconv.Itoa(f.Hi)+`"`)
 	}
 	last := -1
 	for _, g := range []string{"Agent runs", "Verification", "Reporter notes", "Download tracking"} {

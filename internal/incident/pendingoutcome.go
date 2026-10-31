@@ -247,8 +247,8 @@ func (s *Service) escalatePendingOutcome(
 	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
 		"⚠️ Incident **%s** (#%s): searched for **%s** but %s.",
 		inc.Title, inc.ID[:8], pendingOutcomeTargetLabel(po), reason,
-	), "Approve \"Keep searching\" on the dashboard to keep watching for a release over the next "+
-		keepSearchingSpan(t.KeepSearchingDays)+", or investigate manually."))
+	), "Approve \"Keep searching\" on the dashboard to keep watching for a release for up to "+
+		KeepSearchingSpan(t.KeepSearchingDays)+", or investigate manually."))
 }
 
 // pendingOutcomeTargetLabel renders a PendingOutcome's target for a
@@ -265,9 +265,9 @@ func pendingOutcomeTargetLabel(po *db.PendingOutcome) string {
 	}
 }
 
-func keepSearchingSpan(days int) string {
+func KeepSearchingSpan(days int) string {
 	if days == 1 {
-		return "day"
+		return "a day"
 	}
 	return fmt.Sprintf("%d days", days)
 }
