@@ -192,3 +192,29 @@ func TestTimersCard_ReadErrorHidesSave(t *testing.T) {
 		t.Errorf("Save offered while the saved timers are unreadable:\n%s", body)
 	}
 }
+
+func TestTimersCard_FormLayout(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+	form := timersFormRe.FindString(body)
+	if form == "" {
+		t.Fatalf("incident timers form not found:\n%s", body)
+	}
+	if strings.Contains(form, "flex-wrap") {
+		t.Error("timers form still uses flex-wrap")
+	}
+	d := incident.DefaultTimers()
+	for _, f := range d.Fields() {
+		mustContain(
+			t,
+			form,
+			`<button type="button" class="btn btn-link" data-reset="`+f.Name+`" data-default="`+strconv.Itoa(
+				f.Default,
+			)+`"`,
+			f.Help,
+			`id="timer-`+f.Name+`"`,
+			`for="timer-`+f.Name+`"`,
+		)
+	}
+}

@@ -263,3 +263,13 @@ func TestTimersStuckReadFields(t *testing.T) {
 		t.Errorf("fields = %v", units)
 	}
 }
+
+func TestTimerFieldsHaveHelp(t *testing.T) {
+	t.Parallel()
+	d := incident.DefaultTimers()
+	for _, f := range d.Fields() {
+		if f.Help == "" || len(f.Help) >= 120 {
+			t.Errorf("%s help %q: want 1-119 chars", f.Name, f.Help)
+		}
+	}
+}

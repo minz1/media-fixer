@@ -39,8 +39,15 @@ def interactions(br):
     pg.unroute("**/stuck-queue/run")
 
     pg.goto(BASE + "/maintenance", wait_until="load")
+    sent = []
+    pg.on("request", lambda r: sent.append(r.url) if "incident-timers" in r.url else None)
+    pg.fill("#timer-stall_minutes", "99")
+    pg.click("[data-reset=stall_minutes]")
+    check(pg.input_value("#timer-stall_minutes") == "60", "timers Reset did not restore the default")
+    check(not sent, f"timers Reset sent a request: {sent}")
     pg.locator("#incident-timers button[type=submit]").click()
     pg.wait_for_selector("#notice p.notice-ok")
+    check("Saved" in pg.inner_text("#notice"), "timers Save notice does not say Saved")
     box = pg.locator("#notice").bounding_box()
     check(box and 0 <= box["y"] < 900, "timers Save notice outside the viewport")
 

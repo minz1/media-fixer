@@ -87,6 +87,9 @@
     .notice { border-radius: 0.25rem; padding: 0.5rem 0.75rem; font-size: 0.875rem; }
     .notice-ok { background-color: oklch(96.2% 0.044 156.743); color: oklch(44.8% 0.119 151.328); }
     .notice-err { background-color: oklch(93.6% 0.032 17.717); color: oklch(44.4% 0.177 26.899); }
+    .timer-grid { display: grid; grid-template-columns: minmax(10rem, 1fr) 7rem 4.5rem 8.5rem; gap: 0.25rem 0.75rem; align-items: center; }
+    .timer-help { grid-column: 1 / -1; margin-bottom: 0.5rem; }
+    @media (max-width: 639px) { .timer-grid { grid-template-columns: 1fr; } }
     #notice { position: sticky; top: 0; z-index: 10; }
     #notice .notice { margin-bottom: 0.75rem; }
     #progress {
@@ -121,6 +124,11 @@
       });
       document.addEventListener("htmx:error", function () {
         show("Request failed: could not reach Media Fixer.");
+      });
+      document.addEventListener("click", function (e) {
+        var b = e.target.closest && e.target.closest("[data-reset]");
+        var i = b && b.form && b.form.elements.namedItem(b.dataset.reset);
+        if (i) i.value = b.dataset.default;
       });
     })();
   </script>
@@ -748,8 +756,8 @@
     hx-disable="find button" class="space-y-4">
     {{range .Groups}}
     <h3 class="text-sm font-semibold text-gray-800">{{.Name}}</h3>
-    <div class="flex flex-wrap gap-6">
-      {{range .Fields}}{{template "sweep_num" .}}{{end}}
+    <div class="timer-grid">
+      {{range .Fields}}{{template "timer_row" .}}{{end}}
     </div>
     {{end}}
     {{if not .StateErr}}
@@ -800,6 +808,16 @@
   </div>
   {{end}}
 </div>
+{{end}}
+
+{{define "timer_row"}}
+<label for="timer-{{.Name}}" class="text-sm text-gray-700">{{.Label}}</label>
+<input type="number" id="timer-{{.Name}}" name="{{.Name}}" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}"
+  class="w-28 text-right bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900" />
+<span class="text-sm text-gray-500">{{.Unit}}</span>
+<span class="text-xs text-gray-500">default {{.Default}}
+  <button type="button" class="btn btn-link" data-reset="{{.Name}}" data-default="{{.Default}}">Reset</button></span>
+<p class="timer-help text-xs text-gray-500">{{.Help}}{{with .Err}} <span class="text-red-600">{{.}}</span>{{end}}</p>
 {{end}}
 
 {{define "sweep_num"}}
