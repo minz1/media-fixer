@@ -250,8 +250,8 @@ func TestSeerrFailureDM_OncePerHour(t *testing.T) {
 	if len(notif.msgs) != 1 {
 		t.Fatalf("owner msgs = %q, want one Seerr failure DM per hour", notif.msgs)
 	}
-	if !strings.Contains(notif.msgs[0], "in the next 1 hour are only logged") {
-		t.Errorf("DM = %q, want the 1 hour hint", notif.msgs[0])
+	if !strings.Contains(notif.msgs[0], "in the next hour are only logged") {
+		t.Errorf("DM = %q, want the hour hint", notif.msgs[0])
 	}
 
 	svc.BackdateSeerrAlertForTest(time.Hour)

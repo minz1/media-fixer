@@ -812,7 +812,7 @@ func gapText(minutes int) string {
 	if h := minutes / minutesPerHour; h != 1 {
 		return fmt.Sprintf("%d hours", h)
 	}
-	return "1 hour"
+	return "hour"
 }
 
 func (s *Service) claimSeerrAlert(now time.Time, gap time.Duration) (time.Time, bool) {
