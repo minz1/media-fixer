@@ -331,3 +331,42 @@ func TestManualImport_Body(t *testing.T) {
 		}
 	}
 }
+
+func TestManualImportCandidates_Size(t *testing.T) {
+	t.Parallel()
+	c, _ := captureServer(t, `[{"path":"/d/a.mkv","size":1234,"series":{"id":1},"episodes":[],"rejections":[]}]`)
+	cands, err := c.ManualImportCandidates(context.Background(), "D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 || cands[0].Size != 1234 {
+		t.Fatalf("candidates = %+v", cands)
+	}
+}
+
+func TestManualImportPending(t *testing.T) {
+	t.Parallel()
+	c, calls := captureServer(t, `[{"name":"ManualImport","status":"started","body":{"files":[{"path":"/dl/A/a.mkv"}]}},
+{"name":"ManualImport","status":"completed","body":{"files":[{"path":"/dl/X/x.mkv"}]}},
+{"name":"RefreshSeries","status":"queued","body":{}}]`)
+	tests := []struct {
+		paths []string
+		want  bool
+	}{
+		{[]string{"/dl/B/b.mkv", "/dl/A/a.mkv"}, true},
+		{[]string{"/dl/X/x.mkv"}, false},
+		{[]string{}, false},
+	}
+	for _, tt := range tests {
+		got, err := c.ManualImportPending(context.Background(), tt.paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tt.want {
+			t.Errorf("ManualImportPending(%v) = %v, want %v", tt.paths, got, tt.want)
+		}
+	}
+	if (*calls)[0].method != http.MethodGet || (*calls)[0].path != "/api/v3/command" {
+		t.Fatalf("call = %s %s", (*calls)[0].method, (*calls)[0].path)
+	}
+}

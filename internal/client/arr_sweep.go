@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,9 +38,26 @@ type Release struct {
 			Name string `json:"name"`
 		} `json:"quality"`
 	} `json:"quality"`
+	QualityJSON       json.RawMessage `json:"-"`
+	Languages         json.RawMessage `json:"languages"`
 	MappedEpisodeInfo []struct {
 		ID int `json:"id"`
 	} `json:"mappedEpisodeInfo"`
+}
+
+func (r *Release) UnmarshalJSON(b []byte) error {
+	type plain Release
+	if err := json.Unmarshal(b, (*plain)(r)); err != nil {
+		return err
+	}
+	var raw struct {
+		Quality json.RawMessage `json:"quality"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	r.QualityJSON = raw.Quality
+	return nil
 }
 
 type QueueDetail struct {
@@ -95,6 +113,25 @@ func (c *ArrClient) EpisodeReleases(ctx context.Context, episodeID int) ([]Relea
 func (c *ArrClient) GrabRelease(ctx context.Context, guid string, indexerID int) error {
 	body := map[string]any{"guid": guid, "indexerId": indexerID}
 	return c.do(ctx, c.slow, http.MethodPost, pathRelease, nil, body, nil)
+}
+
+func (c *ArrClient) GrabReleaseOverride(
+	ctx context.Context,
+	guid string,
+	indexerID, seriesID int,
+	episodeIDs []int,
+	quality, languages json.RawMessage,
+) error {
+	body := map[string]any{
+		"guid": guid, "indexerId": indexerID, "shouldOverride": true, "seriesId": seriesID,
+		"episodeIds": episodeIDs, "quality": quality, "languages": languages,
+	}
+	return c.do(ctx, c.slow, http.MethodPost, pathRelease, nil, body, nil)
+}
+
+func ReleaseExpired(err error) bool {
+	se, ok := errors.AsType[*HTTPStatusError](err)
+	return ok && se.Status == http.StatusNotFound && strings.Contains(se.Body, "in cache")
 }
 
 func (c *ArrClient) HistorySince(ctx context.Context, since time.Time) ([]HistoryRecord, error) {

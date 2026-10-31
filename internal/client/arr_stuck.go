@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strconv"
 )
 
@@ -116,6 +117,7 @@ type CandidateEpisode struct {
 
 type ImportCandidate struct {
 	Path         string
+	Size         int64
 	DownloadID   string
 	ReleaseGroup string
 	ReleaseType  string
@@ -132,6 +134,7 @@ type ImportCandidate struct {
 
 type candidateJSON struct {
 	Path         string `json:"path"`
+	Size         int64  `json:"size"`
 	DownloadID   string `json:"downloadId"`
 	ReleaseGroup string `json:"releaseGroup"`
 	ReleaseType  string `json:"releaseType"`
@@ -162,7 +165,8 @@ func (c *ArrClient) ManualImportCandidates(ctx context.Context, downloadID strin
 	out := make([]ImportCandidate, 0, len(raw))
 	for _, r := range raw {
 		ic := ImportCandidate{
-			Path: r.Path, DownloadID: r.DownloadID, ReleaseGroup: r.ReleaseGroup, ReleaseType: r.ReleaseType,
+			Path: r.Path, Size: r.Size, DownloadID: r.DownloadID,
+			ReleaseGroup: r.ReleaseGroup, ReleaseType: r.ReleaseType,
 			SeriesID: r.SeriesID, SeasonNumber: r.SeasonNumber, IndexerFlags: r.IndexerFlags,
 			Episodes: r.Episodes, Quality: r.Quality, Languages: r.Languages,
 		}
@@ -199,4 +203,30 @@ func (c *ArrClient) ManualImport(ctx context.Context, cands []ImportCandidate) (
 		files = append(files, f)
 	}
 	return c.postCommand(ctx, map[string]any{paramCommandName: "ManualImport", "importMode": "move", "files": files})
+}
+
+func (c *ArrClient) ManualImportPending(ctx context.Context, paths []string) (bool, error) {
+	var cmds []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Body   struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		} `json:"body"`
+	}
+	if err := c.get(ctx, "/api/v3/command", nil, &cmds); err != nil {
+		return false, err
+	}
+	for _, cmd := range cmds {
+		if cmd.Name != "ManualImport" || (cmd.Status != "queued" && cmd.Status != "started") {
+			continue
+		}
+		for _, f := range cmd.Body.Files {
+			if slices.Contains(paths, f.Path) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -400,6 +401,59 @@ func TestArr_ThinCalls_KeepErrorPrefixes(t *testing.T) {
 			if err == nil || !strings.HasPrefix(err.Error(), prefix) || errors.Is(err, client.ErrNotFound) {
 				t.Errorf("status %d: err = %v, want prefix %q and not ErrNotFound", status, err, prefix)
 			}
+		}
+	}
+}
+
+func TestRelease_KeepsRawQualityAndLanguages(t *testing.T) {
+	t.Parallel()
+	const q = `{"quality":{"name":"WEBDL-1080p"},"revision":{"version":1}}`
+	const l = `[{"id":1,"name":"English"}]`
+	var r client.Release
+	if err := json.Unmarshal([]byte(`{"guid":"g","quality":`+q+`,"languages":`+l+`}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.GUID != "g" || r.Quality.Quality.Name != "WEBDL-1080p" {
+		t.Fatalf("release = %+v", r)
+	}
+	if !jsonEqual(string(r.QualityJSON), q) || !jsonEqual(string(r.Languages), l) {
+		t.Fatalf("raw quality %s languages %s", r.QualityJSON, r.Languages)
+	}
+}
+
+func TestGrabReleaseOverride_Body(t *testing.T) {
+	t.Parallel()
+	c, calls := sweepServer(t, http.StatusOK, `{}`)
+	q, l := json.RawMessage(`{"quality":{"name":"HDTV-720p"}}`), json.RawMessage(`[{"id":1}]`)
+	if err := c.GrabReleaseOverride(context.Background(), "g", 3, 7, []int{11, 12}, q, l); err != nil {
+		t.Fatal(err)
+	}
+	wantCall(t, *calls, sweepCall{
+		method: http.MethodPost, path: "/sonarr/api/v3/release",
+		body: `{"guid":"g","indexerId":3,"shouldOverride":true,"seriesId":7,"episodeIds":[11,12],` +
+			`"quality":{"quality":{"name":"HDTV-720p"}},"languages":[{"id":1}]}`,
+	})
+}
+
+func TestReleaseExpired(t *testing.T) {
+	t.Parallel()
+	expired := &client.HTTPStatusError{
+		Status: 404, Body: "Couldn't find requested release in cache, try searching again",
+	}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"expired", expired, true},
+		{"wrapped", fmt.Errorf("grab: %w", expired), true},
+		{"unparsable", &client.HTTPStatusError{Status: 404, Body: "Unable to parse episodes in the release"}, false},
+		{"conflict", &client.HTTPStatusError{Status: 409, Body: "in cache"}, false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		if got := client.ReleaseExpired(tt.err); got != tt.want {
+			t.Errorf("%s: ReleaseExpired = %v, want %v", tt.name, got, tt.want)
 		}
 	}
 }
