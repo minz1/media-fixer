@@ -18,7 +18,7 @@ type MediaAgentClient struct {
 	apiKey  string
 	http    *http.Client
 
-	stuckHTTP *http.Client
+	stuckTimeout time.Duration
 }
 
 // mediaAgentTimeout is deliberately longer than defaultHTTPTimeout: a
@@ -36,7 +36,7 @@ func NewMediaAgent(baseURL, apiKey string) *MediaAgentClient {
 		apiKey:  apiKey,
 		http:    newHTTPClient(mediaAgentTimeout),
 
-		stuckHTTP: newHTTPClient(stuckReadsTimeout),
+		stuckTimeout: stuckReadsTimeout,
 	}
 }
 
@@ -141,13 +141,15 @@ func (c *MediaAgentClient) ListDirectory(ctx context.Context, path string) (*med
 }
 
 func (c *MediaAgentClient) StuckReads(ctx context.Context) (*mediaagentapi.StuckReadsResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.stuckTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/stuck-reads", nil)
 	if err != nil {
 		return nil, err
 	}
 	c.auth(req)
 
-	resp, err := c.stuckHTTP.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
