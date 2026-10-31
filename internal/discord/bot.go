@@ -193,9 +193,13 @@ func (b *Bot) NotifyOwner(ctx context.Context, c card.Card) error {
 	}
 	d := b.cardStore()
 	if plain || d == nil {
-		return fmt.Errorf("%w", card.ErrUntracked)
+		return card.ErrUntracked
 	}
-	return b.record(ctx, d, m, c, subjects)
+	if err = b.record(ctx, d, m, c, subjects); err != nil {
+		b.log.ErrorContext(ctx, "discord card sent but not recorded", "err", err)
+		return card.ErrUntracked
+	}
+	return nil
 }
 
 // NotifyUser sends a DM to an arbitrary Discord user ID.

@@ -424,6 +424,21 @@ func TestNotifyOwner_PlainFallbackIsUntracked(t *testing.T) {
 	}
 }
 
+func TestNotifyOwner_RecordFailureIsUntracked(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.start(map[string]card.Renderer{})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := e.bot.NotifyOwner(ctx, incCard("1"))
+	if !errors.Is(err, card.ErrUntracked) {
+		t.Errorf("err = %v", err)
+	}
+	if e.api.sent != 1 {
+		t.Errorf("sent = %d, want 1", e.api.sent)
+	}
+}
+
 func TestNotifyUser_NeverRecords(t *testing.T) {
 	t.Parallel()
 	e := newCardEnv(t, "")

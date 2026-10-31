@@ -218,13 +218,13 @@ func TestAct_DropsFromLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Wait()
-	if res, _ := s.Last(); len(app(res, stuckqueue.AppSonarr).Items) != 1 {
+	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Items) != 1 {
 		t.Fatalf("setup: last = %+v", res)
 	}
 	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
 		t.Fatal(err)
 	}
-	if res, _ := s.Last(); len(app(res, stuckqueue.AppSonarr).Items) != 0 {
+	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Items) != 0 {
 		t.Fatalf("last still lists it: %+v", res)
 	}
 }
@@ -237,13 +237,13 @@ func TestAct_DropsWaitingFromLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Wait()
-	if res, _ := s.Last(); len(app(res, stuckqueue.AppSonarr).Waiting) != 1 {
+	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Waiting) != 1 {
 		t.Fatalf("setup: last = %+v", res)
 	}
 	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
 		t.Fatal(err)
 	}
-	if res, _ := s.Last(); len(app(res, stuckqueue.AppSonarr).Waiting) != 0 {
+	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Waiting) != 0 {
 		t.Fatalf("last still lists it as waiting: %+v", res)
 	}
 }
@@ -306,7 +306,7 @@ func TestAct_ForgetLeavesHandedOutResultsAlone(t *testing.T) {
 		s.Wait()
 		e.clock.Add(6 * time.Hour)
 	}
-	before, _ := s.Last()
+	before, _, _ := s.State()
 	if _, err := act(e, s, stuckqueue.AppSonarr, "A", stuckqueue.ActionRemove); err != nil {
 		t.Fatal(err)
 	}

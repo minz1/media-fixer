@@ -31,7 +31,7 @@ func (e *runEnv) tickAt(s *stuckqueue.Scheduler, after time.Duration) time.Time 
 
 func ranAt(t *testing.T, s *stuckqueue.Scheduler, at time.Time) bool {
 	t.Helper()
-	res, ok := s.Last()
+	res, ok, _ := s.State()
 	return ok && res.FinishedAt.Equal(at)
 }
 
@@ -78,7 +78,7 @@ func TestTick_DisabledNoRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.tickAt(s, time.Minute)
-	if _, ok := s.Last(); ok {
+	if _, ok, _ := s.State(); ok {
 		t.Fatal("a disabled sweep ran")
 	}
 }
@@ -95,7 +95,7 @@ func TestTick_CorruptWarnsOnce(t *testing.T) {
 	if n := strings.Count(e.logs.String(), "level=WARN"); n != 1 {
 		t.Fatalf("WARNs = %d, want 1:\n%s", n, e.logs.String())
 	}
-	if _, ok := s.Last(); ok {
+	if _, ok, _ := s.State(); ok {
 		t.Fatal("ran with corrupt settings")
 	}
 }
@@ -117,7 +117,7 @@ func TestRunNow_SingleFlight(t *testing.T) {
 func TestLast_AfterRun(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
-	if _, ok := s.Last(); ok {
+	if _, ok, _ := s.State(); ok {
 		t.Fatal("Last before any run")
 	}
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
@@ -125,7 +125,7 @@ func TestLast_AfterRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Wait()
-	res, ok := s.Last()
+	res, ok, _ := s.State()
 	if !ok || len(res.Apps) != 2 {
 		t.Fatalf("last = %+v, %v", res, ok)
 	}

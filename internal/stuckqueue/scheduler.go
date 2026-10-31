@@ -79,12 +79,6 @@ func (s *Scheduler) RunNow() error {
 	return s.start(s.r.Now(), set)
 }
 
-func (s *Scheduler) Last() (Result, bool) {
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	return s.last, s.hasLast
-}
-
 func (s *Scheduler) State() (Result, bool, bool) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
