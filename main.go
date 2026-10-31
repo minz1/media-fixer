@@ -12,6 +12,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/babysit"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/clientset"
@@ -113,12 +114,19 @@ func startStuckQueue(
 }
 
 func startMaintenance(
-	ctx context.Context, stop context.CancelFunc, cfg *config.Config, clients *clientset.Set, database *db.DB,
+	ctx context.Context, stop context.CancelFunc, cfg *config.Config, bundle *agentBundle, database *db.DB,
 	bot *discord.Bot, srv *server.Server, log *slog.Logger,
 	handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) func() {
+	clients := bundle.clients
 	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log, renderers)
 	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log, handlers, renderers)
+	if sweepSch != nil && stuckSch != nil {
+		srv.SetBabysit(&babysit.Service{
+			DB: database, Sonarr: clients.Sonarr, State: stuckSch.State, LLM: bundle.summary,
+			Model: cfg.LLM.Model, Now: time.Now,
+		})
+	}
 	return func() {
 		stop()
 		if sweepSch != nil {
@@ -203,7 +211,7 @@ func run() error {
 	}
 	handlers := map[string]card.Handler{"inc": svc.CardHandler()}
 	renderers := map[string]card.Renderer{"inc": svc.CardRenderer()}
-	defer startMaintenance(ctx, stop, cfg, bundle.clients, database, bot, srv, log, handlers, renderers)()
+	defer startMaintenance(ctx, stop, cfg, bundle, database, bot, srv, log, handlers, renderers)()
 	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))

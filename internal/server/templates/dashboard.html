@@ -619,6 +619,11 @@
     class="pb-2 {{if eq .Active "maintenance"}}border-b-2 border-blue-600 font-medium text-gray-900{{else}}text-gray-500 hover:text-gray-800{{end}}"
     >Maintenance</a
   >
+  <a
+    href="{{.BaseURL}}/babysit"
+    class="pb-2 {{if eq .Active "babysit"}}border-b-2 border-blue-600 font-medium text-gray-900{{else}}text-gray-500 hover:text-gray-800{{end}}"
+    >Babysit</a
+  >
   <a href="{{.BaseURL}}/selftest" class="pb-2 text-gray-500 hover:text-gray-800"
     >Live tool check</a
   >
@@ -986,6 +991,249 @@
   {{else}}
   <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Idle</span>
   Next run: {{with .Next}}{{.UTC.Format "Mon Jan 2 15:04 UTC"}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}
+  {{end}}
+</div>
+{{end}}
+
+{{define "babysit"}}
+<!doctype html>
+<html lang="en">
+  {{template "head" (dict "Title" "Babysit · Media Fixer")}}
+  <body class="bg-gray-50 font-sans">
+    <div class="max-w-5xl mx-auto px-4 py-8">
+      <h1 class="text-2xl font-bold text-gray-900 mb-6">Media Fixer</h1>
+      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "babysit")}}
+      {{if .Unavailable}}
+      <div class="bg-white border border-gray-200 rounded-lg p-6">
+        <h2 class="text-xl font-bold text-gray-900 mb-1">Babysit</h2>
+        <p class="text-sm text-red-600">{{.Unavailable}}</p>
+      </div>
+      {{else}}{{template "babysit_list" .}}{{end}}
+    </div>
+  </body>
+</html>
+{{end}}
+
+{{define "babysit_list"}}
+<div id="babysit-list" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+  <div>
+    <h2 class="text-xl font-bold text-gray-900 mb-1">Babysit</h2>
+    <p class="text-sm text-gray-500">
+      Shows the pack sweep and the stuck-queue sweep know about: stuck seasons first, then shows with stuck downloads.
+    </p>
+  </div>
+  {{with .Notice}}<p class="text-sm text-green-800 bg-green-100 rounded-sm px-3 py-2">{{.}}</p>{{end}}
+  {{with .Failure}}<p class="text-sm text-red-800 bg-red-100 rounded-sm px-3 py-2">{{.}}</p>{{end}}
+  {{with .List.SonarrErr}}<p class="text-sm text-red-600">Sonarr could not be read: {{.}}</p>{{end}}
+  {{if .List.Rows}}
+  <table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
+        <th class="py-1 pr-3">Show</th>
+        <th class="py-1 pr-3">Seasons</th>
+        <th class="py-1 pr-3">Missing</th>
+        <th class="py-1 pr-3">Stuck</th>
+        <th class="py-1 pr-3">Queue</th>
+        <th class="py-1">Latest</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .List.Rows}}
+      <tr class="border-b border-gray-100 align-top">
+        <td class="py-1 pr-3"><a href="{{$.BaseURL}}/babysit/{{.SeriesID}}" class="text-blue-600 hover:underline">{{.Title}}</a></td>
+        <td class="py-1 pr-3">{{.Seasons}}</td>
+        <td class="py-1 pr-3">{{.Missing}}</td>
+        <td class="py-1 pr-3">{{.StuckSeasons}}</td>
+        <td class="py-1 pr-3">{{.QueueItems}}</td>
+        <td class="py-1 break-all text-gray-700">
+          {{with .Latest}}{{.At.UTC.Format "Jan 2 15:04"}} · {{.Result}} · {{.ReleaseTitle}}{{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="text-sm text-gray-400">Nothing to babysit.</p>
+  {{end}}
+
+  <details>
+    <summary class="text-sm font-semibold text-gray-800 cursor-pointer">Excluded ({{len .List.Excluded}})</summary>
+    <ul class="mt-2 space-y-1">
+      {{range .List.Excluded}}
+      <li class="flex items-center justify-between gap-4 text-sm text-gray-700">
+        <span>{{.Title}}</span>
+        <form hx-post="{{$.BaseURL}}/babysit/include" hx-target="#babysit-list" hx-swap="outerHTML"
+          hx-confirm="Include {{.Title}} in the sweep again?">
+          <input type="hidden" name="series_id" value="{{.ID}}" />
+          <button type="submit" class="text-xs text-blue-600 hover:underline">Include</button>
+        </form>
+      </li>
+      {{else}}
+      <li class="text-sm text-gray-400">None.</li>
+      {{end}}
+    </ul>
+    {{if .List.Pickable}}
+    <form hx-post="{{.BaseURL}}/babysit/exclude" hx-target="#babysit-list" hx-swap="outerHTML"
+      hx-confirm="Exclude this series from the sweep?" class="mt-3 flex gap-2">
+      <select name="series_id" class="text-sm border border-gray-300 rounded-sm px-2 py-1">
+        {{range .List.Pickable}}<option value="{{.ID}}">{{.Title}}</option>{{end}}
+      </select>
+      <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Exclude</button>
+    </form>
+    {{end}}
+  </details>
+</div>
+{{end}}
+
+{{define "babysit_show"}}
+<!doctype html>
+<html lang="en">
+  {{template "head" (dict "Title" "Babysit · Media Fixer")}}
+  <body class="bg-gray-50 font-sans">
+    <div class="max-w-5xl mx-auto px-4 py-8">
+      <h1 class="text-2xl font-bold text-gray-900 mb-6">Media Fixer</h1>
+      {{template "tabs" (dict "BaseURL" .BaseURL "Active" "babysit")}}
+      <p class="text-sm mb-4"><a href="{{.BaseURL}}/babysit" class="text-blue-600 hover:underline">All shows</a></p>
+      {{template "babysit_show_card" .}}
+    </div>
+  </body>
+</html>
+{{end}}
+
+{{define "babysit_show_card"}}
+<div id="babysit-show" class="bg-white border border-gray-200 rounded-lg p-6 space-y-6">
+  <div class="flex items-center gap-3">
+    <h2 class="text-xl font-bold text-gray-900">{{.Title}}</h2>
+    {{if .Show.Stuck}}<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800">stuck</span>{{end}}
+    {{if .Show.Excluded}}<span class="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">excluded</span>{{end}}
+  </div>
+  {{with .Notice}}<p class="text-sm text-green-800 bg-green-100 rounded-sm px-3 py-2">{{.}}</p>{{end}}
+  {{with .Failure}}<p class="text-sm text-red-800 bg-red-100 rounded-sm px-3 py-2">{{.}}</p>{{end}}
+  {{with .Show.SonarrErr}}<p class="text-sm text-red-600">Sonarr could not be read: {{.}}</p>{{end}}
+
+  {{template "sweep_status" .Status}}
+
+  <div class="flex flex-wrap gap-2">
+    {{if .Show.Series}}
+    <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/search/packs" hx-target="#babysit-show" hx-swap="outerHTML"
+      hx-confirm="{{.ConfirmPacks}}">
+      <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Search pack now</button>
+    </form>
+    <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/search/singles" hx-target="#babysit-show" hx-swap="outerHTML"
+      hx-confirm="{{.ConfirmSingles}}">
+      <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Search singles now</button>
+    </form>
+    {{end}}
+    {{if .Show.Excluded}}
+    <form hx-post="{{.BaseURL}}/babysit/include" hx-target="#babysit-show" hx-swap="outerHTML"
+      hx-confirm="Include {{.Title}} in the sweep again?">
+      <input type="hidden" name="series_id" value="{{.ID}}" />
+      <input type="hidden" name="view" value="show" />
+      <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Include</button>
+    </form>
+    {{else}}
+    <form hx-post="{{.BaseURL}}/babysit/exclude" hx-target="#babysit-show" hx-swap="outerHTML"
+      hx-confirm="Exclude {{.Title}} from the sweep?">
+      <input type="hidden" name="series_id" value="{{.ID}}" />
+      <input type="hidden" name="view" value="show" />
+      <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Exclude</button>
+    </form>
+    {{end}}
+  </div>
+
+  {{if or .Show.Stuck .Explain.Text}}{{template "babysit_explain" .Explain}}{{end}}
+
+  {{if .Show.Seasons}}
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Seasons (Sonarr)</h3>
+    <table class="w-full text-xs border-collapse">
+      <thead><tr class="text-left text-gray-500 border-b border-gray-200">
+        <th class="py-1 pr-3">Season</th><th class="py-1 pr-3">Aired</th><th class="py-1 pr-3">On disk</th>
+        <th class="py-1 pr-3">Missing</th><th class="py-1">Queued</th>
+      </tr></thead>
+      <tbody>
+        {{range .Show.Seasons}}
+        <tr class="border-b border-gray-100">
+          <td class="py-1 pr-3">S{{printf "%02d" .Season}}</td><td class="py-1 pr-3">{{.Aired}}</td>
+          <td class="py-1 pr-3">{{.OnDisk}}</td><td class="py-1 pr-3">{{.Missing}}</td><td class="py-1">{{.Queued}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Sweep targets</h3>
+    <table class="w-full text-xs border-collapse">
+      <tbody>
+        {{range .Show.Targets}}
+        <tr class="border-b border-gray-100">
+          <td class="py-1 pr-3">S{{printf "%02d" .Season}}</td>
+          <td class="py-1 pr-3">missing {{.Missing}}</td>
+          <td class="py-1 pr-3">streak {{.Streak}}{{if ge .Streak $.StuckAfter}} <span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800">stuck</span>{{end}}</td>
+          <td class="py-1 pr-3">attempts {{.Attempts}}</td>
+          <td class="py-1 pr-3">last {{.LastAttempt.UTC.Format "Jan 2 15:04"}}</td>
+          <td class="py-1">next {{.NextEligible.UTC.Format "Jan 2 15:04"}}</td>
+        </tr>
+        {{else}}
+        <tr><td class="text-sm text-gray-400">None.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Recent sweep items</h3>
+    <table class="w-full text-xs border-collapse">
+      <tbody>
+        {{range .Show.Items}}
+        <tr class="border-b border-gray-100 align-top">
+          <td class="py-1 pr-3 whitespace-nowrap">{{.At.UTC.Format "Jan 2 15:04"}}</td>
+          <td class="py-1 pr-3">{{season .Season}}</td>
+          <td class="py-1 pr-3">{{.Result}}</td>
+          <td class="py-1 pr-3 break-all">{{.ReleaseTitle}}</td>
+          <td class="py-1 pr-3">{{.Indexer}}</td>
+          <td class="py-1">{{with .LookupResults}}{{.}} results{{end}}</td>
+        </tr>
+        {{else}}
+        <tr><td class="text-sm text-gray-400">None.</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <h3 class="text-sm font-semibold text-gray-800 mb-2">Stuck downloads</h3>
+    {{if not .Show.QueueKnown}}<p class="text-sm text-gray-500">No stuck-queue run since the last restart.</p>{{end}}
+    <ul class="space-y-2">
+      {{range .Queue}}
+      <li class="text-sm text-gray-700">
+        <span class="break-all">{{.Title}}</span>
+        <span class="text-gray-500">· {{.Verdict}} · {{.Age}}</span>
+        {{range .Messages}}<div class="text-xs text-gray-500 break-all">{{.}}</div>{{end}}
+      </li>
+      {{else}}
+      <li class="text-sm text-gray-400">None.</li>
+      {{end}}
+    </ul>
+  </div>
+</div>
+{{end}}
+
+{{define "babysit_explain"}}
+<div id="babysit-explain" class="space-y-2">
+  <h3 class="text-sm font-semibold text-gray-800">Explain</h3>
+  {{with .Err}}<p class="text-sm text-red-800 bg-red-100 rounded-sm px-3 py-2">{{.}}</p>{{end}}
+  {{if .Text}}
+  <p class="text-xs text-gray-500">Explained {{.At.UTC.Format "Jan 2 15:04"}} UTC{{if .Stale}} · history changed since{{end}}</p>
+  <div class="whitespace-pre-wrap text-sm {{if .Stale}}text-gray-400{{else}}text-gray-800{{end}}">{{.Text}}</div>
+  {{end}}
+  {{if .Can}}
+  <form hx-post="{{.BaseURL}}/babysit/{{.ID}}/explain" hx-target="#babysit-explain" hx-swap="outerHTML"
+    hx-confirm="{{.Confirm}}">
+    <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-sm hover:bg-blue-700">Explain</button>
+  </form>
   {{end}}
 </div>
 {{end}}

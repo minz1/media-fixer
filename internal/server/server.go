@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/babysit"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -64,8 +65,9 @@ type Server struct {
 
 	seerrWebhookSecret string
 
-	sweep *sweep.Scheduler
-	stuck *stuckqueue.Scheduler
+	sweep   *sweep.Scheduler
+	stuck   *stuckqueue.Scheduler
+	babysit *babysit.Service
 
 	listener net.Listener
 }
@@ -137,6 +139,12 @@ func New(
 		r.Post("/maintenance/stuck-queue/run", s.stuckRun)
 		r.Post("/maintenance/stuck-queue/{action}", s.stuckAction)
 		r.Post("/maintenance/incident-timers/settings", s.timersSettingsSave)
+		r.Get("/babysit", s.babysitIndex)
+		r.Get("/babysit/{seriesID}", s.babysitShow)
+		r.Post("/babysit/{seriesID}/search/{pass}", s.babysitSearch)
+		r.Post("/babysit/{seriesID}/explain", s.babysitExplain)
+		r.Post("/babysit/exclude", s.babysitSetExcluded(true))
+		r.Post("/babysit/include", s.babysitSetExcluded(false))
 	})
 
 	s.http = &http.Server{
