@@ -7,7 +7,10 @@ import (
 	"strconv"
 )
 
-const queryTrue = "true"
+const (
+	queryTrue           = "true"
+	paramIncludeEpisode = "includeEpisode"
+)
 
 type QueueEntry struct {
 	ID                   int
@@ -63,7 +66,7 @@ func (c *ArrClient) QueueEntries(ctx context.Context) ([]QueueEntry, error) {
 			"pageSize":                  {strconv.Itoa(queuePageSize)},
 			"includeUnknownSeriesItems": {queryTrue},
 			"includeUnknownMovieItems":  {queryTrue},
-			"includeEpisode":            {queryTrue},
+			paramIncludeEpisode:         {queryTrue},
 			"includeMovie":              {queryTrue},
 		}
 		var resp queueEntriesPage

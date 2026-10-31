@@ -124,6 +124,23 @@ func (f *fakeSonarr) addAnime(id int, title string, eps ...client.Episode) {
 	f.series[len(f.series)-1].SeriesType = "anime"
 }
 
+func (f *fakeSonarr) addSeriesAdded(id int, title string, added time.Time, eps ...client.Episode) {
+	f.addSeries(id, title, eps...)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.series[len(f.series)-1].Added = added
+}
+
+func (f *fakeSonarr) addFailure(seriesID, episodeID, season int, downloadID string, at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	f.history = append(f.history, client.HistoryRecord{
+		ID: f.nextID, SeriesID: seriesID, EpisodeID: episodeID, DownloadID: downloadID,
+		EventType: "downloadFailed", Date: at, Episode: &client.HistoryEpisode{SeasonNumber: season},
+	})
+}
+
 func (f *fakeSonarr) setReleases(key string, rels ...client.Release) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -303,9 +320,16 @@ func (f *fakeSonarr) serveHistory(w http.ResponseWriter, q map[string][]string) 
 	}
 	var out []client.HistoryRecord
 	for _, h := range f.history {
-		if !h.Date.Before(since) {
-			out = append(out, h)
+		if h.Date.Before(since) {
+			continue
 		}
+		if et := q["eventType"]; len(et) > 0 && h.EventType != et[0] {
+			continue
+		}
+		if ie := q["includeEpisode"]; len(ie) == 0 || ie[0] != "true" {
+			h.Episode = nil
+		}
+		out = append(out, h)
 	}
 	f.mu.Unlock()
 	writeJSON(w, out)

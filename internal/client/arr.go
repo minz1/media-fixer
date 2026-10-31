@@ -29,11 +29,12 @@ func NewArr(base, apiKey string) *ArrClient {
 }
 
 type Series struct {
-	ID         int    `json:"id"`
-	Title      string `json:"title"`
-	Path       string `json:"path"`
-	Monitored  bool   `json:"monitored"`
-	SeriesType string `json:"seriesType"`
+	ID         int       `json:"id"`
+	Title      string    `json:"title"`
+	Path       string    `json:"path"`
+	Monitored  bool      `json:"monitored"`
+	SeriesType string    `json:"seriesType"`
+	Added      time.Time `json:"added"`
 }
 
 type Movie struct {
@@ -73,6 +74,10 @@ type MovieFile struct {
 	Size    int64  `json:"size"`
 }
 
+type HistoryEpisode struct {
+	SeasonNumber int `json:"seasonNumber"`
+}
+
 // HistoryRecord is one grab/import/failure event from Sonarr/Radarr history.
 type HistoryRecord struct {
 	ID          int       `json:"id"`
@@ -83,6 +88,8 @@ type HistoryRecord struct {
 	DownloadID  string    `json:"downloadId"`
 	EventType   string    `json:"eventType"`
 	Date        time.Time `json:"date"`
+
+	Episode *HistoryEpisode `json:"episode,omitempty"`
 }
 
 // arrYearSuffixRE strips a trailing " (YYYY)" year qualifier some titles carry.
@@ -326,6 +333,8 @@ func (c *ArrClient) DeleteMovieFile(ctx context.Context, fileID int) error {
 // grabEventType is the Sonarr/Radarr history eventType marking a successful
 // grab (as opposed to import, failure, or deletion events).
 const grabEventType = "grabbed"
+
+const failedEventType = "downloadFailed"
 
 // SeriesGrabHistory returns grab events for a series, optionally filtered by
 // season (pass a negative season to fetch every season).

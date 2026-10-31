@@ -98,14 +98,25 @@ func (c *ArrClient) GrabRelease(ctx context.Context, guid string, indexerID int)
 }
 
 func (c *ArrClient) HistorySince(ctx context.Context, since time.Time) ([]HistoryRecord, error) {
-	q := url.Values{"date": {since.UTC().Format(time.RFC3339)}}
+	return c.historySince(ctx, url.Values{"date": {since.UTC().Format(time.RFC3339)}})
+}
+
+func (c *ArrClient) FailuresSince(ctx context.Context, since time.Time) ([]HistoryRecord, error) {
+	return c.historySince(ctx, url.Values{
+		"date":              {since.UTC().Format(time.RFC3339)},
+		"eventType":         {failedEventType},
+		paramIncludeEpisode: {queryTrue},
+	})
+}
+
+func (c *ArrClient) historySince(ctx context.Context, q url.Values) ([]HistoryRecord, error) {
 	var recs []HistoryRecord
 	err := c.do(ctx, c.http, http.MethodGet, "/api/v3/history/since", q, nil, &recs)
 	return recs, err
 }
 
 func (c *ArrClient) QueueDetails(ctx context.Context) ([]QueueDetail, error) {
-	q := url.Values{"includeEpisode": {queryTrue}}
+	q := url.Values{paramIncludeEpisode: {queryTrue}}
 	var recs []QueueDetail
 	err := c.do(ctx, c.http, http.MethodGet, "/api/v3/queue/details", q, nil, &recs)
 	return recs, err

@@ -161,6 +161,40 @@ func TestArr_HistorySince(t *testing.T) {
 	}
 }
 
+func TestArr_FailuresSince(t *testing.T) {
+	t.Parallel()
+	c, calls := sweepServer(
+		t,
+		http.StatusOK,
+		`[{"id":1,"episodeId":5,"seriesId":3,"downloadId":"ABC","eventType":"downloadFailed","date":"2026-10-22T12:00:00Z","episode":{"seasonNumber":2}}]`,
+	)
+	since := time.Date(2026, 10, 22, 11, 55, 0, 0, time.UTC)
+	recs, err := c.FailuresSince(context.Background(), since)
+	if err != nil {
+		t.Fatalf("FailuresSince: %v", err)
+	}
+	wantCall(t, *calls, sweepCall{
+		method: http.MethodGet,
+		path:   "/sonarr/api/v3/history/since",
+		query:  "date=2026-10-22T11%3A55%3A00Z&eventType=downloadFailed&includeEpisode=true",
+	})
+	if len(recs) != 1 || recs[0].Episode == nil || recs[0].Episode.SeasonNumber != 2 {
+		t.Errorf("records = %+v", recs)
+	}
+}
+
+func TestArr_ListSeries_Added(t *testing.T) {
+	t.Parallel()
+	c, _ := sweepServer(t, http.StatusOK, `[{"id":3,"title":"Show","added":"2024-05-01T00:00:00Z"}]`)
+	series, err := c.ListSeries(context.Background())
+	if err != nil {
+		t.Fatalf("ListSeries: %v", err)
+	}
+	if len(series) != 1 || !series[0].Added.Equal(time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("series = %+v", series)
+	}
+}
+
 func TestArr_QueueDetails(t *testing.T) {
 	t.Parallel()
 	c, calls := sweepServer(t, http.StatusOK, `[{"id":12,"downloadId":"ABC","seriesId":3,"episodeId":5,"seasonNumber":2,
