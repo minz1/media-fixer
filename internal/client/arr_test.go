@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -387,5 +389,102 @@ func TestArr_GetQueue(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].SeriesID != 42 || records[0].Status != "downloading" {
 		t.Errorf("got %+v", records)
+	}
+}
+
+func TestGetSeries(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/series/7" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":7,"title":"The Boys"}`))
+	}))
+	defer srv.Close()
+
+	c := client.NewArr(srv.URL, "key")
+	s, err := c.GetSeries(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID != 7 || s.Title != "The Boys" {
+		t.Errorf("got %+v", s)
+	}
+	if _, err = c.GetSeries(context.Background(), 8); !errors.Is(err, client.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSeriesHistory(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/api/v3/history/series" || q.Get("seriesId") != "7" ||
+			q.Get("includeEpisode") != "true" || q.Has("eventType") || q.Has("seasonNumber") {
+			t.Errorf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[
+{"id":1,"eventType":"grabbed","episode":{"seasonNumber":2,"episodeNumber":5},
+ "data":{"indexer":"Nyaa","message":"x","downloadUrl":"http://p/?apikey=SECRET"}},
+{"id":2,"eventType":"seriesFolderImported"},
+{"id":3,"eventType":"downloadFailed",
+ "data":{"message":"fetch http://idx/x?apikey=SECRET&x=1 failed passkey=P2"}}]`))
+	}))
+	defer srv.Close()
+
+	c := client.NewArr(srv.URL, "key")
+	events, err := c.SeriesHistory(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("got %d events", len(events))
+	}
+	if e := events[0]; e.Episode == nil || e.Episode.SeasonNumber != 2 || e.Episode.EpisodeNumber != 5 ||
+		e.Indexer != "Nyaa" || e.Message != "x" {
+		t.Errorf("event 0 = %+v", e)
+	}
+	if e := events[1]; e.Episode != nil || e.Indexer != "" || e.Message != "" {
+		t.Errorf("event 1 = %+v", e)
+	}
+	if m := events[2].Message; !strings.Contains(m, "apikey=REDACTED&x=1") || !strings.Contains(m, "passkey=REDACTED") {
+		t.Errorf("message = %q", m)
+	}
+	all := fmt.Sprintf("%+v", events)
+	if strings.Contains(all, "SECRET") || strings.Contains(all, "P2") {
+		t.Errorf("secret leaked: %s", all)
+	}
+}
+
+func TestSeriesGrabHistoryUnchanged(t *testing.T) {
+	t.Parallel()
+	var raw []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		raw = append(raw, r.URL.RawQuery)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`[{"id":1,"eventType":"grabbed","data":{"downloadUrl":"http://p/?apikey=SECRET"}}]`))
+	}))
+	defer srv.Close()
+
+	c := client.NewArr(srv.URL, "key")
+	recs, err := c.SeriesGrabHistory(context.Background(), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.SeriesGrabHistory(context.Background(), 7, -1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw[0], "eventType=grabbed") || !strings.Contains(raw[0], "seasonNumber=3") {
+		t.Errorf("season query = %s", raw[0])
+	}
+	if !strings.Contains(raw[1], "eventType=grabbed") || strings.Contains(raw[1], "seasonNumber") {
+		t.Errorf("all-seasons query = %s", raw[1])
+	}
+	b, _ := json.Marshal(recs)
+	if strings.Contains(string(b), "data") || strings.Contains(string(b), "downloadUrl") {
+		t.Errorf("marshalled record leaks data: %s", b)
 	}
 }

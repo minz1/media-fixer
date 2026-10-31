@@ -75,7 +75,8 @@ type MovieFile struct {
 }
 
 type HistoryEpisode struct {
-	SeasonNumber int `json:"seasonNumber"`
+	SeasonNumber  int `json:"seasonNumber"`
+	EpisodeNumber int `json:"episodeNumber"`
 }
 
 // HistoryRecord is one grab/import/failure event from Sonarr/Radarr history.
@@ -339,18 +340,63 @@ const FailedEventType = "downloadFailed"
 // SeriesGrabHistory returns grab events for a series, optionally filtered by
 // season (pass a negative season to fetch every season).
 func (c *ArrClient) SeriesGrabHistory(ctx context.Context, seriesID, season int) ([]HistoryRecord, error) {
-	q := url.Values{}
-	q.Set("seriesId", strconv.Itoa(seriesID))
-	q.Set("eventType", grabEventType)
-	if season >= 0 {
-		q.Set("seasonNumber", strconv.Itoa(season))
-	}
+	q := seriesHistoryQuery(seriesID, season, grabEventType)
 
 	var records []HistoryRecord
 	if err := c.get(ctx, "/api/v3/history/series", q, &records); err != nil {
 		return nil, err
 	}
 	return records, nil
+}
+
+func seriesHistoryQuery(seriesID, season int, eventType string) url.Values {
+	q := url.Values{}
+	q.Set("seriesId", strconv.Itoa(seriesID))
+	if eventType != "" {
+		q.Set("eventType", eventType)
+	}
+	if season >= 0 {
+		q.Set("seasonNumber", strconv.Itoa(season))
+	}
+	return q
+}
+
+// SeriesEvent is a history record plus the indexer and message from its data;
+// the rest of data (download URLs carry indexer API keys) is dropped.
+type SeriesEvent struct {
+	HistoryRecord
+
+	Indexer string
+	Message string
+}
+
+var arrCredentialParamRE = regexp.MustCompile(`(?i)\b(apikey|api_key|passkey|token)=[^&\s]*`)
+
+// SeriesHistory returns every history event of a series.
+func (c *ArrClient) SeriesHistory(ctx context.Context, seriesID int) ([]SeriesEvent, error) {
+	q := seriesHistoryQuery(seriesID, -1, "")
+	q.Set("includeEpisode", "true")
+
+	var raw []struct {
+		HistoryRecord
+
+		Data struct {
+			Indexer string `json:"indexer"`
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	if err := c.get(ctx, "/api/v3/history/series", q, &raw); err != nil {
+		return nil, err
+	}
+	events := make([]SeriesEvent, len(raw))
+	for i, r := range raw {
+		events[i] = SeriesEvent{
+			HistoryRecord: r.HistoryRecord,
+			Indexer:       r.Data.Indexer,
+			Message:       arrCredentialParamRE.ReplaceAllString(r.Data.Message, "${1}=REDACTED"),
+		}
+	}
+	return events, nil
 }
 
 // MovieGrabHistory returns grab events for a movie.

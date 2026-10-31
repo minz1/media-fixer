@@ -202,3 +202,12 @@ func (c *ArrClient) do(ctx context.Context, hc *http.Client, method, path string
 	}
 	return nil
 }
+
+func (c *ArrClient) GetSeries(ctx context.Context, id int) (Series, error) {
+	var s Series
+	err := c.get(ctx, fmt.Sprintf("/api/v3/series/%d", id), nil, &s)
+	if se, ok := errors.AsType[*HTTPStatusError](err); ok && se.Status == http.StatusNotFound {
+		return Series{}, fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
+	return s, err
+}
