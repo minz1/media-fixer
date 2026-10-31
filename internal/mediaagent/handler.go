@@ -27,6 +27,7 @@ type Ops interface {
 	Restart(ctx context.Context, service string) error
 	DiskUsage() (*mediaagentapi.DiskResult, error)
 	ListDir(path string) (*mediaagentapi.ListDirResult, error)
+	StuckReads() (*mediaagentapi.StuckReadsResult, error)
 }
 
 // NewHandler builds the media-agent HTTP router.
@@ -113,7 +114,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // RealOps executes actual OS operations.
 type RealOps struct {
-	mounts []string
+	mounts   []string
+	procRoot string
 }
 
 // defaultMounts are the paths checked when no explicit mounts are provided.
@@ -127,7 +129,7 @@ func NewRealOps(mounts []string) *RealOps {
 	if len(mounts) == 0 {
 		mounts = defaultMounts()
 	}
-	return &RealOps{mounts: mounts}
+	return &RealOps{mounts: mounts, procRoot: "/proc"}
 }
 
 // ddBlockSize × ddCount = ~100 MiB read.

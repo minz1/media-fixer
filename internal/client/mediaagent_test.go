@@ -48,6 +48,10 @@ func (s *stubOps) ListDir(path string) (*mediaagentapi.ListDirResult, error) {
 	return &mediaagentapi.ListDirResult{Path: path}, nil
 }
 
+func (s *stubOps) StuckReads() (*mediaagentapi.StuckReadsResult, error) {
+	return &mediaagentapi.StuckReadsResult{Readers: []mediaagentapi.StuckReader{}}, nil
+}
+
 func newTestPair(t *testing.T, ops mediaagent.Ops) *client.MediaAgentClient {
 	t.Helper()
 	h := mediaagent.NewHandler(ops, testAPIKey, slog.New(slog.DiscardHandler))

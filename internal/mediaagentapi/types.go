@@ -74,3 +74,19 @@ type ListDirResult struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+// StuckReader is one task in uninterruptible sleep on a file under a media mount.
+type StuckReader struct {
+	PID      int    `json:"pid"`
+	TID      int    `json:"tid"`
+	Start    uint64 `json:"start"`
+	Comm     string `json:"comm"`
+	Switches uint64 `json:"switches"`
+	Path     string `json:"path"`
+	Via      string `json:"via"`
+}
+
+// StuckReadsResult is the response from GET /stuck-reads.
+type StuckReadsResult struct {
+	Readers []StuckReader `json:"readers"`
+}

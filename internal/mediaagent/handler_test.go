@@ -287,3 +287,6 @@ func (allowAllOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 func (allowAllOps) ListDir(string) (*mediaagentapi.ListDirResult, error) {
 	return &mediaagentapi.ListDirResult{}, nil
 }
+func (allowAllOps) StuckReads() (*mediaagentapi.StuckReadsResult, error) {
+	return &mediaagentapi.StuckReadsResult{Readers: []mediaagentapi.StuckReader{}}, nil
+}
