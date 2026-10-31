@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
@@ -164,17 +165,27 @@ func (w *Watcher) handleFinding(ctx context.Context, title string, rs []mediaage
 	inc, err := w.db.FindUnresolvedByTitle(ctx, title)
 	switch {
 	case errors.Is(err, db.ErrNotFound):
-		_, err = w.svc.Handle(ctx, &incident.Report{
-			Source: "media-agent", ReportedBy: "media-agent", What: "stuck_read",
-			Title: title, Details: w.details(rs, now),
-		})
-		if err != nil {
-			w.log.WarnContext(ctx, "open stuck-read incident", "title", title, "error", err)
-		}
+		w.open(ctx, title, rs, now)
 	case err != nil:
 		w.log.WarnContext(ctx, "look up stuck-read incident", "title", title, "error", err)
+	case inc.What != agent.WhatStuckRead:
+		if !slices.Contains([]db.IncidentStatus{
+			db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
+		}, inc.Status) {
+			w.open(ctx, title, rs, now)
+		}
 	case inc.Status == db.StatusAgentFixed:
 		w.rerunFixed(ctx, inc)
+	}
+}
+
+func (w *Watcher) open(ctx context.Context, title string, rs []mediaagentapi.StuckReader, now time.Time) {
+	_, err := w.svc.Handle(ctx, &incident.Report{
+		Source: "media-agent", ReportedBy: "media-agent", What: agent.WhatStuckRead,
+		Title: title, Details: w.details(rs, now),
+	})
+	if err != nil {
+		w.log.WarnContext(ctx, "open stuck-read incident", "title", title, "error", err)
 	}
 }
 

@@ -27,7 +27,6 @@ func fakeProc(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
 	proc := filepath.Join(root, "proc")
-	writeFile(t, filepath.Join(proc, "uptime"), "1000.00 5.00\n")
 	writeFile(t, filepath.Join(proc, "self", "schedstat"), "1 2 3\n")
 	return proc, filepath.Join(root, "mnt")
 }
@@ -82,12 +81,10 @@ func TestStuckReadsThreeOnOneFile(t *testing.T) {
 	}
 }
 
-func TestStuckReadsYoungAndSleeping(t *testing.T) {
+func TestStuckReadsSleeping(t *testing.T) {
 	t.Parallel()
 	proc, mount := fakeProc(t)
-	task(t, proc, 10, 10, "t", "D", 99000, 1, "0 0x3 0x0")
 	task(t, proc, 11, 11, "t", "S", 1000, 1, "0 0x3 0x0")
-	fd(t, proc, 10, 3, mount+"/a.mkv")
 	fd(t, proc, 11, 3, mount+"/a.mkv")
 	res, err := mediaagent.NewProcOps(proc, []string{mount}).StuckReads()
 	if err != nil {
@@ -218,12 +215,18 @@ func TestStuckReadsNoSchedstat(t *testing.T) {
 	}
 }
 
-func TestStuckReadsEmptyUptime(t *testing.T) {
+func TestStuckReadsStartAfterContainerUptime(t *testing.T) {
 	t.Parallel()
 	proc, mount := fakeProc(t)
-	writeFile(t, filepath.Join(proc, "uptime"), "")
-	if _, err := mediaagent.NewProcOps(proc, []string{mount}).StuckReads(); err == nil {
-		t.Error("want error for an empty uptime")
+	writeFile(t, filepath.Join(proc, "uptime"), "20.00 5.00\n")
+	task(t, proc, 10, 10, "t", "D", 500000, 1, "0 0x3 0x0")
+	fd(t, proc, 10, 3, mount+"/a.mkv")
+	res, err := mediaagent.NewProcOps(proc, []string{mount}).StuckReads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Readers) != 1 {
+		t.Errorf("readers = %+v, want the D reader whose start is past the container uptime", res.Readers)
 	}
 }
 

@@ -12,13 +12,11 @@ import (
 )
 
 const (
-	stuckMinAgeSeconds = 30
-	clkTck             = 100
-	skippedComm        = "decypharr"
-	statStateIdx       = 0
-	statStartIdx       = 19
-	schedSwitchesIdx   = 2
-	syscallFDIdx       = 1
+	skippedComm      = "decypharr"
+	statStateIdx     = 0
+	statStartIdx     = 19
+	schedSwitchesIdx = 2
+	syscallFDIdx     = 1
 )
 
 func isReadSyscall(nr string) bool {
@@ -30,23 +28,14 @@ func isReadSyscall(nr string) bool {
 }
 
 func (o *RealOps) StuckReads() (*mediaagentapi.StuckReadsResult, error) {
-	uptimeRaw, err := os.ReadFile(filepath.Join(o.procRoot, "uptime"))
-	if err != nil {
-		return nil, fmt.Errorf("read uptime: %w", err)
-	}
-	upField, _, _ := strings.Cut(strings.TrimSpace(string(uptimeRaw)), " ")
-	uptime, err := strconv.ParseFloat(upField, 64)
-	if err != nil {
-		return nil, fmt.Errorf("parse uptime: %w", err)
-	}
-	if _, err = os.ReadFile(filepath.Join(o.procRoot, "self", "schedstat")); err != nil {
+	if _, err := os.ReadFile(filepath.Join(o.procRoot, "self", "schedstat")); err != nil {
 		return nil, fmt.Errorf("schedstat unavailable: %w", err)
 	}
 
 	res := &mediaagentapi.StuckReadsResult{Readers: []mediaagentapi.StuckReader{}}
 	for _, pid := range numericDirs(o.procRoot) {
 		for _, tid := range numericDirs(filepath.Join(o.procRoot, strconv.Itoa(pid), "task")) {
-			if r, ok := o.scanTask(pid, tid, uptime); ok {
+			if r, ok := o.scanTask(pid, tid); ok {
 				res.Readers = append(res.Readers, r)
 			}
 		}
@@ -68,14 +57,14 @@ func numericDirs(dir string) []int {
 	return ids
 }
 
-func (o *RealOps) scanTask(pid, tid int, uptime float64) (mediaagentapi.StuckReader, bool) {
+func (o *RealOps) scanTask(pid, tid int) (mediaagentapi.StuckReader, bool) {
 	dir := filepath.Join(o.procRoot, strconv.Itoa(pid), "task", strconv.Itoa(tid))
 	statRaw, err := os.ReadFile(filepath.Join(dir, "stat"))
 	if err != nil {
 		return mediaagentapi.StuckReader{}, false
 	}
 	comm, state, start, ok := parseStat(string(statRaw))
-	if !ok || state != "D" || comm == skippedComm || uptime-float64(start)/clkTck < stuckMinAgeSeconds {
+	if !ok || state != "D" || comm == skippedComm {
 		return mediaagentapi.StuckReader{}, false
 	}
 	schedRaw, err := os.ReadFile(filepath.Join(dir, "schedstat"))

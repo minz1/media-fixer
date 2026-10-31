@@ -508,3 +508,64 @@ func TestClearedTitlesForgotten(t *testing.T) {
 		t.Fatal("a forgotten title must answer clear")
 	}
 }
+
+func (h *harness) otherIncident(status db.IncidentStatus) *db.Incident {
+	h.t.Helper()
+	inc := &db.Incident{Status: status, Source: "discord", ReportedBy: "u", What: "cant_play", Title: "T"}
+	if err := h.db.CreateIncident(h.t.Context(), inc); err != nil {
+		h.t.Fatal(err)
+	}
+	return inc
+}
+
+func (h *harness) stuckReadIncidents() []*db.Incident {
+	h.t.Helper()
+	var out []*db.Incident
+	for _, inc := range h.incidents() {
+		if inc.What == agent.WhatStuckRead {
+			out = append(out, inc)
+		}
+	}
+	return out
+}
+
+func TestInactiveOtherIncidentGetsNewStuckRead(t *testing.T) {
+	t.Parallel()
+	for _, status := range []db.IncidentStatus{db.StatusAgentFixed, db.StatusManualTestNeeded, db.StatusBlocked} {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			other := h.otherIncident(status)
+			for range 6 {
+				h.poll(three("T", 7)...)
+			}
+			if got := h.status(other.ID); got != status {
+				t.Errorf("cant_play status = %s, want %s (never rerun a non-stuck_read incident)", got, status)
+			}
+			if n := len(h.stuckReadIncidents()); n != 1 {
+				t.Fatalf("stuck_read incidents = %d, want 1", n)
+			}
+			for range 4 {
+				h.poll(three("T", 7)...)
+			}
+			if n := len(h.stuckReadIncidents()); n != 1 {
+				t.Errorf("stuck_read incidents after more polls = %d, want 1", n)
+			}
+		})
+	}
+}
+
+func TestActiveOtherIncidentLeftAlone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	other := h.otherIncident(db.StatusInvestigating)
+	for range 6 {
+		h.poll(three("T", 7)...)
+	}
+	if got := h.status(other.ID); got != db.StatusInvestigating {
+		t.Errorf("cant_play status = %s, want investigating", got)
+	}
+	if n := len(h.incidents()); n != 1 {
+		t.Errorf("incidents = %d, want 1 (no stuck_read while another run is active)", n)
+	}
+}
