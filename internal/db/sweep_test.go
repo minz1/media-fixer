@@ -478,3 +478,97 @@ func TestDB_LiveBudgetsCountSpendInWindow(t *testing.T) {
 		t.Errorf("LiveSearchesSince = %d, %v; want 4 (the run finished 23 h ago)", searched, serr)
 	}
 }
+
+func TestLastSweepRunStartIgnoresBabysit(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	if _, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateSweepRun(ctx, db.BabysitTrigger+" Foo", false, sweepT0().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.LastSweepRunStart(ctx, nil)
+	if err != nil || got == nil || !got.Equal(sweepT0()) {
+		t.Errorf("LastSweepRunStart = %v, %v; want %v", got, err, sweepT0())
+	}
+}
+
+func TestRetryableSweepRunsSinceIgnoresBabysit(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	id, err := d.CreateSweepRun(ctx, db.BabysitTrigger+" Foo", false, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.FinishSweepRun(ctx, id, "failed", "", db.SweepCounts{}, sweepT0().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	n, _, err := d.RetryableSweepRunsSince(ctx, sweepT0().Add(-time.Hour))
+	if err != nil || n != 0 {
+		t.Errorf("RetryableSweepRunsSince = %d, %v; want 0", n, err)
+	}
+}
+
+func addItem(t *testing.T, d *db.DB, runID int64, seriesID int, result string, at time.Time) {
+	t.Helper()
+	it := db.SweepItem{RunID: runID, Target: "t", SeriesID: seriesID, SeriesTitle: "S", Result: result, At: at}
+	if err := d.AddSweepItem(context.Background(), &it); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSeriesSweepItemsLiveOnly(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	live, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dry, err := d.CreateSweepRun(ctx, "manual", true, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	addItem(t, d, live, 1, "old", sweepT0())
+	addItem(t, d, live, 1, "mid", sweepT0().Add(time.Hour))
+	addItem(t, d, live, 1, "new", sweepT0().Add(2*time.Hour))
+	addItem(t, d, dry, 1, "dry", sweepT0().Add(3*time.Hour))
+	addItem(t, d, live, 2, "other", sweepT0().Add(4*time.Hour))
+
+	got, err := d.SeriesSweepItems(ctx, 1, 10)
+	if err != nil || len(got) != 3 || got[0].Result != "new" || got[1].Result != "mid" || got[2].Result != "old" {
+		t.Fatalf("SeriesSweepItems = %+v, %v", got, err)
+	}
+	got, err = d.SeriesSweepItems(ctx, 1, 2)
+	if err != nil || len(got) != 2 || got[0].Result != "new" {
+		t.Errorf("limited = %+v, %v", got, err)
+	}
+}
+
+func TestLatestSweepItems(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	live, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dry, err := d.CreateSweepRun(ctx, "manual", true, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	addItem(t, d, live, 1, "a-old", sweepT0())
+	addItem(t, d, live, 1, "a-new", sweepT0().Add(time.Hour))
+	addItem(t, d, dry, 1, "a-dry", sweepT0().Add(2*time.Hour))
+	addItem(t, d, live, 2, "b-tie", sweepT0())
+	addItem(t, d, live, 2, "b-tie-later-id", sweepT0())
+	addItem(t, d, dry, 2, "b-dry", sweepT0().Add(time.Hour))
+
+	got, err := d.LatestSweepItems(ctx)
+	if err != nil || len(got) != 2 || got[1].Result != "a-new" || got[2].Result != "b-tie-later-id" {
+		t.Fatalf("LatestSweepItems = %+v, %v", got, err)
+	}
+}

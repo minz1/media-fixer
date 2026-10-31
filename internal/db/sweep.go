@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const BabysitTrigger = "babysit:"
+
 const sweepSchema = `
 CREATE TABLE IF NOT EXISTS sweep_runs (id INTEGER PRIMARY KEY, trigger TEXT NOT NULL, dry INTEGER NOT NULL,
   started_at DATETIME NOT NULL, finished_at DATETIME, status TEXT NOT NULL, reason TEXT, counts TEXT);
@@ -162,6 +164,57 @@ func scanSweepRun(row interface{ Scan(dest ...any) error }) (SweepRun, error) {
 	return r, nil
 }
 
+const sweepItemColumns = `i.id, i.run_id, i.target, i.series_id, i.series_title, i.season, COALESCE(i.episodes, ''),
+	COALESCE(i.release_title, ''), COALESCE(i.indexer, ''), COALESCE(i.download_id, ''), i.result,
+	i.lookup_results, i.lookup_ms, i.at`
+
+func scanSweepItem(row interface{ Scan(dest ...any) error }) (SweepItem, error) {
+	var it SweepItem
+	err := row.Scan(&it.ID, &it.RunID, &it.Target, &it.SeriesID, &it.SeriesTitle, &it.Season, &it.Episodes,
+		&it.ReleaseTitle, &it.Indexer, &it.DownloadID, &it.Result, &it.LookupResults, &it.LookupMS, &it.At)
+	return it, err
+}
+
+func (d *DB) SeriesSweepItems(ctx context.Context, seriesID, limit int) ([]SweepItem, error) {
+	rows, err := d.read.QueryContext(ctx,
+		`SELECT `+sweepItemColumns+` FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
+		 WHERE r.dry = 0 AND i.series_id = ? ORDER BY i.at DESC, i.id DESC LIMIT ?`, seriesID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SweepItem
+	for rows.Next() {
+		it, scanErr := scanSweepItem(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) LatestSweepItems(ctx context.Context) (map[int]SweepItem, error) {
+	rows, err := d.read.QueryContext(ctx,
+		`SELECT `+sweepItemColumns+` FROM sweep_items i JOIN (
+		   SELECT s.id, ROW_NUMBER() OVER (PARTITION BY s.series_id ORDER BY s.at DESC, s.id DESC) AS rn
+		   FROM sweep_items s JOIN sweep_runs r ON r.id = s.run_id WHERE r.dry = 0) w ON w.id = i.id
+		 WHERE w.rn = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]SweepItem{}
+	for rows.Next() {
+		it, scanErr := scanSweepItem(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out[it.SeriesID] = it
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) attachSweepItems(ctx context.Context, runs []SweepRun, byID map[int64]int, minRunID int64) error {
 	rows, err := d.read.QueryContext(ctx,
 		`SELECT id, run_id, target, series_id, series_title, season, COALESCE(episodes, ''),
@@ -174,24 +227,9 @@ func (d *DB) attachSweepItems(ctx context.Context, runs []SweepRun, byID map[int
 	defer rows.Close()
 
 	for rows.Next() {
-		var it SweepItem
-		if err = rows.Scan(
-			&it.ID,
-			&it.RunID,
-			&it.Target,
-			&it.SeriesID,
-			&it.SeriesTitle,
-			&it.Season,
-			&it.Episodes,
-			&it.ReleaseTitle,
-			&it.Indexer,
-			&it.DownloadID,
-			&it.Result,
-			&it.LookupResults,
-			&it.LookupMS,
-			&it.At,
-		); err != nil {
-			return err
+		it, scanErr := scanSweepItem(rows)
+		if scanErr != nil {
+			return scanErr
 		}
 		if i, ok := byID[it.RunID]; ok {
 			runs[i].Items = append(runs[i].Items, it)
@@ -207,7 +245,8 @@ func (d *DB) LastSweepRunStart(ctx context.Context, excludeStatus []string) (*ti
 	}
 	var at time.Time
 	err = d.read.QueryRowContext(ctx,
-		`SELECT started_at FROM sweep_runs WHERE dry = 0 AND status NOT IN (SELECT value FROM json_each(?))
+		`SELECT started_at FROM sweep_runs
+		 WHERE dry = 0 AND trigger NOT LIKE 'babysit:%' AND status NOT IN (SELECT value FROM json_each(?))
 		 ORDER BY id DESC LIMIT 1`, string(exclude)).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -285,7 +324,7 @@ func (d *DB) DeleteSweepRefused(ctx context.Context, id int64) error {
 func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int, time.Time, error) {
 	rows, err := d.read.QueryContext(ctx,
 		`SELECT started_at, finished_at FROM sweep_runs
-		 WHERE dry = 0 AND status IN ('failed', 'interrupted') AND started_at >= ?`, since)
+		 WHERE dry = 0 AND trigger NOT LIKE 'babysit:%' AND status IN ('failed', 'interrupted') AND started_at >= ?`, since)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
