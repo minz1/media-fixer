@@ -11,32 +11,6 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 )
 
-const (
-	// pendingOutcomeCheckInterval is how often the sweeper re-polls *arr
-	// state for a pending outcome once it's actively being tracked.
-	pendingOutcomeCheckInterval = 5 * time.Minute
-	// pendingOutcomeGracePeriod is how long a search can sit with nothing in
-	// the download queue before "no release found (yet)" is a fair
-	// conclusion. Deliberately not the return value of a duration guess —
-	// see CheckPendingOutcome, which observes the queue directly instead.
-	pendingOutcomeGracePeriod = 15 * time.Minute
-	// pendingOutcomeStallTimeout is how long a queued/downloading item can go
-	// with no progress before it's treated as stalled rather than just slow.
-	pendingOutcomeStallTimeout = 60 * time.Minute
-	// pendingOutcomeOverallCap is the absolute give-up point for a single
-	// tracking attempt, regardless of stage — protects against a queue item
-	// that reports fresh-looking progress forever without ever completing.
-	pendingOutcomeOverallCap = 12 * time.Hour
-	// pendingOutcomeKeepSearchingInterval is the slower check cadence once an
-	// owner has opted into "keep searching" for content with no release yet
-	// — no need to hit the *arr API every 5 minutes for something that may
-	// not exist for days.
-	pendingOutcomeKeepSearchingInterval = time.Hour
-	// keepSearchingDuration is how long "keep searching" stays armed before
-	// giving up again and re-escalating.
-	keepSearchingDuration = 7 * 24 * time.Hour
-)
-
 // startPendingOutcomeTracking begins durable tracking for an arr_search_missing
 // fix: unlike the generic runVerification loop (an in-memory goroutine capped
 // at ~10 minutes total), this survives a process restart and can track a
@@ -70,6 +44,7 @@ func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incid
 	}
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusVerifying))
 
+	t := s.timers(ctx)
 	now := time.Now()
 	po := &db.PendingOutcome{
 		MediaType:      target.MediaType,
@@ -80,7 +55,7 @@ func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incid
 		LastStage:      "searching",
 		LastProgressAt: now,
 	}
-	if setErr := s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(pendingOutcomeCheckInterval)); setErr != nil {
+	if setErr := s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(s.minutes(t.CheckEveryMinutes))); setErr != nil {
 		s.log.ErrorContext(ctx, "set pending outcome", "incident", inc.ID, "error", setErr)
 		return
 	}
@@ -146,8 +121,9 @@ func (s *Service) AdvancePendingOutcomes(ctx context.Context) {
 		s.log.ErrorContext(ctx, "pending outcome sweep query", "error", err)
 		return
 	}
+	t := s.timers(ctx)
 	for _, inc := range due {
-		s.advancePendingOutcome(ctx, inc)
+		s.advancePendingOutcome(ctx, inc, t)
 	}
 }
 
@@ -155,7 +131,7 @@ func (s *Service) AdvancePendingOutcomes(ctx context.Context) {
 // happens next: resolved (mark fixed), actively downloading (notify on the
 // grab milestone, keep polling), stalled/capped/no-release (escalate), or
 // just not due yet (reschedule).
-func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident) {
+func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident, t Timers) {
 	po, err := s.db.GetPendingOutcome(ctx, inc.ID)
 	if err != nil {
 		return
@@ -163,20 +139,14 @@ func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident) {
 
 	obs, err := s.agent.CheckPendingOutcome(ctx, po)
 	if err != nil {
-		// Retrying is right — a transient *arr failure must not be read as
-		// "no release found" — but it cannot be unbounded. Both the stall and
-		// overall-cap checks live further down in advanceDownloading /
-		// advanceNoQueueItem, which this early return skips, so a persistent
-		// failure (rotated API key, Sonarr moved) left the incident polling
-		// every 5 minutes forever with nobody ever told. The reporters' last
-		// message would still be "downloading now".
-		if time.Since(po.StartedAt) > pendingOutcomeOverallCap {
+		// A transient *arr failure is retried, but the cap checks below are skipped on this path, so bound it here.
+		if time.Since(po.StartedAt) > s.minutes(minutesPerHour*t.TrackCapHours) {
 			s.escalatePendingOutcome(ctx, inc, po,
-				"we lost track of the download and could not re-check its state: "+err.Error())
+				"we lost track of the download and could not re-check its state: "+err.Error(), t)
 			return
 		}
 		s.log.WarnContext(ctx, "pending outcome check failed, will retry", "incident", inc.ID, "error", err)
-		_ = s.db.SetPendingOutcome(ctx, inc.ID, po, time.Now().Add(pendingOutcomeCheckInterval))
+		_ = s.db.SetPendingOutcome(ctx, inc.ID, po, time.Now().Add(s.minutes(t.CheckEveryMinutes)))
 		return
 	}
 
@@ -188,10 +158,10 @@ func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident) {
 
 	now := time.Now()
 	if obs.QueueStage != "" {
-		s.advanceDownloading(ctx, inc, po, obs, now)
+		s.advanceDownloading(ctx, inc, po, obs, now, t)
 		return
 	}
-	s.advanceNoQueueItem(ctx, inc, po, now)
+	s.advanceNoQueueItem(ctx, inc, po, now, t)
 }
 
 // advanceDownloading handles the case where something is actively in the
@@ -199,7 +169,12 @@ func (s *Service) advancePendingOutcome(ctx context.Context, inc *db.Incident) {
 // progress tracking to distinguish real movement from a stall, and the
 // overall time cap.
 func (s *Service) advanceDownloading(
-	ctx context.Context, inc *db.Incident, po *db.PendingOutcome, obs *agent.PendingOutcomeObservation, now time.Time,
+	ctx context.Context,
+	inc *db.Incident,
+	po *db.PendingOutcome,
+	obs *agent.PendingOutcomeObservation,
+	now time.Time,
+	t Timers,
 ) {
 	if !po.GrabNotified {
 		po.GrabNotified = true
@@ -212,36 +187,38 @@ func (s *Service) advanceDownloading(
 	}
 	po.LastStage, po.LastProgressPct = obs.QueueStage, obs.ProgressPct
 
-	if now.Sub(po.LastProgressAt) > pendingOutcomeStallTimeout {
-		s.escalatePendingOutcome(ctx, inc, po, "the download appears to have stalled")
+	if now.Sub(po.LastProgressAt) > s.minutes(t.StallMinutes) {
+		s.escalatePendingOutcome(ctx, inc, po, "the download appears to have stalled", t)
 		return
 	}
-	if now.Sub(po.StartedAt) > pendingOutcomeOverallCap {
-		s.escalatePendingOutcome(ctx, inc, po, "the download has been running far longer than expected")
+	if now.Sub(po.StartedAt) > s.minutes(minutesPerHour*t.TrackCapHours) {
+		s.escalatePendingOutcome(ctx, inc, po, "the download has been running far longer than expected", t)
 		return
 	}
-	_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(pendingOutcomeCheckInterval))
+	_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(s.minutes(t.CheckEveryMinutes)))
 }
 
 // advanceNoQueueItem handles the case where nothing is currently in the
 // download queue for this target: either still waiting on an indexer within
 // grace, genuinely no release found, or (if an owner opted in) a slower
 // long-term watch for new content.
-func (s *Service) advanceNoQueueItem(ctx context.Context, inc *db.Incident, po *db.PendingOutcome, now time.Time) {
+func (s *Service) advanceNoQueueItem(
+	ctx context.Context, inc *db.Incident, po *db.PendingOutcome, now time.Time, t Timers,
+) {
 	po.LastStage = "searching"
 	if po.KeepSearching {
 		if now.After(po.KeepSearchingUntil) {
-			s.escalatePendingOutcome(ctx, inc, po, "still no release found after an extended search")
+			s.escalatePendingOutcome(ctx, inc, po, "still no release found after an extended search", t)
 			return
 		}
-		_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(pendingOutcomeKeepSearchingInterval))
+		_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(s.minutes(minutesPerHour*t.KeepSearchingCheckHours)))
 		return
 	}
-	if now.Sub(po.StartedAt) > pendingOutcomeGracePeriod {
-		s.escalatePendingOutcome(ctx, inc, po, "no release was found")
+	if now.Sub(po.StartedAt) > s.minutes(t.NoReleaseGraceMinutes) {
+		s.escalatePendingOutcome(ctx, inc, po, "no release was found", t)
 		return
 	}
-	_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(pendingOutcomeCheckInterval))
+	_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(s.minutes(t.CheckEveryMinutes)))
 }
 
 // escalatePendingOutcome hands a pending outcome to the owner. Deliberately
@@ -249,13 +226,19 @@ func (s *Service) advanceNoQueueItem(ctx context.Context, inc *db.Incident, po *
 // tracking without losing StartedAt/history — but FindDuePendingOutcomes is
 // scoped to StatusVerifying, so the sweeper stops touching it the moment
 // escalateToOwner moves status to manual_test_needed.
-func (s *Service) escalatePendingOutcome(ctx context.Context, inc *db.Incident, po *db.PendingOutcome, reason string) {
+func (s *Service) escalatePendingOutcome(
+	ctx context.Context,
+	inc *db.Incident,
+	po *db.PendingOutcome,
+	reason string,
+	t Timers,
+) {
 	s.log.WarnContext(ctx, "pending outcome escalating", "incident", inc.ID, "reason", reason)
 	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
 		"⚠️ Incident **%s** (#%s): searched for **%s** but %s.",
 		inc.Title, inc.ID[:8], pendingOutcomeTargetLabel(po), reason,
 	), "Approve \"Keep searching\" on the dashboard to keep watching for a release over the next "+
-		"week, or investigate manually."))
+		keepSearchingSpan(t.KeepSearchingDays)+", or investigate manually."))
 }
 
 // pendingOutcomeTargetLabel renders a PendingOutcome's target for a
@@ -272,17 +255,25 @@ func pendingOutcomeTargetLabel(po *db.PendingOutcome) string {
 	}
 }
 
+func keepSearchingSpan(days int) string {
+	if days == 1 {
+		return "day"
+	}
+	return fmt.Sprintf("%d days", days)
+}
+
 // KeepSearching re-arms a pending outcome that was escalated because no
 // release was found yet, so the sweeper resumes checking (at a slower
-// cadence, see pendingOutcomeKeepSearchingInterval) instead of the incident
+// cadence, see KeepSearchingCheckHours) instead of the incident
 // sitting idle in manual_test_needed until an owner manually reruns it.
 func (s *Service) KeepSearching(ctx context.Context, id string) error {
 	po, err := s.db.GetPendingOutcome(ctx, id)
 	if err != nil {
 		return fmt.Errorf("keep searching: %w", err)
 	}
+	t := s.timers(ctx)
 	po.KeepSearching = true
-	po.KeepSearchingUntil = time.Now().Add(keepSearchingDuration)
+	po.KeepSearchingUntil = time.Now().Add(s.minutes(minutesPerDay * t.KeepSearchingDays))
 
 	changed, err := s.db.TransitionStatus(ctx, id, db.StatusVerifying, db.StatusManualTestNeeded)
 	if err != nil {
@@ -292,5 +283,5 @@ func (s *Service) KeepSearching(ctx context.Context, id string) error {
 		return fmt.Errorf("incident %s is not awaiting a keep-searching decision", id)
 	}
 	s.recordStatusChanged(ctx, id, string(db.StatusVerifying))
-	return s.db.SetPendingOutcome(ctx, id, po, time.Now().Add(pendingOutcomeKeepSearchingInterval))
+	return s.db.SetPendingOutcome(ctx, id, po, time.Now().Add(s.minutes(minutesPerHour*t.KeepSearchingCheckHours)))
 }

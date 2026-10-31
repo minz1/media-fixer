@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -359,5 +360,196 @@ func TestSweepStaleRuns_CardPrintsSavedMinutes(t *testing.T) {
 	}
 	if n := countMsgs(notif.msgs, card("Young", ids["Young"])); n != 0 {
 		t.Errorf("the 39 min incident was rerun; msgs %q", notif.msgs)
+	}
+}
+
+func newTrackedIncident(t *testing.T, database *db.DB, status db.IncidentStatus, po *db.PendingOutcome) *db.Incident {
+	t.Helper()
+	inc := &db.Incident{Status: status, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Tracked"}
+	if err := database.CreateIncident(t.Context(), inc); err != nil {
+		t.Fatal(err)
+	}
+	if po != nil {
+		if err := database.SetPendingOutcome(t.Context(), inc.ID, po, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return inc
+}
+
+func dueAt(t *testing.T, database *db.DB, id string, after time.Duration) bool {
+	t.Helper()
+	due, err := database.FindDuePendingOutcomes(t.Context(), time.Now().Add(after))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inc := range due {
+		if inc.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func incidentStatus(t *testing.T, database *db.DB, id string) db.IncidentStatus {
+	t.Helper()
+	got, err := database.GetIncident(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got.Status
+}
+
+func queueAgent(obs *agent.PendingOutcomeObservation) *scriptedPendingOutcomeAgent {
+	return &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			return obs, nil
+		},
+	}
+}
+
+func TestStartPendingOutcomeTracking_FirstCheckFromSavedTimers(t *testing.T) {
+	t.Parallel()
+	ag := &scriptedPendingOutcomeAgent{
+		runResult: &agent.DiagnosticResult{
+			RootCause: "missing", Confidence: "high", PrimaryAction: agent.ToolArrSearchMissing, PrimaryReason: "t",
+		},
+		searchParams: map[string]any{
+			"media_type": "movie",
+			"title":      "Arrival",
+			"season":     float64(-1),
+			"episode":    float64(-1),
+		},
+	}
+	svc, database, notif := newPendingOutcomeTestService(t, ag)
+	ag.database = database
+	saveTimers(t, database, func(tm *incident.Timers) { tm.CheckEveryMinutes = 30 })
+
+	inc, err := svc.Handle(t.Context(), &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice", What: "cant_play", Title: "Arrival",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForUserMsg(t, notif)
+
+	if dueAt(t, database, inc.ID, 29*time.Minute) {
+		t.Error("next check is due within 29 min, want 30")
+	}
+	if !dueAt(t, database, inc.ID, 31*time.Minute) {
+		t.Error("next check is not due after 31 min, want 30")
+	}
+}
+
+func TestAdvancePendingOutcome_SavedGrace(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newPendingOutcomeTestService(t, queueAgent(&agent.PendingOutcomeObservation{}))
+	saveTimers(t, database, func(tm *incident.Timers) { tm.NoReleaseGraceMinutes = 30 })
+	for _, tc := range []struct {
+		age  time.Duration
+		want db.IncidentStatus
+	}{{20 * time.Minute, db.StatusVerifying}, {31 * time.Minute, db.StatusManualTestNeeded}} {
+		started := time.Now().Add(-tc.age)
+		inc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+			MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1, StartedAt: started, LastProgressAt: started,
+		})
+
+		svc.AdvancePendingOutcomes(t.Context())
+
+		if got := incidentStatus(t, database, inc.ID); got != tc.want {
+			t.Errorf("started %v ago: status %q, want %q", tc.age, got, tc.want)
+		}
+	}
+}
+
+func TestAdvancePendingOutcome_SavedStall(t *testing.T) {
+	t.Parallel()
+	svc, database, _ := newPendingOutcomeTestService(t,
+		queueAgent(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 42}))
+	saveTimers(t, database, func(tm *incident.Timers) {
+		tm.StallMinutes = 120
+		tm.CheckEveryMinutes = 30
+	})
+	started := time.Now().Add(-90 * time.Minute)
+	inc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+		MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1,
+		StartedAt: started, LastProgressAt: started, LastProgressPct: 42, GrabNotified: true,
+	})
+
+	svc.AdvancePendingOutcomes(t.Context())
+
+	if got := incidentStatus(t, database, inc.ID); got != db.StatusVerifying {
+		t.Fatalf("status %q, want verifying (90 min is inside the 120 min stall)", got)
+	}
+	if dueAt(t, database, inc.ID, 29*time.Minute) || !dueAt(t, database, inc.ID, 31*time.Minute) {
+		t.Error("re-arm is not 30 min out")
+	}
+}
+
+func TestAdvancePendingOutcome_SavedCap(t *testing.T) {
+	t.Parallel()
+	svc, database, notif := newPendingOutcomeTestService(t,
+		queueAgent(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 50}))
+	saveTimers(t, database, func(tm *incident.Timers) { tm.TrackCapHours = 2 })
+	inc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+		MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1,
+		StartedAt: time.Now().Add(-3 * time.Hour), LastProgressAt: time.Now(), LastProgressPct: 10, GrabNotified: true,
+	})
+
+	svc.AdvancePendingOutcomes(t.Context())
+
+	if got := incidentStatus(t, database, inc.ID); got != db.StatusManualTestNeeded {
+		t.Fatalf("status %q, want manual_test_needed", got)
+	}
+	notif.mu.Lock()
+	defer notif.mu.Unlock()
+	if len(notif.msgs) == 0 || !strings.Contains(notif.msgs[len(notif.msgs)-1], "running far longer than expected") {
+		t.Errorf("msgs %q, want the cap reason", notif.msgs)
+	}
+}
+
+func TestKeepSearching_SavedDurationAndText(t *testing.T) {
+	t.Parallel()
+	svc, database, notif := newPendingOutcomeTestService(t, queueAgent(&agent.PendingOutcomeObservation{}))
+	saveTimers(t, database, func(tm *incident.Timers) {
+		tm.KeepSearchingDays = 3
+		tm.KeepSearchingCheckHours = 2
+	})
+	started := time.Now().Add(-time.Hour)
+	inc := newTrackedIncident(t, database, db.StatusManualTestNeeded, &db.PendingOutcome{
+		MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1, StartedAt: started, LastProgressAt: started,
+	})
+
+	if err := svc.KeepSearching(t.Context(), inc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	po, err := database.GetPendingOutcome(t.Context(), inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Until(po.KeepSearchingUntil) - 72*time.Hour; d < -time.Minute || d > time.Minute {
+		t.Errorf("KeepSearchingUntil is %v from 3 days out", d)
+	}
+	if dueAt(t, database, inc.ID, 2*time.Hour-time.Minute) || !dueAt(t, database, inc.ID, 2*time.Hour+time.Minute) {
+		t.Error("next check is not 2 h out")
+	}
+
+	for days, want := range map[int]string{3: "over the next 3 days", 1: "over the next day"} {
+		saveTimers(t, database, func(tm *incident.Timers) { tm.KeepSearchingDays = days })
+		started = time.Now().Add(-time.Hour)
+		esc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+			MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1, StartedAt: started, LastProgressAt: started,
+		})
+		svc.AdvancePendingOutcomes(t.Context())
+		if got := incidentStatus(t, database, esc.ID); got != db.StatusManualTestNeeded {
+			t.Fatalf("days %d: status %q, want manual_test_needed", days, got)
+		}
+		notif.mu.Lock()
+		last := notif.msgs[len(notif.msgs)-1]
+		notif.mu.Unlock()
+		if !strings.Contains(last, want) {
+			t.Errorf("days %d: card %q does not contain %q", days, last, want)
+		}
 	}
 }
