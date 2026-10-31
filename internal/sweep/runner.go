@@ -124,7 +124,6 @@ type seasonTarget struct {
 type searchBatch struct {
 	item   db.SweepItem
 	series client.Series
-	counts map[int]int
 	eps    []client.Episode
 	anime  bool
 }
@@ -239,10 +238,7 @@ func (x *run) sweep(ctx context.Context) error {
 	if err = x.episodePass(ctx, active); err != nil {
 		return err
 	}
-	if err = x.dropResolved(ctx, active); err != nil {
-		return err
-	}
-	return x.cleanup(ctx)
+	return errors.Join(x.cleanup(ctx), x.dropResolved(ctx, active))
 }
 
 func (x *run) packPasses(ctx context.Context, series []client.Series) error {
@@ -342,7 +338,7 @@ func (x *run) season(ctx context.Context, t seasonTarget) error {
 		return err
 	}
 	x.looked[key] = true
-	if err = x.attempt(ctx, t.series, t.season, len(t.eps)); err != nil {
+	if err = x.attempt(ctx, t.series, t.season); err != nil {
 		return err
 	}
 	cands := SeasonCandidates(rels, x.refused)
@@ -362,7 +358,6 @@ func (x *run) animeSeries(ctx context.Context, s client.Series, burst bool) erro
 		return err
 	}
 	slices.SortFunc(missing, byAbsolute)
-	counts := seasonCounts(missing)
 	uncovered := map[int]bool{}
 	for _, e := range missing {
 		uncovered[e.ID] = true
@@ -385,7 +380,7 @@ func (x *run) animeSeries(ctx context.Context, s client.Series, burst bool) erro
 			continue
 		}
 		x.looked[key] = true
-		if err = x.attempt(ctx, s, e.SeasonNumber, counts[e.SeasonNumber]); err != nil {
+		if err = x.attempt(ctx, s, e.SeasonNumber); err != nil {
 			return err
 		}
 		cands := AnimeCandidates(rels, uncovered, x.refused)
@@ -477,12 +472,11 @@ func (x *run) episodePass(ctx context.Context, series []client.Series) error {
 
 func searchBatches(runID int64, s client.Series, missing []client.Episode) []searchBatch {
 	base := db.SweepItem{RunID: runID, SeriesID: s.ID, SeriesTitle: s.Title}
-	counts := seasonCounts(missing)
 	var out []searchBatch
 	if s.SeriesType == seriesAnime {
 		slices.SortFunc(missing, byAbsolute)
 		for chunk := range slices.Chunk(missing, animeBatch) {
-			b := searchBatch{item: base, series: s, counts: counts, eps: chunk, anime: true}
+			b := searchBatch{item: base, series: s, eps: chunk, anime: true}
 			b.item.Target = episodeTargetKey(chunk[0].ID)
 			out = append(out, b)
 		}
@@ -497,7 +491,7 @@ func searchBatches(runID int64, s client.Series, missing []client.Episode) []sea
 			j++
 		}
 		season := missing[i].SeasonNumber
-		b := searchBatch{item: base, series: s, counts: counts, eps: missing[i:j]}
+		b := searchBatch{item: base, series: s, eps: missing[i:j]}
 		b.item.Target, b.item.Season = seasonTargetKey(s.ID, season), &season
 		out = append(out, b)
 		i = j
@@ -535,7 +529,7 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 		return err
 	}
 	for season := range seasonCounts(eps) {
-		if err := x.attempt(ctx, b.series, season, b.counts[season]); err != nil {
+		if err := x.attempt(ctx, b.series, season); err != nil {
 			return err
 		}
 	}
@@ -574,7 +568,7 @@ func (x *run) eligibleKey(key string) bool {
 	return x.burst[key] || eligible(t, ok, x.start)
 }
 
-func (x *run) attempt(ctx context.Context, s client.Series, season, missing int) error {
+func (x *run) attempt(ctx context.Context, s client.Series, season int) error {
 	key := seasonTargetKey(s.ID, season)
 	if x.dry || x.attempted[key] {
 		return nil
@@ -584,16 +578,25 @@ func (x *run) attempt(ctx context.Context, s client.Series, season, missing int)
 	if t, ok := x.targets[key]; ok {
 		prev = &t
 	}
-	return x.DB.UpsertSweepTarget(ctx, attemptTarget(prev, key, s, season, missing, x.start, x.s))
+	return x.DB.UpsertSweepTarget(ctx, attemptTarget(prev, key, s, season, x.seasonMiss[s.ID][season], x.start, x.s))
 }
 
 func (x *run) dropResolved(ctx context.Context, series []client.Series) error {
 	if x.dry {
 		return nil
 	}
+	rows := map[int]bool{}
+	for _, t := range x.targets {
+		rows[t.SeriesID] = true
+	}
 	live := map[int]bool{}
 	for _, s := range series {
 		live[s.ID] = true
+		if _, seen := x.seasonMiss[s.ID]; rows[s.ID] && !seen {
+			if _, err := x.missing(ctx, s); err != nil {
+				return err
+			}
+		}
 	}
 	var drop []string
 	for key, t := range x.targets {

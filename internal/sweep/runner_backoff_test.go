@@ -36,9 +36,11 @@ func (h *harness) setClock(at time.Time) {
 func (h *harness) setHasFile(episodeID int) {
 	h.fake.mu.Lock()
 	defer h.fake.mu.Unlock()
-	for i := range h.fake.episodes[1] {
-		if h.fake.episodes[1][i].ID == episodeID {
-			h.fake.episodes[1][i].HasFile = true
+	for _, eps := range h.fake.episodes {
+		for i := range eps {
+			if eps[i].ID == episodeID {
+				eps[i].HasFile = true
+			}
 		}
 	}
 }
@@ -222,6 +224,49 @@ func TestRun_ResolvedTargetsDropped(t *testing.T) {
 	}
 	if got["s:6:1"].Attempts != 2 || got["s:6:1"].Streak != 3 {
 		t.Errorf("grabbed row = %+v, want written this run", got["s:6:1"])
+	}
+}
+
+func TestRun_UnreachedResolvedTargetDropped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "A", missingEps(1, 1, 11, 12)...)
+	h.fake.addSeries(2, "B", missingEps(2, 1, 21, 22)...)
+	h.fake.addAnime(3, "Anime", missingEps(3, 1, 31, 32)...)
+	h.setHasFile(31)
+	h.setHasFile(32)
+	tg := targetOf("s:3:1", 3, t0().Add(-time.Hour))
+	tg.Streak = 3
+	h.putTarget(t, tg)
+	s := settings()
+	s.MaxLookups = 1
+	s.MaxSearches = 0
+	h.run(t, false, s)
+	if _, ok := h.targets(t)["s:3:1"]; ok {
+		t.Error("resolved anime season the run never reached kept its row")
+	}
+}
+
+func TestRun_QueuedEpisodesKeepStreak(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12, 13)...)
+	h.fake.queue = []client.QueueDetail{{ID: 1, EpisodeID: 11}}
+	tg := targetOf("s:1:1", 1, t0().Add(-time.Hour))
+	tg.Missing, tg.Streak = 3, 1
+	h.putTarget(t, tg)
+	h.run(t, false, settings())
+	got := h.targets(t)["s:1:1"]
+	if got.Streak != 2 || got.Missing != 3 || got.Attempts != 2 {
+		t.Fatalf("row = %+v, want streak 2 missing 3 (a queued episode is not imported yet)", got)
+	}
+	h.fake.mu.Lock()
+	h.fake.queue = nil
+	h.fake.mu.Unlock()
+	h.setClock(got.NextEligible)
+	h.run(t, false, settings())
+	if again := h.targets(t)["s:1:1"]; again.Streak != 3 || again.Missing != 3 {
+		t.Errorf("after the queued download failed, row = %+v, want streak 3 missing 3", again)
 	}
 }
 
