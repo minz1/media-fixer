@@ -12,12 +12,9 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 )
 
-// escalationVerifySeconds/Minutes size the post-approval re-check loop:
-// a file delete + re-search + re-download takes longer to land than a
-// library scan or cache refresh, so both are larger than their agent-driven
-// counterparts (see the systemPrompt guidance in internal/agent/agent.go).
+// escalationVerifyETAMinutes is the reporter ETA after an approved fix: a delete, re-search and
+// re-download lands slower than a library scan.
 const (
-	escalationVerifySeconds    = 600
 	escalationVerifyETAMinutes = 15
 	// escalationPlanTTL bounds how long an owner's approval stays valid. The
 	// plan names specific file IDs, so approving one from days ago would
@@ -111,7 +108,7 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) erro
 
 	s.launchVerification(inc, &agent.DiagnosticResult{
 		PrimaryAction:      result.EscalateAction,
-		VerifyAfterSeconds: escalationVerifySeconds,
+		VerifyAfterSeconds: int(s.minutes(s.timers(execCtx).ApprovedVerifyMinutes) / time.Second),
 		UserETAMinutes:     escalationVerifyETAMinutes,
 	})
 	return nil

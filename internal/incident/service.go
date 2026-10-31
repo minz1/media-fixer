@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -20,27 +21,12 @@ import (
 const systematicIncidentThreshold = 5
 
 const (
-	retryDelay1     = 2 * time.Minute
-	retryDelay2     = 6 * time.Minute
 	rerunNoteGap    = 30 * time.Minute
 	progressNoteGap = 60 * time.Minute
 	seerrAlertGap   = time.Hour
 )
 
 const (
-	// maxVerifyLoops bounds how many times a deferred fix is re-checked before
-	// the system gives up and either reports an ETA or escalates.
-	maxVerifyLoops = 5
-	// verifyLoopDelayCap caps each verification wait after the first, so the
-	// goroutine can't sleep for an unbounded agent-supplied duration.
-	verifyLoopDelayCap = 2 * time.Minute
-	// firstVerifyDelayCap caps the FIRST wait only, which is the one the
-	// agent's verify_after_seconds is actually an estimate for. Capping every
-	// wait at verifyLoopDelayCap gave a total budget of 10 minutes while the
-	// systemPrompt told the model to prefer 1800+ for a library scan — so a
-	// scan that was working fine routinely exhausted verification and
-	// escalated as "could not be verified".
-	firstVerifyDelayCap = 30 * time.Minute
 	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
 	defaultUserETAMinutes = 10
 )
@@ -48,7 +34,7 @@ const (
 const (
 	// staleRunThreshold is how long a run can sit in "investigating" without a
 	// heartbeat before SweepStaleRuns treats it as hung rather than mid-retry.
-	// Comfortably above retryDelay1+retryDelay2 (8 minutes total), the longest
+	// Comfortably above both retry waits (8 minutes by default), the longest
 	// gap a legitimately-retrying run can go without writing one — Run's own
 	// TransitionStatus keeps status at "investigating" across retries, and
 	// Agent.logTurn (the heartbeat write) doesn't fire again until the next
@@ -70,6 +56,7 @@ type Service struct {
 	log         *slog.Logger
 	runs        *runManager
 	seedTimeout time.Duration
+	unit        atomic.Int64
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -100,18 +87,33 @@ func NewService(
 	log *slog.Logger,
 ) *Service {
 	s := &Service{
-		db:          database,
-		journal:     jrnl,
-		agent:       ag,
-		control:     control,
-		summarizer:  summarizer,
-		notif:       notif,
-		log:         log,
-		runs:        newRunManager(base),
-		seedTimeout: staleRunThreshold,
+		db:         database,
+		journal:    jrnl,
+		agent:      ag,
+		control:    control,
+		summarizer: summarizer,
+		notif:      notif,
+		log:        log,
+		runs:       newRunManager(base),
 	}
 	go s.backgroundSweepLoop(base)
 	return s
+}
+
+func (s *Service) minutes(n int) time.Duration {
+	unit := time.Duration(s.unit.Load())
+	if unit <= 0 {
+		unit = time.Minute
+	}
+	return time.Duration(n) * unit
+}
+
+func (s *Service) timers(ctx context.Context) Timers {
+	t, err := LoadTimers(ctx, s.db)
+	if err != nil && ctx.Err() == nil {
+		s.log.WarnContext(ctx, "incident timers unreadable, using defaults", "error", err)
+	}
+	return t
 }
 
 func (s *Service) SetSeerr(seerr SeerrIssues) {
@@ -140,10 +142,15 @@ func (s *Service) startRun(
 ) {
 	go func() {
 		defer s.runs.end(inc.ID, tok)
-		seedCtx, cancel := context.WithTimeout(ctx, s.seedTimeout)
+		t := s.timers(ctx)
+		seedTimeout := s.seedTimeout
+		if seedTimeout == 0 {
+			seedTimeout = s.minutes(t.StaleRunMinutes)
+		}
+		seedCtx, cancel := context.WithTimeout(ctx, seedTimeout)
 		seed := buildSeed(seedCtx)
 		cancel()
-		s.runAgent(ctx, inc, seed)
+		s.runAgent(ctx, inc, seed, t)
 	}()
 }
 
@@ -245,7 +252,7 @@ func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) 
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
 }
 
-func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) {
+func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, t Timers) {
 	if s.agent == nil {
 		return
 	}
@@ -263,7 +270,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 		return
 	}
 
-	retryDelays := []time.Duration{0, retryDelay1, retryDelay2}
+	retryDelays := []time.Duration{0, s.minutes(t.RetryFirstMinutes), s.minutes(t.RetrySecondMinutes)}
 
 	for attempt, delay := range retryDelays {
 		if delay > 0 {
@@ -567,7 +574,7 @@ func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, acti
 	s.resolveSeerrIssues(ctx, inc)
 }
 
-// runVerification re-checks, up to maxVerifyLoops times, whether a deferred
+// runVerification re-checks, up to the configured number of times, whether a deferred
 // non-destructive fix (e.g. a library scan) resolved the problem. While checking,
 // the incident sits in "verifying". On success it is marked fixed and reporters
 // are told. If it never verifies but a scan is still running, reporters get a
@@ -598,10 +605,11 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 	}
 	s.recordStatusChanged(ctx, inc.ID, string(db.StatusVerifying))
 
-	firstDelay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, firstVerifyDelayCap)
+	t := s.timers(ctx)
+	firstDelay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, s.minutes(t.FirstVerifyCapMinutes))
 
-	for i := range maxVerifyLoops {
-		delay := verifyLoopDelayCap
+	for i := range t.VerifyChecks {
+		delay := s.minutes(t.VerifyGapMinutes)
 		if i == 0 {
 			delay = firstDelay
 		}

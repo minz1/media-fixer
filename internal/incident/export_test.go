@@ -71,6 +71,10 @@ func (s *Service) SetSeedTimeoutForTest(d time.Duration) {
 	s.seedTimeout = d
 }
 
+func (s *Service) SetUnitForTest(d time.Duration) {
+	s.unit.Store(int64(d))
+}
+
 func ErrNotAwaitingDecisionForTest() error { return errNotAwaitingDecision }
 
 func ErrPlanChangedForTest() error { return errPlanChanged }
