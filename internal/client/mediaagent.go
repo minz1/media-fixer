@@ -17,6 +17,8 @@ type MediaAgentClient struct {
 	baseURL string
 	apiKey  string
 	http    *http.Client
+
+	stuckHTTP *http.Client
 }
 
 // mediaAgentTimeout is deliberately longer than defaultHTTPTimeout: a
@@ -26,11 +28,15 @@ type MediaAgentClient struct {
 // the calling incident goroutine forever with nothing to recover it.
 const mediaAgentTimeout = 3 * time.Minute
 
+const stuckReadsTimeout = 20 * time.Second
+
 func NewMediaAgent(baseURL, apiKey string) *MediaAgentClient {
 	return &MediaAgentClient{
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		http:    newHTTPClient(mediaAgentTimeout),
+
+		stuckHTTP: newHTTPClient(stuckReadsTimeout),
 	}
 }
 
@@ -130,6 +136,34 @@ func (c *MediaAgentClient) ListDirectory(ctx context.Context, path string) (*med
 	var result mediaagentapi.ListDirResult
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
 		return nil, fmt.Errorf("media-agent ls decode: %w", decodeErr)
+	}
+	return &result, nil
+}
+
+func (c *MediaAgentClient) StuckReads(ctx context.Context) (*mediaagentapi.StuckReadsResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/stuck-reads", nil)
+	if err != nil {
+		return nil, err
+	}
+	c.auth(req)
+
+	resp, err := c.stuckHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var e mediaagentapi.ErrorResponse
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error != "" {
+			return nil, fmt.Errorf("media-agent stuck-reads: %s", e.Error)
+		}
+		return nil, fmt.Errorf("media-agent stuck-reads: status %d", resp.StatusCode)
+	}
+	var result mediaagentapi.StuckReadsResult
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("media-agent stuck-reads decode: %w", decodeErr)
 	}
 	return &result, nil
 }

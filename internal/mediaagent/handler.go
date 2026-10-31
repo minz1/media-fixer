@@ -86,6 +86,16 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 		writeJSON(w, http.StatusOK, result)
 	})
 
+	r.Get("/stuck-reads", func(w http.ResponseWriter, req *http.Request) {
+		result, err := ops.StuckReads()
+		if err != nil {
+			log.ErrorContext(req.Context(), "stuck reads failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
 	return r
 }
 

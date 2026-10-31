@@ -2,9 +2,13 @@ package client_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/mediaagent"
@@ -146,5 +150,60 @@ func TestMediaAgent_AuthRequired(t *testing.T) {
 	c := client.NewMediaAgent(srv.URL, "wrong-key")
 	if err := c.RestartService(context.Background(), "jellyfin"); err == nil {
 		t.Fatal("expected auth error with wrong API key")
+	}
+}
+
+func TestClientStuckReads(t *testing.T) {
+	t.Parallel()
+	var gotAuth string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_ = json.NewEncoder(w).Encode(mediaagentapi.StuckReadsResult{
+				Readers: []mediaagentapi.StuckReader{{PID: 7, Path: "/mnt/x"}},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(mediaagentapi.ErrorResponse{Error: "proc unreadable"})
+	}))
+	t.Cleanup(srv.Close)
+	c := client.NewMediaAgent(srv.URL, testAPIKey)
+
+	res, err := c.StuckReads(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Readers) != 1 || res.Readers[0].PID != 7 || res.Readers[0].Path != "/mnt/x" {
+		t.Errorf("readers = %+v", res.Readers)
+	}
+	if gotAuth != "Bearer "+testAPIKey {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+
+	status = http.StatusInternalServerError
+	_, err = c.StuckReads(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "proc unreadable") {
+		t.Errorf("err = %v, want it to contain the server's error text", err)
+	}
+}
+
+func TestClientStuckReadsTimeout(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	c := client.NewMediaAgent(srv.URL, testAPIKey)
+	c.SetStuckReadsTimeoutForTest(50 * time.Millisecond)
+
+	if _, err := c.StuckReads(context.Background()); err == nil {
+		t.Fatal("expected a timeout error")
 	}
 }

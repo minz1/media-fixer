@@ -2,6 +2,8 @@ package mediaagent_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -289,4 +291,61 @@ func (allowAllOps) ListDir(string) (*mediaagentapi.ListDirResult, error) {
 }
 func (allowAllOps) StuckReads() (*mediaagentapi.StuckReadsResult, error) {
 	return &mediaagentapi.StuckReadsResult{Readers: []mediaagentapi.StuckReader{}}, nil
+}
+
+type stuckReadsOps struct {
+	allowAllOps
+
+	result *mediaagentapi.StuckReadsResult
+	err    error
+}
+
+func (s stuckReadsOps) StuckReads() (*mediaagentapi.StuckReadsResult, error) {
+	return s.result, s.err
+}
+
+func TestStuckReadsRoute(t *testing.T) {
+	t.Parallel()
+	want := mediaagentapi.StuckReadsResult{Readers: []mediaagentapi.StuckReader{
+		{PID: 10, TID: 11, Start: 12, Comm: "ffprobe", Switches: 3, Path: "/mnt/x.mkv", Via: "fd"},
+	}}
+	do := func(ops mediaagent.Ops, auth string) *httptest.ResponseRecorder {
+		h := mediaagent.NewHandler(ops, "sekrit", slog.New(slog.DiscardHandler))
+		req := httptest.NewRequest(http.MethodGet, "/stuck-reads", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := do(stuckReadsOps{result: &want}, "Bearer sekrit")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got mediaagentapi.StuckReadsResult
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Readers) != 1 || got.Readers[0] != want.Readers[0] {
+		t.Errorf("readers = %+v, want %+v", got.Readers, want.Readers)
+	}
+
+	rec = do(stuckReadsOps{result: &want}, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no bearer: status = %d, want 401", rec.Code)
+	}
+
+	rec = do(stuckReadsOps{err: errors.New("proc unreadable")}, "Bearer sekrit")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("error: status = %d, want 500", rec.Code)
+	}
+	var e mediaagentapi.ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Error != "proc unreadable" {
+		t.Errorf("error = %q", e.Error)
+	}
 }
