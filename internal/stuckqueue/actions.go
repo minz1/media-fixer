@@ -1,6 +1,7 @@
 package stuckqueue
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -68,6 +69,141 @@ func (s *Scheduler) Act(
 	s.forget(app, d.DownloadID)
 	s.refresh(subjectOf(d))
 	return notice, nil
+}
+
+func (s *Scheduler) ImportMapped(
+	ctx context.Context, seriesID int, downloadID, targetsFp string, rows []MappedFile,
+) (string, error) {
+	if len(rows) == 0 {
+		return "", refuse("Tick at least one file.")
+	}
+	if !s.mu.TryLock() {
+		return "", refuse("a run is active, try again in a moment")
+	}
+	defer s.mu.Unlock()
+	c := s.r.client(AppSonarr)
+	if c == nil {
+		return "", refuse("Sonarr is not configured")
+	}
+	entries, err := c.QueueEntries(ctx)
+	if err != nil {
+		return "", err
+	}
+	d, err := ownedStuck(entries, seriesID, downloadID, targetsFp)
+	if err != nil {
+		return "", err
+	}
+	cands, err := c.ManualImportCandidates(ctx, d.DownloadID)
+	if err != nil {
+		return "", err
+	}
+	eps, err := c.GetEpisodes(ctx, seriesID, -1)
+	if err != nil {
+		return "", err
+	}
+	paths := make([]string, 0, len(cands))
+	for _, ic := range cands {
+		paths = append(paths, ic.Path)
+	}
+	pending, err := c.ManualImportPending(ctx, paths)
+	if err != nil {
+		return "", err
+	}
+	if pending {
+		return "", refuse("an import for this download is already running")
+	}
+	results, err := CheckMapping(seriesID, rows, cands, eps, entries, d.DownloadID)
+	if err != nil {
+		return "", err
+	}
+	files, labels := mappedCandidates(seriesID, results, cands, eps)
+	if _, err = c.ManualImport(ctx, files); err != nil {
+		return "", err
+	}
+	s.r.logger().InfoContext(ctx, "stuck-queue: manual import",
+		"series", seriesID, "download", d.DownloadID, "files", labels.lines)
+	if len(files) == len(cands) {
+		s.recordOutcome(d, ActionImport)
+		s.forget(AppSonarr, d.DownloadID)
+	}
+	s.refresh(subjectOf(d))
+	return fmt.Sprintf(
+		"Import started for %d files (%s). Sonarr moves them; the page shows them on disk once it is done.",
+		len(files),
+		labels.span(),
+	), nil
+}
+
+func ownedStuck(entries []client.QueueEntry, seriesID int, downloadID, targetsFp string) (Download, error) {
+	downloads := Group(AppSonarr, entries)
+	i := slices.IndexFunc(downloads, func(d Download) bool { return strings.EqualFold(d.DownloadID, downloadID) })
+	if i < 0 {
+		return Download{}, refuse("this download is no longer in the Sonarr queue")
+	}
+	d := downloads[i]
+	switch {
+	case !d.Stuck():
+		return Download{}, refuse("this download is no longer stuck")
+	case !d.OwnedBy(seriesID):
+		return Download{}, refuse("this download is not only this show's")
+	case d.TargetsFP() != targetsFp:
+		return Download{}, refuse("this download changed; propose again")
+	}
+	return d, nil
+}
+
+type importLabels struct {
+	lines []string
+	codes []episodeCode
+}
+
+type episodeCode struct{ season, episode int }
+
+func (e episodeCode) String() string { return fmt.Sprintf("S%02dE%02d", e.season, e.episode) }
+
+func (l importLabels) span() string {
+	lo, hi := slices.MinFunc(l.codes, compareCodes), slices.MaxFunc(l.codes, compareCodes)
+	if lo == hi {
+		return lo.String()
+	}
+	return lo.String() + "–" + hi.String()
+}
+
+func compareCodes(a, b episodeCode) int {
+	return cmp.Or(cmp.Compare(a.season, b.season), cmp.Compare(a.episode, b.episode))
+}
+
+func mappedCandidates(
+	seriesID int, results []RowResult, cands []client.ImportCandidate, eps []client.Episode,
+) ([]client.ImportCandidate, importLabels) {
+	byPath := map[string]client.ImportCandidate{}
+	for _, ic := range cands {
+		byPath[ic.Path] = ic
+	}
+	byID := map[int]client.Episode{}
+	for _, e := range eps {
+		byID[e.ID] = e
+	}
+	var labels importLabels
+	files := make([]client.ImportCandidate, 0, len(results))
+	for _, r := range results {
+		ic := byPath[r.File.Path]
+		ic.SeriesID, ic.SeasonNumber = seriesID, r.Season
+		ic.Episodes = nil
+		var line []string
+		for _, id := range r.File.EpisodeIDs {
+			e := byID[id]
+			ic.Episodes = append(ic.Episodes, client.CandidateEpisode{
+				ID: id, SeasonNumber: e.SeasonNumber, EpisodeNumber: e.EpisodeNumber,
+			})
+			code := episodeCode{e.SeasonNumber, e.EpisodeNumber}
+			labels.codes = append(labels.codes, code)
+			line = append(line, code.String())
+		}
+		labels.lines = append(labels.lines, r.File.Path+" → "+strings.Join(line, " "))
+		files = append(files, ic)
+	}
+	return files, labels
 }
 
 func (s *Scheduler) waitOver(ctx context.Context, app App, downloadID string) error {

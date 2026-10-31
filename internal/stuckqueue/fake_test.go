@@ -32,6 +32,9 @@ type fakeArr struct {
 	failCommand map[string]bool
 	nextID      int
 	gate        chan struct{}
+	commands    []map[string]any
+	commandsErr int
+	episodes    []map[string]any
 }
 
 func newFakeArr(t *testing.T) *fakeArr {
@@ -80,6 +83,14 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 			c = "[]"
 		}
 		_, _ = io.WriteString(w, c)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/command":
+		if f.commandsErr != 0 {
+			w.WriteHeader(f.commandsErr)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(f.commands)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+		_ = json.NewEncoder(w).Encode(f.episodes)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/queue/"):
 		f.record(r)
 		id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v3/queue/"))
@@ -179,4 +190,23 @@ func (f *fakeArr) hold() chan struct{} {
 	f.gate = g
 	f.mu.Unlock()
 	return g
+}
+
+func (f *fakeArr) setEpisodes(eps ...map[string]any) {
+	f.mu.Lock()
+	f.episodes = eps
+	f.mu.Unlock()
+}
+
+func (f *fakeArr) setCommands(status int, cmds ...map[string]any) {
+	f.mu.Lock()
+	f.commandsErr, f.commands = status, cmds
+	f.mu.Unlock()
+}
+
+func rawEpisode(id, season, number int, hasFile bool) map[string]any {
+	return map[string]any{
+		"id": float64(id), "seriesId": float64(1), "seasonNumber": float64(season),
+		"episodeNumber": float64(number), "hasFile": hasFile,
+	}
 }
