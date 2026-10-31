@@ -52,7 +52,7 @@ func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incid
 		Season:         target.Season,
 		Episode:        target.Episode,
 		StartedAt:      now,
-		LastStage:      "searching",
+		LastStage:      stageSearching,
 		LastProgressAt: now,
 	}
 	if setErr := s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(s.minutes(t.CheckEveryMinutes))); setErr != nil {
@@ -63,6 +63,8 @@ func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incid
 		"🔎 Searching for **%s** — we'll let you know once it's downloading.", inc.Title,
 	)))
 }
+
+const stageSearching = "searching"
 
 // arrSearchTarget is what startPendingOutcomeTracking recovers from
 // actions_log to seed a PendingOutcome.
@@ -178,6 +180,9 @@ func (s *Service) advanceDownloading(
 ) {
 	if !po.GrabNotified {
 		po.GrabNotified = true
+		if po.KeepSearching {
+			po.StartedAt, po.LastProgressAt = now, now
+		}
 		s.notifyReporters(ctx, inc, reporterCard(card.Info, fmt.Sprintf(
 			"📥 Found **%s** — downloading now. We'll let you know when it's ready.", inc.Title,
 		)))
@@ -205,12 +210,13 @@ func (s *Service) advanceDownloading(
 func (s *Service) advanceNoQueueItem(
 	ctx context.Context, inc *db.Incident, po *db.PendingOutcome, now time.Time, t Timers,
 ) {
-	po.LastStage = "searching"
+	po.LastStage = stageSearching
 	if po.KeepSearching {
 		if now.After(po.KeepSearchingUntil) {
 			s.escalatePendingOutcome(ctx, inc, po, "still no release found after an extended search", t)
 			return
 		}
+		resetKeepSearchingTrack(po, now)
 		_ = s.db.SetPendingOutcome(ctx, inc.ID, po, now.Add(s.minutes(minutesPerHour*t.KeepSearchingCheckHours)))
 		return
 	}
@@ -223,7 +229,7 @@ func (s *Service) advanceNoQueueItem(
 
 // escalatePendingOutcome hands a pending outcome to the owner. Deliberately
 // does NOT clear pending_outcome — Service.KeepSearching reuses it to re-arm
-// tracking without losing StartedAt/history — but FindDuePendingOutcomes is
+// tracking, resetting its timers and progress — but FindDuePendingOutcomes is
 // scoped to StatusVerifying, so the sweeper stops touching it the moment
 // escalateToOwner moves status to manual_test_needed.
 func (s *Service) escalatePendingOutcome(
@@ -262,6 +268,13 @@ func keepSearchingSpan(days int) string {
 	return fmt.Sprintf("%d days", days)
 }
 
+func resetKeepSearchingTrack(po *db.PendingOutcome, now time.Time) {
+	po.StartedAt, po.LastProgressAt = now, now
+	po.LastProgressPct = 0
+	po.GrabNotified = false
+	po.LastStage = stageSearching
+}
+
 // KeepSearching re-arms a pending outcome that was escalated because no
 // release was found yet, so the sweeper resumes checking (at a slower
 // cadence, see KeepSearchingCheckHours) instead of the incident
@@ -272,6 +285,7 @@ func (s *Service) KeepSearching(ctx context.Context, id string) error {
 		return fmt.Errorf("keep searching: %w", err)
 	}
 	t := s.timers(ctx)
+	resetKeepSearchingTrack(po, time.Now())
 	po.KeepSearching = true
 	po.KeepSearchingUntil = time.Now().Add(s.minutes(minutesPerDay * t.KeepSearchingDays))
 

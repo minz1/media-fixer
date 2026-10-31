@@ -664,3 +664,185 @@ func TestAdvancePendingOutcome_TransientCheckFailureStillRetries(t *testing.T) {
 			"cap must keep retrying rather than escalate", got.Status)
 	}
 }
+
+const keepSearchingTolerance = time.Minute
+
+type keepSearchingFixture struct {
+	svc      *incident.Service
+	database *db.DB
+	notif    *syncNotifier
+	inc      *db.Incident
+	obs      atomic.Pointer[agent.PendingOutcomeObservation]
+	checkErr atomic.Bool
+}
+
+func newKeepSearchingFixture(t *testing.T, status db.IncidentStatus, po *db.PendingOutcome) *keepSearchingFixture {
+	t.Helper()
+	f := &keepSearchingFixture{}
+	f.obs.Store(&agent.PendingOutcomeObservation{})
+	ag := &scriptedPendingOutcomeAgent{
+		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+			if f.checkErr.Load() {
+				return nil, errors.New("arr unreachable")
+			}
+			return f.obs.Load(), nil
+		},
+	}
+	f.svc, f.database, f.notif = newPendingOutcomeTestService(t, ag)
+	f.inc = newTrackedIncident(t, f.database, status, po)
+	if err := f.database.AddReporter(t.Context(), f.inc.ID, "alice", "discord", "discord-alice"); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func (f *keepSearchingFixture) track(t *testing.T) *db.PendingOutcome {
+	t.Helper()
+	po, err := f.database.GetPendingOutcome(t.Context(), f.inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return po
+}
+
+func (f *keepSearchingFixture) ageTrack(t *testing.T, d time.Duration) {
+	t.Helper()
+	po := f.track(t)
+	po.StartedAt = po.StartedAt.Add(-d)
+	po.LastProgressAt = po.LastProgressAt.Add(-d)
+	if err := f.database.SetPendingOutcome(t.Context(), f.inc.ID, po, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func keepSearchingTrack(startedAgo time.Duration) *db.PendingOutcome {
+	return &db.PendingOutcome{
+		MediaType:          "tv",
+		Title:              "Tracked",
+		Season:             1,
+		Episode:            1,
+		StartedAt:          time.Now().Add(-startedAgo),
+		LastProgressAt:     time.Now().Add(-startedAgo),
+		KeepSearching:      true,
+		KeepSearchingUntil: time.Now().Add(24 * time.Hour),
+	}
+}
+
+func assertNear(t *testing.T, name string, got time.Time) {
+	t.Helper()
+	if d := time.Since(got); d < -keepSearchingTolerance || d > keepSearchingTolerance {
+		t.Errorf("%s = %v, want within %v of now", name, got, keepSearchingTolerance)
+	}
+}
+
+func TestKeepSearching_ResetsTrack(t *testing.T) {
+	t.Parallel()
+	po := &db.PendingOutcome{
+		MediaType: "tv", Title: "Tracked", Season: 1, Episode: 1,
+		StartedAt:       time.Now().Add(-48 * time.Hour),
+		LastProgressAt:  time.Now().Add(-24 * time.Hour),
+		LastProgressPct: 80,
+		LastStage:       "downloading",
+		GrabNotified:    true,
+	}
+	f := newKeepSearchingFixture(t, db.StatusManualTestNeeded, po)
+
+	if err := f.svc.KeepSearching(t.Context(), f.inc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got := f.track(t)
+	assertNear(t, "StartedAt", got.StartedAt)
+	assertNear(t, "LastProgressAt", got.LastProgressAt)
+	if got.LastProgressPct != 0 || got.LastStage != "searching" || got.GrabNotified {
+		t.Errorf("track not reset: pct %v stage %q grabNotified %v",
+			got.LastProgressPct, got.LastStage, got.GrabNotified)
+	}
+}
+
+func TestKeepSearching_NoDownloadingProgressNote(t *testing.T) {
+	t.Parallel()
+	po := &db.PendingOutcome{
+		MediaType: "tv", Title: "Tracked", Season: 1, Episode: 1,
+		StartedAt:       time.Now().Add(-48 * time.Hour),
+		LastProgressAt:  time.Now().Add(time.Minute),
+		LastProgressPct: 80,
+		LastStage:       "downloading",
+		GrabNotified:    true,
+	}
+	f := newKeepSearchingFixture(t, db.StatusManualTestNeeded, po)
+
+	if err := f.svc.KeepSearching(t.Context(), f.inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.AdvanceReporterProgress(t.Context(), time.Now().Add(61*time.Minute))
+
+	f.notif.mu.Lock()
+	defer f.notif.mu.Unlock()
+	for _, m := range f.notif.msgs {
+		if strings.Contains(m, "downloading") {
+			t.Errorf("reporter told about a download that is not running: %q", m)
+		}
+	}
+}
+
+func TestKeepSearching_LateReleaseGetsFullBudget(t *testing.T) {
+	t.Parallel()
+	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(72*time.Hour))
+	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 5})
+
+	f.svc.AdvancePendingOutcomes(t.Context())
+
+	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+		t.Fatalf("status = %q, want verifying: a late release must not escalate on first sighting", got)
+	}
+	if dm := waitForUserMsg(t, f.notif); !strings.Contains(dm, "Found") {
+		t.Errorf("reporter DM = %q, want the Found DM", dm)
+	}
+	got := f.track(t)
+	assertNear(t, "StartedAt", got.StartedAt)
+	assertNear(t, "LastProgressAt", got.LastProgressAt)
+}
+
+func TestKeepSearching_CheckErrorMeasuredFromLastCheck(t *testing.T) {
+	t.Parallel()
+	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(13*time.Hour))
+
+	f.svc.AdvancePendingOutcomes(t.Context())
+	assertNear(t, "StartedAt after an empty check", f.track(t).StartedAt)
+
+	f.ageTrack(t, time.Hour)
+	f.checkErr.Store(true)
+	f.svc.AdvancePendingOutcomes(t.Context())
+
+	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+		t.Errorf("status = %q, want verifying: the cap counts from the last successful check", got)
+	}
+}
+
+func TestKeepSearching_SecondDownloadGetsFreshBudget(t *testing.T) {
+	t.Parallel()
+	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(time.Minute))
+
+	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 80})
+	f.svc.AdvancePendingOutcomes(t.Context())
+	if dm := waitForUserMsg(t, f.notif); !strings.Contains(dm, "Found") {
+		t.Fatalf("first DM = %q, want Found", dm)
+	}
+
+	f.obs.Store(&agent.PendingOutcomeObservation{})
+	f.ageTrack(t, 0)
+	f.svc.AdvancePendingOutcomes(t.Context())
+	f.ageTrack(t, 2*time.Hour)
+
+	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 5})
+	f.svc.AdvancePendingOutcomes(t.Context())
+
+	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+		t.Fatalf("status = %q, want verifying: the second download is a new budget", got)
+	}
+	if dm := waitForUserMsg(t, f.notif); !strings.Contains(dm, "Found") {
+		t.Errorf("second DM = %q, want a second Found DM", dm)
+	}
+	assertNear(t, "LastProgressAt", f.track(t).LastProgressAt)
+}
