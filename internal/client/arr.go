@@ -334,7 +334,7 @@ func (c *ArrClient) DeleteMovieFile(ctx context.Context, fileID int) error {
 // grab (as opposed to import, failure, or deletion events).
 const grabEventType = "grabbed"
 
-const failedEventType = "downloadFailed"
+const FailedEventType = "downloadFailed"
 
 // SeriesGrabHistory returns grab events for a series, optionally filtered by
 // season (pass a negative season to fetch every season).

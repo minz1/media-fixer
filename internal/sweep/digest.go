@@ -91,11 +91,11 @@ func (s *Scheduler) digest(set Settings, now time.Time) error {
 		keys[i] = t.Target
 	}
 	slices.Sort(keys)
-	if slices.Equal(keys, prev.Stuck) {
-		return nil
-	}
-	sendErr := s.r.Notify(s.base, digestCard(stuck))
 	next := digestState{SentAt: now, Stuck: keys}
+	var sendErr error
+	if !slices.Equal(keys, prev.Stuck) {
+		sendErr = s.r.Notify(s.base, digestCard(stuck))
+	}
 	if sendErr != nil && !errors.Is(sendErr, card.ErrUntracked) {
 		next.Stuck = prev.Stuck
 	} else {

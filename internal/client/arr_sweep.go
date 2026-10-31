@@ -104,7 +104,7 @@ func (c *ArrClient) HistorySince(ctx context.Context, since time.Time) ([]Histor
 func (c *ArrClient) FailuresSince(ctx context.Context, since time.Time) ([]HistoryRecord, error) {
 	return c.historySince(ctx, url.Values{
 		"date":              {since.UTC().Format(time.RFC3339)},
-		"eventType":         {failedEventType},
+		"eventType":         {FailedEventType},
 		paramIncludeEpisode: {queryTrue},
 	})
 }

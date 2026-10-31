@@ -440,3 +440,41 @@ func TestGetSweepRun(t *testing.T) {
 		t.Fatalf("run = %+v", r)
 	}
 }
+
+func TestDB_LiveBudgetsCountSpendInWindow(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	now := sweepT0()
+	one := 1
+	id, err := d.CreateSweepRun(ctx, "schedule", false, now.Add(-25*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range []db.SweepItem{
+		{ReleaseTitle: "Old.S01", Result: "imported", LookupResults: &one, At: now.Add(-24*time.Hour - time.Minute)},
+		{ReleaseTitle: "New.S01", Result: "imported", LookupResults: &one, At: now.Add(-23 * time.Hour)},
+		{Result: "no_pack", LookupResults: &one, At: now.Add(-23 * time.Hour)},
+	} {
+		it.RunID, it.Target, it.SeriesID, it.SeriesTitle = id, "season", 1, "Show"
+		if err = d.AddSweepItem(ctx, &it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = d.FinishSweepRun(ctx, id, "done", "", db.SweepCounts{Searched: 4}, now.Add(-23*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	since := now.Add(-24 * time.Hour)
+	grabs, gerr := d.LiveGrabsSince(ctx, since)
+	if gerr != nil || grabs != 1 {
+		t.Errorf("LiveGrabsSince = %d, %v; want 1 (the grab 23 h ago in a run started 25 h ago)", grabs, gerr)
+	}
+	lookups, lerr := d.LiveLookupsSince(ctx, since)
+	if lerr != nil || lookups != 2 {
+		t.Errorf("LiveLookupsSince = %d, %v; want 2", lookups, lerr)
+	}
+	searched, _, serr := d.LiveSearchesSince(ctx, since)
+	if serr != nil || searched != 4 {
+		t.Errorf("LiveSearchesSince = %d, %v; want 4 (the run finished 23 h ago)", searched, serr)
+	}
+}

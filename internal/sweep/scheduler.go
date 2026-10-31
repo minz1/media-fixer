@@ -140,7 +140,7 @@ func Remaining(set Settings, u Usage) Settings {
 	set.MaxLookups = max(0, set.MaxLookups-u.Lookups)
 	set.MaxSearches = max(0, set.MaxSearches-u.Searches)
 	if u.Crashed {
-		set.MaxSearches = 0
+		set.MaxLookups, set.MaxSearches = 0, 0
 	}
 	return set
 }

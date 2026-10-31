@@ -119,7 +119,10 @@ func TestScheduler_DigestOncePerDay(t *testing.T) {
 	}
 	h.seedStuck(t, "s:1:2", 2)
 	h.tick(sch, at(1, 9, 1))
-	h.tick(sch, at(1, 9, 2))
+	if n := len(h.digests()); n != 1 {
+		t.Fatalf("digests later on a day already checked = %d, want 1", n)
+	}
+	h.tick(sch, at(2, 9, 0))
 	if n := len(h.digests()); n != 2 {
 		t.Fatalf("digests after a new stuck season = %d, want 2", n)
 	}

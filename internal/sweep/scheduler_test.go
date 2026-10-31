@@ -671,8 +671,9 @@ func TestScheduler_CrashedRunUsesSearchBudget(t *testing.T) {
 	h, _ := scheduledAt(t, t0().Add(-48*time.Hour), s)
 	interruptedRun(t, h, budgetNow().Add(-3*time.Hour))
 	c := tickBudget(t, h)
-	if c.MaxSearches != 0 || c.MaxGrabs != s.MaxGrabs {
-		t.Errorf("limits = %d/%d, want grabs %d and searches 0", c.MaxGrabs, c.MaxSearches, s.MaxGrabs)
+	if c.MaxSearches != 0 || c.MaxLookups != 0 || c.MaxGrabs != s.MaxGrabs {
+		t.Errorf("limits = %d/%d/%d, want grabs %d, lookups 0 and searches 0",
+			c.MaxGrabs, c.MaxLookups, c.MaxSearches, s.MaxGrabs)
 	}
 }
 

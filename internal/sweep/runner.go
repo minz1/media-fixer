@@ -420,12 +420,20 @@ func (x *run) lookup(
 	if err == nil {
 		return rels, true, nil
 	}
-	if ctx.Err() != nil {
-		return nil, false, err
+	if ctx.Err() == nil {
+		x.logger().WarnContext(ctx, "sweep lookup failed", "target", item.Target, "err", err)
+		err = nil
 	}
-	x.logger().WarnContext(ctx, "sweep lookup failed", "target", item.Target, "err", err)
-	item.Result = resultFailed
-	return nil, false, x.addItem(ctx, item)
+	return nil, false, x.keepLookup(ctx, *item, err)
+}
+
+// keepLookup stores a lookup that led to no grab so the 24 h lookup budget still counts it.
+func (x *run) keepLookup(ctx context.Context, item db.SweepItem, err error) error {
+	if item.LookupResults == nil {
+		return err
+	}
+	item.ReleaseTitle, item.Indexer, item.Result = "", "", resultFailed
+	return errors.Join(err, x.addItem(context.WithoutCancel(ctx), &item))
 }
 
 func (x *run) episodePass(ctx context.Context, series []client.Series) error {
@@ -688,12 +696,12 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 	if !x.lastGrab.IsZero() {
 		if wait := grabGap - x.Now().Sub(x.lastGrab); wait > 0 {
 			if err := x.Sleep(ctx, wait); err != nil {
-				return false, err
+				return false, x.keepLookup(ctx, item, err)
 			}
 		}
 	}
 	if err := x.guard(ctx); err != nil {
-		return false, err
+		return false, x.keepLookup(ctx, item, err)
 	}
 	item.Result = resultGrabbing
 	if err := x.addItem(ctx, &item); err != nil {

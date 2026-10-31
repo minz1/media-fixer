@@ -8,10 +8,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 )
 
-const (
-	burstWindow = 7 * day
-	failedEvent = "downloadFailed"
-)
+const burstWindow = 7 * day
 
 func Bursts(
 	recs []client.HistoryRecord, targets map[string]db.SweepTarget, now time.Time, threshold int,
@@ -19,7 +16,7 @@ func Bursts(
 	floor := now.Add(-burstWindow)
 	downloads := map[string]map[string]bool{}
 	for _, r := range recs {
-		if r.EventType != failedEvent || r.Episode == nil {
+		if r.EventType != client.FailedEventType || r.Episode == nil {
 			continue
 		}
 		key := seasonTargetKey(r.SeriesID, r.Episode.SeasonNumber)

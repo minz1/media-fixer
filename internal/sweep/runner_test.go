@@ -718,3 +718,75 @@ func TestRun_StartSendFailsSummaryAsNewCard(t *testing.T) {
 		}
 	}
 }
+
+func twoGrabbableSeries(h *harness) {
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12, 13)...)
+	h.fake.addSeries(2, "Other", missingEps(2, 1, 31, 32)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
+	h.fake.setReleases(seasonKey(2, 1), seasonRel("g2", "Other S01", "Zilean", 10))
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "archive", after: 1})
+	h.fake.plan("g2", grabPlan{grabbed: true, outcome: "archive", after: 1})
+}
+
+func onSecondLookup(h *harness, f func()) {
+	n := 0
+	h.fake.beforeLookup = func() {
+		if n++; n == 2 {
+			f()
+		}
+	}
+}
+
+func assertLookupsStored(t *testing.T, h *harness, run db.SweepRun) {
+	t.Helper()
+	ctx := context.Background()
+	stored, err := h.db.LiveLookupsSince(ctx, t0().Add(-time.Hour))
+	if err != nil || run.Counts.Lookups != 2 || stored != 2 {
+		t.Errorf("lookups: counted %d, stored %d (%v); want 2 and 2", run.Counts.Lookups, stored, err)
+	}
+	grabs, gerr := h.db.LiveGrabsSince(ctx, t0().Add(-time.Hour))
+	if gerr != nil || grabs != 1 {
+		t.Errorf("stored grabs = %d, %v; want 1", grabs, gerr)
+	}
+}
+
+func TestRun_PauseInGrabGapKeepsLookup(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	twoGrabbableSeries(h)
+	onSecondLookup(h, func() { h.setPaused(t, true) })
+	run := h.run(t, false, settings())
+	if run.Status != "paused" || slices.Contains(h.fake.writeLog(), "POST /release g2") {
+		t.Fatalf("status %s writes %v; want paused before g2", run.Status, h.fake.writeLog())
+	}
+	assertLookupsStored(t, h, run)
+}
+
+func TestRun_CancelInGrabGapKeepsLookup(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	twoGrabbableSeries(h)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	armed := false
+	onSecondLookup(h, func() { armed = true })
+	sleep := h.runner.Sleep
+	h.runner.Sleep = func(c context.Context, d time.Duration) error {
+		if armed {
+			cancel()
+		}
+		return sleep(c, d)
+	}
+	id, err := h.runner.Run(ctx, "manual", false, settings())
+	if err == nil {
+		t.Fatal("Run after cancel returned no error")
+	}
+	run, err := h.db.GetSweepRun(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "interrupted" || slices.Contains(h.fake.writeLog(), "POST /release g2") {
+		t.Fatalf("status %s writes %v; want interrupted before g2", run.Status, h.fake.writeLog())
+	}
+	assertLookupsStored(t, h, run)
+}

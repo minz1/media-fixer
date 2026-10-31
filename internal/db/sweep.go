@@ -312,7 +312,7 @@ func (d *DB) LiveGrabsSince(ctx context.Context, since time.Time) (int, error) {
 	var n int
 	err := d.read.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
-		 WHERE r.dry = 0 AND r.started_at >= ? AND COALESCE(i.release_title, '') != ''
+		 WHERE r.dry = 0 AND i.at >= ? AND COALESCE(i.release_title, '') != ''
 		   AND i.result IN ('grabbing', 'imported', 'failed', 'refused', 'archive', 'downloading')`,
 		since).Scan(&n)
 	return n, err
@@ -322,7 +322,7 @@ func (d *DB) LiveLookupsSince(ctx context.Context, since time.Time) (int, error)
 	var n int
 	err := d.read.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
-		 WHERE r.dry = 0 AND r.started_at >= ? AND i.lookup_results IS NOT NULL`, since).Scan(&n)
+		 WHERE r.dry = 0 AND i.at >= ? AND i.lookup_results IS NOT NULL`, since).Scan(&n)
 	return n, err
 }
 
@@ -331,6 +331,6 @@ func (d *DB) LiveSearchesSince(ctx context.Context, since time.Time) (int, bool,
 	err := d.read.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(json_extract(counts, '$.searched')), 0),
 		        COALESCE(SUM(counts IS NULL AND status != 'running'), 0)
-		 FROM sweep_runs WHERE dry = 0 AND started_at >= ?`, since).Scan(&searched, &crashed)
+		 FROM sweep_runs WHERE dry = 0 AND COALESCE(finished_at, started_at) >= ?`, since).Scan(&searched, &crashed)
 	return searched, crashed > 0, err
 }

@@ -93,7 +93,7 @@ func Outcome(hist []client.HistoryRecord, downloadID string) string {
 		switch h.EventType {
 		case "downloadFolderImported":
 			return "imported"
-		case "downloadFailed":
+		case client.FailedEventType:
 			out = "failed"
 		}
 	}
