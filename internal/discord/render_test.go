@@ -119,7 +119,7 @@ func TestRender_CountMatchesComponents(t *testing.T) {
 		Buttons: []card.Button{{Label: "Resolve", ID: "mf1:inc:resolve:x"}},
 		Path:    "/incidents/x",
 	}
-	stuck := card.Card{Title: "📦 Stuck", Footer: "…and 2 more", Path: "/maintenance"}
+	stuck := card.Card{Title: "Stuck", Footer: "…and 2 more", Path: "/maintenance"}
 	for range 6 {
 		stuck.Items = append(stuck.Items, card.Item{Text: "item", Buttons: three})
 	}

@@ -244,7 +244,7 @@ func TestRun_Cap(t *testing.T) {
 	if n := len(deletes(e.sonarr.writesCopy())); n != 20 || !res.CapHit {
 		t.Fatalf("deletes = %d, capHit = %v", n, res.CapHit)
 	}
-	if dms := e.dmsCopy(); len(dms) != 1 || dms[0] != "📦 Stuck-queue sweep: Stopped after clearing 20 this run." {
+	if dms := e.dmsCopy(); len(dms) != 1 || dms[0] != "Stuck-queue sweep: Stopped after clearing 20 this run." {
 		t.Fatalf("dms = %q", dms)
 	}
 }
@@ -485,7 +485,7 @@ func TestRun_DMText(t *testing.T) {
 		t.Fatalf("dms = %q", dms)
 	}
 	want := strings.Join([]string{
-		"📦 Stuck downloads need you (Maintenance → Stuck queue):",
+		"Stuck downloads need you",
 		"• Sonarr — NOVA S09E01 — episode missing (S01E01) — blocked by: " + sample,
 		"• Sonarr — Pack — episode missing (S01E02) — blocked by: " + sample,
 		"• Sonarr — Unknown Show — can't tell if it has a file — blocked by: " + sample,

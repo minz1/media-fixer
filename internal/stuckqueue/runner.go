@@ -22,7 +22,7 @@ const (
 
 const (
 	maxAutoClears = 20
-	dmHeader      = "📦 Stuck downloads need you (Maintenance → Stuck queue):"
+	dmHeader      = "Stuck downloads need you"
 	noReason      = "no reason given"
 )
 

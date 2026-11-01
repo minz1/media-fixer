@@ -12,7 +12,7 @@ func stuckCard(items []Item, capHit bool) card.Card {
 	capLine := fmt.Sprintf("Stopped after clearing %d this run.", maxAutoClears)
 	c := card.Card{Tone: card.Warn, Path: maintenancePath}
 	if len(items) == 0 {
-		c.Title = "📦 Stuck-queue sweep: " + capLine
+		c.Title = "Stuck-queue sweep: " + capLine
 		return c
 	}
 	c.Title = dmHeader

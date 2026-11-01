@@ -58,7 +58,7 @@ func TestStuckCard_ComponentCap(t *testing.T) {
 func TestStuckCard_ZeroItemsCap(t *testing.T) {
 	t.Parallel()
 	c := stuckqueue.StuckCardForTest(nil, true)
-	if c.Plain() != "📦 Stuck-queue sweep: Stopped after clearing 20 this run." || c.Body != "" || c.Footer != "" {
+	if c.Plain() != "Stuck-queue sweep: Stopped after clearing 20 this run." || c.Body != "" || c.Footer != "" {
 		t.Errorf("card = %+v", c)
 	}
 }
