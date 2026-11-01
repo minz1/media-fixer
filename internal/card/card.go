@@ -93,23 +93,35 @@ type (
 	Renderer func(ctx context.Context, subject string) (Update, bool, error)
 )
 
+// Components predicts the built component count: exact with a public URL, an upper bound without.
 func (c Card) Components() int {
 	n := 1
-	for _, s := range []string{c.Title, c.Body, c.Footer} {
-		if s != "" {
-			n++
-		}
+	header := 0
+	switch {
+	case c.Title != "" && c.Path != "":
+		header += 3
+	case c.Title != "":
+		header++
+	}
+	if c.Body != "" {
+		header++
 	}
 	if len(c.Fields) > 0 {
+		header++
+	}
+	if c.Footer != "" {
 		n++
 	}
 	for _, it := range c.Items {
-		n++
-		n += len(it.Buttons) + (len(it.Buttons)+RowSize-1)/RowSize
+		n += 1 + len(it.Buttons) + (len(it.Buttons)+RowSize-1)/RowSize
 	}
+	n += max(len(c.Items)-1, 0)
 	buttons := max(len(c.Buttons), len(c.Verbs))
-	if c.Path != "" {
+	if c.Title == "" && c.Path != "" {
 		buttons++
 	}
-	return n + buttons + (buttons+RowSize-1)/RowSize
+	if header > 0 && (len(c.Items) > 0 || buttons > 0) {
+		n++
+	}
+	return n + header + buttons + (buttons+RowSize-1)/RowSize
 }

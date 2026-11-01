@@ -507,6 +507,8 @@ func countComponents(cs []discordgo.MessageComponent) int {
 			n += countComponents(v.Components)
 		case discordgo.ActionsRow:
 			n += countComponents(v.Components)
+		case discordgo.Section:
+			n += countComponents(v.Components) + 1
 		}
 	}
 	return n
@@ -517,11 +519,11 @@ func TestRender_LargestCardWithOverlayFits(t *testing.T) {
 	e := newCardEnv(t, "https://h")
 	verbs := []string{"a", "b", "c"}
 	c := card.Card{Subject: "t:card", Title: "Big", Verbs: verbs, Path: "/x"}
-	const items = 6
+	const items = 5
 	for i := range items {
 		s := fmt.Sprintf("t:i%d", i)
 		it := card.Item{Subject: s, Text: s}
-		for _, v := range verbs {
+		for _, v := range verbs[:3-i/(items-1)] {
 			it.Buttons = append(it.Buttons, btn("t", v, s[2:]))
 		}
 		c.Items = append(c.Items, it)

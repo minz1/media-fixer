@@ -24,53 +24,117 @@ type overlay struct {
 	UpdateHash string
 }
 
+type builder struct {
+	kids      []discordgo.MessageComponent
+	publicURL string
+}
+
+func (b *builder) text(s string) {
+	if s != "" {
+		b.kids = append(b.kids, discordgo.TextDisplay{Content: s})
+	}
+}
+
+func (b *builder) section(s string, accessory discordgo.Button) {
+	b.kids = append(b.kids, discordgo.Section{
+		Components: []discordgo.MessageComponent{discordgo.TextDisplay{Content: s}},
+		Accessory:  accessory,
+	})
+}
+
+func (b *builder) separator(divider bool, size discordgo.SeparatorSpacingSize) {
+	b.kids = append(b.kids, discordgo.Separator{Divider: &divider, Spacing: &size})
+}
+
 func render(c card.Card, u map[string]card.Update, ov overlay, publicURL string) []discordgo.MessageComponent {
-	var kids []discordgo.MessageComponent
-	text := func(s string) {
-		if s != "" {
-			kids = append(kids, discordgo.TextDisplay{Content: s})
-		}
-	}
-	if c.Title != "" {
-		text("### " + c.Title)
-	}
-	text(c.Body)
-	text(fieldLines(c.Fields))
-	for _, it := range c.Items {
-		itemText, itemButtons := itemView(it, u)
-		text(itemText)
-		kids = append(kids, rows(buttonComponents(itemButtons, publicURL))...)
-	}
+	b := &builder{publicURL: publicURL}
 	cardButtons, tone := c.Buttons, c.Tone
-	if up, ok := u[c.Subject]; ok && c.Subject != "" {
+	up, live := u[c.Subject]
+	live = live && c.Subject != ""
+	if live {
 		cardButtons = up.Buttons
 		if up.Tone != nil {
 			tone = *up.Tone
 		}
-		if up.Status != "" {
-			text("-# " + up.Status)
+	}
+	link := c.Path != "" && publicURL != ""
+	openButton := discordgo.Button{Label: "Open", Style: discordgo.LinkButton, URL: publicURL + c.Path}
+	headerLink := link && c.Title != ""
+	title := toneEmoji(tone) + c.Title
+	if c.Title != "" {
+		title = "### " + title
+		if headerLink {
+			b.section(title, openButton)
+		} else {
+			b.text(title)
 		}
-		text(fieldLines(up.Sections))
 	}
-	if ov.Line != "" {
-		text("-# " + ov.Line)
+	b.text(c.Body)
+	b.text(fieldLines(c.Fields))
+	if len(b.kids) > 0 && (len(c.Items) > 0 || len(cardButtons) > 0 || len(ov.Confirm) > 0 || (link && !headerLink)) {
+		b.separator(true, discordgo.SeparatorSpacingSizeSmall)
 	}
+	b.items(c.Items, u)
+	if live {
+		b.text(statusLine(up.Status))
+		b.text(fieldLines(up.Sections))
+	}
+	b.text(statusLine(ov.Line))
 	if len(ov.Confirm) > 0 {
 		cardButtons = ov.Confirm
 	}
-	if c.Footer != "" {
-		text("-# " + c.Footer)
-	}
+	b.text(statusLine(c.Footer))
 	cardComps := buttonComponents(cardButtons, publicURL)
-	if c.Path != "" && publicURL != "" {
-		cardComps = append(
-			cardComps,
-			discordgo.Button{Label: "Dashboard", Style: discordgo.LinkButton, URL: publicURL + c.Path},
-		)
+	if link && !headerLink {
+		cardComps = append(cardComps, openButton)
 	}
-	kids = append(kids, rows(cardComps)...)
+	b.kids = append(b.kids, rows(cardComps)...)
 	accent := accentColor(tone)
-	return []discordgo.MessageComponent{discordgo.Container{AccentColor: &accent, Components: kids}}
+	return []discordgo.MessageComponent{discordgo.Container{AccentColor: &accent, Components: b.kids}}
+}
+
+func (b *builder) items(items []card.Item, u map[string]card.Update) {
+	for i, it := range items {
+		if i > 0 {
+			b.separator(false, discordgo.SeparatorSpacingSizeSmall)
+		}
+		itemText, itemButtons := itemView(it, u)
+		comps := buttonComponents(itemButtons, b.publicURL)
+		if btn, ok := singleButton(comps); ok && itemText != "" {
+			b.section(itemText, btn)
+			continue
+		}
+		b.text(itemText)
+		b.kids = append(b.kids, rows(comps)...)
+	}
+}
+
+func singleButton(comps []discordgo.MessageComponent) (discordgo.Button, bool) {
+	if len(comps) != 1 {
+		return discordgo.Button{}, false
+	}
+	btn, ok := comps[0].(discordgo.Button)
+	return btn, ok
+}
+
+func statusLine(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "-# " + s
+}
+
+func toneEmoji(t card.Tone) string {
+	switch t {
+	case card.Success:
+		return "✅ "
+	case card.Warn:
+		return "⚠️ "
+	case card.Alert:
+		return "🚨 "
+	case card.Info:
+	}
+	return ""
 }
 
 func itemView(it card.Item, u map[string]card.Update) (string, []card.Button) {
@@ -87,7 +151,7 @@ func itemView(it card.Item, u map[string]card.Update) (string, []card.Button) {
 func fieldLines(fs []card.Field) string {
 	lines := make([]string, 0, len(fs))
 	for _, f := range fs {
-		lines = append(lines, "**"+f.Name+":** "+f.Value)
+		lines = append(lines, "**"+f.Name+"** · "+f.Value)
 	}
 	return strings.Join(lines, "\n")
 }

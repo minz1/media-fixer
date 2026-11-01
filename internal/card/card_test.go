@@ -155,13 +155,37 @@ func TestComponents(t *testing.T) {
 		Buttons: []card.Button{{Label: "Resolve"}},
 		Path:    "/incidents/x",
 	}
-	if got := c.Components(); got != 16 {
-		t.Errorf("Components() = %d, want 16", got)
+	if got := c.Components(); got != 19 {
+		t.Errorf("Components() = %d, want 19", got)
 	}
 	c.Verbs = []string{"resolve", "rerun", "keep", "unlock", "preview", "refresh"}
 	c.Fields = []card.Field{{Name: "N", Value: "v"}}
 	c.Footer = "f"
-	if got := c.Components(); got != 24 {
-		t.Errorf("Components() with verbs = %d, want 24", got)
+	if got := c.Components(); got != 27 {
+		t.Errorf("Components() with verbs = %d, want 27", got)
+	}
+}
+
+func TestComponents_Layout(t *testing.T) {
+	t.Parallel()
+	one := []card.Button{{Label: "a"}}
+	for _, tc := range []struct {
+		name string
+		c    card.Card
+		want int
+	}{
+		{"empty", card.Card{}, 1},
+		{"title only", card.Card{Title: "T"}, 2},
+		{"title with path is section, text, button", card.Card{Title: "T", Path: "/x"}, 4},
+		{"no title: link joins the bottom row", card.Card{Body: "B", Path: "/x"}, 1 + 1 + 1 + 2},
+		{"header and buttons get a divider", card.Card{Title: "T", Buttons: one}, 1 + 1 + 1 + 2},
+		{"items get gaps and one divider", card.Card{Body: "B", Items: []card.Item{
+			{Text: "x", Buttons: one}, {Text: "y"},
+		}}, 1 + 1 + 1 + 3 + 1 + 1},
+		{"footer has no divider", card.Card{Footer: "f"}, 2},
+	} {
+		if got := tc.c.Components(); got != tc.want {
+			t.Errorf("%s: Components() = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }

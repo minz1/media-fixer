@@ -60,3 +60,9 @@ func SetClockForTest(b *Bot, now func() time.Time) { b.now = now }
 func RenderUpdatesForTest(c card.Card, u map[string]card.Update) []discordgo.MessageComponent {
 	return render(c, u, overlay{}, "")
 }
+
+func RenderOverlayForTest(
+	c card.Card, u map[string]card.Update, line string, confirm []card.Button, publicURL string,
+) []discordgo.MessageComponent {
+	return render(c, u, overlay{Line: line, Confirm: confirm}, publicURL)
+}

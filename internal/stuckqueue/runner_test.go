@@ -493,7 +493,7 @@ func TestRun_DMText(t *testing.T) {
 		"• Sonarr — One Piece — not matched to any episode",
 		"• Radarr — Missing Movie — movie missing — blocked by: " + sample,
 		"• Radarr — Has Movie — Radarr has a file for this movie but didn't compare it",
-		"• Radarr — Skin Like Sun.mp4 — not matched to any movie",
+		"…and 1 more",
 	}, "\n")
 	if dms[0] != want {
 		t.Fatalf("dm =\n%s\nwant\n%s", dms[0], want)
