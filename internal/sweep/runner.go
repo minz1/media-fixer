@@ -552,8 +552,8 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 	item := b.item
 	item.Episodes = numbers(eps, b.anime)
 	x.report("episode pass", item.SeriesTitle+" "+item.Episodes)
-	x.c.Searched += len(ids)
 	if x.dry {
+		x.c.Searched += len(ids)
 		item.Result = resultWouldSearch
 		return x.addItem(ctx, &item)
 	}
@@ -567,6 +567,7 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 	if err := x.guard(ctx); err != nil {
 		return err
 	}
+	x.c.Searched += len(ids)
 	item.Result = resultSearched
 	if err := x.addItem(ctx, &item); err != nil {
 		return err

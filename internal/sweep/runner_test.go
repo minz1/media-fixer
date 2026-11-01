@@ -544,6 +544,39 @@ func TestRun_MaxSearchesCountsEpisodes(t *testing.T) {
 	}
 }
 
+func TestRun_CancelInSearchGapCountsOnlySentSearches(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 1, 2, 3)...)
+	h.fake.addSeries(2, "Other", missingEps(2, 1, 4, 5)...)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sleep := h.runner.Sleep
+	h.runner.Sleep = func(c context.Context, d time.Duration) error {
+		if d > 15*time.Second && len(h.fake.commands()) > 0 {
+			cancel()
+		}
+		return sleep(c, d)
+	}
+	s := settings()
+	s.MaxSearches = 20
+	id, err := h.runner.Run(ctx, "manual", false, s)
+	if err == nil {
+		t.Fatal("Run after cancel returned no error")
+	}
+	run, err := h.db.GetSweepRun(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := 0
+	for _, c := range h.fake.commands() {
+		sent += len(c)
+	}
+	if sent == 0 || run.Counts.Searched != sent {
+		t.Errorf("searched %d, ids sent %d; want equal and > 0", run.Counts.Searched, sent)
+	}
+}
+
 func TestRun_LeftoverCleanupAllMatch(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

@@ -371,6 +371,7 @@ func (d *DB) LiveSearchesSince(ctx context.Context, since time.Time) (int, bool,
 	err := d.read.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(json_extract(counts, '$.searched')), 0),
 		        COALESCE(SUM(counts IS NULL AND status != 'running'), 0)
-		 FROM sweep_runs WHERE dry = 0 AND COALESCE(finished_at, started_at) >= ?`, since).Scan(&searched, &crashed)
+		 FROM sweep_runs WHERE dry = 0 AND COALESCE(finished_at,
+		   (SELECT MAX(at) FROM sweep_items WHERE run_id = sweep_runs.id), started_at) >= ?`, since).Scan(&searched, &crashed)
 	return searched, crashed > 0, err
 }

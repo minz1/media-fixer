@@ -415,6 +415,27 @@ func TestDB_LiveSearchesSince_RunningNotCrashed(t *testing.T) {
 	}
 }
 
+func TestDB_LiveSearchesSince_CrashCountsFromLastItem(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	id, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(-25*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = d.AddSweepItem(ctx, &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+		Result: "searched", At: sweepT0().Add(-23 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.InterruptRunningSweeps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, crashed, err := d.LiveSearchesSince(ctx, sweepT0().Add(-24*time.Hour))
+	if err != nil || !crashed {
+		t.Errorf("run started 25 h ago, last item 23 h ago, crashed: crashed = %v, %v; want true", crashed, err)
+	}
+}
+
 func TestGetSweepRun(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
