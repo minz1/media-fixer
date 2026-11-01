@@ -136,6 +136,14 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		}
 	}
 
+	nextStep := 1
+	for _, t := range turns {
+		if t.Round >= nextStep {
+			nextStep = t.Round + 1
+		}
+	}
+	shown, hidden := condenseTurns(turns, full)
+
 	timers, _ := incident.LoadTimers(ctx, s.db)
 
 	return map[string]any{
@@ -144,7 +152,10 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		"Actions":           actions,
 		"PendingOutcome":    pendingOutcome,
 		"Finding":           diagnosticResultOrNil(inc.Finding),
-		"Transcript":        turns,
+		"Transcript":        shown,
+		"EarlierSteps":      hidden,
+		"NextStep":          nextStep,
+		"Live":              incidentLive(inc.Status),
 		"Full":              full,
 		tplKeyPaused:        s.isPaused(ctx),
 		tplKeyBaseURL:       s.baseURL,

@@ -623,8 +623,8 @@ func TestSweepCard_IntervalAndUsage(t *testing.T) {
 	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
 	next := `title="` + env.sch.NextRun(time.Now()).UTC().Format("2006-01-02 15:04") + ` UTC"`
 	mustContain(t, body, `Enabled`, "Next run:", next)
-	if got := strings.Count(body, "· 3 used"); got != 3 {
-		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "· 3 used", got)
+	if got := strings.Count(body, ">3 used<"); got != 3 {
+		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", ">3 used<", got)
 	}
 	if strings.Contains(body, `name="weekday"`) || strings.Contains(body, "Weekly") {
 		t.Errorf("weekday select or weekly wording still rendered:\n%s", body)

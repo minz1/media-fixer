@@ -10,6 +10,8 @@ import (
 	"github.com/minz1/mediafixer/internal/livecheck"
 
 	"github.com/minz1/mediafixer/internal/stuckqueue"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // SeerrIssueTypeToWhat exports the internal mapping for use in package server_test.
@@ -49,3 +51,11 @@ func SweepTone(s string) string             { return sweepTone(s) }
 func RelTime(now, t time.Time) string { return relTime(now, t) }
 
 func ParseRows(vals []string) ([]stuckqueue.MappedFile, error) { return parseRows(vals) }
+
+func SummarizeArgs(raw string) string { return summarizeArgs(raw) }
+
+func FirstLine(s string, limit int) string { return firstLine(s, limit) }
+
+func CondensedTurnsForTest(msgs []openai.ChatCompletionMessage, full bool) ([]transcriptTurn, int) {
+	return condenseTurns(buildTranscriptTurns(msgs), full)
+}

@@ -222,6 +222,31 @@ def interactions(br):
     pg.close()
 
 
+def live_steps(br):
+    pg = br.new_page(viewport={"width": 390, "height": 900})
+    pg.goto(BASE + PAGES["transcript-investigating"], wait_until="load")
+    steps = pg.locator("#incident-transcript [data-step]")
+    before = steps.count()
+    check(before >= 3, f"investigating transcript has {before} steps")
+    check(pg.locator(".tl-live").count() == 1, "investigating transcript lacks the working indicator")
+    check(pg.locator(".tl-new").count() == 0, "steps highlighted on first load")
+    pg.evaluate(
+        """() => {
+          const old = document.getElementById("incident-transcript");
+          const next = old.cloneNode(true);
+          const last = next.querySelector("[data-step='2']");
+          const add = last.cloneNode(true);
+          add.dataset.step = "3";
+          last.after(add);
+          old.replaceWith(next);
+        }"""
+    )
+    pg.wait_for_timeout(200)
+    check(steps.count() == before + 1, "swap did not add a step")
+    check(pg.locator(".tl-new").count() == 1, "new step not highlighted after swap")
+    pg.close()
+
+
 def main():
     with sync_playwright() as pw:
         br = pw.chromium.launch()
@@ -248,6 +273,7 @@ def main():
                 pg.close()
         check(not problems, "layout:\n" + "\n".join(problems))
         interactions(br)
+        live_steps(br)
         br.close()
     print("statuses:", sorted(SEED["statuses"].items()))
     print("walk ok")

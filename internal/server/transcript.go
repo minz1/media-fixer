@@ -1,11 +1,16 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"sort"
+	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 // transcriptToolCall pairs one tool call with its result, for rendering a
@@ -17,6 +22,8 @@ type transcriptToolCall struct {
 	Name      string
 	Arguments string
 	Result    string
+	ArgsLine  string
+	ResultTop string
 }
 
 // transcriptTurn is one renderable unit of a diagnostic conversation: the
@@ -31,6 +38,7 @@ type transcriptTurn struct {
 	Round   int
 	Content string
 	Tools   []transcriptToolCall
+	Final   bool
 }
 
 // buildTranscriptTurns groups a flat conversation (as journal.Conversation
@@ -58,6 +66,7 @@ func buildTranscriptTurns(messages []openai.ChatCompletionMessage) []transcriptT
 			last := &turns[len(turns)-1]
 			last.Tools = append(last.Tools, transcriptToolCall{
 				Name: tc.Function.Name, Arguments: tc.Function.Arguments, Result: m.Content,
+				ArgsLine: summarizeArgs(tc.Function.Arguments), ResultTop: firstLine(m.Content, resultTopMax),
 			})
 			continue
 		}
@@ -66,7 +75,97 @@ func buildTranscriptTurns(messages []openai.ChatCompletionMessage) []transcriptT
 		}
 		turns = append(turns, transcriptTurn{Role: m.Role, Round: round, Content: m.Content})
 	}
+	if n := len(turns); n > 0 && turns[n-1].Role == openai.ChatMessageRoleAssistant && len(turns[n-1].Tools) == 0 {
+		turns[n-1].Final = true
+	}
 	return turns
+}
+
+const (
+	argsLineMax    = 80
+	resultTopMax   = 100
+	condensedSteps = 3
+	ellipsis       = "…"
+)
+
+func truncate(s string, limit int) string {
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit-1]) + ellipsis
+}
+
+// summarizeArgs renders a tool call's JSON arguments as one "key=value" line;
+// anything that is not a JSON object is shown raw.
+func summarizeArgs(raw string) string {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return truncate(strings.Join(strings.Fields(raw), " "), argsLineMax)
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if str, ok := obj[k].(string); ok {
+			parts = append(parts, k+"="+str)
+			continue
+		}
+		b, _ := json.Marshal(obj[k])
+		parts = append(parts, k+"="+string(b))
+	}
+	return truncate(strings.Join(parts, " "), argsLineMax)
+}
+
+func firstLine(s string, limit int) string {
+	var compact bytes.Buffer
+	if json.Compact(&compact, []byte(s)) == nil {
+		return truncate(compact.String(), limit)
+	}
+	for l := range strings.SplitSeq(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return truncate(l, limit)
+		}
+	}
+	return ""
+}
+
+// condenseTurns drops the system prompt and, unless full, keeps only the last
+// condensedSteps assistant steps (the report goes too once steps are hidden),
+// returning how many earlier steps were hidden.
+func condenseTurns(turns []transcriptTurn, full bool) ([]transcriptTurn, int) {
+	if full {
+		return turns, 0
+	}
+	var out []transcriptTurn
+	steps := 0
+	for _, t := range turns {
+		if t.Role == openai.ChatMessageRoleSystem {
+			continue
+		}
+		if t.Role == openai.ChatMessageRoleAssistant {
+			steps++
+		}
+		out = append(out, t)
+	}
+	hidden := steps - condensedSteps
+	if hidden <= 0 {
+		return out, 0
+	}
+	for i, t := range out {
+		if t.Role == openai.ChatMessageRoleAssistant && t.Round == hidden+1 {
+			return out[i:], hidden
+		}
+	}
+	return out, 0
+}
+
+// incidentLive reports whether the agent may still add steps to the incident.
+func incidentLive(s db.IncidentStatus) bool {
+	return s == db.StatusOpen || s == db.StatusInvestigating || s == db.StatusReopened
 }
 
 // incidentTranscript renders the full, untruncated thought-process page for
