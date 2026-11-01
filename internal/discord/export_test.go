@@ -66,3 +66,5 @@ func RenderOverlayForTest(
 ) []discordgo.MessageComponent {
 	return render(c, u, overlay{Line: line, Confirm: confirm}, publicURL)
 }
+
+func TextLenForTest(cs []discordgo.MessageComponent) int { return textLen(cs) }

@@ -237,6 +237,22 @@ func TestRender_ToneEmoji(t *testing.T) {
 	}
 }
 
+func TestRender_ToneEmojiSkipsTitlesWithSymbol(t *testing.T) {
+	t.Parallel()
+	got := texts(discord.RenderForTest(card.Card{Title: "⚠️ Incident X", Tone: card.Warn}, ""))
+	if got != "### ⚠️ Incident X\n" {
+		t.Errorf("got %q, want one emoji", got)
+	}
+}
+
+func TestTextLen_CountsSectionText(t *testing.T) {
+	t.Parallel()
+	cs := discord.RenderForTest(card.Card{Title: "abcd", Path: "/x"}, "https://h")
+	if n := discord.TextLenForTest(cs); n != len("### abcd") {
+		t.Errorf("textLen = %d, want %d (the header Section's text)", n, len("### abcd"))
+	}
+}
+
 func btns(n int) []card.Button {
 	out := make([]card.Button, n)
 	for i := range out {

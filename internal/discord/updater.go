@@ -233,6 +233,8 @@ func textLen(cs []discordgo.MessageComponent) int {
 		switch v := c.(type) {
 		case discordgo.Container:
 			n += textLen(v.Components)
+		case discordgo.Section:
+			n += textLen(v.Components)
 		case discordgo.TextDisplay:
 			n += utf8.RuneCountInString(v.Content)
 		}

@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -60,7 +62,10 @@ func render(c card.Card, u map[string]card.Update, ov overlay, publicURL string)
 	link := c.Path != "" && publicURL != ""
 	openButton := discordgo.Button{Label: "Open", Style: discordgo.LinkButton, URL: publicURL + c.Path}
 	headerLink := link && c.Title != ""
-	title := toneEmoji(tone) + c.Title
+	title := c.Title
+	if r, _ := utf8.DecodeRuneInString(c.Title); !unicode.Is(unicode.So, r) {
+		title = toneEmoji(tone) + title
+	}
 	if c.Title != "" {
 		title = "### " + title
 		if headerLink {
