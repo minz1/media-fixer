@@ -19,7 +19,7 @@
     }
     .brand { display: flex; align-items: center; gap: 0.5rem; font-size: 1.25rem; line-height: 1.75rem; font-weight: 600; color: var(--ink); }
     .brand-dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; background-color: var(--accent); }
-    .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--line); font-size: 0.875rem; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+    .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; box-shadow: inset 0 -1px 0 var(--line); font-size: 0.875rem; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
     .tabs::-webkit-scrollbar { display: none; }
     .tab { padding: 0.5rem 0.75rem; border-bottom: 2px solid transparent; border-radius: 0.375rem 0.375rem 0 0; color: var(--muted); text-decoration: none; }
     .tab:hover { background-color: var(--hover-tab); color: var(--ink); }
@@ -291,7 +291,7 @@
 
 {{define "empty"}}<p class="empty">{{.}}</p>{{end}}
 
-{{define "stat"}}<span class="stat{{if not .N}} stat-zero{{end}}"{{with .Tip}} title="{{.}}"{{end}}><b>{{.N}}</b>{{with .Max}}<small>/ {{.}}</small>{{end}}<span>{{if and (eq .N 1) .One}}{{.One}}{{else}}{{.Label}}{{end}}</span></span>{{end}}
+{{define "stat"}}<span class="stat{{if not .N}} stat-zero{{end}}"><b>{{.N}}</b>{{with .Max}}<small>/ {{.}}</small>{{end}}<span>{{if and (eq .N 1) .One}}{{.One}}{{else}}{{.Label}}{{end}}</span></span>{{end}}
 
 {{define "badge"}}<span class="badge tone-{{.Tone}}">{{.Word}}</span>{{end}}
 
@@ -905,7 +905,7 @@
   {{range .Apps}}
   <div>
     <h3 class="font-semibold text-gray-900">{{.Name}}{{with .Summary}} <span class="text-sm font-normal text-gray-500">{{.}}</span>{{end}}</h3>
-    {{if .Counted}}<div class="stats mt-1">{{template "stat" (dict "N" .Cleared "Label" "cleared")}}{{template "stat" (dict "N" .WouldClear "Label" "would clear")}}{{template "stat" (dict "N" .Listed "Label" "listed")}}{{template "stat" (dict "N" .Waiting "Label" "waiting" "Tip" (printf "waiting out the %d h delay" .MinAge))}}</div>{{end}}
+    {{if .Counted}}<div class="stats mt-1">{{template "stat" (dict "N" .Cleared "Label" "cleared")}}{{template "stat" (dict "N" .WouldClear "Label" "would clear")}}{{template "stat" (dict "N" .Listed "Label" "listed")}}{{template "stat" (dict "N" .Waiting "Label" "waiting")}}{{if .Waiting}}{{template "info" (printf "waiting out the %d h delay" .MinAge)}}{{end}}</div>{{end}}
     {{with .Error}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
     {{range .Items}}
     <div class="mt-3 border border-gray-200 rounded-sm p-3 text-sm">

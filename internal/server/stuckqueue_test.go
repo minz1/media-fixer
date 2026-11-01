@@ -147,7 +147,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		"unreachable: arr GET /api/v3/queue: 500",
 		"dry run",
 		"<b>1</b><span>would clear</span>",
-		`title="waiting out the 6 h delay"><b>1</b><span>waiting</span>`,
+		`<b>1</b><span>waiting</span>`, `data-tip="waiting out the 6 h delay"`,
 		"AHS",
 		`due <time datetime="2026-10-30T05:07:00Z" title="2026-10-30 05:07 UTC">`,
 		`name="download_id" value="AH"`,
@@ -244,7 +244,8 @@ func TestStuckRun_CardRefreshesUntilDone(t *testing.T) {
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "hx-trigger=\"every") {
 		t.Fatalf("status %d, a finished run still polls:\n%s", rec.Code, rec.Body.String())
 	}
-	mustContain(t, rec.Body.String(), "Last run", `title="waiting out the 6 h delay"><b>1</b><span>waiting</span>`)
+	body := rec.Body.String()
+	mustContain(t, body, "Last run", `<b>1</b><span>waiting</span>`, `data-tip="waiting out the 6 h delay"`)
 }
 
 func TestStuckAction_RequiresSameOrigin(t *testing.T) {
