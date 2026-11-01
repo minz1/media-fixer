@@ -143,6 +143,7 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		}
 	}
 	shown, hidden := condenseTurns(turns, full)
+	paused := s.isPaused(ctx)
 
 	timers, _ := incident.LoadTimers(ctx, s.db)
 
@@ -155,9 +156,9 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		"Transcript":        shown,
 		"EarlierSteps":      hidden,
 		"NextStep":          nextStep,
-		"Live":              incidentLive(inc.Status),
+		"Live":              incidentLive(inc.Status) && !paused,
 		"Full":              full,
-		tplKeyPaused:        s.isPaused(ctx),
+		tplKeyPaused:        paused,
 		tplKeyBaseURL:       s.baseURL,
 	}, nil
 }
