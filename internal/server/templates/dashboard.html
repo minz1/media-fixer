@@ -19,8 +19,9 @@
     }
     .brand { display: flex; align-items: center; gap: 0.5rem; font-size: 1.25rem; line-height: 1.75rem; font-weight: 600; color: var(--ink); }
     .brand-dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; background-color: var(--accent); }
-    .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--line); font-size: 0.875rem; overflow-x: auto; white-space: nowrap; }
-    .tab { padding: 0.5rem 0.75rem; margin-bottom: -1px; border-bottom: 2px solid transparent; border-radius: 0.375rem 0.375rem 0 0; color: var(--muted); text-decoration: none; }
+    .tabs { display: flex; gap: 0.25rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--line); font-size: 0.875rem; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { padding: 0.5rem 0.75rem; border-bottom: 2px solid transparent; border-radius: 0.375rem 0.375rem 0 0; color: var(--muted); text-decoration: none; }
     .tab:hover { background-color: var(--hover-tab); color: var(--ink); }
     .tab[aria-current] { border-bottom-color: var(--accent); color: var(--ink); font-weight: 600; }
     .card { background-color: var(--surface); border: 1px solid var(--line); border-radius: 0.75rem; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); padding: 1.25rem; margin-bottom: 1.5rem; }
@@ -30,6 +31,12 @@
     .kv { display: inline-flex; flex-wrap: wrap; color: var(--muted); }
     .kv .v { color: var(--ink); font-weight: 400; }
     .kv > * + *::before { content: "\00b7"; margin: 0 0.5rem; }
+    .stat { display: inline-flex; align-items: baseline; gap: 0.25rem; padding: 0.125rem 0.5rem; border: 1px solid var(--line); border-radius: 0.5rem; font-size: 0.75rem; line-height: 1rem; color: var(--muted); white-space: nowrap; }
+    .stat b { font-size: 0.875rem; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .stat small { font-size: 0.75rem; color: var(--muted); }
+    .stat-zero b { color: var(--muted); font-weight: 400; }
+    .stats { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+    .run-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.75rem; }
     .tbl { width: 100%; border-collapse: collapse; }
     .tbl th { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; text-align: left; color: var(--muted); border-bottom: 1px solid var(--line); }
     .tbl td { border-bottom: 1px solid var(--line-soft); }
@@ -283,6 +290,8 @@
 {{define "info"}}<span class="info" tabindex="0" role="img" aria-label="{{.}}" data-tip="{{.}}">i</span>{{end}}
 
 {{define "empty"}}<p class="empty">{{.}}</p>{{end}}
+
+{{define "stat"}}<span class="stat{{if not .N}} stat-zero{{end}}"{{with .Tip}} title="{{.}}"{{end}}><b>{{.N}}</b>{{with .Max}}<small>/ {{.}}</small>{{end}}<span>{{if and (eq .N 1) .One}}{{.One}}{{else}}{{.Label}}{{end}}</span></span>{{end}}
 
 {{define "badge"}}<span class="badge tone-{{.Tone}}">{{.Word}}</span>{{end}}
 
@@ -545,7 +554,7 @@
       <div class="flex justify-between">
         <span class="font-medium text-gray-800">{{.Action}}</span>
         <span class="text-xs text-gray-500"
-          >{{.TriggeredBy}} · {{.Status}}</span
+          >{{.TriggeredBy}} {{template "badge" (dict "Tone" "gray" "Word" .Status)}}</span
         >
       </div>
       {{if .Result}}
@@ -896,12 +905,13 @@
   {{range .Apps}}
   <div>
     <h3 class="font-semibold text-gray-900">{{.Name}}{{with .Summary}} <span class="text-sm font-normal text-gray-500">{{.}}</span>{{end}}</h3>
+    {{if .Counted}}<div class="stats mt-1">{{template "stat" (dict "N" .Cleared "Label" "cleared")}}{{template "stat" (dict "N" .WouldClear "Label" "would clear")}}{{template "stat" (dict "N" .Listed "Label" "listed")}}{{template "stat" (dict "N" .Waiting "Label" "waiting" "Tip" (printf "waiting out the %d h delay" .MinAge))}}</div>{{end}}
     {{with .Error}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
     {{range .Items}}
     <div class="mt-3 border border-gray-200 rounded-sm p-3 text-sm">
       <div class="flex flex-wrap justify-between gap-x-4">
         <span class="font-medium text-gray-900 break-all">{{.Title}}</span>
-        <span class="text-gray-500">{{.Verdict}} · {{.Targets}} · {{.Age}}{{if not .Due.IsZero}} · due {{template "ts" .Due}}{{end}}</span>
+        <span class="text-gray-500">{{template "badge" (dict "Tone" "gray" "Word" .Verdict)}} {{.Targets}} · {{.Age}}{{if not .Due.IsZero}} · due {{template "ts" .Due}}{{end}}</span>
       </div>
       {{range .Messages}}<p class="text-gray-600">{{.}}</p>{{end}}
       {{with .Rejections}}<p class="text-gray-600">Import check: {{range $i, $r := .}}{{if $i}}; {{end}}{{$r}}{{end}}</p>{{end}}
@@ -1048,9 +1058,10 @@
         </div>
       </section>
     </div>
-    <p class="text-sm text-gray-700">
-      {{.ExcludedCount}} excluded, edit on <a href="{{.BaseURL}}/monitoring" class="text-blue-600 hover:underline">Monitoring</a>
-    </p>
+    <div class="stats gap-x-3 text-sm">
+      {{template "stat" (dict "N" .ExcludedCount "Label" "shows excluded" "One" "show excluded")}}
+      <a href="{{.BaseURL}}/monitoring" class="text-blue-600 hover:underline">Manage on Monitoring →</a>
+    </div>
     <button
       type="submit"
       class="btn btn-primary"
@@ -1099,13 +1110,14 @@
     {{with .RunsError}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
     {{range .Runs}}
     <details class="border-b border-gray-100 py-2">
-      <summary class="text-sm text-gray-800 cursor-pointer">
-        #{{.ID}} {{template "ts" .StartedAt}} · {{trigger .Trigger}}{{if .Dry}} · dry{{end}} ·
+      <summary class="run-sum text-sm text-gray-800 cursor-pointer">
+        <span class="font-semibold">#{{.ID}}</span>
+        <span>{{trigger .Trigger}}</span>
+        <span class="text-gray-500">{{template "ts" .StartedAt}}</span>
         {{template "badge" (dict "Tone" (sweepTone .Status) "Word" .Status)}}
+        {{if .Dry}}{{template "badge" (dict "Tone" "gray" "Word" "dry run")}}{{end}}
         {{with .Reason}}<span class="text-gray-500">({{.}})</span>{{end}}
-        <span class="text-gray-500"
-          >· grabs {{.Counts.Grabs}}/{{.Counts.MaxGrabs}} · lookups {{.Counts.Lookups}}/{{.Counts.MaxLookups}} · searches {{.Counts.Searched}}/{{.Counts.MaxSearches}}</span
-        >
+        {{template "counts" .Counts}}
       </summary>
       {{if .Items}}
       <div class="overflow-x-auto">
@@ -1173,6 +1185,8 @@
 </div>
 {{end}}
 
+{{define "counts"}}<span class="stats">{{template "stat" (dict "N" .Grabs "Max" .MaxGrabs "Label" "grabs" "One" "grab")}}{{template "stat" (dict "N" .Lookups "Max" .MaxLookups "Label" "lookups" "One" "lookup")}}{{template "stat" (dict "N" .Searched "Max" .MaxSearches "Label" "searches" "One" "search")}}</span>{{end}}
+
 {{define "sweep_status"}}
 <div
   id="sweep-status"
@@ -1183,9 +1197,7 @@
   {{template "badge" (dict "Tone" "blue" "Word" "Running…")}}
   {{if .Progress.Started.IsZero}}starting…{{else}}started {{template "ts" .Progress.Started}}{{end}}
   {{with .Progress.Phase}} · {{.}}{{end}}{{with .Progress.Current}} · {{.}}{{end}}
-  <div class="text-gray-500 mt-1">
-    grabs {{.Progress.Counts.Grabs}}/{{.Progress.Counts.MaxGrabs}} · lookups {{.Progress.Counts.Lookups}}/{{.Progress.Counts.MaxLookups}} · searches {{.Progress.Counts.Searched}}/{{.Progress.Counts.MaxSearches}}
-  </div>
+  <div class="mt-1">{{template "counts" .Progress.Counts}}</div>
   {{else}}
   {{template "badge" (dict "Tone" "gray" "Word" "Idle")}}
   <span class="kv"><span>Next run: <span class="v">{{with .Next}}{{template "ts" .}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}</span></span></span>
@@ -1215,7 +1227,7 @@
           <span class="font-medium text-gray-900">{{.Title}}</span>
           {{if .StuckSeasons}}{{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{else if .QueueItems}}{{template "badge" (dict "Tone" "orange" "Word" "stuck download")}}{{else}}{{template "badge" (dict "Tone" "gray" "Word" "watching")}}{{end}}
         </div>
-        <div class="text-sm text-gray-500">{{.Seasons}} seasons · {{.Missing}} missing · {{.StuckSeasons}} stuck · {{.QueueItems}} in queue</div>
+        <div class="stats mt-1">{{template "stat" (dict "N" .Seasons "Label" "seasons" "One" "season")}}{{template "stat" (dict "N" .Missing "Label" "missing")}}{{template "stat" (dict "N" .StuckSeasons "Label" "stuck")}}{{template "stat" (dict "N" .QueueItems "Label" "in queue")}}</div>
         {{with .Latest}}<div class="text-xs text-gray-700 break-all">{{template "ts" .At}} · {{.Result}}{{with .ReleaseTitle}} · {{.}}{{end}}</div>{{end}}
       </div>
       <span class="text-xl text-gray-500" aria-hidden="true">›</span>
@@ -1340,9 +1352,9 @@
           {{range .Show.Targets}}
           <tr class="border-b border-gray-100">
             <td class="py-1 pr-3">S{{printf "%02d" .Season}}</td>
-            <td class="py-1 pr-3">missing {{.Missing}}</td>
-            <td class="py-1 pr-3">streak {{.Streak}}{{if ge .Streak $.StuckAfter}} {{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}</td>
-            <td class="py-1 pr-3">attempts {{.Attempts}}</td>
+            <td class="py-1 pr-3">{{template "stat" (dict "N" .Missing "Label" "missing")}}</td>
+            <td class="py-1 pr-3">{{template "stat" (dict "N" .Streak "Label" "streak")}}{{if ge .Streak $.StuckAfter}} {{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}</td>
+            <td class="py-1 pr-3">{{template "stat" (dict "N" .Attempts "Label" "attempts" "One" "attempt")}}</td>
             <td class="py-1 pr-3">last {{template "ts" .LastAttempt}}</td>
             <td class="py-1">next {{template "ts" .NextEligible}}</td>
           </tr>
@@ -1382,7 +1394,7 @@
       {{range $i, $l := .Live}}
       <li class="text-sm text-gray-700">
         <span class="break-all">{{.Title}}</span>
-        {{if .Verdict}}<span class="text-gray-500">· {{.Verdict}} · {{.Age}}</span>{{end}}
+        {{if .Verdict}}{{template "badge" (dict "Tone" "gray" "Word" .Verdict)}} <span class="text-gray-500">{{.Age}}</span>{{end}}
         {{range .Messages}}<div class="text-xs text-gray-500 break-all">{{.}}</div>{{end}}
         <form hx-post="{{$.BaseURL}}/monitoring/{{$.ID}}/import/propose" hx-target="#import-{{$i}}" hx-swap="innerHTML" hx-disable="find button" hx-indicator="this, #progress" class="mt-1">
           <input type="hidden" name="download_id" value="{{.DownloadID}}">

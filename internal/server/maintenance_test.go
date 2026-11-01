@@ -157,7 +157,7 @@ func TestMaintenance_RendersTabsAndCard(t *testing.T) {
 		`href="/media/"`, `href="/media/maintenance"`, `href="/media/selftest"`,
 		`name="max_grabs" value="10"`, `name="max_lookups" value="40"`, `name="interval_hours" value="6"`,
 		`name="max_searches" value="200"`,
-		`0 excluded, edit on <a href="/media/monitoring"`, "Run now", "Dry run")
+		"shows excluded", `Manage on Monitoring →`, "Run now", "Dry run")
 	if strings.Contains(rec.Body.String(), "excluded_series") {
 		t.Error("form still renders excluded_series")
 	}
@@ -218,7 +218,7 @@ func TestSweepSave_NewFields(t *testing.T) {
 	if string(gotJSON) != string(wantJSON) {
 		t.Errorf("stored %s, want %s", gotJSON, wantJSON)
 	}
-	mustContain(t, rec.Body.String(), "Saved", "2 excluded, edit on")
+	mustContain(t, rec.Body.String(), "Saved", "shows excluded", "Manage on Monitoring")
 }
 
 func TestSweepSave_ValidationErrorShowsStoredCount(t *testing.T) {
@@ -230,7 +230,7 @@ func TestSweepSave_ValidationErrorShowsStoredCount(t *testing.T) {
 	form := validSettingsForm()
 	form.Set("max_grabs", "101")
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", form)
-	mustContain(t, rec.Body.String(), "must be between", "1 excluded, edit on")
+	mustContain(t, rec.Body.String(), "must be between", "show excluded")
 }
 
 func TestSweepSave_BadValues(t *testing.T) {
@@ -350,8 +350,16 @@ func TestMaintenanceStatus_Fragment(t *testing.T) {
 		env := newMaintenanceTestServer(t)
 		env.startHeldRun(t)
 		body := do(t, env.srv, http.MethodGet, "/media/maintenance/pack-sweep/status", nil).Body.String()
-		mustContain(t, body, "season pass", "Severance S01", "lookups 1/40", "grabs 0/10", "searches 0/200",
-			`hx-trigger="every 10s"`)
+		mustContain(
+			t,
+			body,
+			"season pass",
+			"Severance S01",
+			"<b>1</b><small>/ 40</small><span>lookup</span>",
+			"<b>0</b><small>/ 10</small><span>grabs</span>",
+			"<b>0</b><small>/ 200</small><span>searches</span>",
+			`hx-trigger="every 10s"`,
+		)
 	})
 
 	t.Run("idle", func(t *testing.T) {

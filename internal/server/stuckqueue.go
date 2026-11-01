@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -42,10 +41,12 @@ type stuckItemView struct {
 }
 
 type stuckAppView struct {
-	Name    string
-	Summary string
-	Error   string
-	Items   []stuckItemView
+	Name                                         string
+	Summary                                      string
+	Counted                                      bool
+	Cleared, WouldClear, Listed, Waiting, MinAge int
+	Error                                        string
+	Items                                        []stuckItemView
 }
 
 func (s *Server) SetStuckQueue(sch *stuckqueue.Scheduler) {
@@ -189,8 +190,8 @@ func stuckApp(ar stuckqueue.AppResult, minAgeHours int) stuckAppView {
 		v.Error = "unreachable: " + ar.Err
 		return v
 	}
-	v.Summary = fmt.Sprintf("cleared %d, would clear %d, %d listed, %d waiting out the %d h delay",
-		ar.Cleared, ar.WouldClear, len(ar.Items), len(ar.Waiting), minAgeHours)
+	v.Counted, v.Cleared, v.WouldClear = true, ar.Cleared, ar.WouldClear
+	v.Listed, v.Waiting, v.MinAge = len(ar.Items), len(ar.Waiting), minAgeHours
 	for _, it := range slices.Concat(ar.Items, ar.Waiting) {
 		v.Items = append(v.Items, stuckItem(it))
 	}
