@@ -262,6 +262,21 @@ func TestProposeImport_RejectedFileUnticked(t *testing.T) {
 	}
 }
 
+func TestProposeImport_RejectionCredentialsRedacted(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	c := cand("/dl/Seven.S01/a.mkv", 1, 1)
+	c["rejections"] = []map[string]any{{"reason": "client error: X-Api-Key: RJ9 at http://t/api?apikey=RK9"}}
+	e.importShow(c)
+	e.llm.reply = `{"files":[{"file":"f1","episode_ids":[1]}]}`
+	if _, err := e.svc.ProposeImport(context.Background(), 7, dl); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(e.llm.user, "RJ9") || strings.Contains(e.llm.user, "RK9") {
+		t.Fatalf("rejection credential reached the prompt:\n%s", e.llm.user)
+	}
+}
+
 func TestProposeImport_LongSeriesFits(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

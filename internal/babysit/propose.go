@@ -158,8 +158,8 @@ func sonarrParse(c client.ImportCandidate) string {
 func fileLines(cands []client.ImportCandidate, rels []string) string {
 	var b strings.Builder
 	for i, c := range cands {
-		fmt.Fprintf(&b, "f%d %s %d sonarr=%s rejections=%s\n",
-			i+1, clean(rels[i]), c.Size, sonarrParse(c), clean(strings.Join(c.Rejections, "; ")))
+		rejections := clean(client.RedactCredentials(strings.Join(c.Rejections, "; ")))
+		fmt.Fprintf(&b, "f%d %s %d sonarr=%s rejections=%s\n", i+1, clean(rels[i]), c.Size, sonarrParse(c), rejections)
 	}
 	return b.String()
 }
