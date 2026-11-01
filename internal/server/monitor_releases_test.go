@@ -114,6 +114,22 @@ func TestMonitorGrab_ExpiredNotice(t *testing.T) {
 	mustContain(t, rec.Body.String(), "the search expired; find releases again", "notice-err")
 }
 
+func TestMonitorGrab_BadReleaseRefused(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	for _, v := range []url.Values{
+		{"season": {"1"}, "guid": {""}, "indexer_id": {"3"}},
+		{"season": {"1"}, "guid": {"g1"}, "indexer_id": {"x"}},
+		{"season": {"1"}, "guid": {"g1"}, "indexer_id": {"0"}},
+	} {
+		rec := do(t, e.srv, http.MethodPost, grabPath, v)
+		mustContain(t, rec.Body.String(), "invalid release", "notice-err")
+	}
+	if g := e.son.grabPosts(); len(g) != 0 {
+		t.Fatalf("grabs = %v, want none", g)
+	}
+}
+
 func TestMonitorReleases_BadSeason(t *testing.T) {
 	t.Parallel()
 	e := newMonitorTestServer(t)

@@ -10,7 +10,10 @@ import (
 	"github.com/minz1/mediafixer/internal/babysit"
 )
 
-const errInvalidSeason = "invalid season"
+const (
+	errInvalidSeason  = "invalid season"
+	errInvalidRelease = "invalid release"
+)
 
 type releasesView struct {
 	BaseURL string
@@ -63,8 +66,11 @@ func (s *Server) monitorGrab(w http.ResponseWriter, r *http.Request) {
 	}
 	notice, failure := "", ""
 	season, err := formSeason(r)
+	indexer, idErr := strconv.Atoi(r.FormValue("indexer_id"))
+	if err == nil && (idErr != nil || indexer <= 0 || r.FormValue("guid") == "") {
+		err = errors.New(errInvalidRelease)
+	}
 	if err == nil {
-		indexer, _ := strconv.Atoi(r.FormValue("indexer_id"))
 		notice, err = s.babysit.Grab(context.WithoutCancel(r.Context()), id, babysit.GrabRequest{
 			Season: season, GUID: r.FormValue("guid"), Title: r.FormValue("title"), IndexerID: indexer,
 			Override: r.FormValue("override") == "1",
