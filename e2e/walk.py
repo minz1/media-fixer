@@ -1,9 +1,16 @@
+import json
+import os
 import sys
+import urllib.request
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 from shots import BASE, PAGES, SCHEMES, SEED, VIEWPORTS
+
+SONARR = "http://127.0.0.1:18989"
+SHOTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "shots")
+os.makedirs(SHOTS, exist_ok=True)
 
 EXPECT = {
     "incident": ["Link Click S01E02 will not play"],
@@ -89,6 +96,47 @@ def check(cond, msg):
         sys.exit(f"FAIL: {msg}")
 
 
+def writes():
+    with urllib.request.urlopen(SONARR + "/_writes", timeout=5) as r:
+        return json.load(r)
+
+
+def import_and_grab(br):
+    for scheme in SCHEMES:
+        for tag, width in VIEWPORTS:
+            pg = br.new_page(color_scheme=scheme, viewport={"width": width, "height": 900})
+            pg.on("dialog", lambda d: d.accept())
+            pg.goto(BASE + "/monitoring/3", wait_until="load")
+            pg.locator("form[hx-post$='/import/propose'] button").first.click()
+            pg.wait_for_selector("form[hx-post$='/import'] input[name=row]", timeout=10000)
+            check("Nothing is imported until you confirm" in pg.inner_text("body"), "proposal lacks the confirm line")
+            check(pg.locator("input[name=row]:checked").count() == 2, "the two clean mapped files are not the ticked ones")
+            check(pg.locator("input[name=row]:not(:checked)").count() == 1, "the Sample row is ticked or missing")
+            for msg in layout(pg, f"proposal {scheme} {tag}"):
+                check(False, msg)
+            pg.screenshot(path=f"{SHOTS}/proposal-{scheme}-{tag}.png", full_page=True)
+            if (scheme, tag) == ("light", "desk"):
+                pg.click("button:has-text('Import ticked files')")
+                pg.wait_for_selector("#notice p.notice-ok")
+                check("Import started" in pg.inner_text("#notice"), "import gave no 'Import started'")
+                imports = [w for w in writes() if w.get("name") == "ManualImport"]
+                check(len(imports) == 1, f"{len(imports)} ManualImport commands, want 1")
+                check(len(imports[0]["files"]) == 2, "ManualImport did not carry the two ticked files")
+            pg.locator("form[hx-post$='/releases'] button").first.click()
+            pg.wait_for_selector("#monitor-show table button:has-text('Grab'), #monitor-show .empty, #monitor-show .notice-err", timeout=15000)
+            check(pg.locator("button:has-text('Grab')").count() > 0, "Find releases listed nothing to grab")
+            for msg in layout(pg, f"releases {scheme} {tag}"):
+                check(False, msg)
+            pg.screenshot(path=f"{SHOTS}/releases-{scheme}-{tag}.png", full_page=True)
+            if (scheme, tag) == ("light", "desk"):
+                pg.locator("button:has-text('Grab')").first.click()
+                pg.wait_for_selector("#notice p.notice-ok")
+                check("Grabbed." in pg.inner_text("#notice"), "grab gave no 'Grabbed.'")
+                posts = [w for w in writes() if w.get("kind") == "release"]
+                check(len(posts) == 1, f"{len(posts)} release POSTs, want 1")
+            pg.close()
+
+
 def interactions(br):
     pg = br.new_page(viewport={"width": 1280, "height": 900})
     pg.on("dialog", lambda d: d.accept())
@@ -158,6 +206,8 @@ def interactions(br):
     check("boom" in pg.inner_text("#notice"), "explain 500 text not shown in #notice")
     check(pg.locator("form[hx-post$='/explain']").count() == 1, "explain card was replaced by the error")
     pg.unroute("**/explain")
+
+    import_and_grab(br)
 
     pg.goto(BASE + "/", wait_until="load")
     pg.locator("a", has_text="NOVA S01E01").first.click()

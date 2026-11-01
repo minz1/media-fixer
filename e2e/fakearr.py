@@ -32,6 +32,20 @@ records = [] if kind == "radarr" else [
 ]
 HIST = [{"id": 9, "seriesId": 3, "episodeId": 3102, "eventType": "downloadFailed", "date": "2026-10-30T10:00:00Z",
          "sourceTitle": "Link.Click.S01E02.1080p", "data": {"indexer": "Nyaa", "message": "Download failed: no seeders"}}]
+Q = {"quality": {"name": "WEBDL-1080p"}, "revision": {"version": 1}}
+L = [{"id": 1, "name": "English"}]
+def cand(name, size, eps, rej=()):
+    return {"path": "/dl/LC0102/" + name, "size": size, "downloadId": "LC0102", "releaseGroup": "grp", "releaseType": "singleEpisode",
+            "seriesId": 3, "series": {"id": 3}, "seasonNumber": 1, "indexerFlags": 0, "quality": Q, "languages": L,
+            "episodes": [{"id": e, "seasonNumber": 1, "episodeNumber": e % 100, "hasFile": False} for e in eps],
+            "rejections": [{"reason": r} for r in rej]}
+CANDS = [
+    cand("Link.Click.S01E02.mkv", 1500000000, [3102]),
+    cand("Link.Click.S01E05.mkv", 1400000000, [3105]),
+    cand("extras.mkv", 90000000, []),
+    cand("Sample/sample.mkv", 20000000, [3108], ["Sample"]),
+]
+WRITES = []
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): sys.stderr.write("%s %s\n" % (self.command, self.path))
     def send(self, obj, code=200):
@@ -54,7 +68,10 @@ class H(BaseHTTPRequestHandler):
             return self.send([h for h in HIST if not sid or h["seriesId"] == sid])
         if p == "/api/v3/release": return self.send(RELEASES if kind == "sonarr" else [])
         if p == "/api/v3/movie": return self.send([])
-        if p in ("/api/v3/manualimport", "/api/v3/episodefile", "/api/v3/moviefile"): return self.send([])
+        if p == "/_writes": return self.send(WRITES)
+        if p == "/api/v3/manualimport":
+            return self.send(CANDS if q.get("downloadId") == ["LC0102"] else [])
+        if p in ("/api/v3/command", "/api/v3/episodefile", "/api/v3/moviefile"): return self.send([])
         if p == "/api/v3/config/downloadclient": return self.send({"autoRedownloadFailed": True})
         return self.send({})
     def do_DELETE(self):
@@ -62,6 +79,10 @@ class H(BaseHTTPRequestHandler):
         if m: records[:] = [r for r in records if r["id"] != int(m.group(1))]
         return self.send({})
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        try: body = json.loads(raw or b"{}")
+        except ValueError: body = {}
+        if self.path.startswith("/api/v3/command"): WRITES.append(body)
+        if self.path.startswith("/api/v3/release"): WRITES.append({"kind": "release", **body})
         return self.send({"id": 1, "status": "completed"})
 ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
