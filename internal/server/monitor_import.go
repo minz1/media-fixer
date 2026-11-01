@@ -56,7 +56,8 @@ func (s *Server) importSeries(w http.ResponseWriter, r *http.Request) (int, clie
 		return 0, client.Series{}, false
 	}
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		s.log.WarnContext(r.Context(), "monitoring: series read failed", "series", id, "err", err)
+		http.Error(w, "Sonarr could not be read: "+err.Error(), http.StatusBadGateway)
 		return 0, client.Series{}, false
 	}
 	return id, series, true

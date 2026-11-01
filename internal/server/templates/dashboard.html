@@ -1301,9 +1301,9 @@
         </form>
         <div id="import-{{$i}}"></div>
       </li>
-      {{else}}
+      {{else}}{{if not .Show.SonarrErr}}
       <li>{{template "empty" "Nothing stuck in Sonarr's queue for this show."}}</li>
-      {{end}}
+      {{end}}{{end}}
     </ul>
   </div>
 </div>
@@ -1332,7 +1332,7 @@
         <tr class="border-t border-gray-100 align-top">
           <td class="py-1 pr-2">{{if .Episodes}}<input type="checkbox" name="row" value="{{range $i, $e := .Episodes}}{{if $i}},{{end}}{{$e.ID}}{{end}}|{{.Path}}"{{if .Ticked}} checked{{end}}>{{end}}</td>
           <td class="py-1 pr-3 break-all">{{.Rel}}</td>
-          <td class="py-1 pr-3">{{.Size}} B</td>
+          <td class="py-1 pr-3">{{size .Size}}</td>
           <td class="py-1 pr-3">{{.SonarrParse}}</td>
           <td class="py-1 pr-3">{{range .Episodes}}<div>{{printf "S%02dE%02d" .SeasonNumber .EpisodeNumber}}{{with .Title}} {{.}}{{end}}</div>{{end}}</td>
           <td class="py-1 pr-3">{{range .Rejections}}<div>{{.}}</div>{{end}}</td>

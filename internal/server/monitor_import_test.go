@@ -222,3 +222,48 @@ func TestParseRows(t *testing.T) {
 		t.Errorf("row 0 = %+v", rows[0])
 	}
 }
+
+func TestMonitorPropose_SizeIsHuman(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.importSetup()
+	big := candidate("/dl/Seven.S01/a.mkv")
+	big["size"] = 3 << 30
+	e.son.setCandidates(big)
+	e.llm.reply = `{"files":[{"file":"f1","episode_ids":[1]}]}`
+	body := propose(t, e)
+	mustContain(t, body, "3.0 GiB")
+	if strings.Contains(body, "3221225472") {
+		t.Errorf("raw byte size shown:\n%s", body)
+	}
+}
+
+func TestMonitorActions_BadSeriesID(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	before := e.son.requests()
+	for _, action := range []string{"import", "releases", "grab"} {
+		for _, id := range []string{"abc", "0"} {
+			p := "/media/monitoring/" + id + "/" + action
+			if rec := do(t, e.srv, http.MethodPost, p, url.Values{"season": {"1"}}); rec.Code != http.StatusNotFound {
+				t.Errorf("%s: %d, want 404", p, rec.Code)
+			}
+		}
+	}
+	if e.son.requests() != before {
+		t.Error("Sonarr was hit for a bad id")
+	}
+}
+
+func TestMonitorActions_SonarrDownSaysWhy(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.son.down = true
+	for _, p := range []string{proposePath, importPath, "/media/monitoring/7/releases", "/media/monitoring/7/grab"} {
+		rec := do(t, e.srv, http.MethodPost, p, url.Values{"download_id": {"d1"}, "season": {"1"}})
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("%s: %d, want 502", p, rec.Code)
+		}
+		mustContain(t, rec.Body.String(), "Sonarr could not be read")
+	}
+}

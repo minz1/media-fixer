@@ -125,6 +125,13 @@ func TestImportMapped_PostsMapping(t *testing.T) {
 func TestImportMapped_Partial(t *testing.T) {
 	t.Parallel()
 	e, s := importEnv(t)
+	if err := s.RunNow(); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	e.sonarr.mu.Lock()
+	e.sonarr.writes = nil
+	e.sonarr.mu.Unlock()
 	statuses := captureRefresh(s)
 	_, err := importMapped(e, s, t, importRows(stuckqueue.MappedFile{Path: pathA, EpisodeIDs: []int{1}}))
 	if err != nil {
@@ -139,6 +146,13 @@ func TestImportMapped_Partial(t *testing.T) {
 	}
 	if got := statuses(); len(got) != 1 || strings.HasPrefix(got[0], "✅") {
 		t.Fatalf("refresh statuses = %q, want one refresh without an outcome", got)
+	}
+	if res, _, _ := s.State(); len(
+		app(res, stuckqueue.AppSonarr).Items,
+	)+len(
+		app(res, stuckqueue.AppSonarr).Waiting,
+	) == 0 {
+		t.Fatal("a partial import forgot the download")
 	}
 }
 

@@ -805,3 +805,19 @@ func TestMonitorList_RowsAreLinks(t *testing.T) {
 		t.Error("the Monitoring list is still a table")
 	}
 }
+
+func TestMonitorShow_SonarrDownNoEmptyClaim(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	e.son.down = true
+	rec := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	mustContain(t, body, "Sonarr could not be read")
+	if strings.Contains(body, "Nothing stuck in Sonarr") {
+		t.Errorf("empty queue claimed while Sonarr is down:\n%s", body)
+	}
+}
