@@ -50,6 +50,11 @@ type Proposal struct {
 	Rows                                         []ProposalRow
 }
 
+// Importable reports whether any row maps to an episode.
+func (p Proposal) Importable() bool {
+	return slices.ContainsFunc(p.Rows, func(r ProposalRow) bool { return len(r.Episodes) > 0 })
+}
+
 type mapAnswer struct {
 	Files []struct {
 		File       string `json:"file"`

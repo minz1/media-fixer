@@ -45,8 +45,8 @@ func TestMonitorPropose_RendersForm(t *testing.T) {
 	mustContain(t, body,
 		`hx-post="/media/monitoring/7/import"`, `hx-target="#monitor-show"`, `name="download_id" value="d1"`,
 		`name="row" value="1|/dl/Seven.S01/a.mkv"`, `name="row" value="3|/dl/Seven.S01/b.mkv"`,
-		"Not an upgrade", "sample", "btn btn-danger", "Import ticked files",
-		"Import the ticked files of Seven.S01 into Seven? Sonarr moves them into the library.",
+		"Not an upgrade", "sample", "btn btn-danger", "Import selected files", ">Import</th>",
+		"Import the selected files of Seven.S01 into Seven? Sonarr moves them into the library.",
 		"overflow-x-auto", `hx-disable="find button"`,
 	)
 	if !fpRe.MatchString(body) {
@@ -81,8 +81,20 @@ func TestMonitorPropose_Error(t *testing.T) {
 	e.son.setCandidates()
 	body := propose(t, e)
 	mustContain(t, body, "notice-err", "Sonarr found no files to import")
-	if strings.Contains(body, "Import ticked files") {
+	if strings.Contains(body, "Import selected files") {
 		t.Error("an error answer carries the form")
+	}
+}
+
+func TestMonitorPropose_NothingMappedHasNoImportButton(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.importSetup()
+	e.llm.reply = `{"files":[{"file":"f1","skip":"no match"},{"file":"f2","skip":"no match"},{"file":"f3","skip":"sample"}]}`
+	body := propose(t, e)
+	mustContain(t, body, "None of these files could be matched to an episode")
+	if strings.Contains(body, "Import selected files") || strings.Contains(body, `name="row"`) {
+		t.Errorf("a proposal with nothing mapped offers an import:\n%s", body)
 	}
 }
 

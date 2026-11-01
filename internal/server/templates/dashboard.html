@@ -1413,7 +1413,7 @@
 {{define "monitor_proposal"}}
 {{if .Err}}<p class="notice notice-err">{{.Err}}</p>{{else}}
 <form hx-post="{{.BaseURL}}/monitoring/{{.ID}}/import" hx-target="#monitor-show" hx-swap="outerHTML"
-  hx-confirm="Import the ticked files of {{.P.Title}} into {{.Show}}? Sonarr moves them into the library."
+  hx-confirm="Import the selected files of {{.P.Title}} into {{.Show}}? Sonarr moves them into the library."
   hx-disable="find button" class="mt-2 space-y-2">
   <input type="hidden" name="download_id" value="{{.P.DownloadID}}">
   <input type="hidden" name="targets_fp" value="{{.P.TargetsFP}}">
@@ -1423,7 +1423,7 @@
     <table class="tbl text-xs">
       <thead>
         <tr>
-          <th class="py-1 pr-2"></th><th class="py-1 pr-3">File</th><th class="py-1 pr-3 num">Size</th>
+          <th class="py-1 pr-2">Import</th><th class="py-1 pr-3">File</th><th class="py-1 pr-3 num">Size</th>
           <th class="py-1 pr-3">Sonarr</th><th class="py-1 pr-3">Proposed</th><th class="py-1 pr-3">Rejections</th>
           <th class="py-1">Note</th>
         </tr>
@@ -1443,7 +1443,8 @@
       </tbody>
     </table>
   </div>
-  <button type="submit" class="btn btn-danger">Import ticked files</button>
+  {{if .P.Importable}}<button type="submit" class="btn btn-danger">Import selected files</button>
+  {{else}}<p class="text-sm text-gray-600">None of these files could be matched to an episode, so there is nothing to import. Use Sonarr's manual import for them.</p>{{end}}
 </form>
 {{end}}
 {{end}}

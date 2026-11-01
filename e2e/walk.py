@@ -116,7 +116,7 @@ def import_and_grab(br):
                 check(False, msg)
             pg.screenshot(path=f"{SHOTS}/proposal-{scheme}-{tag}.png", full_page=True)
             if (scheme, tag) == ("light", "desk"):
-                pg.click("button:has-text('Import ticked files')")
+                pg.click("button:has-text('Import selected files')")
                 pg.wait_for_selector("#notice p.notice-ok")
                 check("Import started" in pg.inner_text("#notice"), "import gave no 'Import started'")
                 imports = [w for w in writes() if w.get("name") == "ManualImport"]
