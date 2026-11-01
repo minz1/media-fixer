@@ -243,7 +243,7 @@ def main():
                     problems += layout(pg, where)
                     if name == "incidents":
                         rows = pg.locator("a[href*='/incidents/']").count()
-                        check(rows == 4, f"{where}: {rows} incident rows, want 4")
+                        check(rows == 5, f"{where}: {rows} incident rows, want 5")
                 pg.close()
         check(not problems, "layout:\n" + "\n".join(problems))
         interactions(br)

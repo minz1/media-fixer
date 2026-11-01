@@ -55,6 +55,9 @@ for _ in $(seq 100); do
 done
 curl -fs -o /dev/null http://127.0.0.1:18080/media/ || { echo "server did not start" >&2; exit 1; }
 
+# Seeded after startup recovery, which would rerun an investigating row against the dead fake LLM.
+go run ./e2e/seed -db "$state/mf.db" -late >"$state/seed-late.json"
+
 case $mode in
 walk) python3 "$here/walk.py" ;;
 shots) python3 "$here/shots.py" "${2:?outdir}" ;;

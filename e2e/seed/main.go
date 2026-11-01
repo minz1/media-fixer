@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const (
@@ -23,19 +24,27 @@ const (
 
 func main() {
 	path := flag.String("db", "", "sqlite path")
+	late := flag.Bool("late", false, "seed only the investigating incident, once startup recovery has run")
 	flag.Parse()
-	if err := run(*path); err != nil {
+	if err := run(*path, *late); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(path string) error {
+func run(path string, late bool) error {
 	d, err := db.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = d.Close() }()
 	ctx := context.Background()
+	if late {
+		ids, statuses, lateErr := seedInvestigating(ctx, d)
+		if lateErr != nil {
+			return lateErr
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"ids": ids, "statuses": statuses})
+	}
 	ids, statuses, err := seedIncidents(ctx, d)
 	if err != nil {
 		return err
@@ -85,6 +94,11 @@ func seedIncidents(ctx context.Context, d *db.DB) (map[string]string, map[string
 			}
 		}
 		statuses[sp.title] = string(sp.status)
+		if sp.status == db.StatusBlocked {
+			if err := seedConversation(ctx, journal.New(d), inc.ID, sp.title); err != nil {
+				return nil, nil, err
+			}
+		}
 		if sp.key != "" {
 			ids[sp.key] = inc.ID
 		}

@@ -6,6 +6,8 @@ RELEASES = []
 for f in sorted(glob.glob(sys.argv[3] + "/rel-*.json.gz")):
     with gzip.open(f) as fh:
         RELEASES += json.load(fh)
+for i, r in enumerate(RELEASES):
+    r.setdefault("guid", f"fake-guid-{i}")
 SERIES = [
     {"id": 1, "title": "American Horror Story", "path": "/tv/AHS", "monitored": True, "seriesType": "standard", "added": "2024-01-01T00:00:00Z"},
     {"id": 2, "title": "NOVA", "path": "/tv/NOVA", "monitored": True, "seriesType": "standard", "added": "2024-01-01T00:00:00Z"},
