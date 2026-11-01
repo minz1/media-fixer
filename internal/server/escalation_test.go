@@ -221,7 +221,9 @@ func TestEscalationPreview_NoFinding(t *testing.T) {
 	srv, database := newEscalationTestServer(t, ag)
 
 	ctx := context.Background()
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "No Finding Show"}
+	inc := &db.Incident{
+		Status: db.StatusManualTestNeeded, Source: "discord", What: "cant_play", Title: "No Finding Show",
+	}
 	if err := database.CreateIncident(ctx, inc); err != nil {
 		t.Fatal(err)
 	}

@@ -40,6 +40,9 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string
 	if err != nil {
 		return nil, "", err
 	}
+	if inc.Status != db.StatusManualTestNeeded {
+		return nil, "", errNotAwaitingDecision
+	}
 	result, err := escalationResult(inc)
 	if err != nil {
 		return nil, "", err
@@ -87,6 +90,13 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) erro
 	if err != nil {
 		return err
 	}
+	claimed, err := s.db.ClaimEscalationPlan(ctx, id, planJSON)
+	if err != nil {
+		return fmt.Errorf("claim escalation plan: %w", err)
+	}
+	if !claimed {
+		return errNotAwaitingDecision
+	}
 
 	// ExecuteReplace is blocklist -> delete files -> trigger search, with no
 	// compensation if it stops partway. Running it on the caller's HTTP
@@ -98,9 +108,6 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) erro
 	execCtx := context.WithoutCancel(ctx)
 	execResult, runErr := s.agent.ExecuteApprovedPlan(execCtx, result, planJSON)
 	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
-	// Consumed either way: a failed run leaves the library in a state the
-	// stored plan no longer describes, so it must be re-previewed too.
-	s.clearEscalationPlan(execCtx, id)
 	s.recordStatusChanged(execCtx, id, "")
 	if runErr != nil {
 		return runErr

@@ -1555,8 +1555,22 @@ func (d *DB) GetEscalationPlan(ctx context.Context, id string) ([]byte, time.Tim
 	return []byte(plan.String), at.Time, nil
 }
 
-// ClearEscalationPlan drops a stored plan once it has been executed, so one
-// approval cannot be replayed against state it no longer describes.
+// ClaimEscalationPlan clears planJSON only while it is still the stored plan of an incident awaiting a decision, so
+// it runs at most once. It reports whether it did.
+func (d *DB) ClaimEscalationPlan(ctx context.Context, id string, planJSON []byte) (bool, error) {
+	res, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET escalation_plan = NULL, escalation_plan_at = NULL, updated_at = ?
+		 WHERE id = ? AND status = ? AND escalation_plan = ?`,
+		time.Now(), id, StatusManualTestNeeded, string(planJSON))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// ClearEscalationPlan drops a stored plan when it no longer applies, so the
+// owner has to preview again.
 func (d *DB) ClearEscalationPlan(ctx context.Context, id string) error {
 	_, err := d.write.ExecContext(ctx,
 		`UPDATE incidents SET escalation_plan = NULL, escalation_plan_at = NULL, updated_at = ? WHERE id = ?`,

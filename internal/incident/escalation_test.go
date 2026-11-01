@@ -194,6 +194,43 @@ func TestApproveEscalation_ConcurrentRunsOnce(t *testing.T) {
 	}
 }
 
+func TestApproveEscalation_PlanConsumedBeforeExecute(t *testing.T) {
+	t.Parallel()
+	ag := newEscalationAgent()
+	ag.execGate = make(chan struct{})
+	fx := newEscalationFixture(t, ag)
+	inc := fx.incident(t)
+	fp := fx.preview(t, inc.ID)
+
+	done := make(chan error, 1)
+	go func() { done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	<-ag.execStart
+	_, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID)
+	close(ag.execGate)
+	if approveErr := <-done; approveErr != nil {
+		t.Fatal(approveErr)
+	}
+	if !errors.Is(err, db.ErrNoEscalationPlan) {
+		t.Errorf("plan during execution: err = %v, want ErrNoEscalationPlan (consumed before it runs)", err)
+	}
+}
+
+func TestPreviewEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
+	t.Parallel()
+	fx := newEscalationFixture(t, newEscalationAgent())
+	inc := fx.incident(t)
+	if err := fx.db.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusReopened); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fx.svc.PreviewEscalation(context.Background(), inc.ID); !errors.Is(
+		err, incident.ErrNotAwaitingDecisionForTest()) {
+		t.Errorf("err = %v, want errNotAwaitingDecision", err)
+	}
+	if _, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID); !errors.Is(err, db.ErrNoEscalationPlan) {
+		t.Errorf("a refused preview stored a plan: err = %v", err)
+	}
+}
+
 func TestApproveEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 	t.Parallel()
 	ag := newEscalationAgent()
