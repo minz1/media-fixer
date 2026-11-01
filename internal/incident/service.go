@@ -221,7 +221,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 			"Later incidents in this lock are blocked without a DM for the next %s; see the dashboard.",
 		openCount+1,
 		r.Title,
-		inc.ID[:8],
+		inc.ShortID(),
 		gapText(gap),
 	), "")
 	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
@@ -400,7 +400,7 @@ func (s *Service) evaluateDiagnosis(
 		s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
 			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).",
 			inc.Title,
-			inc.ID[:8],
+			inc.ShortID(),
 		), "", card.Field{Name: fieldRootCause, Value: result.RootCause}, card.Field{Name: "Concern", Value: verdict.Reason}))
 		return diagnosisOutcome{done: true}
 
@@ -408,7 +408,7 @@ func (s *Service) evaluateDiagnosis(
 		if attempt == maxAttempts-1 {
 			s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
 				"⚠️ **%s** (#%s): agent still needs approval after %d retries.",
-				inc.Title, inc.ID[:8], attempt+1,
+				inc.Title, inc.ShortID(), attempt+1,
 			), "",
 				card.Field{Name: fieldRootCause, Value: result.RootCause},
 				card.Field{Name: "Action needed", Value: agent.EscalationSummary(result)}))
@@ -724,14 +724,14 @@ func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err er
 	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
 		"❌ Agent error for incident **%s** (#%s): %v",
 		inc.Title,
-		inc.ID[:8],
+		inc.ShortID(),
 		err,
 	), "Incident marked for manual review."))
 }
 
 func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
 	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
-		"🔍 Incident **%s** (#%s) needs your attention%s.", inc.Title, inc.ID[:8], note,
+		"🔍 Incident **%s** (#%s) needs your attention%s.", inc.Title, inc.ShortID(), note,
 	), "",
 		card.Field{Name: fieldRootCause, Value: result.RootCause},
 		card.Field{Name: "Action needed", Value: agent.EscalationSummary(result)},
@@ -814,7 +814,7 @@ func (s *Service) notifyDiscordReporters(ctx context.Context, inc *db.Incident, 
 			// least visible somewhere.
 			_ = s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
 				"⚠️ Could not DM reporter %s for **%s** (#%s): %v",
-				id, inc.Title, inc.ID[:8], notifyErr,
+				id, inc.Title, inc.ShortID(), notifyErr,
 			), "", card.Field{Name: "Message was", Value: c.Plain()}))
 		}
 	}
@@ -845,7 +845,7 @@ func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id
 		}
 		if derr := s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
 			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v",
-			verb, id, inc.Title, inc.ID[:8], err,
+			verb, id, inc.Title, inc.ShortID(), err,
 		), "Further Seerr failures in the next "+gapText(t.SeerrAlertGapMinutes)+" are only logged.")); derr != nil {
 			s.log.ErrorContext(ctx, "seerr alert DM failed", "incident", inc.ID, "error", derr)
 			s.releaseSeerrAlert(now, prev)
@@ -1004,7 +1004,7 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin, stal
 	case rerunStale:
 		c := ownerCard(inc, card.Info, fmt.Sprintf(
 			"⏱️ Incident **%s** (#%s) stopped making progress for %d min and is being re-run.",
-			inc.Title, inc.ID[:8], staleMinutes,
+			inc.Title, inc.ShortID(), staleMinutes,
 		), "")
 		c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbResolve}
 		_ = s.notif.NotifyOwner(ctx, c)

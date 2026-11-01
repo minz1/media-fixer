@@ -1708,3 +1708,8 @@ func scanIncident(s scanner) (*Incident, error) {
 func nullStr(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: s != ""}
 }
+
+// ShortID is the first 8 characters of the id, as shown to people.
+func (i *Incident) ShortID() string { return i.ID[:min(shortIDLen, len(i.ID))] }
+
+const shortIDLen = 8

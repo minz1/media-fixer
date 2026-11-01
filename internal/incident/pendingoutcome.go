@@ -246,7 +246,7 @@ func (s *Service) escalatePendingOutcome(
 	s.log.WarnContext(ctx, "pending outcome escalating", "incident", inc.ID, "reason", reason)
 	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
 		"⚠️ Incident **%s** (#%s): searched for **%s** but %s.",
-		inc.Title, inc.ID[:8], pendingOutcomeTargetLabel(po), reason,
+		inc.Title, inc.ShortID(), pendingOutcomeTargetLabel(po), reason,
 	), "Approve \"Keep searching\" on the dashboard to keep watching for a release for up to "+
 		KeepSearchingSpan(t.KeepSearchingDays)+", or investigate manually."))
 }

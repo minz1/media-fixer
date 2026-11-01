@@ -19,6 +19,7 @@ const (
 	syscallFDIdx     = 1
 )
 
+// shortcut: x86-64 numbers (read, pread64, readv, preadv, preadv2); other arches fall back to the fd table.
 func isReadSyscall(nr string) bool {
 	switch nr {
 	case "0", "17", "19", "295", "327":

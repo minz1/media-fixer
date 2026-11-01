@@ -262,7 +262,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	} else {
 		content = fmt.Sprintf(
 			"✅ Incident **#%s** created for **%s**. The agent is investigating. You'll get a DM when it's resolved.",
-			inc.ID[:8],
+			inc.ShortID(),
 			title,
 		)
 	}
