@@ -57,7 +57,9 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string
 	if marshalErr != nil {
 		return nil, "", fmt.Errorf("encode escalation plan: %w", marshalErr)
 	}
-	if setErr := s.db.SetEscalationPlan(ctx, id, planJSON); setErr != nil {
+	if setErr := s.db.SetEscalationPlan(ctx, id, planJSON); errors.Is(setErr, db.ErrPlanNotStored) {
+		return nil, "", errNotAwaitingDecision
+	} else if setErr != nil {
 		return nil, "", fmt.Errorf("store escalation plan: %w", setErr)
 	}
 	s.recordStatusChanged(ctx, id, "")

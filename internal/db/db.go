@@ -1520,7 +1520,10 @@ func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*I
 
 // ErrNoEscalationPlan is returned when an incident has no previewed plan
 // stored (or it was already consumed).
-var ErrNoEscalationPlan = errors.New("no previewed escalation plan")
+var (
+	ErrNoEscalationPlan = errors.New("no previewed escalation plan")
+	ErrPlanNotStored    = errors.New("escalation plan not stored: the incident is not awaiting a decision")
+)
 
 // SetEscalationPlan stores the exact plan an owner is being shown, so
 // approving it executes that plan rather than whatever a re-resolution would
@@ -1528,10 +1531,17 @@ var ErrNoEscalationPlan = errors.New("no previewed escalation plan")
 // for an operation that deletes files.
 func (d *DB) SetEscalationPlan(ctx context.Context, id string, planJSON []byte) error {
 	now := time.Now()
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET escalation_plan = ?, escalation_plan_at = ?, updated_at = ? WHERE id = ?`,
-		string(planJSON), now, now, id)
-	return err
+	res, err := d.write.ExecContext(ctx,
+		`UPDATE incidents SET escalation_plan = ?, escalation_plan_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
+		string(planJSON), now, now, id, StatusManualTestNeeded)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil || n == 1 {
+		return err
+	}
+	return ErrPlanNotStored
 }
 
 // GetEscalationPlan returns the stored plan and when it was previewed, or

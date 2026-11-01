@@ -284,6 +284,13 @@ func TestRerunAndResolve_ClearStoredPlan(t *testing.T) {
 		{"Resolve", func() error { return svc.Resolve(ctx, inc.ID) }},
 		{"Rerun", func() error { return svc.Rerun(ctx, inc.ID) }},
 	} {
+		if setErr := database.SetEscalationPlan(ctx, inc.ID, []byte(`{"Title":"x"}`)); !errors.Is(
+			setErr, db.ErrPlanNotStored) {
+			t.Fatalf("before %s: plan stored on a %s incident: %v", step.name, inc.Status, setErr)
+		}
+		if stErr := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); stErr != nil {
+			t.Fatal(stErr)
+		}
 		if setErr := database.SetEscalationPlan(ctx, inc.ID, []byte(`{"Title":"x"}`)); setErr != nil {
 			t.Fatal(setErr)
 		}
