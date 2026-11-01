@@ -110,6 +110,8 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) erro
 	execCtx := context.WithoutCancel(ctx)
 	execResult, runErr := s.agent.ExecuteApprovedPlan(execCtx, result, planJSON)
 	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
+	// A preview stored while the plan ran describes the library before the run.
+	s.clearEscalationPlan(execCtx, id)
 	s.recordStatusChanged(execCtx, id, "")
 	if runErr != nil {
 		return runErr

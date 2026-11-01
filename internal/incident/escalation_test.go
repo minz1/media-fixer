@@ -215,6 +215,27 @@ func TestApproveEscalation_PlanConsumedBeforeExecute(t *testing.T) {
 	}
 }
 
+func TestApproveEscalation_PreviewDuringRunIsCleared(t *testing.T) {
+	t.Parallel()
+	ag := newEscalationAgent()
+	ag.execGate = make(chan struct{})
+	fx := newEscalationFixture(t, ag)
+	inc := fx.incident(t)
+	fp := fx.preview(t, inc.ID)
+
+	done := make(chan error, 1)
+	go func() { done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	<-ag.execStart
+	fx.preview(t, inc.ID)
+	close(ag.execGate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID); !errors.Is(err, db.ErrNoEscalationPlan) {
+		t.Errorf("a plan previewed during the run survived it: err = %v", err)
+	}
+}
+
 func TestPreviewEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 	t.Parallel()
 	fx := newEscalationFixture(t, newEscalationAgent())
