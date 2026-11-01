@@ -218,7 +218,7 @@ func TestSweepSave_NewFields(t *testing.T) {
 	if string(gotJSON) != string(wantJSON) {
 		t.Errorf("stored %s, want %s", gotJSON, wantJSON)
 	}
-	mustContain(t, rec.Body.String(), "Saved", "shows excluded", "Manage on Monitoring")
+	mustContain(t, rec.Body.String(), "Saved", "<b>2</b><span>shows excluded</span>", "Manage on Monitoring")
 }
 
 func TestSweepSave_ValidationErrorShowsStoredCount(t *testing.T) {
@@ -230,7 +230,7 @@ func TestSweepSave_ValidationErrorShowsStoredCount(t *testing.T) {
 	form := validSettingsForm()
 	form.Set("max_grabs", "101")
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/pack-sweep/settings", form)
-	mustContain(t, rec.Body.String(), "must be between", "show excluded")
+	mustContain(t, rec.Body.String(), "must be between", "<b>1</b><span>show excluded</span>")
 }
 
 func TestSweepSave_BadValues(t *testing.T) {

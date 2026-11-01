@@ -795,10 +795,10 @@ func TestMonitorList_RowsAreLinks(t *testing.T) {
 		list,
 		`<a class="row" href="/media/monitoring/7"`,
 		"›",
-		"<span>season</span>",
-		"<span>missing</span>",
-		"<span>stuck</span>",
-		"<span>in queue</span>",
+		"<b>1</b><span>season</span>",
+		"<b>1</b><span>missing</span>",
+		"<b>1</b><span>stuck</span>",
+		"<b>0</b><span>in queue</span>",
 		`class="badge tone-red">stuck<`,
 	)
 	if strings.Contains(list, "<table") {
