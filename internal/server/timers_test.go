@@ -3,7 +3,6 @@ package server_test
 import (
 	"context"
 	"errors"
-	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -210,10 +209,8 @@ func TestTimersCard_FormLayout(t *testing.T) {
 		mustContain(
 			t,
 			form,
-			`<button type="button" class="btn btn-link" data-reset="`+f.Name+`" data-default="`+strconv.Itoa(
-				f.Default,
-			)+`"`,
-			html.EscapeString(f.Help),
+			`class="btn btn-secondary btn-sm" data-reset="`+f.Name+`" data-default="`+strconv.Itoa(f.Default)+`"`,
+			`title="Reset to `+strconv.Itoa(f.Default)+" "+f.Unit+`"`,
 			`id="timer-`+f.Name+`"`,
 			`for="timer-`+f.Name+`"`,
 		)

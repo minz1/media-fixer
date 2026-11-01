@@ -335,7 +335,7 @@ func TestIncidentTranscript_Renders(t *testing.T) {
 		t.Fatalf("got status %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Chernobyl", "Full thought process", "events?full=1"} {
+	for _, want := range []string{"Chernobyl", "Thought process", "events?full=1"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("transcript page missing %q; body:\n%s", want, body)
 		}

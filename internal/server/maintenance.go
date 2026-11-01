@@ -161,11 +161,9 @@ func (s *Server) sweepCard(
 	sonarr := s.sweep.Runner().Sonarr
 	stored, _ := sweep.LoadSettings(ctx, s.db)
 	card["ExcludedCount"] = len(stored.ExcludedSeries)
-	if flags, err := sonarr.DownloadClientConfig(ctx); err != nil {
-		card["FlagsError"] = err.Error()
-	} else {
-		card["Flags"] = flags
-	}
+	flags, flagsErr := sonarr.DownloadClientConfig(ctx)
+	card["BothRedownload"] = flagsErr == nil && flags.AutoRedownloadFailed &&
+		flags.AutoRedownloadFailedFromInteractiveSearch
 	if runs, err := s.db.ListSweepRuns(ctx, sweepRunsShown); err != nil {
 		card["RunsError"] = err.Error()
 	} else {

@@ -150,7 +150,7 @@ func TestMaintenance_RendersTabsAndCard(t *testing.T) {
 	mustContain(t, rec.Body.String(),
 		`href="/media/"`, `href="/media/maintenance"`, `href="/media/selftest"`,
 		`name="max_grabs" value="10"`, `name="max_lookups" value="40"`, `name="interval_hours" value="6"`,
-		`name="max_searches" value="200"`, "not counted in max grabs",
+		`name="max_searches" value="200"`,
 		`0 excluded, edit on <a href="/media/monitoring"`, "Run now", "Dry run")
 	if strings.Contains(rec.Body.String(), "excluded_series") {
 		t.Error("form still renders excluded_series")
@@ -162,7 +162,9 @@ func TestMaintenance_FlagWarning(t *testing.T) {
 	env := newMaintenanceTestServer(t)
 
 	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
-	mustContain(t, body, "autoRedownloadFailed: on", "autoRedownloadFailedFromInteractiveSearch: off")
+	if strings.Contains(body, "autoRedownloadFailed") || strings.Contains(body, "redownload flags") {
+		t.Errorf("Sonarr flag status line still rendered:\n%s", body)
+	}
 	if strings.Contains(body, "the sweep refuses to run") {
 		t.Errorf("warning shown with the interactive flag off:\n%s", body)
 	}
@@ -620,9 +622,9 @@ func TestSweepCard_IntervalAndUsage(t *testing.T) {
 
 	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
 	next := `title="` + env.sch.NextRun(time.Now()).UTC().Format("2006-01-02 15:04") + ` UTC"`
-	mustContain(t, body, "Enabled (every 6 h)", "Next run:", next)
-	if got := strings.Count(body, "Used today 3 / 10."); got != 3 {
-		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "Used today 3 / 10.", got)
+	mustContain(t, body, `Enabled`, "Next run:", next)
+	if got := strings.Count(body, "· 3 used"); got != 3 {
+		t.Errorf("%q appears %d times, want 3 (grabs, lookups, searches)", "· 3 used", got)
 	}
 	if strings.Contains(body, `name="weekday"`) || strings.Contains(body, "Weekly") {
 		t.Errorf("weekday select or weekly wording still rendered:\n%s", body)
@@ -788,5 +790,5 @@ func TestSweepForm_Layout(t *testing.T) {
 	} {
 		mustContain(t, form, `data-reset="`+name+`" data-default="`+strconv.Itoa(def)+`"`, `for="timer-`+name+`"`)
 	}
-	mustContain(t, form, `class="timer-grid`, "Used today", `name="enabled"`, `name="anime"`, "Save settings")
+	mustContain(t, form, `class="timer-grid`, "used", `name="enabled"`, `name="anime"`, "Save settings")
 }

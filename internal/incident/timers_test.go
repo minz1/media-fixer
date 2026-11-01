@@ -167,8 +167,7 @@ func TestMapTimeoutSeconds(t *testing.T) {
 		}
 	}
 	if f.Lo != 30 || f.Hi != 600 || f.Group != "Explain" || f.Unit != "seconds" ||
-		f.Label != "Import mapping: give up after" ||
-		f.Help != "Stop waiting for the agent's file-to-episode mapping after this long." {
+		f.Label != "Import mapping: give up after" {
 		t.Errorf("field = %+v", f)
 	}
 	for _, v := range []int{29, 601} {
@@ -295,15 +294,5 @@ func TestTimersStuckReadFields(t *testing.T) {
 	}
 	if len(units) != 2 || units["stuck_read_tasks"] != "tasks" || units["stuck_read_minutes"] != "minutes" {
 		t.Errorf("fields = %v", units)
-	}
-}
-
-func TestTimerFieldsHaveHelp(t *testing.T) {
-	t.Parallel()
-	d := incident.DefaultTimers()
-	for _, f := range d.Fields() {
-		if f.Help == "" || len(f.Help) >= 120 {
-			t.Errorf("%s help %q: want 1-119 chars", f.Name, f.Help)
-		}
 	}
 }

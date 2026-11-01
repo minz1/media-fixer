@@ -56,7 +56,7 @@ func (s *Server) timersCard(
 		g := &groups[len(groups)-1]
 		g.Fields = append(g.Fields, map[string]any{
 			"Label": f.Label, "Name": f.Name, "Value": f.Value, "Min": f.Lo, "Max": f.Hi,
-			"Err": errs[f.Name], "Unit": f.Unit, "Default": f.Default, "Help": f.Help,
+			"Err": errs[f.Name], "Unit": f.Unit, "Default": f.Default,
 		})
 	}
 	return map[string]any{
