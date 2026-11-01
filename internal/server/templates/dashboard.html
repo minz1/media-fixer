@@ -117,8 +117,8 @@
       width: 1rem; height: 1rem; border-radius: 9999px; border: 1px solid currentColor; cursor: help;
       font-size: 0.6875rem; line-height: 1; font-style: italic; font-weight: 600; color: oklch(55.1% 0.027 264.364);
     }
-    .info:hover, .info:focus-visible { color: oklch(37.3% 0.034 259.733); }
-    .info:hover::after, .info:focus-visible::after {
+    .info:hover, .info:focus { color: oklch(37.3% 0.034 259.733); }
+    .info:hover::after, .info:focus::after {
       content: attr(data-tip); position: absolute; z-index: 30; bottom: calc(100% + 0.375rem); left: 50%;
       transform: translateX(-50%); width: max-content; max-width: min(18rem, calc(100vw - 2rem));
       padding: 0.375rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; line-height: 1rem;
@@ -127,7 +127,7 @@
     }
     @media (max-width: 639px) {
       .info { position: static; }
-      .info:hover::after, .info:focus-visible::after { position: fixed; left: 1rem; right: 1rem; bottom: auto; top: 3.5rem; transform: none; width: auto; max-width: none; }
+      .info:hover::after, .info:focus::after { position: fixed; left: 1rem; right: 1rem; bottom: auto; top: 3.5rem; transform: none; width: auto; max-width: none; }
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -178,8 +178,8 @@
       .notice-ok { background-color: oklch(30% 0.07 150); color: oklch(87% 0.11 150); }
       .notice-err { background-color: oklch(30% 0.09 25); color: oklch(85% 0.09 20); }
       .info { color: oklch(71% 0.02 261); }
-      .info:hover, .info:focus-visible { color: oklch(92% 0.006 264); }
-      .info:hover::after, .info:focus-visible::after { background-color: oklch(37.3% 0.034 259.733); color: oklch(96.7% 0.003 264.542); }
+      .info:hover, .info:focus { color: oklch(92% 0.006 264); }
+      .info:hover::after, .info:focus::after { background-color: oklch(37.3% 0.034 259.733); color: oklch(96.7% 0.003 264.542); }
     }
     #notice { position: sticky; top: 0; z-index: 10; }
     #notice .notice { margin-bottom: 0.75rem; }
@@ -990,6 +990,7 @@
     </div>
   </div>
 
+  {{with .FlagsError}}<p class="notice notice-err">Couldn't read Sonarr's redownload flags: {{.}}</p>{{end}}
   {{if .BothRedownload}}
   <p class="notice notice-err">
     Both Sonarr redownload flags are on, so the sweep refuses to run. Turn off "Redownload failed from interactive search" in Sonarr.

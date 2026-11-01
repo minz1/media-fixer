@@ -57,5 +57,9 @@ func SummarizeArgs(raw string) string { return summarizeArgs(raw) }
 func FirstLine(s string, limit int) string { return firstLine(s, limit) }
 
 func CondensedTurnsForTest(msgs []openai.ChatCompletionMessage, full bool) ([]transcriptTurn, int) {
-	return condenseTurns(buildTranscriptTurns(msgs), full)
+	return condenseTurns(buildTranscriptTurns(msgs, false), full)
+}
+
+func LiveTurnsForTest(msgs []openai.ChatCompletionMessage) []transcriptTurn {
+	return buildTranscriptTurns(msgs, true)
 }

@@ -83,6 +83,15 @@ func TestBuildTranscriptTurns_SummariesAndConclusion(t *testing.T) {
 	}
 }
 
+func TestBuildTranscriptTurns_NoConclusionWhileLive(t *testing.T) {
+	t.Parallel()
+	for i, tr := range server.LiveTurnsForTest(transcriptFixture(2)) {
+		if tr.Final {
+			t.Errorf("turn %d marked as the conclusion while the agent is still working", i)
+		}
+	}
+}
+
 func TestCondenseTurns(t *testing.T) {
 	t.Parallel()
 	msgs := transcriptFixture(4)

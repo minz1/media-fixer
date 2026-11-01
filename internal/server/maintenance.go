@@ -164,6 +164,9 @@ func (s *Server) sweepCard(
 	flags, flagsErr := sonarr.DownloadClientConfig(ctx)
 	card["BothRedownload"] = flagsErr == nil && flags.AutoRedownloadFailed &&
 		flags.AutoRedownloadFailedFromInteractiveSearch
+	if flagsErr != nil {
+		card["FlagsError"] = flagsErr.Error()
+	}
 	if runs, err := s.db.ListSweepRuns(ctx, sweepRunsShown); err != nil {
 		card["RunsError"] = err.Error()
 	} else {

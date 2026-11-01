@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,8 +21,9 @@ import (
 )
 
 type maintSonarr struct {
-	hold    chan struct{}
-	lookups chan struct{}
+	hold      chan struct{}
+	lookups   chan struct{}
+	flagsDown atomic.Bool
 }
 
 func (f *maintSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +31,10 @@ func (f *maintSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body any
 	switch r.URL.Path {
 	case "/api/v3/config/downloadclient":
+		if f.flagsDown.Load() {
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
 		body = client.DownloadClientConfig{AutoRedownloadFailed: true}
 	case "/api/v3/queue/details":
 		body = []any{}
@@ -791,4 +797,12 @@ func TestSweepForm_Layout(t *testing.T) {
 		mustContain(t, form, `data-reset="`+name+`" data-default="`+strconv.Itoa(def)+`"`, `for="timer-`+name+`"`)
 	}
 	mustContain(t, form, `class="timer-grid`, "used", `name="enabled"`, `name="anime"`, "Save settings")
+}
+
+func TestSweepCard_FlagsUnreadableNotice(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	env.sonarr.flagsDown.Store(true)
+	rec := do(t, env.srv, http.MethodGet, "/media/maintenance", nil)
+	mustContain(t, rec.Body.String(), "Couldn't read Sonarr's redownload flags")
 }

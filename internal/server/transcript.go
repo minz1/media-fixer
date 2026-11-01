@@ -47,7 +47,7 @@ type transcriptTurn struct {
 // view and the full thought-process page — the two differ only in which
 // turns the template shows and how much of each it shows, not in how the
 // data is built.
-func buildTranscriptTurns(messages []openai.ChatCompletionMessage) []transcriptTurn {
+func buildTranscriptTurns(messages []openai.ChatCompletionMessage, live bool) []transcriptTurn {
 	callByID := make(map[string]openai.ToolCall)
 	for _, m := range messages {
 		for _, tc := range m.ToolCalls {
@@ -75,7 +75,8 @@ func buildTranscriptTurns(messages []openai.ChatCompletionMessage) []transcriptT
 		}
 		turns = append(turns, transcriptTurn{Role: m.Role, Round: round, Content: m.Content})
 	}
-	if n := len(turns); n > 0 && turns[n-1].Role == openai.ChatMessageRoleAssistant && len(turns[n-1].Tools) == 0 {
+	n := len(turns)
+	if !live && n > 0 && turns[n-1].Role == openai.ChatMessageRoleAssistant && len(turns[n-1].Tools) == 0 {
 		turns[n-1].Final = true
 	}
 	return turns

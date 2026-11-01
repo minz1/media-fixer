@@ -132,15 +132,13 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 	var turns []transcriptTurn
 	if s.journal != nil {
 		if conv, convErr := s.journal.Conversation(ctx, id); convErr == nil {
-			turns = buildTranscriptTurns(conv)
+			turns = buildTranscriptTurns(conv, incidentLive(inc.Status))
 		}
 	}
 
 	nextStep := 1
-	for _, t := range turns {
-		if t.Round >= nextStep {
-			nextStep = t.Round + 1
-		}
+	if len(turns) > 0 {
+		nextStep = turns[len(turns)-1].Round + 1
 	}
 	shown, hidden := condenseTurns(turns, full)
 	paused := s.isPaused(ctx)
