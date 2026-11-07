@@ -117,6 +117,7 @@ type Applied struct {
 	Effects []lifecycle.Effect
 	Events  []*Event
 	Merged  bool
+	OpID    int64
 	seqs    []int64
 }
 
@@ -144,6 +145,9 @@ func (d *DB) ApplyIncident(ctx context.Context, id string, decide Decide) (Appli
 		if cur.In, err = readInputs(ctx, tx); err != nil {
 			return err
 		}
+		if err = d.loadIncidentOp(ctx, tx, &cur); err != nil {
+			return err
+		}
 		dec, err := decide(cur)
 		if err != nil {
 			return err
@@ -160,12 +164,17 @@ func (d *DB) ApplyIncident(ctx context.Context, id string, decide Decide) (Appli
 func commitDecision(ctx context.Context, tx *sql.Tx, cur lifecycle.Snapshot, dec Decision) (Applied, error) {
 	events := dec.Events
 	next := cur
+	effects := dec.Effects
 	if !dec.JournalOnly {
+		var err error
 		next = lifecycle.Versioned(cur, dec.Next)
-		if err := lifecycle.Check(next); err != nil {
+		if err = lifecycle.Check(next); err != nil {
 			return Applied{}, err
 		}
-		if err := writeSnapshot(ctx, tx, cur, next); err != nil {
+		if next, effects, err = writeIncidentOp(ctx, tx, dec, next); err != nil {
+			return Applied{}, err
+		}
+		if err = writeSnapshot(ctx, tx, cur, next); err != nil {
 			return Applied{}, err
 		}
 		if next.Version != cur.Version {
@@ -176,7 +185,11 @@ func commitDecision(ctx context.Context, tx *sql.Tx, cur lifecycle.Snapshot, dec
 	if err != nil {
 		return Applied{}, err
 	}
-	return Applied{Snap: next, Effects: dec.Effects, Events: events, seqs: seqs}, nil
+	out := Applied{Snap: next, Effects: effects, Events: events, seqs: seqs}
+	if next.Op != nil {
+		out.OpID = next.Op.ID
+	}
+	return out, nil
 }
 
 func appendAll(ctx context.Context, tx *sql.Tx, events []*Event) ([]int64, error) {
@@ -200,10 +213,15 @@ func (a Applied) withSeqs() Applied {
 }
 
 func statusChangedEvent(s lifecycle.Snapshot) *Event {
+	var opID int64
+	if s.Op != nil {
+		opID = s.Op.ID
+	}
 	payload, _ := json.Marshal(struct {
 		Status  string `json:"status"`
 		Version int64  `json:"version"`
-	}{string(s.Status), s.Version})
+		OpID    int64  `json:"op_id,omitempty"`
+	}{string(s.Status), s.Version, opID})
 	return &Event{IncidentID: s.ID, Kind: kindStatusChanged, Payload: payload}
 }
 
