@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/livecheck"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
@@ -67,8 +68,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		"size":           humanSize,
 		"trigger":        sweep.TriggerLabel,
 		"utc":            utcStamp,
-		"statusTone":     statusTone,
-		"statusWord":     func(st db.IncidentStatus) string { return strings.ReplaceAll(string(st), "_", " ") },
+		"statusMeta":     statusMeta,
 		"checkTone":      checkTone,
 		"sweepTone":      sweepTone,
 		"season":         seasonLabel,
@@ -383,25 +383,12 @@ func parseUUIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return parsed.String(), true
 }
 
-func statusTone(s db.IncidentStatus) string {
-	switch s {
-	case db.StatusOpen:
-		return toneYellow
-	case db.StatusInvestigating:
-		return toneBlue
-	case db.StatusAgentFixed:
-		return toneGreen
-	case db.StatusManualTestNeeded:
-		return toneOrange
-	case db.StatusReopened, db.StatusBlocked:
-		return toneRed
-	case db.StatusVerifying:
-		return "purple"
-	case db.StatusResolved:
-		return toneGray
-	default:
-		return toneGray
+func statusMeta(s db.IncidentStatus) lifecycle.StateMeta {
+	m := lifecycle.Meta(lifecycle.State(s))
+	if m.Label == "" {
+		m.Label, m.Tone = string(s), toneGray
 	}
+	return m
 }
 
 func checkTone(s livecheck.Status) string {

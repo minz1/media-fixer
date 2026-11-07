@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
@@ -170,7 +171,7 @@ func (w *Watcher) handleFinding(ctx context.Context, title string, rs []mediaage
 	case err != nil:
 		w.log.WarnContext(ctx, "look up stuck-read incident", "title", title, "error", err)
 	case inc.What != agent.WhatStuckRead:
-		if !slices.Contains(db.ActiveIncidentStatuses(), inc.Status) {
+		if !lifecycle.Meta(lifecycle.State(inc.Status)).Active {
 			w.open(ctx, title, rs, now)
 		}
 	case inc.Status == db.StatusAgentFixed:
@@ -204,7 +205,7 @@ func (w *Watcher) rerunFixed(ctx context.Context, inc *db.Incident) {
 	if open >= incident.SystematicIncidentThreshold {
 		return
 	}
-	if err = w.svc.Rerun(ctx, inc.ID, incident.Version{}); errors.Is(err, card.ErrRestarting) {
+	if err = w.svc.SystemRerun(ctx, inc.ID, inc.Generation); errors.Is(err, card.ErrRestarting) {
 		w.log.InfoContext(ctx, "rerun stuck-read incident refused, shutting down", "incident", inc.ID, "error", err)
 		return
 	}

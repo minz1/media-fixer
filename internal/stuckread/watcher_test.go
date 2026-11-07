@@ -578,3 +578,31 @@ func TestActiveOtherIncidentLeftAlone(t *testing.T) {
 		t.Errorf("the stuck read was reported onto the active %s incident", other.What)
 	}
 }
+
+func TestWatcher_SystemRerunOnlyFromFixed(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	inc := openOne(t, h)
+	h.setStatus(inc.ID, db.StatusAgentFixed)
+	for range 2 {
+		if _, err := h.db.IncrementActionCount(t.Context(), inc.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.poll(three("T", 7)...)
+	got, err := h.db.GetIncident(t.Context(), inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != db.StatusReopened || got.ActionCount != 2 {
+		t.Fatalf("system rerun: %s count %d, want reopened with the budget kept", got.Status, got.ActionCount)
+	}
+
+	other := newHarness(t)
+	waiting := openOne(t, other)
+	other.setStatus(waiting.ID, db.StatusManualTestNeeded)
+	other.poll(three("T", 7)...)
+	if s := other.status(waiting.ID); s != db.StatusManualTestNeeded {
+		t.Fatalf("a stuck-read incident waiting for the owner was rerun: %s", s)
+	}
+}

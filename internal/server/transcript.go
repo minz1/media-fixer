@@ -11,6 +11,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 // transcriptToolCall pairs one tool call with its result, for rendering a
@@ -166,7 +167,7 @@ func condenseTurns(turns []transcriptTurn, full bool) ([]transcriptTurn, int) {
 
 // incidentLive reports whether the agent may still add steps to the incident.
 func incidentLive(s db.IncidentStatus) bool {
-	return s == db.StatusOpen || s == db.StatusInvestigating || s == db.StatusReopened
+	return lifecycle.Meta(lifecycle.State(s)).Live
 }
 
 // incidentTranscript renders the full, untruncated thought-process page for

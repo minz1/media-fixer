@@ -13,6 +13,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 const (
@@ -104,23 +105,8 @@ func (s *Service) escalationSpecs(ctx context.Context, inc *db.Incident) ([]butt
 }
 
 func statusLine(st db.IncidentStatus) string {
-	switch st {
-	case db.StatusOpen:
-		return "🆕 Open"
-	case db.StatusInvestigating:
-		return "🔁 Investigating…"
-	case db.StatusVerifying:
-		return "⏳ Verifying the fix"
-	case db.StatusReopened:
-		return "🔁 Re-opened"
-	case db.StatusBlocked:
-		return "⛔ Blocked"
-	case db.StatusAgentFixed:
-		return "✅ Fixed by the agent"
-	case db.StatusManualTestNeeded:
-		return "🧑‍🔧 Needs you"
-	case db.StatusResolved:
-		return "✅ Resolved"
+	if line := lifecycle.Meta(lifecycle.State(st)).Line; line != "" {
+		return line
 	}
 	return string(st)
 }

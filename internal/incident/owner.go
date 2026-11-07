@@ -72,3 +72,13 @@ func (s *Service) CurrentVersion(ctx context.Context, id string) Version {
 	}
 	return Version{N: snap.Version, Set: true}
 }
+
+func (s *Service) SystemRerun(ctx context.Context, id string, gen int64) error {
+	leave, err := s.ownerSection(verbRerun, id)
+	if err != nil {
+		return err
+	}
+	defer leave()
+	_, err = s.apply(ctx, id, lifecycle.Event{Kind: lifecycle.SystemRerun, Gen: gen}, nil)
+	return err
+}

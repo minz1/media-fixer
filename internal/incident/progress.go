@@ -11,11 +11,12 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 func (s *Service) AdvanceReporterProgress(ctx context.Context, now time.Time) {
-	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusVerifying} {
-		incs, err := s.db.FindByStatus(ctx, status)
+	for _, status := range lifecycle.StatesWhere(func(m lifecycle.StateMeta) bool { return m.Progress }) {
+		incs, err := s.db.FindByStatus(ctx, db.IncidentStatus(status))
 		if err != nil {
 			s.log.ErrorContext(ctx, "find incidents for progress", "status", status, "error", err)
 			continue

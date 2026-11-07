@@ -43,7 +43,11 @@ func (s *Server) StuckCardDataForTest(
 
 func (s *Server) TimersCardForTest(ctx context.Context) map[string]any { return s.timersCardFor(ctx) }
 
-func StatusTone(s db.IncidentStatus) string { return statusTone(s) }
+func StatusTone(s db.IncidentStatus) string { return string(statusMeta(s).Tone) }
+
+func StatusWord(s db.IncidentStatus) string { return statusMeta(s).Label }
+
+func IncidentLive(s db.IncidentStatus) bool { return incidentLive(s) }
 func CheckTone(s livecheck.Status) string   { return checkTone(s) }
 func ConfidenceTone(c string) string        { return confidenceTone(c) }
 func SweepTone(s string) string             { return sweepTone(s) }

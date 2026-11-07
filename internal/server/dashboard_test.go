@@ -198,31 +198,6 @@ func mustExecuteIncidentTemplate(t *testing.T, srv *server.Server, incidentID st
 	return buf.String()
 }
 
-// TestIncidentEvents_SettledIncidentClosesImmediately confirms an incident
-// already in a terminal state (see incidentSettled) sends its render once,
-// followed by a named "settled" event, and returns — never entering the
-// blocking select loop, so this test has no timing dependency.
-func TestIncidentEvents_SettledIncidentClosesImmediately(t *testing.T) {
-	t.Parallel()
-	srv, database := newDashboardTestServer(t)
-	inc := newManualTestNeededIncident(t, database)
-
-	req := httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID+"/events", nil)
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
-
-	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
-		t.Errorf("Content-Type = %q, want text/event-stream", ct)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "incident-card") {
-		t.Errorf("expected an initial incident-card partial, got:\n%s", body)
-	}
-	if !strings.Contains(body, "event: settled") {
-		t.Errorf("expected a settled close event, got:\n%s", body)
-	}
-}
-
 // TestIncidentEvents_OpenIncidentStreamsThenClosesOnContextDone confirms a
 // non-terminal incident's stream sends its initial render and then blocks
 // (does not send "settled") until the request context is done, at which

@@ -15,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite" // register SQLite driver
+
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 // ErrNotFound is returned when a requested record does not exist.
@@ -902,7 +904,15 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 // reopened is included because a reopened incident IS active; its previous
 // exclusion meant duplicate reports never collapsed into one.
 func ActiveIncidentStatuses() []IncidentStatus {
-	return []IncidentStatus{StatusOpen, StatusInvestigating, StatusVerifying, StatusReopened}
+	return statusesWhere(func(m lifecycle.StateMeta) bool { return m.Active })
+}
+
+func statusesWhere(pred func(lifecycle.StateMeta) bool) []IncidentStatus {
+	var out []IncidentStatus
+	for _, s := range lifecycle.StatesWhere(pred) {
+		out = append(out, IncidentStatus(s))
+	}
+	return out
 }
 
 // activeStatusesJSON is ActiveIncidentStatuses as one JSON-array bind
@@ -925,10 +935,7 @@ func (d *DB) FindOpenByTitle(ctx context.Context, title string) (*Incident, erro
 
 // FindUnresolvedByTitle is FindOpenByTitle over every status except resolved.
 func (d *DB) FindUnresolvedByTitle(ctx context.Context, title string) (*Incident, error) {
-	return d.findByTitle(ctx, title, []IncidentStatus{
-		StatusOpen, StatusInvestigating, StatusVerifying, StatusReopened,
-		StatusManualTestNeeded, StatusBlocked, StatusAgentFixed,
-	})
+	return d.findByTitle(ctx, title, statusesWhere(func(m lifecycle.StateMeta) bool { return !m.Terminal }))
 }
 
 func (d *DB) findByTitle(ctx context.Context, title string, in []IncidentStatus) (*Incident, error) {

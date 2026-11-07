@@ -347,7 +347,7 @@
     <div class="min-w-0 flex-1">
       <div class="flex items-start justify-between gap-4">
         <div class="font-medium text-gray-900">{{.Title}}</div>
-        <span class="shrink-0">{{template "badge" (dict "Tone" (statusTone .Status) "Word" (statusWord .Status))}}</span>
+        <span class="shrink-0">{{template "badge" (dict "Tone" (statusMeta .Status).Tone "Word" (statusMeta .Status).Label)}}</span>
       </div>
       <div class="text-sm text-gray-500 mt-0.5">
         {{.What}} · {{.Source}} · {{template "ts" .CreatedAt}}
@@ -367,15 +367,8 @@
 {{define "incident"}}{{template "page_top" (dict "Title" (printf "Incident %s · Media Fixer" .Incident.ID) "BaseURL" .BaseURL "Active" "issues" "Paused" .Paused "Done" .Done)}}
       <div class="mb-6"><a href="{{.BaseURL}}/" class="btn btn-secondary">← All incidents</a></div>
 
-      <!-- Closes itself (hx-sse:close="settled", a named event the server
-           sends once the incident reaches a terminal state with nothing
-           left in progress — see incidentSettled) instead of holding the
-           connection open indefinitely on a page that will never change
-           again without a full reload (e.g. Re-run diagnosis, which swaps
-           the whole body and re-establishes a fresh connection anyway). -->
       <div
         hx-sse:connect="{{.BaseURL}}/incidents/{{.Incident.ID}}/events"
-        hx-sse:close="settled"
         hx-swap="none"
       ></div>
 
@@ -393,7 +386,7 @@
         {{.Incident.ReportedBy}}
       </p>
     </div>
-    {{template "badge" (dict "Tone" (statusTone .Incident.Status) "Word" (statusWord .Incident.Status))}}
+    {{template "badge" (dict "Tone" (statusMeta .Incident.Status).Tone "Word" (statusMeta .Incident.Status).Label)}}
   </div>
 
   {{if .Incident.Details}}
@@ -643,7 +636,6 @@
            incident-card/incident-actions elements to target. -->
       <div
         hx-sse:connect="{{.BaseURL}}/incidents/{{.Incident.ID}}/events?full=1"
-        hx-sse:close="settled"
         hx-swap="none"
       ></div>
 

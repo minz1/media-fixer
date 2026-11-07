@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/minz1/mediafixer/internal/db"
 )
 
 // sseKeepAliveInterval bounds how long an idle SSE connection goes without a
@@ -54,17 +52,6 @@ func writeSSEEvent(w http.ResponseWriter, flush func(), data string) {
 		// data is our own server-rendered HTML, already escaped by
 		// html/template when the fragment was executed — not raw user
 		// input reaching the wire unescaped.
-		fmt.Fprintf(w, "data: %s\n", line)
-	}
-	fmt.Fprint(w, "\n")
-	flush()
-}
-
-// writeSSENamedEvent writes an event with an explicit "event:" field, for
-// hx-sse:close="<name>" on the client to match against.
-func writeSSENamedEvent(w http.ResponseWriter, flush func(), name, data string) {
-	fmt.Fprintf(w, "event: %s\n", name)
-	for line := range strings.SplitSeq(data, "\n") {
 		fmt.Fprintf(w, "data: %s\n", line)
 	}
 	fmt.Fprint(w, "\n")
@@ -152,9 +139,7 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 // incremental diff means a client that reconnects mid-run (or one that just
 // missed a coalesced/dropped notification — see journal.Journal.Subscribe's
 // non-blocking-send contract) is trivially always consistent: there is no
-// delta to have missed. Closes the stream with a named "settled" event once
-// the incident reaches a terminal status with nothing left pending, which the
-// incident page's hx-sse:close="settled" matches to stop reconnecting.
+// delta to have missed.
 func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 	id := incidentIDParam(r)
 	if s.journal == nil {
@@ -175,23 +160,16 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 	ch, unsubscribe := s.journal.Subscribe(id)
 	defer unsubscribe()
 
-	render := func() bool {
+	render := func() {
 		data, err := s.buildIncidentPageData(ctx, id, full)
 		if err != nil {
-			return false
+			return
 		}
-		combined, renderErr := s.renderIncidentFragments(data, full)
-		if renderErr != nil {
-			return false
+		if combined, renderErr := s.renderIncidentFragments(data, full); renderErr == nil {
+			writeSSEEvent(w, flush, combined)
 		}
-		writeSSEEvent(w, flush, combined)
-		inc, _ := data["Incident"].(*db.Incident)
-		return inc != nil && incidentSettled(inc)
 	}
-	if render() {
-		writeSSENamedEvent(w, flush, "settled", "")
-		return
-	}
+	render()
 
 	ticker := time.NewTicker(sseKeepAliveInterval)
 	defer ticker.Stop()
@@ -206,10 +184,7 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 			if !chOK {
 				return
 			}
-			if render() {
-				writeSSENamedEvent(w, flush, "settled", "")
-				return
-			}
+			render()
 		case <-ticker.C:
 			writeSSEComment(w, flush, "keep-alive")
 		}
@@ -234,19 +209,4 @@ func (s *Server) renderIncidentFragments(data map[string]any, transcriptOnly boo
 		parts = append(parts, hxPartial(id, sb.String()))
 	}
 	return strings.Join(parts, "\n"), nil
-}
-
-// incidentSettled reports whether an incident has reached a terminal state
-// with nothing left for the sweep loops to advance — the point at which the
-// live stream has nothing further to say and can close instead of holding
-// the connection open indefinitely.
-func incidentSettled(inc *db.Incident) bool {
-	switch inc.Status {
-	case db.StatusResolved, db.StatusAgentFixed, db.StatusManualTestNeeded, db.StatusBlocked:
-		return true
-	case db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened:
-		return false
-	default:
-		return false
-	}
 }

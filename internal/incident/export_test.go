@@ -199,3 +199,5 @@ func (s *Service) ReconcileForTest(ctx context.Context) lifecycle.Counts { retur
 func (s *Service) ReserveForTest(id string) func() { return s.runs.reserve(id) }
 
 func (s *Service) PlanStartedForTest(id string) func() { return s.runs.planStarted(id) }
+
+func StatusLineForTest(st db.IncidentStatus) string { return statusLine(st) }
