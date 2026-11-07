@@ -1255,9 +1255,7 @@ func (d *DB) LogAction(ctx context.Context, a *ActionLog) error {
 }
 
 // insertActionLog inserts one actions_log row within tx, generating an ID and
-// applied_at if absent. AppendEvents calls it for an event that carries an
-// ActionLog, writing an action_applied event and its actions_log projection
-// atomically — both succeed or both roll back.
+// applied_at if absent.
 func insertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
@@ -1630,8 +1628,7 @@ func (d *DB) AppendEvents(ctx context.Context, events ...*Event) error {
 	})
 }
 
-// appendEvent inserts one event row within tx and sets its assigned seq, plus
-// the actions_log row the event carries, if any. A free function, not a *DB
+// appendEvent inserts one event row within tx. A free function, not a *DB
 // method, so a caller composing an event insert with a projection write (both
 // must land in the same transaction) isn't tempted to reach for a second,
 // unrelated *DB write pool mid-transaction.

@@ -597,10 +597,6 @@ func (a *Agent) initMessages(
 
 // processToolCalls handles one batch of tool calls from the LLM.
 // It appends tool result messages to *messages in place.
-// Returns evConcluded with the result when complete_diagnosis is recorded,
-// evBudgetTripped when the action limit is hit, evBatchFailed when the
-// diagnosis can't be recorded, and evBatchDone otherwise, including when ctx
-// is done before a call is dispatched.
 func (a *Agent) processToolCalls(
 	ctx context.Context,
 	inc *db.Incident,
