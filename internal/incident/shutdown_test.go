@@ -199,8 +199,17 @@ func TestBackgroundLoop_LockEpisodeTickRearmsAlert(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if svc.LockAlertArmedForTest() {
+		t.Fatal("the lock alert never fired for six open incidents")
+	}
 	svc.Start()
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for !svc.LockAlertArmedForTest() {
+		if time.Now().After(deadline) {
+			t.Fatal("the loop's tick never re-armed the lock alert")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	for _, inc := range first[:2] {
 		if err := database.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusReopened); err != nil {
 			t.Fatal(err)

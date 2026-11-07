@@ -119,3 +119,7 @@ func (s *Service) SupersedeForTest(id string) context.Context {
 	ctx, _, _ := s.runs.supersede(id)
 	return ctx
 }
+
+func (s *Service) LockAlertArmedForTest() bool {
+	return s.lockAlertAt.Load() == 0
+}
