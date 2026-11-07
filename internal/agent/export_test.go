@@ -214,3 +214,11 @@ type ToolImpactForTest = toolImpact
 func (d *Dispatcher) CallScoped(ctx context.Context, s Scope, name string, args map[string]any) (any, error) {
 	return d.call(ctx, &toolCall{scope: s}, name, args)
 }
+
+func (d *Dispatcher) CallGated(ctx context.Context, s Scope, g Gate, name string, args map[string]any) (any, error) {
+	return d.call(ctx, &toolCall{scope: s, gate: g}, name, args)
+}
+
+func (a *Agent) SetReadinessForTest(timeout, interval time.Duration) {
+	a.readyTimeout, a.readyInterval = timeout, interval
+}

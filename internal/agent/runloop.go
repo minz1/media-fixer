@@ -144,7 +144,7 @@ func manualFinding(s RunState, err error) *DiagnosticResult {
 	}
 	reason := ""
 	if s == RunBudgetTripped {
-		reason = "agent applied 3 actions without confirming fix"
+		reason = "agent tried 3 autonomous actions without confirming a fix"
 	}
 	if s == RunExhausted {
 		reason = "agent did not reach a conclusion within iteration limit"

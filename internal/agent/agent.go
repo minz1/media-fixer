@@ -304,6 +304,9 @@ type Agent struct {
 	db      *db.DB
 	journal *journal.Journal
 	log     *slog.Logger
+
+	readyTimeout  time.Duration
+	readyInterval time.Duration
 }
 
 // New creates an Agent.
@@ -582,41 +585,16 @@ func (a *Agent) processToolCalls(
 		}
 
 		if isAutonomousAction(fn) {
-			// Structural backstop for the "do not repeat a failed action" instruction
-			// in attemptHistory: the prompt is not enough on its own — a run seeded
-			// from a lossy summary, or one that just weighs the evidence the same way
-			// again, can still reach for the same fix a second time. This blocks it
-			// before it executes rather than trusting the model to have read the
-			// history. Checked (and messaged) before the action-limit increment below
-			// so a blocked repeat doesn't burn from the same budget a real attempt
-			// would.
-			if a.actionAlreadyApplied(ctx, inc.ID, fn, call.Function.Arguments) {
-				a.log.WarnContext(ctx, "duplicate action blocked, already applied on this incident", "tool", fn)
-				*messages = append(*messages, openai.ChatCompletionMessage{
-					Role: openai.ChatMessageRoleTool,
-					Content: jsonResult(map[string]any{
-						keyError: fmt.Sprintf(
-							"%s (with these parameters) was already applied on this incident and did not "+
-								"resolve it. Do not repeat it — choose a different action, or set "+
-								"escalate_action and call complete_diagnosis.",
-							fn,
-						),
-					}),
-					ToolCallID: call.ID,
-				})
-				continue
-			}
-
-			ev, skip := a.act(ctx, gate, call, messages)
-			if ev.kind != "" {
+			if ev := a.invoke(ctx, inc, call, seenCalls, gate, messages); ev.kind != "" {
 				return ev, nil
 			}
-			if skip {
-				continue
-			}
+			continue
+		}
+		if kind, stop := gateStop(gate.Live(ctx)); stop {
+			return runEvent{kind: kind}, nil
 		}
 
-		resultJSON := a.executeCall(ctx, inc, fn, call.Function.Arguments, seenCalls)
+		resultJSON := a.executeRead(ctx, inc, fn, call.Function.Arguments)
 		*messages = append(*messages, openai.ChatCompletionMessage{
 			Role:       openai.ChatMessageRoleTool,
 			Content:    resultJSON,
@@ -682,33 +660,8 @@ func (a *Agent) handleCompleteDiagnosis(
 	return &result, nil
 }
 
-// executeCall dispatches a single tool call with dedup protection for action tools.
-func (a *Agent) executeCall(
-	ctx context.Context,
-	inc *db.Incident,
-	fn, argsJSON string,
-	seenCalls map[string]int,
-) string {
-	callKey := fn + ":" + argsJSON
-	seenCalls[callKey]++
-
-	// Only block duplicate calls for state-changing actions. Read-only diagnostic
-	// tools (playback info, dd, loki, etc.) may legitimately be re-called to
-	// verify that an autonomous action actually fixed the problem.
-	if isAutonomousAction(fn) && seenCalls[callKey] > 1 {
-		a.log.WarnContext(ctx, "duplicate action blocked", "tool", fn)
-		return jsonResult(map[string]any{
-			keyError: fmt.Sprintf(
-				"you already called %s — it has been applied, do not repeat it. Call complete_diagnosis with your current findings.",
-				fn,
-			),
-		})
-	}
-
-	c := &toolCall{
-		scope:   Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
-		journal: a.journal,
-	}
+func (a *Agent) executeRead(ctx context.Context, inc *db.Incident, fn, argsJSON string) string {
+	c := &toolCall{scope: Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt}}
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
 	result, err := a.disp.call(ctx, c, fn, args)
@@ -718,6 +671,216 @@ func (a *Agent) executeCall(
 	}
 	a.log.DebugContext(ctx, "tool call", "tool", fn, "result", resultJSON)
 	return resultJSON
+}
+
+func (a *Agent) invoke(
+	ctx context.Context,
+	inc *db.Incident,
+	call openai.ToolCall,
+	seen map[string]int,
+	gate Gate,
+	messages *[]openai.ChatCompletionMessage,
+) runEvent {
+	fn := call.Function.Name
+	spec, _ := specByName(fn)
+	v := &invocation{
+		a:    a,
+		ctx:  ctx,
+		fn:   fn,
+		seen: seen,
+		key:  fn + ":" + call.Function.Arguments,
+		snap: callSnap{State: callProposed, Impact: spec.Impact},
+		c: &toolCall{
+			scope:         Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
+			gate:          gate,
+			readyTimeout:  a.readyTimeout,
+			readyInterval: a.readyInterval,
+		},
+	}
+	var args map[string]any
+	_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+	v.drive(call.Function.Arguments, args)
+	if v.reply == "" {
+		a.log.ErrorContext(ctx, "tool call ended without a reply", "tool", fn, "state", v.snap.State)
+		v.reply = errorReply("not run: internal error")
+	}
+	*messages = append(*messages, openai.ChatCompletionMessage{
+		Role:       openai.ChatMessageRoleTool,
+		Content:    v.reply,
+		ToolCallID: call.ID,
+	})
+	return v.ev
+}
+
+type invocation struct {
+	a     *Agent
+	ctx   context.Context
+	fn    string
+	seen  map[string]int
+	key   string
+	snap  callSnap
+	c     *toolCall
+	reply string
+	ev    runEvent
+}
+
+type stepInfo struct {
+	reply   string
+	verdict Verdict
+	errText string
+	params  map[string]any
+}
+
+func errorReply(text string) string {
+	return jsonResult(map[string]any{keyError: text})
+}
+
+func notRunReply(v Verdict) string {
+	switch v {
+	case GateTripped:
+		return errorReply(notRunTripped)
+	case GatePaused:
+		return errorReply(notRunPaused)
+	case GateSuperseded:
+		return errorReply(notRunSuperseded)
+	case GateAllowed, GateDiagnosisOnly:
+	}
+	return errorReply(notRunDiagnosisOnly)
+}
+
+func verdictEvent(v Verdict) runEvent {
+	if v == GateTripped {
+		return runEvent{kind: evBudgetTripped}
+	}
+	kind, _ := gateStop(v)
+	return runEvent{kind: kind}
+}
+
+func (v *invocation) step(kind callKind, in stepInfo) {
+	next, effects, err := nextCall(v.snap, kind)
+	if err != nil {
+		v.a.log.ErrorContext(v.ctx, "tool call step rejected", "tool", v.fn, "event", kind, "error", err)
+		return
+	}
+	v.snap = next
+	for _, e := range effects {
+		switch e {
+		case effReply:
+			v.reply = in.reply
+		case effVerdict:
+			v.ev = verdictEvent(in.verdict)
+		case effLog:
+			v.a.recordCall(v.ctx, v.c.scope.IncidentID, v.fn, in.params,
+				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive)
+		case effRemember:
+			v.seen[v.key]++
+		}
+	}
+}
+
+func (v *invocation) drive(argsJSON string, args map[string]any) {
+	if live := v.c.gate.Live(v.ctx); live != GateAllowed {
+		if _, stop := gateStop(live); stop {
+			v.step(evLiveDenied, stepInfo{reply: notRunReply(live), verdict: live})
+			return
+		}
+	}
+	if v.a.actionAlreadyApplied(v.ctx, v.c.scope.IncidentID, v.fn, argsJSON) {
+		v.a.log.WarnContext(v.ctx, "duplicate action blocked, already applied on this incident", "tool", v.fn)
+		v.step(evAppliedBefore, stepInfo{reply: errorReply(fmt.Sprintf(
+			"%s (with these parameters) was already applied on this incident and did not "+
+				"resolve it. Do not repeat it — choose a different action, or set "+
+				"escalate_action and call complete_diagnosis.", v.fn))})
+		return
+	}
+	if v.seen[v.key] > 0 {
+		v.a.log.WarnContext(v.ctx, "duplicate action blocked", "tool", v.fn)
+		v.step(evSeenInRun, stepInfo{reply: errorReply(fmt.Sprintf(
+			"you already called %s — it has been applied, do not repeat it. "+
+				"Call complete_diagnosis with your current findings.", v.fn))})
+		return
+	}
+	v.step(evCleared, stepInfo{})
+
+	result, err := v.a.disp.call(v.ctx, v.c, v.fn, args)
+	v.a.log.DebugContext(v.ctx, "tool call", "tool", v.fn, "result", jsonResult(result))
+	if !v.c.acted {
+		v.beforeAct(args, err)
+		return
+	}
+	switch {
+	case v.c.gateErr != nil:
+		v.a.log.ErrorContext(v.ctx, "record autonomous action", "tool", v.fn, "error", v.c.gateErr)
+		v.step(evGateFailed, stepInfo{reply: errorReply(notRunUnrecorded)})
+	case v.c.verdict != GateAllowed:
+		v.step(evGateDenied, stepInfo{reply: notRunReply(v.c.verdict), verdict: v.c.verdict})
+	default:
+		v.step(evGateAllowed, stepInfo{})
+		v.afterAct(result, err)
+	}
+}
+
+func (v *invocation) beforeAct(args map[string]any, err error) {
+	var ref *refusal
+	switch {
+	case errors.As(err, &ref):
+		reply := ref.reply
+		if reply == nil {
+			reply = map[string]any{keyError: ref.reason}
+		}
+		v.step(evRefusal, stepInfo{reply: jsonResult(reply), errText: ref.reason, params: identitySubset(args)})
+	case err != nil:
+		v.step(evPreconditionFailed, stepInfo{reply: errorReply("not run: " + err.Error())})
+	default:
+		v.a.log.ErrorContext(v.ctx, "write handler returned without act", "tool", v.fn)
+		v.step(evPreconditionFailed, stepInfo{reply: errorReply("not run: handler did not reach act")})
+	}
+}
+
+func (v *invocation) afterAct(result any, err error) {
+	switch {
+	case err == nil:
+		v.step(evSucceeded, stepInfo{reply: jsonResult(result), params: v.c.params})
+	case errors.Is(err, errAppliedNotReady):
+		v.step(evNotReady, stepInfo{reply: errorReply(err.Error()), errText: err.Error(), params: v.c.params})
+	default:
+		v.step(evErrored, stepInfo{reply: errorReply(err.Error()), errText: err.Error(), params: v.c.params})
+	}
+}
+
+func identitySubset(args map[string]any) map[string]any {
+	var out map[string]any
+	for _, k := range identityParamKeys() {
+		if val, ok := args[k]; ok {
+			if out == nil {
+				out = map[string]any{}
+			}
+			out[k] = val
+		}
+	}
+	return out
+}
+
+func (a *Agent) recordCall(
+	ctx context.Context, incidentID, tool string, params map[string]any, status db.ActionStatus,
+	errText string, disruptive bool,
+) {
+	if a.journal == nil {
+		return
+	}
+	jctx, cancel := detached(ctx)
+	defer cancel()
+	err := a.journal.LogAction(jctx, &db.ActionLog{
+		IncidentID:  incidentID,
+		Action:      tool,
+		Params:      params,
+		TriggeredBy: triggeredByAgent,
+		Status:      status,
+		Error:       errText,
+	}, disruptive)
+	if err != nil {
+		a.log.ErrorContext(ctx, "action record lost", "tool", tool, "outcome", status, "error", err)
+	}
 }
 
 // captureSignature snapshots a title's current observable state: what
@@ -1092,7 +1255,7 @@ func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\nActions already attempted on this incident, each marked applied or failed. They " +
+	sb.WriteString("\nActions already attempted on this incident, each marked applied, failed or refused. They " +
 		"did NOT resolve the problem (the incident is still open). Do not repeat any of them; if your " +
 		"evidence points toward one again, that is a signal to look for a different cause or to " +
 		"escalate, not to retry it:\n")
@@ -1120,7 +1283,7 @@ func identityParamKeys() []string {
 // identityParamsMatch reports whether a and b identify the same target: both
 // empty (a parameterless action like restart_jellyfin), or agreeing on every
 // identity key present in both. Checked individually instead of comparing
-// full JSON objects because logAction sometimes records extra resolved
+// full JSON objects because recordCall sometimes records extra resolved
 // fields the LLM's own call arguments never contain — e.g. sonarr_rescan
 // logs series_id alongside the title the LLM passed.
 //

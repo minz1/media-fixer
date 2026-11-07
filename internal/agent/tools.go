@@ -14,8 +14,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/client"
-	"github.com/minz1/mediafixer/internal/db"
-	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const (
@@ -821,23 +819,20 @@ type Dispatcher struct {
 	MediaAgent *client.MediaAgentClient
 }
 
-type Scope struct {
-	IncidentID string
-	What       string
-	ReportedAt time.Time
-}
-
-type toolCall struct {
-	scope   Scope
-	journal *journal.Journal
-}
-
 // Call executes a tool by name with already-decoded arguments and returns the
 // typed result. Errors are returned rather than folded into
 // the JSON payload — this is what live-check tooling uses to tell "tool
 // errored" apart from "tool returned an error-shaped result".
 func (d *Dispatcher) Call(ctx context.Context, name string, args map[string]any) (any, error) {
-	return d.call(ctx, &toolCall{}, name, args)
+	result, err := d.call(ctx, &toolCall{}, name, args)
+	var ref *refusal
+	if errors.As(err, &ref) && ref.cause == nil {
+		if ref.reply != nil {
+			return ref.reply, nil
+		}
+		return map[string]string{keyError: ref.reason}, nil
+	}
+	return result, err
 }
 
 func (d *Dispatcher) call(ctx context.Context, c *toolCall, name string, args map[string]any) (any, error) {
@@ -845,6 +840,7 @@ func (d *Dispatcher) call(ctx context.Context, c *toolCall, name string, args ma
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
+	c.tool = name
 	return spec.Handler(d, ctx, c, args)
 }
 
@@ -1133,46 +1129,52 @@ func (d *Dispatcher) readArrGrabHistory(ctx context.Context, _ *toolCall, args m
 // --- write (autonomous action) handlers ---
 
 func (d *Dispatcher) dispatchRefreshLinks(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
+	if err := c.act(ctx, nil); err != nil {
+		return nil, err
+	}
 	runID, err := d.Decypharr.RefreshLinks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	c.logAction(ctx, toolRefreshLinks, nil)
 	return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 }
 
 func (d *Dispatcher) dispatchRepairSweep(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
+	if err := c.act(ctx, nil); err != nil {
+		return nil, err
+	}
 	runID, err := d.Decypharr.RunRepairSweep(ctx)
 	if err != nil {
 		return nil, err
 	}
-	c.logAction(ctx, toolRepairSweep, nil)
 	return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 }
 
 func (d *Dispatcher) dispatchCacheCleanup(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
+	if err := c.act(ctx, nil); err != nil {
+		return nil, err
+	}
 	if err := d.Decypharr.MountCacheCleanup(ctx); err != nil {
 		return nil, err
 	}
-	c.logAction(ctx, toolCacheCleanup, nil)
 	return map[string]string{keyStatus: statusStarted}, nil
 }
 
-// dispatchLibraryScan triggers a Jellyfin library scan, but first checks whether
-// one is already running so the agent never re-triggers an in-progress scan.
 func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	status, err := d.Jellyfin.ScanStatus(ctx)
 	if err == nil && status.Running {
-		return map[string]any{
+		return nil, refuseWith("a library scan is already running", map[string]any{
 			keyStatus:      "already_running",
 			"progress_pct": status.ProgressPct,
 			"note":         "a library scan is already in progress — do not trigger another; wait for it to finish",
-		}, nil
+		})
+	}
+	if actErr := c.act(ctx, nil); actErr != nil {
+		return nil, actErr
 	}
 	if scanErr := d.Jellyfin.LibraryScan(ctx); scanErr != nil {
 		return nil, scanErr
 	}
-	c.logAction(ctx, toolJellyfinLibraryScan, nil)
 	return map[string]string{keyStatus: statusStarted}, nil
 }
 
@@ -1208,7 +1210,10 @@ func waitUntilReady(ctx context.Context, timeout, interval time.Duration, probe 
 
 func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
-		return nil, errMediaAgentNotConfigured
+		return nil, refuseCause(errMediaAgentNotConfigured)
+	}
+	if err := c.act(ctx, nil); err != nil {
+		return nil, err
 	}
 	if err := d.MediaAgent.RestartService(ctx, "decypharr"); err != nil {
 		return nil, err
@@ -1217,10 +1222,10 @@ func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, 
 		_, err := d.Decypharr.RepairStatus(ctx)
 		return err
 	}
-	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, probe); err != nil {
-		return nil, fmt.Errorf("decypharr restarted but did not become ready: %w", err)
+	timeout, interval := c.ready()
+	if err := waitUntilReady(ctx, timeout, interval, probe); err != nil {
+		return nil, notReady(fmt.Errorf("decypharr restarted but did not become ready: %w", err))
 	}
-	c.logAction(ctx, toolRestartDecypharr, nil)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
@@ -1248,15 +1253,18 @@ func (d *Dispatcher) jellyfinServing(ctx context.Context) error {
 
 func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
-		return nil, errMediaAgentNotConfigured
+		return nil, refuseCause(errMediaAgentNotConfigured)
+	}
+	if err := c.act(ctx, nil); err != nil {
+		return nil, err
 	}
 	if err := d.MediaAgent.RestartService(ctx, "jellyfin"); err != nil {
 		return nil, err
 	}
-	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, d.jellyfinServing); err != nil {
-		return nil, fmt.Errorf("jellyfin restarted but did not become ready: %w", err)
+	timeout, interval := c.ready()
+	if err := waitUntilReady(ctx, timeout, interval, d.jellyfinServing); err != nil {
+		return nil, notReady(fmt.Errorf("jellyfin restarted but did not become ready: %w", err))
 	}
-	c.logAction(ctx, toolRestartJellyfin, nil)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
@@ -1264,16 +1272,18 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _
 func (d *Dispatcher) dispatchDecypharrRecheck(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	name, _ := args[paramName].(string)
 	if name == "" {
-		return map[string]string{keyError: "name is required"}, nil
+		return nil, refuse("name is required")
 	}
 	fix := true
 	if v, ok := args["fix"].(bool); ok {
 		fix = v
 	}
+	if err := c.act(ctx, map[string]any{paramName: name, "fix": fix}); err != nil {
+		return nil, err
+	}
 	if err := d.Decypharr.RecheckEntry(ctx, name, fix); err != nil {
 		return nil, err
 	}
-	c.logAction(ctx, toolDecypharrRecheck, map[string]any{paramName: name, "fix": fix})
 	return map[string]string{keyStatus: "rechecked"}, nil
 }
 
@@ -1281,15 +1291,17 @@ func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, c *toolCall, args
 	title, _ := args[paramTitle].(string)
 	series, err := d.Sonarr.SearchSeries(ctx, title)
 	if errors.Is(err, client.ErrNotFound) {
-		return map[string]string{keyError: "series not found in sonarr"}, nil
+		return nil, refuse("series not found in sonarr")
 	}
 	if err != nil {
 		return nil, err
 	}
+	if actErr := c.act(ctx, map[string]any{paramSeriesID: series.ID, paramTitle: title}); actErr != nil {
+		return nil, actErr
+	}
 	if rescanErr := d.Sonarr.RescanSeries(ctx, series.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
-	c.logAction(ctx, toolSonarrRescan, map[string]any{paramSeriesID: series.ID, paramTitle: title})
 	return map[string]any{paramSeriesID: series.ID, keyStatus: "rescan_queued"}, nil
 }
 
@@ -1297,24 +1309,28 @@ func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, c *toolCall, args
 	title, _ := args[paramTitle].(string)
 	movie, err := d.Radarr.SearchMovie(ctx, title)
 	if errors.Is(err, client.ErrNotFound) {
-		return map[string]string{keyError: "movie not found in radarr"}, nil
+		return nil, refuse("movie not found in radarr")
 	}
 	if err != nil {
 		return nil, err
 	}
+	if actErr := c.act(ctx, map[string]any{paramMovieID: movie.ID, paramTitle: title}); actErr != nil {
+		return nil, actErr
+	}
 	if rescanErr := d.Radarr.RescanMovie(ctx, movie.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
-	c.logAction(ctx, toolRadarrRescan, map[string]any{paramMovieID: movie.ID, paramTitle: title})
 	return map[string]any{paramMovieID: movie.ID, keyStatus: "rescan_queued"}, nil
 }
 
 func (d *Dispatcher) dispatchClearJellyfinCache(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	itemID, _ := args[paramItemID].(string)
+	if err := c.act(ctx, map[string]any{paramItemID: itemID}); err != nil {
+		return nil, err
+	}
 	if err := d.Jellyfin.DeleteCache(ctx, itemID); err != nil {
 		return nil, err
 	}
-	c.logAction(ctx, toolClearJellyfinCache, map[string]any{paramItemID: itemID})
 	return map[string]string{keyStatus: "cache_cleared"}, nil
 }
 
@@ -1347,37 +1363,50 @@ func (d *Dispatcher) dispatchArrSearchMissing(ctx context.Context, c *toolCall, 
 		return nil, err
 	}
 	if status.HasFile {
-		return nil, ErrArrTargetHasFile
+		return nil, refuseCause(ErrArrTargetHasFile)
 	}
 
-	scope, searchErr := d.triggerArrSearch(ctx, mediaType, status, season, episode)
+	params := map[string]any{
+		paramMediaType: mediaType, paramTitle: title, paramSeason: season, paramEpisode: episode,
+	}
+	scope, searchErr := d.triggerArrSearch(ctx, c, params, mediaType, status, season, episode)
 	if searchErr != nil {
 		return nil, searchErr
 	}
-	c.logAction(ctx, toolArrSearchMissing, map[string]any{
-		paramMediaType: mediaType, paramTitle: title, paramSeason: season, paramEpisode: episode,
-	})
 	return map[string]any{keyStatus: statusStarted, paramScope: scope}, nil
 }
 
 // triggerArrSearch fires the narrowest search command the given target
 // supports and returns its scope for reporting.
 func (d *Dispatcher) triggerArrSearch(
-	ctx context.Context, mediaType string, status *MediaStatusResult, season, episode int,
+	ctx context.Context, c *toolCall, params map[string]any, mediaType string, status *MediaStatusResult,
+	season, episode int,
 ) (string, error) {
 	switch {
 	case mediaType == client.ReplaceMediaMovie:
+		if err := c.act(ctx, params); err != nil {
+			return "", err
+		}
 		return "movie", d.Radarr.SearchMovieNow(ctx, status.MovieID)
 	case episode >= 0:
 		epID, findErr := d.findSonarrEpisodeID(ctx, status.SeriesID, season, episode)
 		if findErr != nil {
 			return "", findErr
 		}
+		if err := c.act(ctx, params); err != nil {
+			return "", err
+		}
 		_, err := d.Sonarr.SearchEpisodes(ctx, []int{epID})
 		return "episode", err
 	case season >= 0:
+		if err := c.act(ctx, params); err != nil {
+			return "", err
+		}
 		return "season", d.Sonarr.SeasonSearch(ctx, status.SeriesID, season)
 	default:
+		if err := c.act(ctx, params); err != nil {
+			return "", err
+		}
 		return "series", d.Sonarr.SeriesSearch(ctx, status.SeriesID)
 	}
 }
@@ -1395,7 +1424,7 @@ func (d *Dispatcher) findSonarrEpisodeID(ctx context.Context, seriesID, season, 
 			return ep.ID, nil
 		}
 	}
-	return 0, fmt.Errorf("arr_search_missing: season %d episode %d not found", season, episode)
+	return 0, refuse("episode not found in sonarr")
 }
 
 // --- approval (owner-approved escalation) handlers ---
@@ -1681,32 +1710,6 @@ func intArgOrSentinel(args map[string]any, key string) int {
 		return noArgValue
 	}
 	return n
-}
-
-func isDisruptiveTool(name string) bool {
-	spec, ok := specByName(name)
-	return ok && spec.disruptive()
-}
-
-// logAction records a completed action via the event log: an action_applied
-// event plus its actions_log projection, atomically (see journal.LogAction).
-// A nil Journal (e.g. when the dispatcher is used by the live-check CLI,
-// which has no incident to attach actions to) is a silent no-op rather than a
-// panic. Disruptive actions are tagged as such so journal.LastDisruption can
-// find them — a concurrently-starting run's prompt is warned about them via
-// Agent.disruptionNote, a best-effort visibility aid, not a lock; globalSlot
-// is what actually prevents the interference.
-func (c *toolCall) logAction(ctx context.Context, action string, params map[string]any) {
-	if c.journal == nil {
-		return
-	}
-	_ = c.journal.LogAction(ctx, &db.ActionLog{
-		IncidentID:  c.scope.IncidentID,
-		Action:      action,
-		Params:      params,
-		TriggeredBy: triggeredByAgent,
-		Status:      db.ActionApplied,
-	}, isDisruptiveTool(action))
 }
 
 // --- helpers ---

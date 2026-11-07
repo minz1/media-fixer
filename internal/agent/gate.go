@@ -28,6 +28,9 @@ type Gate interface {
 const (
 	notRunDiagnosisOnly = "not run: budget spent, diagnosis only"
 	notRunUnrecorded    = "not run: could not record the action"
+	notRunTripped       = "not run: autonomous action limit reached"
+	notRunPaused        = "not run: autonomous actions paused"
+	notRunSuperseded    = "not run: the run was stopped"
 )
 
 func gateStop(v Verdict) (runEventKind, bool) {
@@ -46,34 +49,6 @@ func claimEvent(err error) runEvent {
 		return runEvent{kind: evClaimRefused, err: err}
 	}
 	return runEvent{kind: evClaimFailed, err: err}
-}
-
-func (a *Agent) act(
-	ctx context.Context, gate Gate, call openai.ToolCall, messages *[]openai.ChatCompletionMessage,
-) (runEvent, bool) {
-	fn := call.Function.Name
-	v, err := gate.Act(ctx, fn)
-	reply := func(text string) (runEvent, bool) {
-		*messages = append(*messages, openai.ChatCompletionMessage{
-			Role: openai.ChatMessageRoleTool, Content: jsonResult(map[string]any{keyError: text}), ToolCallID: call.ID,
-		})
-		return runEvent{}, true
-	}
-	if err != nil {
-		a.log.ErrorContext(ctx, "record autonomous action", "tool", fn, "error", err)
-		return reply(notRunUnrecorded)
-	}
-	switch v {
-	case GateAllowed:
-		return runEvent{}, false
-	case GateTripped:
-		return runEvent{kind: evBudgetTripped}, false
-	case GateDiagnosisOnly:
-		return reply(notRunDiagnosisOnly)
-	case GatePaused, GateSuperseded:
-	}
-	kind, _ := gateStop(v)
-	return runEvent{kind: kind}, false
 }
 
 func (a *Agent) conclude(

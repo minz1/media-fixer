@@ -308,7 +308,7 @@ func TestIncidentExport_DownloadsBundleWithEventsAndActions(t *testing.T) {
 	lifecycletest.Incident(t, database, inc)
 	// Use journal.LogAction, not the plain database.LogAction, to also
 	// produce the action_applied event this test asserts on — production
-	// code (Dispatcher.logAction) always goes through the journal; a bare
+	// code (Agent.recordCall) always goes through the journal; a bare
 	// db.LogAction call is a standalone write with no event, by design.
 	action := &db.ActionLog{
 		IncidentID: inc.ID, Action: "clear_jellyfin_cache", TriggeredBy: "agent", Status: db.ActionApplied,

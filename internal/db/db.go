@@ -1128,6 +1128,7 @@ type ActionStatus string
 const (
 	ActionApplied ActionStatus = "applied"
 	ActionFailed  ActionStatus = "failed"
+	ActionRefused ActionStatus = "refused"
 )
 
 // ActionLog records a single action taken for an incident.

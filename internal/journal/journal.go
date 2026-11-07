@@ -259,9 +259,9 @@ type actionAppliedPayload struct {
 }
 
 // LogAction appends an action_applied event and writes its actions_log
-// projection atomically — the shared replacement for the old
-// Dispatcher.logAction (agent-triggered, always status=applied by the time it
-// logs) and Service.logEscalation (owner-triggered, may log status=failed
+// projection atomically — the shared writer for Agent.recordCall
+// (agent-triggered, applied, failed or refused) and Service.logEscalation
+// (owner-triggered, may log status=failed
 // with a Result/Error already known). a.AppliedAt, if nil, defaults to now;
 // a.ID, if empty, is generated here (not left to the actions_log projection
 // to generate its own — the event and its projection must share one ID so an

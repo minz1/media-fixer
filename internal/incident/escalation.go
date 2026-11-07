@@ -177,7 +177,7 @@ func partialOf(action string, execResult any) lifecycle.Partial {
 }
 
 // logEscalation records an owner-approved escalation to the event log,
-// mirroring Dispatcher.logAction but attributed to the owner rather than the
+// mirroring Agent.recordCall but attributed to the owner rather than the
 // agent. Not tagged disruptive — remove_and_search (currently the only
 // automated escalation) is item-scoped, not service-wide, so it's outside
 // what Agent.disruptionNote warns concurrent runs about.
