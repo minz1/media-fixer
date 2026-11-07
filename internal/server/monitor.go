@@ -140,7 +140,7 @@ func (s *Server) renderMonitorShow(
 	set, _ := sweep.LoadSettings(ctx, s.db)
 	v := monitorShowView{
 		BaseURL: s.baseURL, ID: id, Title: showTitle(sh, id), Show: sh, StuckAfter: set.StuckAfter,
-		Status: s.sweepStatus(started), Notice: notice, Failure: failure, Paused: s.isPaused(ctx),
+		Status: s.sweepStatus(ctx, started), Notice: notice, Failure: failure, Paused: s.isPaused(ctx),
 		Explain: explainView{BaseURL: s.baseURL, ID: id},
 	}
 	for _, l := range sh.Live {

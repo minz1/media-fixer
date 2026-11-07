@@ -1201,7 +1201,7 @@
   <div class="mt-1">{{template "counts" .Progress.Counts}}</div>
   {{else}}
   {{template "badge" (dict "Tone" "gray" "Word" "Idle")}}
-  <span class="kv"><span>Next run: <span class="v">{{with .Next}}{{template "ts" .}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}</span></span></span>
+  <span class="kv"><span>Next run: <span class="v">{{if .Unknown}}unknown{{else}}{{with .Next}}{{template "ts" .}}{{if $.Due}} (due){{end}}{{else}}not scheduled (disabled){{end}}{{end}}</span></span></span>
   {{end}}
 </div>
 {{end}}
@@ -1220,6 +1220,7 @@
   <h2 class="card-title">Monitoring</h2>
   {{template "notice" (dict "Ok" .Notice "Err" .Failure)}}
   {{with .List.SonarrErr}}<p class="notice notice-err">Sonarr could not be read: {{.}}</p>{{end}}
+  {{if .List.SettingsUnreadable}}<p class="notice notice-err">Stored sweep settings couldn't be read.</p>{{end}}
   <div class="space-y-2">
     {{range .List.Rows}}
     <a class="row" href="{{$.BaseURL}}/monitoring/{{.SeriesID}}">
@@ -1281,6 +1282,7 @@
   </div>
   {{template "notice" (dict "Ok" .Notice "Err" .Failure)}}
   {{with .Show.SonarrErr}}<p class="notice notice-err">Sonarr could not be read: {{.}}</p>{{end}}
+  {{if .Show.SettingsUnreadable}}<p class="notice notice-err">Stored sweep settings couldn't be read.</p>{{end}}
 
   {{template "sweep_status" .Status}}
 
@@ -1295,7 +1297,7 @@
       <button type="submit" class="btn btn-primary">Search singles now</button>
     </form>
     {{end}}
-    {{if .Show.Excluded}}
+    {{if .Show.SettingsUnreadable}}{{else if .Show.Excluded}}
     <form hx-post="{{.BaseURL}}/monitoring/include" hx-target="#monitor-show" hx-swap="outerHTML"
       hx-confirm="Include {{.Title}} in the sweep again?" hx-disable="find button">
       <input type="hidden" name="series_id" value="{{.ID}}" />

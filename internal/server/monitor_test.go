@@ -821,3 +821,24 @@ func TestMonitorShow_SonarrDownNoEmptyClaim(t *testing.T) {
 		t.Errorf("empty queue claimed while Sonarr is down:\n%s", body)
 	}
 }
+
+func TestS6_10_MonitoringShowsUnreadableSweepSettings(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	if err := e.db.SetSetting(context.Background(), sweep.SettingsKey, "{nope"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/media/monitoring", "/media/monitoring/7"} {
+		body := do(t, e.srv, http.MethodGet, path, nil).Body.String()
+		if !strings.Contains(body, "Stored sweep settings couldn't be read.") {
+			t.Errorf("%s: no unreadable-settings notice", path)
+		}
+		if strings.Contains(body, "/monitoring/exclude") {
+			t.Errorf("%s: offers Exclude while the exclusions are unknown", path)
+		}
+	}
+	if e.settingsRaw(t) != "{nope" {
+		t.Error("the corrupt row was rewritten")
+	}
+}

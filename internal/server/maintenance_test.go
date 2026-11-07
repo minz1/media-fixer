@@ -814,3 +814,18 @@ func TestSweepCard_FlagsUnreadableNotice(t *testing.T) {
 	rec := do(t, env.srv, http.MethodGet, "/media/maintenance", nil)
 	mustContain(t, rec.Body.String(), "Couldn't read Sonarr's redownload flags")
 }
+
+func TestD7_6_SweepStatusSaysUnknownForUnreadableSettings(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	if err := env.db.SetSetting(context.Background(), sweep.SettingsKey, `{not json`); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/media/maintenance/pack-sweep/status", "/media/maintenance"} {
+		body := do(t, env.srv, http.MethodGet, path, nil).Body.String()
+		if strings.Contains(body, "not scheduled (disabled)") ||
+			!strings.Contains(body, `Next run: <span class="v">unknown`) {
+			t.Errorf("%s: sweep status doesn't say the schedule is unknown", path)
+		}
+	}
+}

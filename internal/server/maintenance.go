@@ -27,6 +27,7 @@ type sweepStatus struct {
 	Progress sweep.Progress
 	Next     *time.Time
 	Due      bool
+	Unknown  bool
 }
 
 func (s *Server) SetSweep(sch *sweep.Scheduler) {
@@ -93,12 +94,12 @@ func (s *Server) sweepRun(w http.ResponseWriter, r *http.Request) {
 	s.renderSweepCard(r.Context(), w, set, nil, notice, failure, failure == "")
 }
 
-func (s *Server) sweepStatusFragment(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) sweepStatusFragment(w http.ResponseWriter, r *http.Request) {
 	if !s.sweepConfigured(w) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.t.ExecuteTemplate(w, "sweep_status", s.sweepStatus(false))
+	_ = s.tmpl.t.ExecuteTemplate(w, "sweep_status", s.sweepStatus(r.Context(), false))
 }
 
 func (s *Server) sweepForget(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +157,7 @@ func (s *Server) sweepCard(
 		"Errors":      errs,
 		tplKeyNotice:  notice,
 		tplKeyFailure: failure,
-		"Status":      s.sweepStatus(started),
+		"Status":      s.sweepStatus(ctx, started),
 	}
 	sonarr := s.sweep.Runner().Sonarr
 	stored, _ := sweep.LoadSettings(ctx, s.db)
@@ -192,10 +193,14 @@ func (s *Server) sweepCard(
 	return card
 }
 
-func (s *Server) sweepStatus(started bool) sweepStatus {
+func (s *Server) sweepStatus(ctx context.Context, started bool) sweepStatus {
 	st := sweepStatus{BaseURL: s.baseURL}
 	st.Progress, st.Active = s.sweep.Runner().Progress()
 	st.Active = st.Active || started
+	if _, err := sweep.LoadSettings(ctx, s.db); err != nil {
+		st.Unknown = true
+		return st
+	}
 	now := time.Now()
 	if st.Next = s.sweep.NextRun(now); st.Next != nil {
 		st.Due = !st.Next.After(now)

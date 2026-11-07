@@ -77,10 +77,11 @@ type Row struct {
 }
 
 type List struct {
-	Rows      []Row
-	Excluded  []client.Series
-	Pickable  []client.Series
-	SonarrErr string
+	Rows               []Row
+	Excluded           []client.Series
+	Pickable           []client.Series
+	SonarrErr          string
+	SettingsUnreadable bool
 }
 
 type SeasonCounts struct {
@@ -88,17 +89,18 @@ type SeasonCounts struct {
 }
 
 type Show struct {
-	Series     *client.Series
-	SonarrErr  string
-	Seasons    []SeasonCounts
-	Targets    []db.SweepTarget
-	Items      []db.SweepItem
-	Queue      []stuckqueue.Item
-	Live       []LiveStuck
-	Stuck      bool
-	Excluded   bool
-	Cached     *db.BabysitExplanation
-	CacheFresh bool
+	Series             *client.Series
+	SonarrErr          string
+	Seasons            []SeasonCounts
+	Targets            []db.SweepTarget
+	Items              []db.SweepItem
+	Queue              []stuckqueue.Item
+	Live               []LiveStuck
+	Stuck              bool
+	Excluded           bool
+	Cached             *db.BabysitExplanation
+	CacheFresh         bool
+	SettingsUnreadable bool
 }
 
 type LiveStuck struct {
@@ -141,10 +143,11 @@ func (s *Service) queueItems() []stuckqueue.Item {
 }
 
 type local struct {
-	targets  []db.SweepTarget
-	queue    []stuckqueue.Item
-	stuck    bool
-	excluded bool
+	targets    []db.SweepTarget
+	queue      []stuckqueue.Item
+	stuck      bool
+	excluded   bool
+	unreadable bool
 }
 
 func (s *Service) local(ctx context.Context, seriesID int) (local, error) {
@@ -152,8 +155,8 @@ func (s *Service) local(ctx context.Context, seriesID int) (local, error) {
 	if err != nil {
 		return local{}, err
 	}
-	set, _ := sweep.LoadSettings(ctx, s.DB)
-	var l local
+	set, setErr := sweep.LoadSettings(ctx, s.DB)
+	l := local{unreadable: setErr != nil}
 	for _, t := range all {
 		if t.SeriesID == seriesID {
 			l.targets = append(l.targets, t)
@@ -249,11 +252,12 @@ func (s *Service) Show(ctx context.Context, seriesID int) (Show, error) {
 		return Show{}, err
 	}
 	sh := Show{
-		Targets:  l.targets,
-		Items:    items,
-		Queue:    l.queue,
-		Stuck:    l.stuck,
-		Excluded: l.excluded,
+		Targets:            l.targets,
+		Items:              items,
+		Queue:              l.queue,
+		Stuck:              l.stuck,
+		Excluded:           l.excluded,
+		SettingsUnreadable: l.unreadable,
 	}
 	if c, getErr := s.DB.GetBabysitExplanation(ctx, seriesID); getErr == nil {
 		sh.Cached = &c
@@ -314,11 +318,11 @@ func (s *Service) List(ctx context.Context) (List, error) {
 	if err != nil {
 		return List{}, err
 	}
-	set, _ := sweep.LoadSettings(ctx, s.DB)
+	set, setErr := sweep.LoadSettings(ctx, s.DB)
 	queue := s.queueItems()
 	rows := collectRows(targets, latest, queue, set.StuckAfter)
 
-	var l List
+	l := List{SettingsUnreadable: setErr != nil}
 	live, err := s.Sonarr.ListSeries(ctx)
 	if err != nil {
 		l.SonarrErr = err.Error()
@@ -345,7 +349,7 @@ func (s *Service) List(ctx context.Context) (List, error) {
 		l.Rows = append(l.Rows, *r)
 	}
 	for _, sr := range live {
-		if sr.Monitored && !slices.Contains(set.ExcludedSeries, sr.ID) {
+		if !l.SettingsUnreadable && sr.Monitored && !slices.Contains(set.ExcludedSeries, sr.ID) {
 			l.Pickable = append(l.Pickable, sr)
 		}
 	}
