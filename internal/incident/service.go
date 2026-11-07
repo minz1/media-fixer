@@ -618,41 +618,6 @@ func (s *Service) legacyEscalate(ctx context.Context, inc *db.Incident, c card.C
 
 var errRunNotExited = errors.New("the agent run returned without an exit")
 
-// Resolve marks an incident as resolved (called from dashboard or Discord).
-func (s *Service) Resolve(ctx context.Context, id string) error {
-	leave, err := s.ownerSection("resolve", id)
-	if err != nil {
-		return err
-	}
-	defer leave()
-	inc, err := s.db.GetIncident(ctx, id)
-	if err != nil {
-		return err
-	}
-	changed, err := s.db.TransitionStatus(ctx, id, db.StatusResolved,
-		db.StatusOpen, db.StatusInvestigating, db.StatusAgentFixed, db.StatusManualTestNeeded,
-		db.StatusReopened, db.StatusBlocked, db.StatusVerifying)
-	if err != nil {
-		return err
-	}
-	if !changed {
-		return ErrAlreadyResolved
-	}
-	inc.Status = db.StatusResolved
-	s.clearEscalationPlan(ctx, id)
-	s.recordStatusChanged(ctx, id, string(db.StatusResolved))
-	s.notifyReporters(
-		ctx,
-		inc,
-		reporterCard(
-			card.Success,
-			fmt.Sprintf("✅ Your report for **%s** has been resolved. Give it a try!", inc.Title),
-		),
-	)
-	s.resolveSeerrIssues(ctx, inc)
-	return nil
-}
-
 func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, c card.Card) {
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
 	s.deliverToReporters(ctx, inc, c)
@@ -771,25 +736,6 @@ func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
 	s.notifySeerrIssues(ctx, inc, "resolve", func(id string) error { return s.seerr.Resolve(ctx, id) })
 }
 
-// Unlock clears an incident's autonomous lock so the agent may act on it again.
-// This is a manual owner override (e.g. for a systemic-failure "blocked" incident).
-func (s *Service) Unlock(ctx context.Context, id string) error {
-	leave, err := s.ownerSection("unlock", id)
-	if err != nil {
-		return err
-	}
-	defer leave()
-	if err = s.db.SetAutonomousLocked(ctx, id, false); err != nil {
-		return err
-	}
-	// Not a status transition, but the incident card's lock banner/button
-	// depend on this flag too — reuses status_changed as a generic
-	// "something display-relevant moved" signal rather than adding a
-	// dedicated kind for one boolean.
-	s.recordStatusChanged(ctx, id, "")
-	return nil
-}
-
 // recordStatusChanged appends a status_changed event so an incident page's
 // live SSE connection re-renders and re-checks incidentSettled instead of
 // only updating on the next event the agent loop happens to emit — every
@@ -806,25 +752,6 @@ func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status st
 	if err := s.journal.StatusChanged(ctx, incidentID, status); err != nil {
 		s.log.WarnContext(ctx, "record status_changed", "incident", incidentID, "error", err)
 	}
-}
-
-// Rerun re-runs diagnosis for an incident: on the dashboard's "still broken"
-// path and on the "Re-investigate" path.
-// These used to be two separate methods (Reopen/Reinvestigate) that did the
-// same thing with different seeding, and both had the same bug: neither reset
-// status to a state Agent.Run's own transition gate would accept, so
-// re-running an already-terminal incident (agent_fixed, manual_test_needed)
-// silently did nothing — the run executed but could never transition the
-// incident, and runVerification's matching gate then refused to enter
-// verification too, logging "not entering verification, incident already
-// progressed" with no visible effect on the dashboard.
-//
-// Rerun fixes that by setting status to Reopened — an allowed source for
-// every downstream transition — before launching, and always seeds the run
-// with a summary of the prior conversation (if any) so the agent knows what
-// it already tried and does not repeat a failed action from scratch.
-func (s *Service) Rerun(ctx context.Context, id string) error {
-	return s.rerun(ctx, id, rerunManual, 0)
 }
 
 type rerunOrigin int

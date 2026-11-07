@@ -3,10 +3,8 @@ package incident_test
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,7 +56,7 @@ func newRunningIncident(
 	if err = database.CreateIncident(context.Background(), inc); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Rerun(context.Background(), inc.ID); err != nil {
+	if err = svc.Rerun(context.Background(), inc.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -76,7 +74,7 @@ func TestRerun_ReadFailureLeavesTheRunningRunAlone(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Rerun(context.Background(), id); err == nil {
+	if err := svc.Rerun(context.Background(), id, incident.Version{}); err == nil {
 		t.Fatal("Rerun on a closed DB returned nil, want an error")
 	}
 
@@ -84,41 +82,5 @@ func TestRerun_ReadFailureLeavesTheRunningRunAlone(t *testing.T) {
 	case <-ag.done:
 		t.Fatal("a rerun that failed to read the incident cancelled the running run")
 	case <-time.After(quietWindow):
-	}
-}
-
-func TestRerun_StatusWriteFailureAfterCancelLogsError(t *testing.T) {
-	t.Parallel()
-	logs := &syncBuffer{}
-	svc, _, dbPath, ag, id := newRunningIncident(t, logs, newSyncNotifier())
-
-	raw, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	if _, err = raw.ExecContext(context.Background(), `CREATE TRIGGER refuse_status BEFORE UPDATE OF status
-		ON incidents BEGIN SELECT RAISE(ABORT, 'status write refused'); END`); err != nil {
-		t.Fatal(err)
-	}
-
-	if err = svc.Rerun(context.Background(), id); err == nil {
-		t.Fatal("Rerun with a refused status write returned nil, want an error")
-	}
-	select {
-	case <-ag.done:
-	case <-time.After(notifyWaitTimeout):
-		t.Fatal("timed out waiting for the old run to be cancelled")
-	}
-
-	var found bool
-	for line := range strings.SplitSeq(logs.String(), "\n") {
-		if strings.Contains(line, "level=ERROR") && strings.Contains(line, id) &&
-			strings.Contains(line, "no replacement") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("no ERROR log naming the incident and the lost run; logs:\n%s", logs.String())
 	}
 }

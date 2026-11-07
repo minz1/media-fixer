@@ -130,7 +130,7 @@ func TestRerunNote_RateLimited(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if err = svc.Rerun(ctx, inc.ID); err != nil {
+		if err = svc.Rerun(ctx, inc.ID, incident.Version{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -339,7 +339,7 @@ func TestRerunNote_SavedGap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.Rerun(ctx, inc.ID); err != nil {
+	if err := svc.Rerun(ctx, inc.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 

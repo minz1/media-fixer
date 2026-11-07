@@ -246,24 +246,25 @@ func (s *Service) cardAction(ctx context.Context, id string, a card.Action) (car
 	done := func(line string) (card.Result, error) {
 		return card.Result{Line: fmt.Sprintf("%s · <t:%d:t>", line, time.Now().Unix())}, nil
 	}
+	v := s.CurrentVersion(ctx, id)
 	switch a.Verb {
 	case verbResolve:
-		if err := s.Resolve(ctx, id); err != nil {
+		if err := s.Resolve(ctx, id, v); err != nil {
 			return card.Result{}, err
 		}
 		return done("✅ Resolved")
 	case verbRerun:
-		if err := s.Rerun(ctx, id); err != nil {
+		if err := s.Rerun(ctx, id, v); err != nil {
 			return card.Result{}, err
 		}
 		return done("🔁 Re-running")
 	case verbKeep:
-		if err := s.KeepSearching(ctx, id); err != nil {
+		if err := s.KeepSearching(ctx, id, v); err != nil {
 			return card.Result{}, err
 		}
 		return done("🔎 Keeping the search going")
 	case verbUnlock:
-		if err := s.Unlock(ctx, id); err != nil {
+		if err := s.Unlock(ctx, id, v); err != nil {
 			return card.Result{}, err
 		}
 		return done("🔓 Unlocked")
@@ -315,7 +316,7 @@ func refusal(err error) (card.Result, error) {
 	for _, target := range []error{
 		errNotAwaitingDecision, errNoPlan, errPlanExpired, errPlanChanged, ErrAlreadyResolved, db.ErrNotFound,
 	} {
-		if errors.Is(err, target) {
+		if errors.Is(err, target) || IsRefusal(err) {
 			return card.Result{Line: refusedLine + err.Error()}, nil
 		}
 	}

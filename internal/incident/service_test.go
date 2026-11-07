@@ -24,6 +24,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -313,7 +314,7 @@ func TestUnlock(t *testing.T) {
 		t.Fatal(lockErr)
 	}
 
-	if unlockErr := svc.Unlock(ctx, inc.ID); unlockErr != nil {
+	if unlockErr := svc.Unlock(ctx, inc.ID, incident.Version{}); unlockErr != nil {
 		t.Fatal(unlockErr)
 	}
 	got, err := database.GetIncident(ctx, inc.ID)
@@ -341,7 +342,7 @@ func TestRerunClearsLock(t *testing.T) {
 	}
 
 	// Rerun is a deliberate human override — it must clear the lock.
-	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 	got, err := database.GetIncident(ctx, inc.ID)
@@ -369,7 +370,7 @@ func TestResolveAndRerun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if resolveErr := svc.Resolve(ctx, inc.ID); resolveErr != nil {
+	if resolveErr := svc.Resolve(ctx, inc.ID, incident.Version{}); resolveErr != nil {
 		t.Fatal(resolveErr)
 	}
 
@@ -382,7 +383,7 @@ func TestResolveAndRerun(t *testing.T) {
 	}
 
 	// Rerun with nil agent just marks it reopened (agent goroutine exits immediately).
-	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 	got, err = database.GetIncident(ctx, inc.ID)
@@ -439,20 +440,19 @@ func TestStatusTransitions_NotifyLiveSubscribers(t *testing.T) {
 	ch, unsubscribe := jrnl.Subscribe(inc.ID)
 	defer unsubscribe()
 
-	if resolveErr := svc.Resolve(ctx, inc.ID); resolveErr != nil {
+	if resolveErr := svc.Resolve(ctx, inc.ID, incident.Version{}); resolveErr != nil {
 		t.Fatal(resolveErr)
 	}
 	waitForStatusChanged(t, ch, "Resolve")
 
-	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 	waitForStatusChanged(t, ch, "Rerun")
 
-	if unlockErr := svc.Unlock(ctx, inc.ID); unlockErr != nil {
-		t.Fatal(unlockErr)
+	if unlockErr := svc.Unlock(ctx, inc.ID, incident.Version{}); !errors.Is(unlockErr, lifecycle.ErrNotLocked) {
+		t.Fatalf("unlock of an unlocked incident: %v", unlockErr)
 	}
-	waitForStatusChanged(t, ch, "Unlock")
 }
 
 // waitForStatusChanged fails the test if no status_changed event arrives on
@@ -733,7 +733,7 @@ func TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
 	}
 
 	// Rerun must supersede (cancel) run A and launch run B.
-	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 
@@ -896,7 +896,7 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 	}
 
 	// Re-run diagnosis on the now-terminal incident.
-	if rerunErr := svc.Rerun(ctx, inc.ID); rerunErr != nil {
+	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 
@@ -1472,7 +1472,7 @@ func TestResolve_UpdatesLinkedSeerrIssues(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Resolve(ctx, inc.ID); err != nil {
+	if err = svc.Resolve(ctx, inc.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1558,7 +1558,7 @@ func TestRerun_HeldNoteDoesNotLetTheOldRunFinish(t *testing.T) {
 	}
 
 	rerunDone := make(chan error, 1)
-	go func() { rerunDone <- svc.Rerun(ctx, inc.ID) }()
+	go func() { rerunDone <- svc.Rerun(ctx, inc.ID, incident.Version{}) }()
 	time.Sleep(1500 * time.Millisecond)
 	close(notif.release)
 	if err = <-rerunDone; err != nil {

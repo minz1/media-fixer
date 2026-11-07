@@ -468,7 +468,7 @@ func TestHandler_RefusalLines(t *testing.T) {
 	}
 
 	resolved := fx.incident(t)
-	if err := fx.svc.Resolve(ctx, resolved.ID); err != nil {
+	if err := fx.svc.Resolve(ctx, resolved.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := fx.db.UpdateIncidentStatus(ctx, resolved.ID, db.StatusResolved); err != nil {

@@ -197,7 +197,7 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing
 	if err := database.CreateIncident(ctx, waiting); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Rerun(ctx, waiting.ID); err != nil {
+	if err := svc.Rerun(ctx, waiting.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite&_timezone=UTC")
@@ -249,7 +249,7 @@ func TestRerun_HungSummarizerDoesNotHoldTheRunBeforeDiagnosis(t *testing.T) {
 	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetSeedTimeoutForTest(quietWindow)
 
-	if err := svc.Rerun(ctx, inc.ID); err != nil {
+	if err := svc.Rerun(ctx, inc.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 

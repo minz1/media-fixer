@@ -223,7 +223,7 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(time.Millisecond)
 
-	if err := svc.Rerun(t.Context(), inc.ID); err != nil {
+	if err := svc.Rerun(t.Context(), inc.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -522,7 +522,7 @@ func TestKeepSearching_SavedDurationAndText(t *testing.T) {
 		MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1, StartedAt: started, LastProgressAt: started,
 	})
 
-	if err := svc.KeepSearching(t.Context(), inc.ID); err != nil {
+	if err := svc.KeepSearching(t.Context(), inc.ID, svc.CurrentVersion(t.Context(), inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 

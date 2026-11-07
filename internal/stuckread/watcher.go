@@ -204,7 +204,7 @@ func (w *Watcher) rerunFixed(ctx context.Context, inc *db.Incident) {
 	if open >= incident.SystematicIncidentThreshold {
 		return
 	}
-	if err = w.svc.Rerun(ctx, inc.ID); errors.Is(err, card.ErrRestarting) {
+	if err = w.svc.Rerun(ctx, inc.ID, incident.Version{}); errors.Is(err, card.ErrRestarting) {
 		w.log.InfoContext(ctx, "rerun stuck-read incident refused, shutting down", "incident", inc.ID, "error", err)
 		return
 	}

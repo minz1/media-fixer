@@ -187,3 +187,20 @@ func (n *recNotifier) ownerCards() []card.Card {
 	defer n.mu.Unlock()
 	return append([]card.Card(nil), n.owner...)
 }
+
+func (e *lcEnv) force(t *testing.T, id string, edit func(s *lifecycle.Snapshot)) {
+	t.Helper()
+	_, err := e.db.ApplyIncident(t.Context(), id, func(cur lifecycle.Snapshot) (db.Decision, error) {
+		n := cur.Clone()
+		edit(&n)
+		return db.Decision{Next: n}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *lcEnv) version(t *testing.T, id string) incident.Version {
+	t.Helper()
+	return incident.Version{N: e.snap(t, id).Version, Set: true}
+}

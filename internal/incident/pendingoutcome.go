@@ -106,18 +106,3 @@ func KeepSearchingSpan(days int) string {
 	}
 	return fmt.Sprintf("%d days", days)
 }
-
-func (s *Service) KeepSearching(ctx context.Context, id string) error {
-	leave, err := s.ownerSection("keep", id)
-	if err != nil {
-		return err
-	}
-	defer leave()
-	snap, err := s.db.GetIncidentSnapshot(ctx, id)
-	if err != nil {
-		return fmt.Errorf("keep searching: %w", err)
-	}
-	ev := lifecycle.Event{Kind: lifecycle.OwnerKeepSearching, Version: snap.Version, HasVersion: true}
-	_, err = s.apply(ctx, id, ev, nil)
-	return err
-}

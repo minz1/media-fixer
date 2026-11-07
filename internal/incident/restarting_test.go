@@ -172,10 +172,10 @@ func TestA10_10_OwnerActionsRefusedBeforeAnyWrite(t *testing.T) {
 		name string
 		do   func() error
 	}{
-		{"Rerun", func() error { return fx.svc.Rerun(ctx, inc.ID) }},
-		{"Resolve", func() error { return fx.svc.Resolve(ctx, inc.ID) }},
-		{"Unlock", func() error { return fx.svc.Unlock(ctx, inc.ID) }},
-		{"KeepSearching", func() error { return fx.svc.KeepSearching(ctx, inc.ID) }},
+		{"Rerun", func() error { return fx.svc.Rerun(ctx, inc.ID, incident.Version{}) }},
+		{"Resolve", func() error { return fx.svc.Resolve(ctx, inc.ID, incident.Version{}) }},
+		{"Unlock", func() error { return fx.svc.Unlock(ctx, inc.ID, incident.Version{}) }},
+		{"KeepSearching", func() error { return fx.svc.KeepSearching(ctx, inc.ID, incident.Version{}) }},
 		{"PreviewEscalation", func() error {
 			_, _, err := fx.svc.PreviewEscalation(ctx, inc.ID)
 			return err

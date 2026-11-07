@@ -508,7 +508,7 @@ func TestKeepSearching_ReArmsAndResumesSweeping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.KeepSearching(ctx, inc.ID); err != nil {
+	if err := svc.KeepSearching(ctx, inc.ID, svc.CurrentVersion(ctx, inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := database.GetIncident(ctx, inc.ID)
@@ -554,7 +554,7 @@ func TestKeepSearching_RequiresManualTestNeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc.KeepSearching(ctx, inc.ID); err == nil {
+	if err := svc.KeepSearching(ctx, inc.ID, svc.CurrentVersion(ctx, inc.ID)); err == nil {
 		t.Error("expected an error keep-searching an incident not in manual_test_needed")
 	}
 }
@@ -732,7 +732,7 @@ func TestKeepSearching_ResetsTrack(t *testing.T) {
 	}
 	f := newKeepSearchingFixture(t, db.StatusManualTestNeeded, po)
 
-	if err := f.svc.KeepSearching(t.Context(), f.inc.ID); err != nil {
+	if err := f.svc.KeepSearching(t.Context(), f.inc.ID, f.svc.CurrentVersion(t.Context(), f.inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -757,7 +757,7 @@ func TestKeepSearching_NoDownloadingProgressNote(t *testing.T) {
 	}
 	f := newKeepSearchingFixture(t, db.StatusManualTestNeeded, po)
 
-	if err := f.svc.KeepSearching(t.Context(), f.inc.ID); err != nil {
+	if err := f.svc.KeepSearching(t.Context(), f.inc.ID, f.svc.CurrentVersion(t.Context(), f.inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 	f.svc.AdvanceReporterProgress(t.Context(), time.Now().Add(61*time.Minute))

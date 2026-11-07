@@ -252,7 +252,7 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.svc.Resolve(context.WithoutCancel(r.Context()), id)
+	err := s.svc.Resolve(context.WithoutCancel(r.Context()), id, s.formVersion(r, id))
 	if errors.Is(err, incident.ErrAlreadyResolved) {
 		err = nil
 	}
@@ -264,7 +264,7 @@ func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.finishIncidentAction(w, r, id, "rerun", s.svc.Rerun(context.WithoutCancel(r.Context()), id))
+	s.finishIncidentAction(w, r, id, "rerun", s.svc.Rerun(context.WithoutCancel(r.Context()), id, s.formVersion(r, id)))
 }
 
 func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +305,13 @@ func (s *Server) actionKeepSearching(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.finishIncidentAction(w, r, id, "keep", s.svc.KeepSearching(context.WithoutCancel(r.Context()), id))
+	s.finishIncidentAction(
+		w,
+		r,
+		id,
+		"keep",
+		s.svc.KeepSearching(context.WithoutCancel(r.Context()), id, s.formVersion(r, id)),
+	)
 }
 
 func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
@@ -313,7 +319,7 @@ func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.finishIncidentAction(w, r, id, "unlock", s.svc.Unlock(r.Context(), id))
+	s.finishIncidentAction(w, r, id, "unlock", s.svc.Unlock(r.Context(), id, s.formVersion(r, id)))
 }
 
 // escalationPreview renders a read-only plan preview for the incident's
@@ -484,4 +490,11 @@ func utcStamp(v any) *stamp {
 		Exact: u.Format("2006-01-02 15:04") + " UTC",
 		Rel:   relTime(time.Now(), t),
 	}
+}
+
+func (s *Server) formVersion(r *http.Request, id string) incident.Version {
+	if v := incident.ParseVersion(r.FormValue("v")); v.Set {
+		return v
+	}
+	return s.svc.CurrentVersion(context.WithoutCancel(r.Context()), id)
 }

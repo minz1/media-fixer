@@ -310,8 +310,8 @@ func TestRerunAndResolve_ClearStoredPlan(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"Resolve", func() error { return svc.Resolve(ctx, inc.ID) }},
-		{"Rerun", func() error { return svc.Rerun(ctx, inc.ID) }},
+		{"Resolve", func() error { return svc.Resolve(ctx, inc.ID, incident.Version{}) }},
+		{"Rerun", func() error { return svc.Rerun(ctx, inc.ID, incident.Version{}) }},
 	} {
 		if setErr := database.SetEscalationPlan(ctx, inc.ID, []byte(`{"Title":"x"}`)); !errors.Is(
 			setErr, db.ErrPlanNotStored) {
@@ -408,12 +408,12 @@ func TestResolve_AlreadyResolvedRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolveErr := svc.Resolve(ctx, inc.ID); resolveErr != nil {
+	if resolveErr := svc.Resolve(ctx, inc.ID, incident.Version{}); resolveErr != nil {
 		t.Fatal(resolveErr)
 	}
 	msgs, resolved, comments := len(notif.msgs), len(seerr.resolved), len(seerr.comments["7"])
 
-	if resolveErr := svc.Resolve(ctx, inc.ID); !errors.Is(resolveErr, incident.ErrAlreadyResolved) {
+	if resolveErr := svc.Resolve(ctx, inc.ID, incident.Version{}); !errors.Is(resolveErr, incident.ErrAlreadyResolved) {
 		t.Fatalf("second Resolve err = %v, want ErrAlreadyResolved", resolveErr)
 	}
 	if len(notif.msgs) != msgs || len(seerr.resolved) != resolved || len(seerr.comments["7"]) != comments {
