@@ -17,11 +17,10 @@ import (
 const nullResult = "null"
 
 var (
-	errNotAwaitingDecision = errors.New("this incident is not waiting for an escalation decision")
-	errNoPlan              = errors.New("preview this escalation before approving it, so the plan " +
-		"that runs is the one you saw")
-	errPlanExpired = errors.New("may no longer describe the same files; preview it again")
-	errPlanChanged = errors.New("the plan changed since you previewed it; preview it again")
+	errNotAwaitingDecision = lifecycle.ErrNotAwaitingDecision
+	errNoPlan              = lifecycle.ErrNoPlan
+	errPlanExpired         = lifecycle.ErrPlanExpired
+	errPlanChanged         = lifecycle.ErrPlanChanged
 )
 
 // PreviewEscalation resolves an incident's recommended escalation action into

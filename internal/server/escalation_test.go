@@ -496,13 +496,16 @@ func TestApproveEscalation_MissingPlanFPRefused(t *testing.T) {
 	}
 	previewResp.Body.Close()
 
-	resp, err := ts.Client().Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
+	noFollow := ts.Client()
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noFollow.Post(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 300 {
-		t.Errorf("status = %d, want a refusal", resp.StatusCode)
+	loc := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasSuffix(loc, "?done=refused-plan-changed") {
+		t.Errorf("status = %d %s, want a refusal notice", resp.StatusCode, loc)
 	}
 	if ag.approvedPlanJSON() != nil {
 		t.Error("an escalation ran without the previewed plan's fingerprint")

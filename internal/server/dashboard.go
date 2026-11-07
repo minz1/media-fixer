@@ -40,8 +40,54 @@ const (
 	msgWholeNumber = "must be a whole number"
 	doneRestarting = "restarting"
 	doneStale      = "stale"
-	staleNotice    = "Refused: this changed, look again."
+	doneRefused    = "refused-"
+	refusedPrefix  = "Refused: "
+	staleNotice    = refusedPrefix + "this changed, look again."
 )
+
+type refusalNoticeRow struct {
+	key  string
+	err  error
+	text string
+}
+
+func refusalNotices() []refusalNoticeRow {
+	return []refusalNoticeRow{
+		{"plan-running", lifecycle.ErrPlanRunning, ""},
+		{"already-resolved", lifecycle.ErrAlreadyResolved, ""},
+		{"not-locked", lifecycle.ErrNotLocked, ""},
+		{"resolved", lifecycle.ErrResolved, ""},
+		{"no-keep-searching", lifecycle.ErrNoKeepSearching, ""},
+		{"plan-half-run", lifecycle.ErrPlanHalfRun, ""},
+		{"not-escalatable", lifecycle.ErrNotEscalatable, ""},
+		{"not-awaiting-decision", lifecycle.ErrNotAwaitingDecision, ""},
+		{"no-plan", lifecycle.ErrNoPlan, ""},
+		{"plan-expired", lifecycle.ErrPlanExpired, "this plan " + lifecycle.ErrPlanExpired.Error()},
+		{"plan-changed", lifecycle.ErrPlanChanged, ""},
+	}
+}
+
+func refusalDone(err error) string {
+	for _, n := range refusalNotices() {
+		if errors.Is(err, n.err) {
+			return doneRefused + n.key
+		}
+	}
+	return doneStale
+}
+
+func refusalNotice(key string) string {
+	for _, n := range refusalNotices() {
+		if n.key != key {
+			continue
+		}
+		if n.text != "" {
+			return refusedPrefix + n.text + "."
+		}
+		return refusedPrefix + n.err.Error() + "."
+	}
+	return ""
+}
 
 const (
 	toneGray   = "gray"
@@ -76,7 +122,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		"season":         seasonLabel,
 		"ms":             lookupDuration,
 		"confidenceTone": confidenceTone,
-		"restarting":     func(s string) bool { return s == card.RestartingNotice || s == staleNotice },
+		"restarting":     func(s string) bool { return s == card.RestartingNotice || strings.HasPrefix(s, refusedPrefix) },
 		"restartingText": func() string { return card.RestartingNotice },
 	}).ParseFS(templateFS, "templates/dashboard.html")
 	if err != nil {
@@ -195,6 +241,9 @@ func incidentDoneNotice(key string) string {
 	case doneStale:
 		return staleNotice
 	}
+	if k, ok := strings.CutPrefix(key, doneRefused); ok {
+		return refusalNotice(k)
+	}
 	return ""
 }
 
@@ -214,6 +263,8 @@ func (s *Server) finishIncidentAction(w http.ResponseWriter, r *http.Request, id
 		s.redirectIncident(w, r, id, doneRestarting)
 	case errors.Is(err, lifecycle.ErrChanged):
 		s.redirectIncident(w, r, id, doneStale)
+	case incident.IsRefusal(err):
+		s.redirectIncident(w, r, id, refusalDone(err))
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:

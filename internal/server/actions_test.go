@@ -96,3 +96,22 @@ func TestDashboard_ParkedBadge(t *testing.T) {
 		t.Error("a parked incident has no paused badge")
 	}
 }
+
+func TestDashboard_RefusalRedirectsWithNotice(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	inc := seedNoRelease(t, database, "Not locked")
+	s, err := database.GetIncidentSnapshot(context.Background(), inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := url.Values{"v": {"v" + strconv.FormatInt(s.Version, 10)}}
+	rec := do(t, srv, http.MethodPost, "/media/incidents/"+inc.ID+"/unlock", v)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("unlock of an unlocked incident: %d %s", rec.Code, rec.Body.String())
+	}
+	page := do(t, srv, http.MethodGet, rec.Header().Get("Location"), nil).Body.String()
+	if !strings.Contains(page, "tone-yellow\">Refused: this incident is not locked.") {
+		t.Error("the refusal notice is missing or not in the warning tone")
+	}
+}
