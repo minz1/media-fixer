@@ -64,7 +64,7 @@ func (c *DecypharrClient) PlanTorrentReadd(ctx context.Context, name string) (*R
 		return nil, errors.New("decypharr readd: name is required")
 	}
 
-	resp, err := c.listTorrentsPage(ctx, trimmed, "")
+	resp, err := c.listTorrentsPage(ctx, trimmed, "", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func (c *DecypharrClient) AddTorrent(ctx context.Context, magnet, category strin
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("decypharr add torrent: status %d", resp.StatusCode)
+		return decypharrStatusError("decypharr add torrent", resp)
 	}
 	return nil
 }

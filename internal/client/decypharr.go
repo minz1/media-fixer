@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -46,20 +49,26 @@ type TorrentEntry struct {
 	ActiveProvider string `json:"active_provider,omitempty"`
 }
 
+const torrentPageSize = 100
+
 type TorrentListResponse struct {
 	Torrents []*TorrentEntry `json:"torrents"`
 	Total    int             `json:"total"`
 }
 
 func (c *DecypharrClient) ListTorrents(ctx context.Context, search, state string) ([]*TorrentEntry, error) {
-	resp, err := c.listTorrentsPage(ctx, search, state)
+	resp, err := c.listTorrentsPage(ctx, search, state, 0)
 	if err != nil {
 		return nil, err
 	}
 	return resp.Torrents, nil
 }
 
-func (c *DecypharrClient) listTorrentsPage(ctx context.Context, search, state string) (*TorrentListResponse, error) {
+func (c *DecypharrClient) listTorrentsPage(
+	ctx context.Context,
+	search, state string,
+	page int,
+) (*TorrentListResponse, error) {
 	u, _ := url.Parse(c.base + "/api/torrents")
 	q := u.Query()
 	if search != "" {
@@ -68,7 +77,10 @@ func (c *DecypharrClient) listTorrentsPage(ctx context.Context, search, state st
 	if state != "" {
 		q.Set("state", state)
 	}
-	q.Set("limit", "100")
+	if page > 0 {
+		q.Set("page", strconv.Itoa(page))
+	}
+	q.Set("limit", strconv.Itoa(torrentPageSize))
 	u.RawQuery = q.Encode()
 
 	var resp TorrentListResponse
@@ -168,7 +180,7 @@ func (c *DecypharrClient) DeleteTorrent(ctx context.Context, category, hash stri
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("decypharr DELETE %s: status %d", u, resp.StatusCode)
+		return decypharrStatusError("decypharr DELETE "+u, resp)
 	}
 	return nil
 }
@@ -232,4 +244,31 @@ func (c *DecypharrClient) setAuth(req *http.Request) {
 	if c.apiToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	}
+}
+
+func (c *DecypharrClient) TorrentByHash(ctx context.Context, name, hash string) (bool, error) {
+	if hash == "" {
+		return false, nil
+	}
+	for page, seen := 1, 0; ; page++ {
+		resp, err := c.listTorrentsPage(ctx, name, "", page)
+		if err != nil {
+			return false, err
+		}
+		for _, t := range resp.Torrents {
+			if strings.EqualFold(t.InfoHash, hash) {
+				return true, nil
+			}
+		}
+		seen += len(resp.Torrents)
+		if len(resp.Torrents) == 0 || seen >= resp.Total {
+			return false, nil
+		}
+	}
+}
+
+func decypharrStatusError(label string, resp *http.Response) error {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, statusScanLimit))
+	se := &HTTPStatusError{Status: resp.StatusCode, Body: string(b[:min(len(b), statusBodyLimit)])}
+	return fmt.Errorf("%s: %w", label, se)
 }

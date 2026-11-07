@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -227,6 +228,11 @@ func findFuzzyTitle[T any](items []T, want string, title func(T) string) *T {
 const (
 	paramCommandName = "name"
 	paramSeriesID    = "seriesId"
+
+	CommandMoviesSearch  = "MoviesSearch"
+	CommandEpisodeSearch = "EpisodeSearch"
+	CommandSeasonSearch  = "SeasonSearch"
+	CommandSeriesSearch  = "SeriesSearch"
 )
 
 func (c *ArrClient) RescanSeries(ctx context.Context, seriesID int) error {
@@ -249,7 +255,7 @@ func (c *ArrClient) RescanMovie(ctx context.Context, movieID int) error {
 // SearchEpisodes triggers Sonarr to search for the given episodes and returns the command id.
 func (c *ArrClient) SearchEpisodes(ctx context.Context, episodeIDs []int) (int, error) {
 	return c.postCommand(ctx, map[string]any{
-		paramCommandName: "EpisodeSearch",
+		paramCommandName: CommandEpisodeSearch,
 		"episodeIds":     episodeIDs,
 	})
 }
@@ -257,7 +263,7 @@ func (c *ArrClient) SearchEpisodes(ctx context.Context, episodeIDs []int) (int, 
 // SeasonSearch triggers Sonarr to search for every episode in a season.
 func (c *ArrClient) SeasonSearch(ctx context.Context, seriesID, season int) error {
 	_, err := c.postCommand(ctx, map[string]any{
-		paramCommandName: "SeasonSearch",
+		paramCommandName: CommandSeasonSearch,
 		paramSeriesID:    seriesID,
 		"seasonNumber":   season,
 	})
@@ -267,7 +273,7 @@ func (c *ArrClient) SeasonSearch(ctx context.Context, seriesID, season int) erro
 // SeriesSearch triggers Sonarr to search for every monitored episode of a series.
 func (c *ArrClient) SeriesSearch(ctx context.Context, seriesID int) error {
 	_, err := c.postCommand(ctx, map[string]any{
-		paramCommandName: "SeriesSearch",
+		paramCommandName: CommandSeriesSearch,
 		paramSeriesID:    seriesID,
 	})
 	return err
@@ -276,7 +282,7 @@ func (c *ArrClient) SeriesSearch(ctx context.Context, seriesID int) error {
 // SearchMovieNow triggers Radarr to search for a movie.
 func (c *ArrClient) SearchMovieNow(ctx context.Context, movieID int) error {
 	_, err := c.postCommand(ctx, map[string]any{
-		paramCommandName: "MoviesSearch",
+		paramCommandName: CommandMoviesSearch,
 		"movieIds":       []int{movieID},
 	})
 	return err
@@ -312,7 +318,7 @@ func (c *ArrClient) GetEpisodeFiles(ctx context.Context, seriesID int) ([]Episod
 // DeleteEpisodeFile deletes a single episode file record (and the underlying
 // file, per Sonarr's normal delete-file behavior).
 func (c *ArrClient) DeleteEpisodeFile(ctx context.Context, fileID int) error {
-	return c.delete(ctx, fmt.Sprintf("/api/v3/episodefile/%d", fileID))
+	return wrapNotFound(c.delete(ctx, fmt.Sprintf("/api/v3/episodefile/%d", fileID)))
 }
 
 // GetMovieFiles returns the on-disk files Radarr tracks for a movie.
@@ -330,7 +336,7 @@ func (c *ArrClient) GetMovieFiles(ctx context.Context, movieID int) ([]MovieFile
 // DeleteMovieFile deletes a single movie file record (and the underlying
 // file, per Radarr's normal delete-file behavior).
 func (c *ArrClient) DeleteMovieFile(ctx context.Context, fileID int) error {
-	return c.delete(ctx, fmt.Sprintf("/api/v3/moviefile/%d", fileID))
+	return wrapNotFound(c.delete(ctx, fmt.Sprintf("/api/v3/moviefile/%d", fileID)))
 }
 
 // grabEventType is the Sonarr/Radarr history eventType marking a successful
@@ -508,4 +514,58 @@ func (c *ArrClient) get(ctx context.Context, path string, q url.Values, out any)
 
 func (c *ArrClient) delete(ctx context.Context, path string) error {
 	return c.do(ctx, c.http, http.MethodDelete, path, nil, nil, nil)
+}
+
+func wrapNotFound(err error) error {
+	if se, ok := errors.AsType[*HTTPStatusError](err); ok && se.Status == http.StatusNotFound {
+		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
+	return err
+}
+
+func (c *ArrClient) FailedForDownload(
+	ctx context.Context,
+	mediaType string,
+	mediaID int,
+	downloadID string,
+	since time.Time,
+) (bool, error) {
+	var path string
+	q := url.Values{"eventType": {FailedEventType}}
+	switch mediaType {
+	case ReplaceMediaTV:
+		path = "/api/v3/history/series"
+		q.Set(paramSeriesID, strconv.Itoa(mediaID))
+	case ReplaceMediaMovie:
+		path = "/api/v3/history/movie"
+		q.Set("movieId", strconv.Itoa(mediaID))
+	default:
+		return false, fmt.Errorf("arr history: unknown media_type %q", mediaType)
+	}
+	var records []HistoryRecord
+	if err := c.get(ctx, path, q, &records); err != nil {
+		return false, err
+	}
+	for _, r := range records {
+		if downloadID != "" && strings.EqualFold(r.DownloadID, downloadID) && !r.Date.Before(since) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (c *ArrClient) Search(ctx context.Context, command string, mediaID, season int, episodeIDs []int) error {
+	switch command {
+	case CommandMoviesSearch:
+		return c.SearchMovieNow(ctx, mediaID)
+	case CommandEpisodeSearch:
+		_, err := c.SearchEpisodes(ctx, episodeIDs)
+		return err
+	case CommandSeasonSearch:
+		return c.SeasonSearch(ctx, mediaID, season)
+	case CommandSeriesSearch:
+		return c.SeriesSearch(ctx, mediaID)
+	default:
+		return fmt.Errorf("arr search: unknown command %q", command)
+	}
 }

@@ -363,14 +363,14 @@ func (c *ArrClient) deleteReplaceFile(ctx context.Context, mediaType string, f R
 func (c *ArrClient) triggerReplaceSearch(ctx context.Context, plan *ReplacePlan) (string, error) {
 	switch {
 	case plan.MediaType == ReplaceMediaMovie:
-		return "MoviesSearch", c.SearchMovieNow(ctx, plan.MediaID)
+		return CommandMoviesSearch, c.SearchMovieNow(ctx, plan.MediaID)
 	case plan.Scope == ReplaceScopeEpisode:
 		_, err := c.SearchEpisodes(ctx, []int{plan.EpisodeID})
-		return "EpisodeSearch", err
+		return CommandEpisodeSearch, err
 	case plan.Scope == ReplaceScopeSeason:
-		return "SeasonSearch", c.SeasonSearch(ctx, plan.MediaID, plan.SeasonNumber)
+		return CommandSeasonSearch, c.SeasonSearch(ctx, plan.MediaID, plan.SeasonNumber)
 	case plan.Scope == ReplaceScopeSeries:
-		return "SeriesSearch", c.SeriesSearch(ctx, plan.MediaID)
+		return CommandSeriesSearch, c.SeriesSearch(ctx, plan.MediaID)
 	default:
 		return "", fmt.Errorf("arr replace: cannot determine search command for media_type=%s scope=%s",
 			plan.MediaType, plan.Scope)
