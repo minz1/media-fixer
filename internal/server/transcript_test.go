@@ -1,11 +1,16 @@
 package server_test
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -109,5 +114,47 @@ func TestCondenseTurns(t *testing.T) {
 	short, hidden := server.CondensedTurnsForTest(transcriptFixture(1), false)
 	if hidden != 0 || len(short) != 3 || short[0].Role != openai.ChatMessageRoleUser {
 		t.Errorf("short: %d turns, %d hidden", len(short), hidden)
+	}
+}
+
+func TestD9_8_TranscriptMarksTheRunsStepCount(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	ctx := context.Background()
+	inc := &db.Incident{
+		Status: db.StatusInvestigating, Source: "discord", ReportedBy: "t", What: "cant_play", Title: "T",
+	}
+	if err := database.CreateIncident(ctx, inc); err != nil {
+		t.Fatal(err)
+	}
+	j := journal.New(database)
+	seed := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: "report"},
+	}
+	page := func() string {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID, nil))
+		return rec.Body.String()
+	}
+
+	if err := j.RunStarted(ctx, inc.ID, seed); err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 2; round++ {
+		msg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "thinking"}
+		if err := j.LLMRound(ctx, inc.ID, round, msg, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if body := page(); !strings.Contains(body, `id="incident-transcript" data-turns="4"`) {
+		t.Errorf("first run: transcript doesn't carry its step count")
+	}
+
+	if err := j.RunStarted(ctx, inc.ID, seed); err != nil {
+		t.Fatal(err)
+	}
+	if body := page(); !strings.Contains(body, `id="incident-transcript" data-turns="2"`) {
+		t.Errorf("rerun: transcript step count didn't drop to the new run's")
 	}
 }

@@ -245,7 +245,8 @@
       document.addEventListener("DOMContentLoaded", function () {
         var steps = function () { return document.querySelectorAll("#incident-transcript [data-step]"); };
         var ids = function () { return [].map.call(steps(), function (e) { return e.dataset.step; }); };
-        var seen = ids(), nearBottom = true;
+        var turns = function () { var t = document.getElementById("incident-transcript"); return t ? +t.dataset.turns : 0; };
+        var seen = ids(), count = turns(), nearBottom = true;
         var calm = matchMedia("(prefers-reduced-motion: reduce)");
         var track = function () { nearBottom = innerHeight + scrollY >= document.documentElement.scrollHeight - 160; };
         addEventListener("scroll", track, { passive: true });
@@ -254,6 +255,8 @@
           if (!muts.some(function (m) {
             return [].some.call(m.addedNodes, function (n) { return n.id === "incident-transcript"; });
           })) return;
+          if (turns() < count) seen = [];
+          count = turns();
           var fresh = [].filter.call(steps(), function (e) { return seen.indexOf(e.dataset.step) < 0; });
           if (fresh.length && !calm.matches) {
             fresh.forEach(function (e) { e.classList.add("tl-new"); });
@@ -571,7 +574,7 @@
 {{end}}
 
 {{define "incident_transcript"}}
-<div id="incident-transcript" class="card">
+<div id="incident-transcript" data-turns="{{.Turns}}" class="card">
   <div class="card-head mb-3">
     <h3 class="card-title">Thought process</h3>
     <div class="flex items-center gap-3">

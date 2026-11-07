@@ -153,6 +153,7 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		"Finding":           diagnosticResultOrNil(inc.Finding),
 		"Transcript":        shown,
 		"EarlierSteps":      hidden,
+		"Turns":             len(turns),
 		"NextStep":          nextStep,
 		"Live":              incidentLive(inc.Status) && !paused,
 		"Full":              full,
