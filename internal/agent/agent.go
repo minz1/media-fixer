@@ -455,6 +455,11 @@ func (a *Agent) Run(
 	inc *db.Incident,
 	seed []openai.ChatCompletionMessage,
 ) (*DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	return a.runExit(ctx, inc, seed).legacy()
+}
+
+func (l *runLoop) claim(ctx context.Context, seed []openai.ChatCompletionMessage) {
+	a, inc := l.a, l.inc
 	a.log.InfoContext(ctx, "starting diagnostic", "incident", inc.ID, "title", inc.Title)
 
 	a.disp.IncidentID = inc.ID
@@ -473,11 +478,13 @@ func (a *Agent) Run(
 		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
 		db.StatusAgentFixed, db.StatusManualTestNeeded)
 	if claimErr != nil {
-		return nil, nil, claimErr
+		l.fire(ctx, runEvent{kind: evClaimFailed, err: claimErr})
+		return
 	}
 	if !changed {
 		a.log.WarnContext(ctx, "run could not claim incident; status changed before start", "incident", inc.ID)
-		return nil, nil, ErrIncidentNotInvestigatable
+		l.fire(ctx, runEvent{kind: evClaimRefused, err: ErrIncidentNotInvestigatable})
+		return
 	}
 	a.recordStatusChanged(ctx, inc.ID, string(db.StatusInvestigating))
 
@@ -486,86 +493,36 @@ func (a *Agent) Run(
 	// item looks afterward. Captured once per run (not persisted across a
 	// later Rerun) — "did what this run's action changed" is the question that
 	// matters, and a fresh Run already gets a fresh baseline.
-	preFix := a.captureSignature(ctx, inc.JellyfinItemID, inc.Title)
+	l.preFix = a.captureSignature(ctx, inc.JellyfinItemID, inc.Title)
 
-	messages := a.initMessages(ctx, inc, seed)
-	a.recordRunStarted(ctx, inc.ID, messages)
+	l.messages = a.initMessages(ctx, inc, seed)
 
-	tools := toolDefs()
 	// Seeded from what this incident has already spent, not reset to zero.
 	// A per-run budget meant runAgent's retry loop (up to 3 attempts) and any
 	// dashboard re-run each handed out a fresh 3, so an incident could burn 9
 	// or more autonomous actions while the prompt told the model its cap was
 	// 3 — potentially two Jellyfin restarts and two decypharr restarts.
-	autonomousActions := inc.ActionCount
-	seenCalls := make(map[string]int)
+	l.actions = inc.ActionCount
+	l.fire(ctx, runEvent{kind: evClaimed})
+}
 
-	for round := range maxRounds {
-		resp, err := a.llmCall(ctx, openai.ChatCompletionRequest{
-			Model:    a.model,
-			Messages: messages,
-			Tools:    tools,
-		})
-		if err != nil {
-			a.recordRunFinished(ctx, inc.ID, round, err)
-			return nil, messages, fmt.Errorf("llm round %d: %w", round, err)
-		}
-
-		msg := resp.Choices[0].Message
-		messages = append(messages, msg)
-		a.logTurn(ctx, inc.ID, round, msg)
-
-		if len(msg.ToolCalls) == 0 {
-			a.recordRound(ctx, inc.ID, round, msg, nil)
-			break
-		}
-
-		toolMsgStart := len(messages)
-		ev, result := a.processToolCalls(
-			ctx,
-			inc,
-			preFix,
-			msg.ToolCalls,
-			seenCalls,
-			&autonomousActions,
-			&messages,
-		)
-		messages = closeBatch(ctx, round, ev, msg.ToolCalls, messages)
+func (l *runLoop) effect(ctx context.Context, eff runEffect, before runSnapshot) {
+	switch eff {
+	case effRecordStarted:
+		l.a.recordRunStarted(ctx, l.inc.ID, l.messages)
+	case effAnswerPending:
+		l.messages = answerPending(l.messages, l.assistant.ToolCalls, RunMeta(l.snap.State).NotRun)
+	case effRecordRound:
 		// Recorded once per round, AFTER tool calls are processed — not, as the
 		// old per-round SaveConversation did, right after the assistant message
 		// and before this. That ordering was the reason the final round's tool
 		// results (the ones complete_diagnosis itself triggers no further round
 		// to re-save) were never persisted at all, and every other round's
 		// landed one round late.
-		a.recordRound(ctx, inc.ID, round, msg, messages[toolMsgStart:])
-		if ev.kind == evBatchFailed {
-			a.recordRunFinished(ctx, inc.ID, round, ev.err)
-			return nil, messages, ev.err
-		}
-		if ev.kind == evBudgetTripped {
-			result = &DiagnosticResult{
-				RootCause:        "max autonomous actions reached without resolution",
-				Confidence:       "low",
-				PrimaryAction:    "manual_investigation",
-				PrimaryReason:    "agent applied 3 actions without confirming fix",
-				RequiresApproval: true,
-			}
-		}
-		if result != nil {
-			a.recordRunFinished(ctx, inc.ID, round, nil)
-			return result, messages, nil
-		}
+		l.a.recordRound(ctx, l.inc.ID, before.Round, l.assistant, l.messages[l.toolStart:])
+	case effFinish:
+		l.finish(ctx)
 	}
-
-	exhausted := &DiagnosticResult{
-		RootCause:        "diagnostic loop exhausted without conclusion",
-		Confidence:       "low",
-		PrimaryAction:    "manual_investigation",
-		PrimaryReason:    "agent did not reach a conclusion within iteration limit",
-		RequiresApproval: true,
-	}
-	a.recordRunFinished(ctx, inc.ID, maxRounds, errLoopExhausted)
-	return exhausted, messages, nil
 }
 
 // errLoopExhausted labels a run_finished event whose loop ran out of rounds
@@ -578,7 +535,7 @@ var errLoopExhausted = errors.New("diagnostic loop exhausted without conclusion"
 // array — see llmCall, where it is retried like any other transient failure.
 var errNoChoices = errors.New("llm returned no choices")
 
-// recordRunStarted, recordRound, and recordRunFinished are best-effort:
+// recordRunStarted and recordRound are best-effort:
 // journal writes must never abort a diagnosis, and a.journal is nil in
 // contexts that don't care about the durable transcript (e.g. some tests
 // construct an Agent without one).
@@ -586,6 +543,8 @@ func (a *Agent) recordRunStarted(ctx context.Context, incidentID string, seed []
 	if a.journal == nil {
 		return
 	}
+	ctx, cancel := detached(ctx)
+	defer cancel()
 	if err := a.journal.RunStarted(ctx, incidentID, seed); err != nil {
 		a.log.WarnContext(ctx, "record run_started", "incident", incidentID, "error", err)
 	}
@@ -598,17 +557,10 @@ func (a *Agent) recordRound(
 	if a.journal == nil {
 		return
 	}
+	ctx, cancel := detached(ctx)
+	defer cancel()
 	if err := a.journal.LLMRound(ctx, incidentID, round, assistant, toolMessages); err != nil {
 		a.log.WarnContext(ctx, "record llm_round", "incident", incidentID, "round", round, "error", err)
-	}
-}
-
-func (a *Agent) recordRunFinished(ctx context.Context, incidentID string, rounds int, runErr error) {
-	if a.journal == nil {
-		return
-	}
-	if err := a.journal.RunFinished(ctx, incidentID, rounds, runErr); err != nil {
-		a.log.WarnContext(ctx, "record run_finished", "incident", incidentID, "error", err)
 	}
 }
 
@@ -785,7 +737,9 @@ func (a *Agent) handleCompleteDiagnosis(
 		return nil, fmt.Errorf("persist diagnosis for incident %s: %w", inc.ID, err)
 	}
 	if a.journal != nil {
-		if err := a.journal.DiagnosisCompleted(ctx, inc.ID, result); err != nil {
+		jctx, cancel := detached(ctx)
+		defer cancel()
+		if err := a.journal.DiagnosisCompleted(jctx, inc.ID, result); err != nil {
 			a.log.WarnContext(ctx, "record diagnosis_completed", "incident", inc.ID, "error", err)
 		}
 	}
@@ -1309,8 +1263,12 @@ func (a *Agent) llmCall(ctx context.Context, req openai.ChatCompletionRequest) (
 	delays := []time.Duration{time.Second, llmRetryDelay2, llmRetryDelay3}
 	var lastErr error
 	for i, delay := range delays {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return openai.ChatCompletionResponse{}, ctxErr
+		}
 		if i > 0 {
 			a.log.WarnContext(ctx, "llm transient error, retrying", "attempt", i, "error", lastErr)
+
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():

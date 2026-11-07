@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"slices"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -41,16 +40,4 @@ func unansweredCalls(messages []openai.ChatCompletionMessage, calls []openai.Too
 		}
 	}
 	return out
-}
-
-func closeBatch(
-	ctx context.Context, round int, ev runEvent, calls []openai.ToolCall, messages []openai.ChatCompletionMessage,
-) []openai.ChatCompletionMessage {
-	ev.cancelled = ctx.Err() != nil
-	snap := runSnapshot{State: RunInBatch, Started: true, Round: round, Replies: round + 1}
-	next, _, err := nextRun(snap, ev)
-	if err != nil {
-		next, _ = failRun(snap, ev)
-	}
-	return answerPending(messages, calls, RunMeta(next.State).NotRun)
 }

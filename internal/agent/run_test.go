@@ -67,6 +67,13 @@ func toolCallResponse(name, args string) string {
 // stub that accepts every write, plus a real on-disk DB and journal.
 func newRunTestAgent(t *testing.T, llm http.Handler, opts ...func(*agent.Dispatcher)) (*agent.Agent, *db.DB) {
 	t.Helper()
+	return newLoggedRunTestAgent(t, llm, slog.New(slog.DiscardHandler), opts...)
+}
+
+func newLoggedRunTestAgent(
+	t *testing.T, llm http.Handler, log *slog.Logger, opts ...func(*agent.Dispatcher),
+) (*agent.Agent, *db.DB) {
+	t.Helper()
 
 	llmSrv := httptest.NewServer(llm)
 	t.Cleanup(llmSrv.Close)
@@ -99,9 +106,7 @@ func newRunTestAgent(t *testing.T, llm http.Handler, opts ...func(*agent.Dispatc
 	for _, opt := range opts {
 		opt(disp)
 	}
-	return agent.New(
-		openai.NewClientWithConfig(cfg), "stub", disp, database, jrnl,
-		slog.New(slog.DiscardHandler)), database
+	return agent.New(openai.NewClientWithConfig(cfg), "stub", disp, database, jrnl, log), database
 }
 
 func seedRunIncident(t *testing.T, database *db.DB) *db.Incident {
