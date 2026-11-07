@@ -129,3 +129,31 @@ func (d *DB) ForeignKeysPerConnForTest(ctx context.Context) ([]int, error) {
 }
 
 const IncidentsLifecycleDDLForTest = incidentsLifecycleDDL
+
+func MigrateTruncatedForTest(path string, maxVersion int) ([]int, error) {
+	ctx := context.Background()
+	write, err := sql.Open("sqlite", dsn(path))
+	if err != nil {
+		return nil, err
+	}
+	defer write.Close()
+	write.SetMaxOpenConns(1)
+	if _, err = write.ExecContext(ctx, createSchemaVersionTable); err != nil {
+		return nil, err
+	}
+	known, err := loadAppliedVersions(ctx, write)
+	if err != nil {
+		return nil, err
+	}
+	var ran []int
+	for _, m := range migrations() {
+		if m.version > maxVersion || known[m.version] {
+			continue
+		}
+		if err = applyMigration(ctx, write, m); err != nil {
+			return ran, err
+		}
+		ran = append(ran, m.version)
+	}
+	return ran, nil
+}

@@ -128,6 +128,7 @@ func seedHalfRun(t *testing.T, raw *sql.DB) []string {
 
 func migrateDown(t *testing.T, path string) string {
 	t.Helper()
+	strip22(t, path)
 	var out bytes.Buffer
 	if err := db.MigrateDown(context.Background(), path, 21, &out); err != nil {
 		t.Fatalf("migrate down: %v", err)
@@ -367,7 +368,7 @@ func TestMigrateDown_RefusesAbove21(t *testing.T) {
 	t.Parallel()
 	path := upgraded(t)
 	raw := rawOpen(t, path)
-	mustExec(t, raw, `INSERT INTO schema_version (version, name) VALUES (22, 'later')`)
+	mustExec(t, raw, `INSERT INTO schema_version (version, name) VALUES (23, 'later')`)
 	raw.Close()
 	var out bytes.Buffer
 	err := db.MigrateDown(context.Background(), path, 21, &out)
@@ -398,4 +399,17 @@ func TestMigrateDown_PrintsCountsChangedRowsAndIdsOnly(t *testing.T) {
 			t.Errorf("output leaks %q: %q", leak, out)
 		}
 	}
+}
+
+func strip22(t *testing.T, path string) {
+	t.Helper()
+	raw := rawOpen(t, path)
+	for _, q := range []string{
+		`DROP INDEX IF EXISTS operations_one_running`, `DROP INDEX IF EXISTS operations_subject`,
+		`DROP TABLE IF EXISTS operations`,
+		`DELETE FROM schema_version WHERE version = 22`,
+	} {
+		mustExec(t, raw, q)
+	}
+	raw.Close()
 }

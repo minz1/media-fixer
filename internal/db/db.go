@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"slices"
@@ -147,6 +148,7 @@ type DB struct {
 	read   *sql.DB
 	yearRE *regexp.Regexp
 	lock   *os.File
+	log    *slog.Logger
 }
 
 // dsn builds the SQLite connection string for path. _pragma values use
@@ -219,6 +221,7 @@ func openLocked(path string) (*DB, error) {
 		write:  write,
 		read:   read,
 		yearRE: regexp.MustCompile(`\s*\(\d{4}\)\s*$`),
+		log:    slog.Default(),
 	}, nil
 }
 
@@ -412,7 +415,8 @@ type migration struct {
 // under a reasonable single-function length — they're one logical list.
 func migrations() []migration {
 	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations(),
-		sweepTargetsMigrations(), babysitMigrations(), lifecycleMigrations())
+		sweepTargetsMigrations(), babysitMigrations(), lifecycleMigrations(),
+		operationsMigrations())
 }
 
 func legacyMigrations() []migration {
