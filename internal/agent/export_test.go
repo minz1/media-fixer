@@ -222,3 +222,9 @@ func (d *Dispatcher) CallGated(ctx context.Context, s Scope, g Gate, name string
 func (a *Agent) SetReadinessForTest(timeout, interval time.Duration) {
 	a.readyTimeout, a.readyInterval = timeout, interval
 }
+
+func (a *Agent) SetSideEffectBoundForTest(d time.Duration) { a.sideBound = d }
+
+func BoundForTest(s ToolSpec) time.Duration { return s.bound() }
+
+const JournalWriteTimeoutForTest = journalWriteTimeout

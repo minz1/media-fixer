@@ -752,6 +752,22 @@ const (
 
 func (s toolSpec) disruptive() bool { return s.Impact >= impactShared }
 
+const (
+	restartBound   = 35 * time.Second
+	writeToolBound = 35 * time.Second
+)
+
+func (s toolSpec) bound() time.Duration {
+	if s.Risk != riskWrite {
+		return 0
+	}
+	switch s.Name {
+	case toolRestartDecypharr, toolRestartJellyfin:
+		return restartBound
+	}
+	return writeToolBound
+}
+
 func LiveTierOf(name string) (LiveTier, bool) {
 	spec, ok := specByName(name)
 	if !ok {
@@ -841,6 +857,7 @@ func (d *Dispatcher) call(ctx context.Context, c *toolCall, name string, args ma
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 	c.tool = name
+	defer c.finish()
 	return spec.Handler(d, ctx, c, args)
 }
 
@@ -1129,10 +1146,11 @@ func (d *Dispatcher) readArrGrabHistory(ctx context.Context, _ *toolCall, args m
 // --- write (autonomous action) handlers ---
 
 func (d *Dispatcher) dispatchRefreshLinks(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
-	if err := c.act(ctx, nil); err != nil {
+	sctx, err := c.act(ctx, nil)
+	if err != nil {
 		return nil, err
 	}
-	runID, err := d.Decypharr.RefreshLinks(ctx)
+	runID, err := d.Decypharr.RefreshLinks(sctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1140,10 +1158,11 @@ func (d *Dispatcher) dispatchRefreshLinks(ctx context.Context, c *toolCall, _ ma
 }
 
 func (d *Dispatcher) dispatchRepairSweep(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
-	if err := c.act(ctx, nil); err != nil {
+	sctx, err := c.act(ctx, nil)
+	if err != nil {
 		return nil, err
 	}
-	runID, err := d.Decypharr.RunRepairSweep(ctx)
+	runID, err := d.Decypharr.RunRepairSweep(sctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1151,10 +1170,11 @@ func (d *Dispatcher) dispatchRepairSweep(ctx context.Context, c *toolCall, _ map
 }
 
 func (d *Dispatcher) dispatchCacheCleanup(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
-	if err := c.act(ctx, nil); err != nil {
-		return nil, err
+	sctx, actErr := c.act(ctx, nil)
+	if actErr != nil {
+		return nil, actErr
 	}
-	if err := d.Decypharr.MountCacheCleanup(ctx); err != nil {
+	if err := d.Decypharr.MountCacheCleanup(sctx); err != nil {
 		return nil, err
 	}
 	return map[string]string{keyStatus: statusStarted}, nil
@@ -1169,10 +1189,11 @@ func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, c *toolCall, _ map
 			"note":         "a library scan is already in progress — do not trigger another; wait for it to finish",
 		})
 	}
-	if actErr := c.act(ctx, nil); actErr != nil {
+	sctx, actErr := c.act(ctx, nil)
+	if actErr != nil {
 		return nil, actErr
 	}
-	if scanErr := d.Jellyfin.LibraryScan(ctx); scanErr != nil {
+	if scanErr := d.Jellyfin.LibraryScan(sctx); scanErr != nil {
 		return nil, scanErr
 	}
 	return map[string]string{keyStatus: statusStarted}, nil
@@ -1212,10 +1233,11 @@ func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, 
 	if d.MediaAgent == nil {
 		return nil, refuseCause(errMediaAgentNotConfigured)
 	}
-	if err := c.act(ctx, nil); err != nil {
-		return nil, err
+	sctx, actErr := c.act(ctx, nil)
+	if actErr != nil {
+		return nil, actErr
 	}
-	if err := d.MediaAgent.RestartService(ctx, "decypharr"); err != nil {
+	if err := d.MediaAgent.RestartService(sctx, "decypharr"); err != nil {
 		return nil, err
 	}
 	probe := func(ctx context.Context) error {
@@ -1255,10 +1277,11 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _
 	if d.MediaAgent == nil {
 		return nil, refuseCause(errMediaAgentNotConfigured)
 	}
-	if err := c.act(ctx, nil); err != nil {
-		return nil, err
+	sctx, actErr := c.act(ctx, nil)
+	if actErr != nil {
+		return nil, actErr
 	}
-	if err := d.MediaAgent.RestartService(ctx, "jellyfin"); err != nil {
+	if err := d.MediaAgent.RestartService(sctx, "jellyfin"); err != nil {
 		return nil, err
 	}
 	timeout, interval := c.ready()
@@ -1278,10 +1301,11 @@ func (d *Dispatcher) dispatchDecypharrRecheck(ctx context.Context, c *toolCall, 
 	if v, ok := args["fix"].(bool); ok {
 		fix = v
 	}
-	if err := c.act(ctx, map[string]any{paramName: name, "fix": fix}); err != nil {
-		return nil, err
+	sctx, actErr := c.act(ctx, map[string]any{paramName: name, "fix": fix})
+	if actErr != nil {
+		return nil, actErr
 	}
-	if err := d.Decypharr.RecheckEntry(ctx, name, fix); err != nil {
+	if err := d.Decypharr.RecheckEntry(sctx, name, fix); err != nil {
 		return nil, err
 	}
 	return map[string]string{keyStatus: "rechecked"}, nil
@@ -1296,10 +1320,11 @@ func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, c *toolCall, args
 	if err != nil {
 		return nil, err
 	}
-	if actErr := c.act(ctx, map[string]any{paramSeriesID: series.ID, paramTitle: title}); actErr != nil {
+	sctx, actErr := c.act(ctx, map[string]any{paramSeriesID: series.ID, paramTitle: title})
+	if actErr != nil {
 		return nil, actErr
 	}
-	if rescanErr := d.Sonarr.RescanSeries(ctx, series.ID); rescanErr != nil {
+	if rescanErr := d.Sonarr.RescanSeries(sctx, series.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
 	return map[string]any{paramSeriesID: series.ID, keyStatus: "rescan_queued"}, nil
@@ -1314,10 +1339,11 @@ func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, c *toolCall, args
 	if err != nil {
 		return nil, err
 	}
-	if actErr := c.act(ctx, map[string]any{paramMovieID: movie.ID, paramTitle: title}); actErr != nil {
+	sctx, actErr := c.act(ctx, map[string]any{paramMovieID: movie.ID, paramTitle: title})
+	if actErr != nil {
 		return nil, actErr
 	}
-	if rescanErr := d.Radarr.RescanMovie(ctx, movie.ID); rescanErr != nil {
+	if rescanErr := d.Radarr.RescanMovie(sctx, movie.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
 	return map[string]any{paramMovieID: movie.ID, keyStatus: "rescan_queued"}, nil
@@ -1325,10 +1351,11 @@ func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, c *toolCall, args
 
 func (d *Dispatcher) dispatchClearJellyfinCache(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	itemID, _ := args[paramItemID].(string)
-	if err := c.act(ctx, map[string]any{paramItemID: itemID}); err != nil {
-		return nil, err
+	sctx, actErr := c.act(ctx, map[string]any{paramItemID: itemID})
+	if actErr != nil {
+		return nil, actErr
 	}
-	if err := d.Jellyfin.DeleteCache(ctx, itemID); err != nil {
+	if err := d.Jellyfin.DeleteCache(sctx, itemID); err != nil {
 		return nil, err
 	}
 	return map[string]string{keyStatus: "cache_cleared"}, nil
@@ -1384,30 +1411,34 @@ func (d *Dispatcher) triggerArrSearch(
 ) (string, error) {
 	switch {
 	case mediaType == client.ReplaceMediaMovie:
-		if err := c.act(ctx, params); err != nil {
+		sctx, err := c.act(ctx, params)
+		if err != nil {
 			return "", err
 		}
-		return "movie", d.Radarr.SearchMovieNow(ctx, status.MovieID)
+		return "movie", d.Radarr.SearchMovieNow(sctx, status.MovieID)
 	case episode >= 0:
 		epID, findErr := d.findSonarrEpisodeID(ctx, status.SeriesID, season, episode)
 		if findErr != nil {
 			return "", findErr
 		}
-		if err := c.act(ctx, params); err != nil {
+		sctx, err := c.act(ctx, params)
+		if err != nil {
 			return "", err
 		}
-		_, err := d.Sonarr.SearchEpisodes(ctx, []int{epID})
+		_, err = d.Sonarr.SearchEpisodes(sctx, []int{epID})
 		return "episode", err
 	case season >= 0:
-		if err := c.act(ctx, params); err != nil {
+		sctx, err := c.act(ctx, params)
+		if err != nil {
 			return "", err
 		}
-		return "season", d.Sonarr.SeasonSearch(ctx, status.SeriesID, season)
+		return "season", d.Sonarr.SeasonSearch(sctx, status.SeriesID, season)
 	default:
-		if err := c.act(ctx, params); err != nil {
+		sctx, err := c.act(ctx, params)
+		if err != nil {
 			return "", err
 		}
-		return "series", d.Sonarr.SeriesSearch(ctx, status.SeriesID)
+		return "series", d.Sonarr.SeriesSearch(sctx, status.SeriesID)
 	}
 }
 

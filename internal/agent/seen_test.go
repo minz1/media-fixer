@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 )
@@ -215,5 +216,28 @@ func TestSeen_RerunNewGenerationStartsEmpty(t *testing.T) {
 	}
 	if got := second.acted(); len(got) != 1 {
 		t.Errorf("Act ran %d times under the new gate, want once: %v", len(got), got)
+	}
+}
+
+func TestSeen_InterruptedRepeatBlocked(t *testing.T) {
+	t.Parallel()
+	srv := hangingRepairRun(t)
+	ag, database, inc := newRig(t, srv.URL, []string{
+		toolCallResponse("refresh_decypharr_links", `{}`),
+		toolCallResponse("refresh_decypharr_links", `{}`),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+	}, rigOpts{})
+	ag.SetSideEffectBoundForTest(150 * time.Millisecond)
+	g := newRecGate(database, inc)
+	exit := runGated(context.Background(), t, ag, database, inc, g)
+	if exit.State != agent.RunConcluded {
+		t.Fatalf("exit %s: %v", exit.State, exit.Err)
+	}
+	if got := g.acted(); len(got) != 1 {
+		t.Fatalf("Act ran %d times, want once: %v", len(got), got)
+	}
+	replies := toolReplies(exit.Conversation)
+	if len(replies) < 2 || !strings.Contains(replies[1], "its outcome is unknown (interrupted)") {
+		t.Errorf("replies = %v, want the repeat to say the outcome is unknown (interrupted)", replies)
 	}
 }

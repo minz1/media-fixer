@@ -21,12 +21,12 @@ type MediaAgentClient struct {
 	stuckTimeout time.Duration
 }
 
-// mediaAgentTimeout is deliberately longer than defaultHTTPTimeout: a
+// MediaAgentTimeout is deliberately longer than defaultHTTPTimeout: a
 // dd-test reads up to 100 MiB off a debrid-backed FUSE mount and can legitimately
 // take a while. It is not unbounded, though — this client used to have no
 // timeout at all, so a hung mount (the exact condition dd-test diagnoses) parked
 // the calling incident goroutine forever with nothing to recover it.
-const mediaAgentTimeout = 3 * time.Minute
+const MediaAgentTimeout = 3 * time.Minute
 
 const stuckReadsTimeout = 20 * time.Second
 
@@ -34,7 +34,7 @@ func NewMediaAgent(baseURL, apiKey string) *MediaAgentClient {
 	return &MediaAgentClient{
 		baseURL: baseURL,
 		apiKey:  apiKey,
-		http:    newHTTPClient(mediaAgentTimeout),
+		http:    newHTTPClient(MediaAgentTimeout),
 
 		stuckTimeout: stuckReadsTimeout,
 	}

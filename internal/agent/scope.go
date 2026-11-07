@@ -19,10 +19,14 @@ type toolCall struct {
 	readyTimeout  time.Duration
 	readyInterval time.Duration
 
-	acted   bool
-	params  map[string]any
-	verdict Verdict
-	gateErr error
+	acted     bool
+	params    map[string]any
+	verdict   Verdict
+	gateErr   error
+	sideBound time.Duration
+	side      context.Context
+	release   context.CancelFunc
+	cut       bool
 }
 
 type refusal struct {
@@ -53,21 +57,39 @@ func notReady(err error) error { return &notReadyError{err: err} }
 
 var errActDenied = errors.New("action not allowed")
 
-func (c *toolCall) act(ctx context.Context, params map[string]any) error {
+func (c *toolCall) act(ctx context.Context, params map[string]any) (context.Context, error) {
 	c.acted = true
 	c.params = params
 	if c.gate == nil {
 		c.verdict = GateAllowed
-		return nil
+		return c.sideEffect(ctx), nil
 	}
 	c.verdict, c.gateErr = c.gate.Act(ctx, c.tool)
 	if c.gateErr != nil {
-		return c.gateErr
+		return ctx, c.gateErr
 	}
 	if c.verdict != GateAllowed {
-		return errActDenied
+		return ctx, errActDenied
 	}
-	return nil
+	return c.sideEffect(ctx), nil
+}
+
+func (c *toolCall) sideEffect(ctx context.Context) context.Context {
+	bound := c.sideBound
+	if bound == 0 {
+		spec, _ := specByName(c.tool)
+		bound = spec.bound()
+	}
+	c.side, c.release = context.WithTimeout(context.WithoutCancel(ctx), bound)
+	return c.side
+}
+
+func (c *toolCall) finish() {
+	if c.release == nil {
+		return
+	}
+	c.cut = errors.Is(c.side.Err(), context.DeadlineExceeded)
+	c.release()
 }
 
 func (c *toolCall) ready() (time.Duration, time.Duration) {

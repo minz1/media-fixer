@@ -174,3 +174,10 @@ func TestMigrateDownFlag_ExitCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestShutdownBudget_MatchesAgentBoundTest(t *testing.T) {
+	t.Parallel()
+	if shutdownBudget != 60*time.Second {
+		t.Errorf("shutdownBudget = %v: update shutdownBudgetMirror in internal/agent/registry_test.go", shutdownBudget)
+	}
+}

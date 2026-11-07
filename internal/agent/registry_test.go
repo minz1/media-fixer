@@ -5,8 +5,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/client"
 )
 
 // TestToolRegistry_UniqueNames catches a copy-paste duplicate tool entry —
@@ -251,5 +253,28 @@ func TestLiveTier_TotalOverTools(t *testing.T) {
 	}
 	if _, ok := agent.LiveTierOf("no_such_tool"); ok {
 		t.Error("unknown tool must have no live tier")
+	}
+}
+
+const shutdownBudgetMirror = 60 * time.Second
+
+func TestRegistry_SideEffectBoundsFitShutdown(t *testing.T) {
+	t.Parallel()
+	bounded := 0
+	for _, spec := range agent.ToolRegistry() {
+		bound := agent.BoundForTest(spec)
+		if bound == 0 {
+			continue
+		}
+		bounded++
+		if bound+3*agent.JournalWriteTimeoutForTest > shutdownBudgetMirror-5*time.Second {
+			t.Errorf("%s: bound %v + 3 journal writes exceeds the shutdown budget less 5s", spec.Name, bound)
+		}
+		if strings.HasPrefix(spec.Name, "restart_") && bound >= client.MediaAgentTimeout {
+			t.Errorf("%s: bound %v is not under the media-agent timeout %v", spec.Name, bound, client.MediaAgentTimeout)
+		}
+	}
+	if bounded != 11 {
+		t.Errorf("%d tools have a side-effect bound, want the 11 write tools", bounded)
 	}
 }

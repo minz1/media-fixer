@@ -40,6 +40,8 @@ type callServer struct {
 	pingStatus     int
 	repairRunCode  int
 	onRepairRun    func()
+	onRestart      func()
+	onCommand      func()
 	onPing         func()
 }
 
@@ -60,8 +62,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func (s *callServer) routeHook(path string) {
+	switch {
+	case strings.HasPrefix(path, "/restart/") && s.onRestart != nil:
+		s.onRestart()
+	case path == "/api/v3/command" && s.onCommand != nil:
+		s.onCommand()
+	}
+}
+
 func (s *callServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.note(r.Method + " " + r.URL.Path)
+	s.routeHook(r.URL.Path)
 	switch r.URL.Path {
 	case "/api/repair/run":
 		if s.onRepairRun != nil {
@@ -718,5 +730,84 @@ func TestBudgetTrip_FindingSaysTried(t *testing.T) {
 	const want = "agent tried 3 autonomous actions without confirming a fix"
 	if exit.Finding.PrimaryReason != want {
 		t.Errorf("PrimaryReason = %q, want %q", exit.Finding.PrimaryReason, want)
+	}
+}
+
+func cancelThenLinger(cancel context.CancelFunc) func() {
+	return func() {
+		cancel()
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestReview2_SideEffectSurvivesRunCancel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		tool, args string
+		hook       func(*callServer, func())
+	}{
+		{"restart_jellyfin", `{}`, func(s *callServer, c func()) { s.onRestart = c }},
+		{"restart_decypharr", `{}`, func(s *callServer, c func()) { s.onRestart = c }},
+		{"arr_search_missing", searchEpisode7, func(s *callServer, c func()) { s.onCommand = c }},
+		{"refresh_decypharr_links", `{}`, func(s *callServer, c func()) { s.onRepairRun = c }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s, srv := newCallServer(t)
+			tc.hook(s, cancelThenLinger(cancel))
+			ag, database, inc := newRig(t, srv.URL, script(tc.tool, tc.args), rigOpts{})
+			ag.Run(ctx, inc, nil, newRecGate(database, inc))
+			acts := listActions(t, database, inc.ID)
+			if len(acts) != 1 || acts[0].Status != db.ActionApplied {
+				t.Fatalf("actions = %+v, want one applied row", acts)
+			}
+		})
+	}
+}
+
+func hangingRepairRun(t *testing.T) *httptest.Server {
+	t.Helper()
+	s := &callServer{}
+	s.onRepairRun = func() { time.Sleep(time.Second) }
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestReview2_BoundCutIsInterrupted(t *testing.T) {
+	t.Parallel()
+	srv := hangingRepairRun(t)
+	var out lockedBuffer
+	log := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ag, database, inc := newRig(t, srv.URL, script("refresh_decypharr_links", `{}`), rigOpts{log: log})
+	ag.SetSideEffectBoundForTest(150 * time.Millisecond)
+	g := newRecGate(database, inc)
+	exit := runGated(context.Background(), t, ag, database, inc, g)
+	if exit.State != agent.RunConcluded {
+		t.Fatalf("exit %s: %v", exit.State, exit.Err)
+	}
+	if acts := listActions(t, database, inc.ID); len(acts) != 0 {
+		t.Errorf("actions = %+v, want no row", acts)
+	}
+	calls := g.Calls()
+	if len(calls) != 1 || calls[0].Status != agent.OutcomeInterrupted || !calls[0].Counted {
+		t.Errorf("gate records = %+v, want one counted interrupted", calls)
+	}
+	var warns []string
+	for line := range strings.SplitSeq(out.String(), "\n") {
+		if strings.Contains(line, "action outcome unknown") {
+			warns = append(warns, line)
+		}
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "level=WARN") ||
+		!strings.Contains(warns[0], "tool=refresh_decypharr_links") {
+		t.Errorf("outcome-unknown lines = %v, want one WARN naming the tool", warns)
+	}
+	replies := toolReplies(exit.Conversation)
+	if len(replies) == 0 || !strings.Contains(replies[0], "unknown") {
+		t.Errorf("reply = %v, want the outcome unknown", replies)
 	}
 }

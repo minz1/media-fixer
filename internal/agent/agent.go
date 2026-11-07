@@ -308,6 +308,7 @@ type Agent struct {
 
 	readyTimeout  time.Duration
 	readyInterval time.Duration
+	sideBound     time.Duration
 }
 
 // New creates an Agent.
@@ -692,6 +693,7 @@ func (a *Agent) invoke(
 			gate:          gate,
 			readyTimeout:  a.readyTimeout,
 			readyInterval: a.readyInterval,
+			sideBound:     a.sideBound,
 		},
 	}
 	var args map[string]any
@@ -842,6 +844,12 @@ func (v *invocation) afterAct(result any, err error) {
 		v.step(evSucceeded, stepInfo{reply: jsonResult(result), params: v.c.params})
 	case errors.Is(err, errAppliedNotReady):
 		v.step(evNotReady, stepInfo{reply: errorReply(err.Error()), errText: err.Error(), params: v.c.params})
+	case v.c.cut:
+		v.a.log.WarnContext(v.ctx, "action outcome unknown", "tool", v.fn, "error", err)
+		v.step(evCut, stepInfo{reply: errorReply(fmt.Sprintf(
+			"%s was interrupted and its outcome is unknown (interrupted). Check the service before repeating it, "+
+				"or call complete_diagnosis with your current findings.", v.fn)),
+			errText: err.Error(), params: v.c.params})
 	default:
 		v.step(evErrored, stepInfo{reply: errorReply(err.Error()), errText: err.Error(), params: v.c.params})
 	}
