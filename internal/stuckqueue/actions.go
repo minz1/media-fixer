@@ -3,12 +3,15 @@ package stuckqueue
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/minz1/mediafixer/internal/client"
 )
+
+var errSearchFailed = errors.New("removed; search failed")
 
 func (s *Scheduler) Act(
 	ctx context.Context, app App, downloadID string, action Action, targetsFp string,
@@ -60,15 +63,16 @@ func (s *Scheduler) Act(
 		return "", refuse("%s is not offered for this download", action)
 	}
 	notice, err := s.apply(ctx, c, d, action, cands)
-	if err != nil {
+	searchFailed := errors.Is(err, errSearchFailed)
+	if err != nil && !searchFailed {
 		return "", err
 	}
 	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
-		"app", app, "download", d.DownloadID, "title", d.Title, "action", action)
-	s.recordOutcome(d, action)
+		"app", app, "download", d.DownloadID, "title", d.Title, "action", action, "search_failed", searchFailed)
+	s.recordOutcome(d, action, searchFailed)
 	s.forget(app, d.DownloadID)
 	s.refresh(subjectOf(d))
-	return notice, nil
+	return notice, err
 }
 
 func (s *Scheduler) ImportMapped(
@@ -123,7 +127,7 @@ func (s *Scheduler) ImportMapped(
 	s.r.logger().InfoContext(ctx, "stuck-queue: manual import",
 		"series", seriesID, "download", d.DownloadID, "files", labels.lines)
 	if len(files) == len(cands) {
-		s.recordOutcome(d, ActionImport)
+		s.recordOutcome(d, ActionImport, false)
 		s.forget(AppSonarr, d.DownloadID)
 	}
 	s.refresh(subjectOf(d))
@@ -239,8 +243,7 @@ func (s *Scheduler) apply(
 			return "", err
 		}
 		if err := search(ctx, c, d); err != nil {
-			return "", fmt.Errorf("the release is blocklisted and removed, but the search failed; search from %s: %w",
-				d.App.Name(), err)
+			return "", fmt.Errorf("%w: %w", errSearchFailed, err)
 		}
 		return "Re-grab started for " + d.Targets() + ".", nil
 	case ActionRemove:

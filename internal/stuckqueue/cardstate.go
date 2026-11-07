@@ -21,11 +21,15 @@ const (
 )
 
 type outcome struct {
-	action Action
-	at     time.Time
+	action       Action
+	at           time.Time
+	searchFailed bool
 }
 
 func (o outcome) line() string {
+	if o.searchFailed {
+		return fmt.Sprintf("⚠️ Removed; search failed · <t:%d:t>", o.at.Unix())
+	}
 	return fmt.Sprintf("✅ %s · <t:%d:t>", actionDone(o.action), o.at.Unix())
 }
 
@@ -152,13 +156,13 @@ func (s *Scheduler) CardHandler() card.Handler {
 	}
 }
 
-func (s *Scheduler) recordOutcome(d Download, a Action) {
+func (s *Scheduler) recordOutcome(d Download, a Action, searchFailed bool) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	if s.outcomes == nil {
 		s.outcomes = map[string]outcome{}
 	}
-	s.outcomes[subjectOf(d)] = outcome{action: a, at: s.r.Now()}
+	s.outcomes[subjectOf(d)] = outcome{action: a, at: s.r.Now(), searchFailed: searchFailed}
 }
 
 func (s *Scheduler) clearStuckOutcomes(res Result) {

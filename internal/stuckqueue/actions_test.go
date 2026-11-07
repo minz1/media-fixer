@@ -158,8 +158,7 @@ func TestAct_RegrabSearchFails(t *testing.T) {
 	e.radarr.set(rawMovie(1, "M", "Movie", 5, false, sample))
 	e.radarr.failCommand["MoviesSearch"] = true
 	_, err := act(e, s, stuckqueue.AppRadarr, "M", stuckqueue.ActionRegrab)
-	if err == nil || !strings.Contains(err.Error(), "blocklisted") ||
-		!strings.Contains(err.Error(), "search from Radarr") {
+	if err == nil || !strings.Contains(err.Error(), "removed; search failed: ") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -313,5 +312,39 @@ func TestAct_ForgetLeavesHandedOutResultsAlone(t *testing.T) {
 	items := app(before, stuckqueue.AppSonarr).Items
 	if len(items) != 2 || items[0].DownloadID != "A" || items[1].DownloadID != "B" {
 		t.Fatalf("a Result handed out earlier changed under its holder: %+v", items)
+	}
+}
+
+func TestQ2_8_RegrabSearchFailsRecordsRemoved(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	for range 2 {
+		if err := s.RunNow(); err != nil {
+			t.Fatal(err)
+		}
+		s.Wait()
+		e.clock.Add(6 * time.Hour)
+	}
+	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Items) != 1 {
+		t.Fatalf("setup: last = %+v", res)
+	}
+	e.sonarr.failCommand["EpisodeSearch"] = true
+	refreshed := ""
+	s.Refresh = func(subject string) { refreshed = subject }
+	_, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRegrab)
+	if err == nil || errors.Is(err, stuckqueue.ErrRefused) || !strings.Contains(err.Error(), "search failed") {
+		t.Fatalf("err = %v; want the search failure", err)
+	}
+	subject := card.StuckSubject("s", "D")
+	if refreshed != subject {
+		t.Fatalf("refreshed %q, want %q", refreshed, subject)
+	}
+	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Items) != 0 {
+		t.Fatalf("last still lists the removed download: %+v", res)
+	}
+	up, ok := render(t, s, subject)
+	if !ok || !strings.Contains(up.Status, "Removed; search failed") || len(up.Buttons) != 0 {
+		t.Fatalf("update = %+v, %v; want the half-done outcome and no buttons", up, ok)
 	}
 }
