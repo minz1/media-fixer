@@ -326,3 +326,22 @@ func TestBot_PressAfterDisconnectGetsEphemeralNotice(t *testing.T) {
 		t.Errorf("handler ran %d times after Disconnect", calls.Load())
 	}
 }
+
+func TestBot_DisconnectBoundsStuckSessionClose(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		b := discord.NewWithSenderForTest(slog.New(slog.DiscardHandler), &followSender{}, "owner", "")
+		release := make(chan struct{})
+		discord.SetSessionCloseForTest(b, func() error {
+			<-release
+			return nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := b.Disconnect(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Disconnect with a stuck session close = %v, want DeadlineExceeded", err)
+		}
+		close(release)
+		synctest.Wait()
+	})
+}

@@ -51,6 +51,7 @@ type Bot struct {
 	liveMsgs  map[string]bool
 	stopCards context.CancelFunc
 	cardsDone chan struct{}
+	closeConn func() error
 }
 
 // New creates a Bot from a Discord bot token.
@@ -79,6 +80,7 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		cardsDone: make(chan struct{}),
 	}
 	b.connect = b.openAndRegister
+	b.closeConn = sess.Close
 	sess.AddHandler(b.onInteraction)
 	return b, nil
 }
@@ -223,7 +225,14 @@ func (b *Bot) Disconnect(ctx context.Context) error {
 			err = errors.Join(err, ctx.Err())
 		}
 	}
-	return errors.Join(err, b.session.Close())
+	connClosed := make(chan error, 1)
+	go func() { connClosed <- b.closeConn() }()
+	select {
+	case cerr := <-connClosed:
+		return errors.Join(err, cerr)
+	case <-ctx.Done():
+		return errors.Join(err, ctx.Err())
+	}
 }
 
 func (b *Bot) track() bool {

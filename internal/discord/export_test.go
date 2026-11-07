@@ -76,3 +76,5 @@ func SetHandlersForTest(b *Bot, handlers map[string]card.Handler) {
 	defer b.mu.Unlock()
 	b.handlers, b.procCtx = handlers, context.Background()
 }
+
+func SetSessionCloseForTest(b *Bot, fn func() error) { b.closeConn = fn }
