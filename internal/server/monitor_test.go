@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -840,5 +841,31 @@ func TestS6_10_MonitoringShowsUnreadableSweepSettings(t *testing.T) {
 	}
 	if e.settingsRaw(t) != "{nope" {
 		t.Error("the corrupt row was rewritten")
+	}
+}
+
+func TestD8_4_ExplainViewMatchesPageWhenSonarrIsDown(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	if err := e.db.PutBabysitExplanation(context.Background(), db.BabysitExplanation{
+		SeriesID: 7, Fingerprint: "old", Text: "OLD ANSWER", Model: "m", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.son.mu.Lock()
+	e.son.down = true
+	e.son.mu.Unlock()
+
+	state := func(body string) string {
+		return fmt.Sprintf("can=%t stale=%t text=%t",
+			strings.Contains(body, `hx-post="/media/monitoring/7/explain"`),
+			strings.Contains(body, "history changed since"),
+			strings.Contains(body, "OLD ANSWER"))
+	}
+	posted := state(do(t, e.srv, http.MethodPost, "/media/monitoring/7/explain", url.Values{}).Body.String())
+	page := state(do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String())
+	if posted != page {
+		t.Errorf("explain POST gives %s, page render gives %s", posted, page)
 	}
 }

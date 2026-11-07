@@ -141,17 +141,12 @@ func (s *Server) renderMonitorShow(
 	v := monitorShowView{
 		BaseURL: s.baseURL, ID: id, Title: showTitle(sh, id), Show: sh, StuckAfter: set.StuckAfter,
 		Status: s.sweepStatus(ctx, started), Notice: notice, Failure: failure, Paused: s.isPaused(ctx),
-		Explain: explainView{BaseURL: s.baseURL, ID: id},
+		Explain: s.explainFor(id, sh),
 	}
 	for _, l := range sh.Live {
 		v.Live = append(v.Live, liveStuck(l))
 	}
 	v.ConfirmPacks, v.ConfirmSingles = s.searchConfirms(set, v.Title)
-	e := &v.Explain
-	e.Can = sh.Series != nil && sh.SonarrErr == "" && sh.Stuck && !sh.CacheFresh
-	if sh.Cached != nil {
-		e.Text, e.At, e.Stale = sh.Cached.Text, sh.Cached.CreatedAt, !sh.CacheFresh && sh.SonarrErr == ""
-	}
 	s.renderMonitor(w, name, v)
 }
 
@@ -255,19 +250,28 @@ func (s *Server) monitorExplain(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ex, err := s.babysit.Explain(r.Context(), id)
-	if errors.Is(err, client.ErrNotFound) {
+	_, err := s.babysit.Explain(r.Context(), id)
+	sh, showErr := s.babysit.Show(r.Context(), id)
+	if errors.Is(err, client.ErrNotFound) || errors.Is(showErr, client.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
-	v := explainView{BaseURL: s.baseURL, ID: id}
+	if showErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	v := s.explainFor(id, sh)
 	if err != nil {
-		v.Err, v.Can = err.Error(), !errors.Is(err, babysit.ErrNotStuck)
-		if c, getErr := s.db.GetBabysitExplanation(r.Context(), id); getErr == nil {
-			v.Text, v.At, v.Stale = c.Text, c.CreatedAt, true
-		}
-	} else {
-		v.Text, v.At = ex.Text, ex.CreatedAt
+		v.Err = err.Error()
 	}
 	s.renderMonitor(w, "monitor_explain", v)
+}
+
+func (s *Server) explainFor(id int, sh babysit.Show) explainView {
+	v := explainView{BaseURL: s.baseURL, ID: id}
+	v.Can = sh.Series != nil && sh.SonarrErr == "" && sh.Stuck && !sh.CacheFresh
+	if sh.Cached != nil {
+		v.Text, v.At, v.Stale = sh.Cached.Text, sh.Cached.CreatedAt, !sh.CacheFresh && sh.SonarrErr == ""
+	}
+	return v
 }
