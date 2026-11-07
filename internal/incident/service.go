@@ -1231,12 +1231,6 @@ func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time,
 	}
 }
 
-// backgroundSweepLoop periodically calls SweepStaleRuns and
-// AdvancePendingOutcomes until base is done — one ticker for both, since
-// neither needs a different cadence than the other and a second ticker would
-// just be more moving parts for no benefit. Started once from Start,
-// tied to the same process-lifetime context that owns every other piece of
-// Service's background lifecycle (runManager).
 func (s *Service) backgroundSweepLoop(base context.Context) {
 	d := s.minutes(s.timers(base).CheckEveryMinutes)
 	ticker := time.NewTicker(d)
@@ -1248,7 +1242,6 @@ func (s *Service) backgroundSweepLoop(base context.Context) {
 		case <-ticker.C:
 			s.SweepStaleRuns(base)
 			s.armDueChecks(base)
-			s.AdvancePendingOutcomes(base)
 			s.AdvanceReporterProgress(base, time.Now())
 			s.endLockEpisode(base)
 			if next := s.minutes(s.timers(base).CheckEveryMinutes); next != d {

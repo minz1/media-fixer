@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -239,18 +240,17 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 func newPendingTracker(t *testing.T, database *db.DB) *db.Incident {
 	t.Helper()
 	inc := &db.Incident{
-		Status: db.StatusVerifying, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Loop Show",
+		Status: statusAwaiting, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Loop Show",
 	}
-	if err := database.CreateIncident(t.Context(), inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	if err := database.AddReporter(t.Context(), inc.ID, "alice", "discord", "discord-alice"); err != nil {
 		t.Fatal(err)
 	}
 	po := &db.PendingOutcome{MediaType: "tv", Title: "Loop Show", Season: 1, Episode: 1, StartedAt: time.Now()}
-	if err := database.SetPendingOutcome(t.Context(), inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(t.Context(), database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	dueNow(t, database, inc.ID)
 	return inc
 }
 
@@ -269,12 +269,19 @@ func TestBackgroundLoop_ResetsToSavedInterval(t *testing.T) {
 			return &agent.PendingOutcomeObservation{}, nil
 		},
 	}
-	cancelled, cancel := context.WithCancel(t.Context())
-	cancel()
-	svc := incident.NewService(cancelled, database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler))
+	svc := incident.NewService(
+		t.Context(),
+		database,
+		nil,
+		ag,
+		nil,
+		nil,
+		newSyncNotifier(),
+		slog.New(slog.DiscardHandler),
+	)
 	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(20 * time.Millisecond)
-	inc := newPendingTracker(t, database)
+	newPendingTracker(t, database)
 
 	ctx, stop := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -282,15 +289,6 @@ func TestBackgroundLoop_ResetsToSavedInterval(t *testing.T) {
 		svc.BackgroundSweepLoopForTest(ctx)
 		close(done)
 	}()
-	go func() {
-		po := &db.PendingOutcome{MediaType: "tv", Title: "Loop Show", Season: 1, Episode: 1, StartedAt: time.Now()}
-		for ctx.Err() == nil {
-			_ = database.SetPendingOutcome(ctx, inc.ID, po, time.Now())
-			time.Sleep(2 * time.Millisecond)
-		}
-	}()
-
-	time.Sleep(50 * time.Millisecond)
 	saveTimers(t, database, func(tm *incident.Timers) {
 		tm.CheckEveryMinutes = 1
 		tm.NoReleaseGraceMinutes = 240
@@ -373,12 +371,13 @@ func TestSweepStaleRuns_CardPrintsSavedMinutes(t *testing.T) {
 
 func newTrackedIncident(t *testing.T, database *db.DB, status db.IncidentStatus, po *db.PendingOutcome) *db.Incident {
 	t.Helper()
-	inc := &db.Incident{Status: status, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Tracked"}
-	if err := database.CreateIncident(t.Context(), inc); err != nil {
-		t.Fatal(err)
+	inc := &db.Incident{
+		Status: status, Source: "discord", ReportedBy: "x", What: "cant_play",
+		Title: "Tracked " + strconv.FormatInt(time.Now().UnixNano(), 36),
 	}
+	seedTracked(t, database, inc)
 	if po != nil {
-		if err := database.SetPendingOutcome(t.Context(), inc.ID, po, time.Now()); err != nil {
+		if err := setTrack(t.Context(), database, inc.ID, po, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -387,16 +386,11 @@ func newTrackedIncident(t *testing.T, database *db.DB, status db.IncidentStatus,
 
 func dueAt(t *testing.T, database *db.DB, id string, after time.Duration) bool {
 	t.Helper()
-	due, err := database.FindDuePendingOutcomes(t.Context(), time.Now().Add(after))
+	s, err := database.GetIncidentSnapshot(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, inc := range due {
-		if inc.ID == id {
-			return true
-		}
-	}
-	return false
+	return !s.NextCheck.IsZero() && !s.NextCheck.After(time.Now().Add(after))
 }
 
 func incidentStatus(t *testing.T, database *db.DB, id string) db.IncidentStatus {
@@ -456,13 +450,13 @@ func TestAdvancePendingOutcome_SavedGrace(t *testing.T) {
 	for _, tc := range []struct {
 		age  time.Duration
 		want db.IncidentStatus
-	}{{20 * time.Minute, db.StatusVerifying}, {31 * time.Minute, db.StatusManualTestNeeded}} {
+	}{{20 * time.Minute, statusAwaiting}, {31 * time.Minute, db.StatusManualTestNeeded}} {
 		started := time.Now().Add(-tc.age)
-		inc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+		inc := newTrackedIncident(t, database, statusAwaiting, &db.PendingOutcome{
 			MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1, StartedAt: started, LastProgressAt: started,
 		})
 
-		svc.AdvancePendingOutcomes(t.Context())
+		svc.CheckNowForTest(t.Context(), inc.ID)
 
 		if got := incidentStatus(t, database, inc.ID); got != tc.want {
 			t.Errorf("started %v ago: status %q, want %q", tc.age, got, tc.want)
@@ -479,14 +473,14 @@ func TestAdvancePendingOutcome_SavedStall(t *testing.T) {
 		tm.CheckEveryMinutes = 30
 	})
 	started := time.Now().Add(-90 * time.Minute)
-	inc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+	inc := newTrackedIncident(t, database, statusAwaiting, &db.PendingOutcome{
 		MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1,
 		StartedAt: started, LastProgressAt: started, LastProgressPct: 42, GrabNotified: true,
 	})
 
-	svc.AdvancePendingOutcomes(t.Context())
+	svc.CheckNowForTest(t.Context(), inc.ID)
 
-	if got := incidentStatus(t, database, inc.ID); got != db.StatusVerifying {
+	if got := incidentStatus(t, database, inc.ID); got != statusAwaiting {
 		t.Fatalf("status %q, want verifying (90 min is inside the 120 min stall)", got)
 	}
 	if dueAt(t, database, inc.ID, 29*time.Minute) || !dueAt(t, database, inc.ID, 31*time.Minute) {
@@ -499,12 +493,12 @@ func TestAdvancePendingOutcome_SavedCap(t *testing.T) {
 	svc, database, notif := newPendingOutcomeTestService(t,
 		queueAgent(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 50}))
 	saveTimers(t, database, func(tm *incident.Timers) { tm.TrackCapHours = 2 })
-	inc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+	inc := newTrackedIncident(t, database, statusAwaiting, &db.PendingOutcome{
 		MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1,
 		StartedAt: time.Now().Add(-3 * time.Hour), LastProgressAt: time.Now(), LastProgressPct: 10, GrabNotified: true,
 	})
 
-	svc.AdvancePendingOutcomes(t.Context())
+	svc.CheckNowForTest(t.Context(), inc.ID)
 
 	if got := incidentStatus(t, database, inc.ID); got != db.StatusManualTestNeeded {
 		t.Fatalf("status %q, want manual_test_needed", got)
@@ -546,10 +540,10 @@ func TestKeepSearching_SavedDurationAndText(t *testing.T) {
 	for days, want := range map[int]string{3: "for up to 3 days", 1: "for up to a day"} {
 		saveTimers(t, database, func(tm *incident.Timers) { tm.KeepSearchingDays = days })
 		started = time.Now().Add(-time.Hour)
-		esc := newTrackedIncident(t, database, db.StatusVerifying, &db.PendingOutcome{
+		esc := newTrackedIncident(t, database, statusAwaiting, &db.PendingOutcome{
 			MediaType: "movie", Title: "Tracked", Season: -1, Episode: -1, StartedAt: started, LastProgressAt: started,
 		})
-		svc.AdvancePendingOutcomes(t.Context())
+		svc.CheckNowForTest(t.Context(), esc.ID)
 		if got := incidentStatus(t, database, esc.ID); got != db.StatusManualTestNeeded {
 			t.Fatalf("days %d: status %q, want manual_test_needed", days, got)
 		}

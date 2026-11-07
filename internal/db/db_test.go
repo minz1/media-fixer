@@ -547,68 +547,6 @@ func TestPendingOutcome_SetGetClear(t *testing.T) {
 	}
 }
 
-// TestFindDuePendingOutcomes_ScopedToVerifying is the regression test for the
-// "escalated incident keeps getting swept" bug: a pending outcome whose
-// incident has moved to manual_test_needed (escalated after a no-release
-// timeout) must NOT be returned, even though its next-check time has passed
-// and pending_outcome is still set — only Service.KeepSearching should
-// resume sweeping it, by transitioning status back to verifying first.
-func TestFindDuePendingOutcomes_ScopedToVerifying(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	due := &db.Incident{Status: db.StatusVerifying, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Due"}
-	if err := d.CreateIncident(ctx, due); err != nil {
-		t.Fatal(err)
-	}
-	notYetDue := &db.Incident{
-		Status:     db.StatusVerifying,
-		Source:     "discord",
-		ReportedBy: "x",
-		What:       "cant_play",
-		Title:      "NotYetDue",
-	}
-	if err := d.CreateIncident(ctx, notYetDue); err != nil {
-		t.Fatal(err)
-	}
-	escalated := &db.Incident{
-		Status:     db.StatusManualTestNeeded,
-		Source:     "discord",
-		ReportedBy: "x",
-		What:       "cant_play",
-		Title:      "Escalated",
-	}
-	if err := d.CreateIncident(ctx, escalated); err != nil {
-		t.Fatal(err)
-	}
-
-	po := &db.PendingOutcome{MediaType: "tv", Title: "x", Season: -1, Episode: -1, StartedAt: time.Now()}
-	past := time.Now().Add(-time.Minute)
-	future := time.Now().Add(time.Hour)
-	if err := d.SetPendingOutcome(ctx, due.ID, po, past); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.SetPendingOutcome(ctx, notYetDue.ID, po, future); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.SetPendingOutcome(ctx, escalated.ID, po, past); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := d.FindDuePendingOutcomes(ctx, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].ID != due.ID {
-		ids := make([]string, len(got))
-		for i, inc := range got {
-			ids[i] = inc.Title
-		}
-		t.Fatalf("expected only %q, got %v", due.Title, ids)
-	}
-}
-
 // last_disruption (RecordDisruption/LastDisruption) no longer exists as a
 // dedicated table/method pair — LastDisruption is now a query journal.Journal
 // answers over incident_events. See internal/journal/journal_test.go for its

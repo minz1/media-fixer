@@ -164,3 +164,20 @@ func (s *Service) ScheduleCheckForTest(inc *db.Incident, gen int64, at time.Time
 func (s *Service) ArmedForTest(id string) int64 { return s.runs.liveness().armed[id] }
 
 func (s *Service) LogForTest() *slog.Logger { return s.log }
+
+func (s *Service) CheckNowForTest(ctx context.Context, id string) {
+	snap, err := s.db.GetIncidentSnapshot(ctx, id)
+	if err != nil {
+		return
+	}
+	if snap.Status == lifecycle.Verifying {
+		s.verifyCheck(ctx, id, snap.Generation)
+	}
+	if snap.Status == lifecycle.AwaitingDownload {
+		s.downloadCheck(ctx, id, snap.Generation)
+	}
+}
+
+func (s *Service) DownloadCheckForTest(ctx context.Context, id string, gen int64) {
+	s.downloadCheck(ctx, id, gen)
+}

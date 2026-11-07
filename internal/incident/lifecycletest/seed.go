@@ -99,6 +99,11 @@ func (sd *seeder) finish(o lifecycle.Outcome) {
 
 func Seed(t testing.TB, d *db.DB, sp Spec) lifecycle.Snapshot {
 	t.Helper()
+	return SeedReport(t, d, Report(sp.Title, sp.What), sp)
+}
+
+func SeedReport(t testing.TB, d *db.DB, r *db.NewIncident, sp Spec) lifecycle.Snapshot {
+	t.Helper()
 	l := Limits()
 	l.SystemicThreshold = math.MaxInt32
 	if sp.State == lifecycle.Blocked {
@@ -107,11 +112,14 @@ func Seed(t testing.TB, d *db.DB, sp Spec) lifecycle.Snapshot {
 	now := time.Now()
 	a, err := d.CreateFromReport(
 		t.Context(),
-		Report(sp.Title, sp.What),
+		r,
 		Decide(lifecycle.Event{Kind: lifecycle.Reported}, l, now),
 	)
 	if err != nil {
 		t.Fatalf("seed report: %v", err)
+	}
+	if a.Merged {
+		t.Fatalf("seed report %q merged into %s", r.Title, a.Snap.ID)
 	}
 	sd := &seeder{t: t, d: d, s: a.Snap, now: now}
 	sd.drive(sp)

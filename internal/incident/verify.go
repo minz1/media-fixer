@@ -63,7 +63,7 @@ func (s *Service) runCheck(ctx context.Context, id string, gen int64, kind lifec
 	case lifecycle.CheckVerify:
 		s.verifyCheck(ctx, id, gen)
 	case lifecycle.CheckDownload:
-		s.log.InfoContext(ctx, "download check not wired yet", "incident", id, "gen", gen)
+		s.downloadCheck(ctx, id, gen)
 	}
 }
 
@@ -160,14 +160,17 @@ func (s *Service) armDueChecks(ctx context.Context) {
 	armed := s.runs.liveness().armed
 	for _, r := range rows {
 		snap := r.Snap
-		if snap.Status != lifecycle.Verifying {
+		kind := lifecycle.CheckVerify
+		if snap.Status == lifecycle.AwaitingDownload {
+			kind = lifecycle.CheckDownload
+		} else if snap.Status != lifecycle.Verifying {
 			continue
 		}
 		if gen, ok := armed[snap.ID]; ok && gen == snap.Generation {
 			continue
 		}
 		s.scheduleCheck(snap.ID, lifecycle.Effect{
-			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: snap.NextCheck, Check: lifecycle.CheckVerify,
+			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: snap.NextCheck, Check: kind,
 		})
 	}
 }

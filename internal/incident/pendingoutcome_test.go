@@ -141,8 +141,8 @@ func TestHandleAgentResolved_ArrSearchMissing_StartsPendingOutcomeTracking(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.StatusVerifying {
-		t.Fatalf("status: got %q want %q", got.Status, db.StatusVerifying)
+	if got.Status != statusAwaiting {
+		t.Fatalf("status: got %q want %q", got.Status, statusAwaiting)
 	}
 
 	po, err := database.GetPendingOutcome(ctx, inc.ID)
@@ -169,24 +169,22 @@ func TestAdvancePendingOutcome_Resolved(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status:     db.StatusVerifying,
+		Status:     statusAwaiting,
 		Source:     "discord",
 		ReportedBy: "x",
 		What:       "cant_play",
 		Title:      "Rick and Morty",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	if err := database.AddReporter(ctx, inc.ID, "alice", "discord", "discord-alice"); err != nil {
 		t.Fatal(err)
 	}
 	po := &db.PendingOutcome{MediaType: "tv", Title: "Rick and Morty", Season: 9, Episode: 9, StartedAt: time.Now()}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	dm := waitForUserMsg(t, notif)
 	if !strings.Contains(dm, "fixed automatically") {
@@ -221,15 +219,13 @@ func TestAdvancePendingOutcome_GrabbedNotifiesOnceThenTracksProgress(t *testing.
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status:     db.StatusVerifying,
+		Status:     statusAwaiting,
 		Source:     "discord",
 		ReportedBy: "x",
 		What:       "cant_play",
 		Title:      "Rick and Morty",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	if err := database.AddReporter(ctx, inc.ID, "alice", "discord", "discord-alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +237,11 @@ func TestAdvancePendingOutcome_GrabbedNotifiesOnceThenTracksProgress(t *testing.
 		StartedAt:      time.Now(),
 		LastProgressAt: time.Now(),
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 	dm := waitForUserMsg(t, notif)
 	if !strings.Contains(dm, "Found") || !strings.Contains(dm, "downloading") {
 		t.Fatalf("unexpected first-poll DM: %q", dm)
@@ -261,10 +257,10 @@ func TestAdvancePendingOutcome_GrabbedNotifiesOnceThenTracksProgress(t *testing.
 		t.Fatal(err)
 	}
 	pct.Store(50)
-	if setErr := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); setErr != nil {
+	if setErr := setTrack(ctx, database, inc.ID, po, time.Now()); setErr != nil {
 		t.Fatal(setErr)
 	}
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 	select {
 	case second := <-notif.userMsgs:
 		t.Fatalf("received a second DM on the same download: %q", second)
@@ -296,15 +292,13 @@ func TestAdvancePendingOutcome_StalledDownload_Escalates(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status:     db.StatusVerifying,
+		Status:     statusAwaiting,
 		Source:     "discord",
 		ReportedBy: "x",
 		What:       "cant_play",
 		Title:      "Backrooms",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	// LastProgressAt well past the stall timeout, and already GrabNotified
 	// (this isn't the first sighting) so we isolate the escalation path from
 	// the grab-notification path.
@@ -315,11 +309,11 @@ func TestAdvancePendingOutcome_StalledDownload_Escalates(t *testing.T) {
 		StartedAt: staleProgress, LastProgressAt: staleProgress, LastProgressPct: 42,
 		GrabNotified: true,
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	got, err := database.GetIncident(ctx, inc.ID)
 	if err != nil {
@@ -347,15 +341,13 @@ func TestAdvancePendingOutcome_NoReleaseFound_EscalatesAfterGrace(t *testing.T) 
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status:     db.StatusVerifying,
+		Status:     statusAwaiting,
 		Source:     "discord",
 		ReportedBy: "x",
 		What:       "cant_play",
 		Title:      "New Show",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	longAgo := time.Now().Add(-30 * time.Minute) // past pendingOutcomeGracePeriod (15m)
 	po := &db.PendingOutcome{
 		MediaType:      "tv",
@@ -365,11 +357,11 @@ func TestAdvancePendingOutcome_NoReleaseFound_EscalatesAfterGrace(t *testing.T) 
 		StartedAt:      longAgo,
 		LastProgressAt: longAgo,
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	got, err := database.GetIncident(ctx, inc.ID)
 	if err != nil {
@@ -400,21 +392,19 @@ func TestAdvancePendingOutcome_QueueItemGoneClearsDownloadingStage(t *testing.T)
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status: db.StatusVerifying, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "New Show",
+		Status: statusAwaiting, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "New Show",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	now := time.Now()
 	po := &db.PendingOutcome{
 		MediaType: "tv", Title: "New Show", Season: 1, Episode: 1,
 		StartedAt: now, LastStage: "downloading", LastProgressPct: 37, LastProgressAt: now,
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, now); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, now); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	got, err := database.GetPendingOutcome(ctx, inc.ID)
 	if err != nil {
@@ -444,15 +434,13 @@ func TestAdvancePendingOutcome_CheckErrors_RescheduledNotEscalated(t *testing.T)
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status:     db.StatusVerifying,
+		Status:     statusAwaiting,
 		Source:     "discord",
 		ReportedBy: "x",
 		What:       "cant_play",
 		Title:      "New Show",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	// Past pendingOutcomeGracePeriod (15m) — exactly the condition under
 	// which the pre-fix code would have escalated on a degraded observation.
 	longAgo := time.Now().Add(-30 * time.Minute)
@@ -464,18 +452,18 @@ func TestAdvancePendingOutcome_CheckErrors_RescheduledNotEscalated(t *testing.T)
 		StartedAt:      longAgo,
 		LastProgressAt: longAgo,
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	got, err := database.GetIncident(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.StatusVerifying {
-		t.Errorf("status: got %q, want %q (a check error must not escalate)", got.Status, db.StatusVerifying)
+	if got.Status != statusAwaiting {
+		t.Errorf("status: got %q, want %q (a check error must not escalate)", got.Status, statusAwaiting)
 	}
 	if len(notif.msgs) != 0 {
 		t.Errorf("expected no owner notification on a check error, got %v", notif.msgs)
@@ -508,9 +496,7 @@ func TestKeepSearching_ReArmsAndResumesSweeping(t *testing.T) {
 		What:       "cant_play",
 		Title:      "New Show",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	po := &db.PendingOutcome{
 		MediaType: "tv",
 		Title:     "New Show",
@@ -518,7 +504,7 @@ func TestKeepSearching_ReArmsAndResumesSweeping(t *testing.T) {
 		Episode:   1,
 		StartedAt: time.Now().Add(-time.Hour),
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -529,17 +515,17 @@ func TestKeepSearching_ReArmsAndResumesSweeping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.StatusVerifying {
-		t.Fatalf("status after KeepSearching: got %q want %q", got.Status, db.StatusVerifying)
+	if got.Status != statusAwaiting {
+		t.Fatalf("status after KeepSearching: got %q want %q", got.Status, statusAwaiting)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	got, err = database.GetIncident(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.StatusVerifying {
+	if got.Status != statusAwaiting {
 		t.Fatalf("expected KeepSearching to prevent immediate re-escalation, status: got %q", got.Status)
 	}
 	afterPo, err := database.GetPendingOutcome(ctx, inc.ID)
@@ -562,11 +548,9 @@ func TestKeepSearching_RequiresManualTestNeeded(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "New Show"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	po := &db.PendingOutcome{MediaType: "tv", Title: "New Show", Season: 1, Episode: 1, StartedAt: time.Now()}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -593,26 +577,24 @@ func TestAdvancePendingOutcome_PersistentCheckFailureEventuallyEscalates(t *test
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status:     db.StatusVerifying,
+		Status:     statusAwaiting,
 		Source:     "discord",
 		ReportedBy: "x",
 		What:       "cant_play",
 		Title:      "Lanterns",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 
 	// Well past the absolute give-up point for one tracking attempt.
 	po := &db.PendingOutcome{
 		MediaType: "tv", Title: "Lanterns", Season: 1, Episode: 3,
 		StartedAt: time.Now().Add(-24 * time.Hour),
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	notif.mu.Lock()
 	msgs := strings.Join(notif.msgs, "\n")
@@ -644,27 +626,25 @@ func TestAdvancePendingOutcome_TransientCheckFailureStillRetries(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{
-		Status: db.StatusVerifying, Source: "discord", ReportedBy: "x",
+		Status: statusAwaiting, Source: "discord", ReportedBy: "x",
 		What: "cant_play", Title: "Lanterns",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	seedTracked(t, database, inc)
 	po := &db.PendingOutcome{
 		MediaType: "tv", Title: "Lanterns", Season: 1, Episode: 3,
 		StartedAt: time.Now().Add(-2 * time.Minute),
 	}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(ctx, database, inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
-	svc.AdvancePendingOutcomes(ctx)
+	svc.CheckNowForTest(ctx, inc.ID)
 
 	got, err := database.GetIncident(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.StatusVerifying {
+	if got.Status != statusAwaiting {
 		t.Errorf("status = %q, want verifying: a transient check failure well inside the "+
 			"cap must keep retrying rather than escalate", got.Status)
 	}
@@ -715,7 +695,7 @@ func (f *keepSearchingFixture) ageTrack(t *testing.T, d time.Duration) {
 	po := f.track(t)
 	po.StartedAt = po.StartedAt.Add(-d)
 	po.LastProgressAt = po.LastProgressAt.Add(-d)
-	if err := f.database.SetPendingOutcome(t.Context(), f.inc.ID, po, time.Now()); err != nil {
+	if err := setTrack(t.Context(), f.database, f.inc.ID, po, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -793,12 +773,12 @@ func TestKeepSearching_NoDownloadingProgressNote(t *testing.T) {
 
 func TestKeepSearching_LateReleaseGetsFullBudget(t *testing.T) {
 	t.Parallel()
-	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(72*time.Hour))
+	f := newKeepSearchingFixture(t, statusAwaiting, keepSearchingTrack(72*time.Hour))
 	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 5})
 
-	f.svc.AdvancePendingOutcomes(t.Context())
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
 
-	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+	if got := incidentStatus(t, f.database, f.inc.ID); got != statusAwaiting {
 		t.Fatalf("status = %q, want verifying: a late release must not escalate on first sighting", got)
 	}
 	if dm := waitForUserMsg(t, f.notif); !strings.Contains(dm, "Found") {
@@ -811,23 +791,23 @@ func TestKeepSearching_LateReleaseGetsFullBudget(t *testing.T) {
 
 func TestKeepSearching_CheckErrorMeasuredFromLastCheck(t *testing.T) {
 	t.Parallel()
-	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(13*time.Hour))
+	f := newKeepSearchingFixture(t, statusAwaiting, keepSearchingTrack(13*time.Hour))
 
-	f.svc.AdvancePendingOutcomes(t.Context())
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
 	assertNear(t, "StartedAt after an empty check", f.track(t).StartedAt)
 
 	f.ageTrack(t, time.Hour)
 	f.checkErr.Store(true)
-	f.svc.AdvancePendingOutcomes(t.Context())
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
 
-	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+	if got := incidentStatus(t, f.database, f.inc.ID); got != statusAwaiting {
 		t.Errorf("status = %q, want verifying: the cap counts from the last successful check", got)
 	}
 }
 
 func TestKeepSearching_CheckErrorAllowsOneCheckIntervalPastCap(t *testing.T) {
 	t.Parallel()
-	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(0))
+	f := newKeepSearchingFixture(t, statusAwaiting, keepSearchingTrack(0))
 	tm := incident.DefaultTimers()
 	tm.Set("track_cap_hours", 1)
 	tm.Set("stall_minutes", 59)
@@ -836,24 +816,24 @@ func TestKeepSearching_CheckErrorAllowsOneCheckIntervalPastCap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f.svc.AdvancePendingOutcomes(t.Context())
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
 	f.ageTrack(t, 2*time.Hour)
 	f.checkErr.Store(true)
-	f.svc.AdvancePendingOutcomes(t.Context())
-	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
+	if got := incidentStatus(t, f.database, f.inc.ID); got != statusAwaiting {
 		t.Fatalf("status = %q, want verifying: a failed check at the scheduled time is inside check + cap", got)
 	}
 
 	f.ageTrack(t, time.Hour+time.Minute)
-	f.svc.AdvancePendingOutcomes(t.Context())
-	if got := incidentStatus(t, f.database, f.inc.ID); got == db.StatusVerifying {
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
+	if got := incidentStatus(t, f.database, f.inc.ID); got == statusAwaiting {
 		t.Errorf("status = %q, want escalated past check + cap", got)
 	}
 }
 
 func TestKeepSearching_CheckErrorAfterDownloadSeenKeepsCap(t *testing.T) {
 	t.Parallel()
-	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(0))
+	f := newKeepSearchingFixture(t, statusAwaiting, keepSearchingTrack(0))
 	tm := incident.DefaultTimers()
 	tm.Set("track_cap_hours", 1)
 	tm.Set("stall_minutes", 59)
@@ -863,42 +843,12 @@ func TestKeepSearching_CheckErrorAfterDownloadSeenKeepsCap(t *testing.T) {
 	}
 
 	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 5})
-	f.svc.AdvancePendingOutcomes(t.Context())
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
 	f.ageTrack(t, time.Hour+time.Minute)
 	f.checkErr.Store(true)
-	f.svc.AdvancePendingOutcomes(t.Context())
+	f.svc.CheckNowForTest(t.Context(), f.inc.ID)
 
-	if got := incidentStatus(t, f.database, f.inc.ID); got == db.StatusVerifying {
+	if got := incidentStatus(t, f.database, f.inc.ID); got == statusAwaiting {
 		t.Errorf("status = %q, want escalated: a seen download keeps the plain cap", got)
 	}
-}
-
-func TestKeepSearching_SecondDownloadGetsFreshBudget(t *testing.T) {
-	t.Parallel()
-	f := newKeepSearchingFixture(t, db.StatusVerifying, keepSearchingTrack(time.Minute))
-
-	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 80})
-	f.svc.AdvancePendingOutcomes(t.Context())
-	if dm := waitForUserMsg(t, f.notif); !strings.Contains(dm, "Found") {
-		t.Fatalf("first DM = %q, want Found", dm)
-	}
-
-	f.obs.Store(&agent.PendingOutcomeObservation{})
-	f.ageTrack(t, 0)
-	f.svc.AdvancePendingOutcomes(t.Context())
-	if pct := f.track(t).LastProgressPct; pct != 0 {
-		t.Fatalf("LastProgressPct after an empty check = %v, want 0", pct)
-	}
-	f.ageTrack(t, 2*time.Hour)
-
-	f.obs.Store(&agent.PendingOutcomeObservation{QueueStage: "downloading", ProgressPct: 5})
-	f.svc.AdvancePendingOutcomes(t.Context())
-
-	if got := incidentStatus(t, f.database, f.inc.ID); got != db.StatusVerifying {
-		t.Fatalf("status = %q, want verifying: the second download is a new budget", got)
-	}
-	if dm := waitForUserMsg(t, f.notif); !strings.Contains(dm, "Found") {
-		t.Errorf("second DM = %q, want a second Found DM", dm)
-	}
-	assertNear(t, "LastProgressAt", f.track(t).LastProgressAt)
 }

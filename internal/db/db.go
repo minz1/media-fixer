@@ -1523,36 +1523,6 @@ func (d *DB) GetPendingOutcome(ctx context.Context, id string) (*PendingOutcome,
 	return &po, nil
 }
 
-// FindDuePendingOutcomes returns incidents in StatusVerifying with a pending
-// outcome whose next check time has passed. Scoped to StatusVerifying
-// (rather than "has a pending_outcome at all") so an incident escalated to
-// manual_test_needed after a no-release-found timeout stops being swept
-// automatically — it only resumes once Service.KeepSearching explicitly
-// re-arms it, which transitions status back to verifying.
-func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*Incident, error) {
-	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
-	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
-	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
-	      FROM incidents
-	      WHERE status = ? AND pending_outcome IS NOT NULL AND pending_outcome_next_check <= ?`
-	rows, err := d.read.QueryContext(ctx, q, StatusVerifying, before)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*Incident
-	for rows.Next() {
-		inc, scanErr := scanIncident(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		out = append(out, inc)
-	}
-	return out, rows.Err()
-}
-
 // --- Escalation plans ---
 
 // ErrNoEscalationPlan is returned when an incident has no previewed plan

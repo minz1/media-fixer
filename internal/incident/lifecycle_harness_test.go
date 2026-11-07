@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 type recNotifier struct {
@@ -142,6 +143,41 @@ func (e *lcEnv) exec(t *testing.T, q string, args ...any) {
 	}
 	defer raw.Close()
 	if _, err = raw.ExecContext(context.Background(), q, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const statusAwaiting = db.IncidentStatus(lifecycle.AwaitingDownload)
+
+func seedTracked(t *testing.T, database *db.DB, inc *db.Incident) {
+	t.Helper()
+	sp := lifecycletest.Spec{Title: inc.Title, What: inc.What, State: lifecycle.State(inc.Status)}
+	if inc.Status == db.StatusVerifying || inc.Status == statusAwaiting {
+		sp.State = lifecycle.AwaitingDownload
+	}
+	if inc.Status == db.StatusManualTestNeeded {
+		sp.Reason = lifecycle.ReasonNoRelease
+	}
+	r := &db.NewIncident{Source: inc.Source, ReportedBy: inc.ReportedBy, What: inc.What, Title: inc.Title}
+	s := lifecycletest.SeedReport(t, database, r, sp)
+	inc.ID = s.ID
+}
+
+func setTrack(ctx context.Context, database *db.DB, id string, po *db.PendingOutcome, next time.Time) error {
+	if po.LastStage == "" {
+		po.LastStage = string(lifecycle.StageSearching)
+	}
+	return database.SetPendingOutcome(ctx, id, po, next)
+}
+
+func dueNow(t *testing.T, database *db.DB, id string) {
+	t.Helper()
+	_, err := database.ApplyIncident(t.Context(), id, func(cur lifecycle.Snapshot) (db.Decision, error) {
+		n := cur.Clone()
+		n.NextCheck = time.Now().Add(-time.Second)
+		return db.Decision{Next: n}, nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 }

@@ -16,6 +16,8 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -491,17 +493,9 @@ func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
 	t.Parallel()
 	srv, database := newDashboardTestServer(t)
 	ctx := context.Background()
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "New Show"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-	po := &db.PendingOutcome{MediaType: "tv", Title: "New Show", Season: 1, Episode: 1, StartedAt: time.Now()}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-		t.Fatal(err)
-	}
+	inc := lifecycletest.Seed(t, database, lifecycletest.Spec{
+		Title: "New Show", State: lifecycle.ManualTestNeeded, Reason: lifecycle.ReasonNoRelease,
+	})
 
 	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/keep-searching")
 
@@ -512,8 +506,8 @@ func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.StatusVerifying {
-		t.Errorf("status = %q, want %q", got.Status, db.StatusVerifying)
+	if got.Status != db.IncidentStatus(lifecycle.AwaitingDownload) {
+		t.Errorf("status = %q, want awaiting_download", got.Status)
 	}
 	armed, err := database.GetPendingOutcome(ctx, inc.ID)
 	if err != nil {

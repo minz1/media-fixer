@@ -239,11 +239,7 @@ func (s *Server) renderIncidentFragments(data map[string]any, transcriptOnly boo
 // incidentSettled reports whether an incident has reached a terminal state
 // with nothing left for the sweep loops to advance — the point at which the
 // live stream has nothing further to say and can close instead of holding
-// the connection open indefinitely. Deliberately does not consult
-// PendingOutcome: FindDuePendingOutcomes only sweeps StatusVerifying
-// incidents (see its doc comment), so a pending outcome can only exist
-// alongside a non-terminal status in the first place — checking status alone
-// is already correct.
+// the connection open indefinitely.
 func incidentSettled(inc *db.Incident) bool {
 	switch inc.Status {
 	case db.StatusResolved, db.StatusAgentFixed, db.StatusManualTestNeeded, db.StatusBlocked:
