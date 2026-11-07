@@ -360,12 +360,7 @@ func TestStartPendingOutcomeTracking_FirstCheckFromSavedTimers(t *testing.T) {
 		runResult: &agent.DiagnosticResult{
 			RootCause: "missing", Confidence: "high", PrimaryAction: agent.ToolArrSearchMissing, PrimaryReason: "t",
 		},
-		searchParams: map[string]any{
-			"media_type": "movie",
-			"title":      "Arrival",
-			"season":     float64(-1),
-			"episode":    float64(-1),
-		},
+		search: &agent.SearchTarget{MediaType: "movie", Title: "Arrival", Season: -1, Episode: -1},
 	}
 	svc, database, notif := newPendingOutcomeTestService(t, ag)
 	ag.database = database

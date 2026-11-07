@@ -3,6 +3,7 @@ package incident_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -25,7 +26,24 @@ func exitOf(result *agent.DiagnosticResult, conv []openai.ChatCompletionMessage,
 	case result == nil:
 		return agent.RunExit{State: agent.RunSuperseded, Conversation: conv, Err: context.Canceled}
 	}
-	return agent.RunExit{State: agent.RunConcluded, Finding: result, Conversation: conv}
+	return agent.RunExit{State: agent.RunConcluded, Finding: classified(result, nil), Conversation: conv}
+}
+
+func exitOfSearch(result *agent.DiagnosticResult, target agent.SearchTarget) agent.RunExit {
+	return agent.RunExit{State: agent.RunConcluded, Finding: classified(result, agent.SearchCalls(target))}
+}
+
+func classified(result *agent.DiagnosticResult, calls []agent.CallRecord) *agent.DiagnosticResult {
+	if result == nil || result.Outcome.Kind != "" {
+		return result
+	}
+	out := *result
+	outcome, err := agent.Classify(&out, calls)
+	if err != nil {
+		panic(fmt.Sprintf("test finding does not classify: %v", err))
+	}
+	out.Outcome = outcome
+	return &out
 }
 
 type fixedExitAgent struct {
@@ -50,6 +68,7 @@ func manualExit(s agent.RunState) agent.RunExit {
 	return agent.RunExit{State: s, Rounds: 1, Err: errors.New("boom"), Finding: &agent.DiagnosticResult{
 		RootCause: agent.RunMeta(s).Reason, Confidence: "low", PrimaryAction: agent.EscalateManualInvestigation,
 		EscalateAction: agent.EscalateManualInvestigation, RequiresApproval: true,
+		Outcome: agent.DiagnosisOutcome{Kind: agent.DiagnosisManual, Reason: agent.RunMeta(s).Reason},
 	}}
 }
 

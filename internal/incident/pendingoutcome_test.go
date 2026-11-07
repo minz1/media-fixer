@@ -28,6 +28,7 @@ type scriptedPendingOutcomeAgent struct {
 	database     *db.DB
 	runResult    *agent.DiagnosticResult
 	searchParams map[string]any // if non-nil, Run logs this as an arr_search_missing action first
+	search       *agent.SearchTarget
 	checkOutcome func(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)
 	runCalls     chan struct{}
 }
@@ -46,6 +47,9 @@ func (a *scriptedPendingOutcomeAgent) Run(
 	}
 	if a.runCalls != nil {
 		a.runCalls <- struct{}{}
+	}
+	if a.search != nil {
+		return gatedExit(ctx, gate, exitOfSearch(a.runResult, *a.search).Finding, nil, nil)
 	}
 	return gatedExit(ctx, gate, a.runResult, nil, nil)
 }
@@ -106,7 +110,7 @@ func newPendingOutcomeTestService(t *testing.T, ag incident.AgentRunner) (*incid
 // end-to-end regression test for routing: a diagnosis whose primary_action is
 // arr_search_missing must NOT go through the generic markFixedAndNotify or
 // runVerification paths — it must land in StatusVerifying with a
-// PendingOutcome recovered from the just-logged action's params, and the
+// PendingOutcome taken from the outcome's target, and the
 // reporter gets a "searching" DM, not a "fixed" one.
 func TestHandleAgentResolved_ArrSearchMissing_StartsPendingOutcomeTracking(t *testing.T) {
 	t.Parallel()
@@ -115,9 +119,7 @@ func TestHandleAgentResolved_ArrSearchMissing_StartsPendingOutcomeTracking(t *te
 			RootCause: "missing episode", Confidence: "high",
 			PrimaryAction: agent.ToolArrSearchMissing, PrimaryReason: "test",
 		},
-		searchParams: map[string]any{
-			"media_type": "tv", "title": "Rick and Morty", "season": float64(9), "episode": float64(9),
-		},
+		search: &agent.SearchTarget{MediaType: "tv", Title: "Rick and Morty", Season: 9, Episode: 9},
 	}
 	ag.database = nil // set below once the DB exists
 	svc, database, notif := newPendingOutcomeTestService(t, ag)

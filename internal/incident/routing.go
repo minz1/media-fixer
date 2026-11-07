@@ -103,18 +103,21 @@ func (s *Service) handleAgentResolved(
 		s.runVerification(ctx, inc, gen, result)
 		return
 	}
-	if result.PrimaryAction == agent.ToolArrSearchMissing {
-		s.startPendingOutcomeTracking(ctx, inc, gen, result)
-		return
-	}
-	if result.VerifyAfterSeconds > 0 {
+	switch result.Outcome.Kind {
+	case agent.DiagnosisAwaitDownload:
+		s.startPendingOutcomeTracking(ctx, inc.ID, gen, result.Outcome.Target)
+	case agent.DiagnosisDeferredVerify:
 		s.runVerification(ctx, inc, gen, result)
-		return
+	case agent.DiagnosisFixNow:
+		s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
+		s.applyOutcome(ctx, inc.ID, lifecycle.Event{
+			Kind: lifecycle.RunFinished, Gen: gen, Outcome: lifecycle.Outcome{Kind: lifecycle.OutcomeFixed},
+		})
+	case agent.DiagnosisNeedsApproval, agent.DiagnosisManual:
+		s.surfaceToOwner(ctx, inc, gen, result, "")
+	default:
+		s.handleAgentError(ctx, inc, gen, fmt.Errorf("%w: kind %q", errUnclassified, result.Outcome.Kind))
 	}
-	s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", result.PrimaryAction)
-	s.applyOutcome(ctx, inc.ID, lifecycle.Event{
-		Kind: lifecycle.RunFinished, Gen: gen, Outcome: lifecycle.Outcome{Kind: lifecycle.OutcomeFixed},
-	})
 }
 
 func (s *Service) escalate(ctx context.Context, inc *db.Incident, gen int64, reason lifecycle.Reason, c card.Card) {

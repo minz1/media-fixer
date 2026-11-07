@@ -111,10 +111,7 @@ const (
 )
 
 // ToolArrSearchMissing is arr_search_missing's registry name, exported so
-// internal/incident can recognize it as result.PrimaryAction (routing to
-// durable pending-outcome tracking instead of the generic verify loop) and
-// look it up in actions_log (to recover the search target's params) without
-// hardcoding the string a second time.
+// other packages never hardcode the string a second time.
 const ToolArrSearchMissing = toolArrSearchMissing
 
 // escalateActionEnum lists every value the escalate_action schema accepts.

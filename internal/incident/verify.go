@@ -41,7 +41,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, gen int
 		spec.PreFix, _ = json.Marshal(result.PreFix)
 	}
 	ev := lifecycle.Event{Kind: lifecycle.RunFinished, Gen: gen, Outcome: lifecycle.Outcome{
-		Kind: lifecycle.OutcomeVerify, Spec: spec, After: time.Duration(result.VerifyAfterSeconds) * time.Second,
+		Kind: lifecycle.OutcomeVerify, Spec: spec, After: time.Duration(result.Outcome.AfterSeconds) * time.Second,
 	}}
 	s.applyOutcome(ctx, inc.ID, ev)
 }

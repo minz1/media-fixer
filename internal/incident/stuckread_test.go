@@ -66,9 +66,16 @@ func (a *stuckReadAgent) Run(
 	a.ranAt = time.Now()
 	a.mu.Unlock()
 	a.started <- inc.ID
-	return gatedExit(ctx, gate, &agent.DiagnosticResult{
+	result := &agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high", PrimaryAction: a.action, PrimaryReason: "test",
-	}, nil, nil)
+	}
+	if a.action == agent.ToolArrSearchMissing {
+		result = exitOfSearch(
+			result,
+			agent.SearchTarget{MediaType: "series", Title: inc.Title, Season: 1, Episode: 1},
+		).Finding
+	}
+	return gatedExit(ctx, gate, result, nil, nil)
 }
 
 func (a *stuckReadAgent) VerifyResolved(context.Context, string, string, *agent.FixSignature) bool {

@@ -60,7 +60,7 @@ func TestI2_2_TrackingStartsWithPendingOutcome(t *testing.T) {
 		runResult: &agent.DiagnosticResult{
 			RootCause: "missing", Confidence: "high", PrimaryAction: agent.ToolArrSearchMissing, PrimaryReason: "t",
 		},
-		searchParams: map[string]any{"media_type": "tv", "title": "Andor", "season": float64(2), "episode": float64(3)},
+		search: &agent.SearchTarget{MediaType: "tv", Title: "Andor", Season: 2, Episode: 3},
 	}
 	svc, database, _ := newPendingOutcomeTestService(t, ag)
 	ag.database = database

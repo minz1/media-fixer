@@ -1154,6 +1154,7 @@ func TestControlProposal(t *testing.T) {
 
 	approval := &agent.DiagnosticResult{
 		RequiresApproval: true, EscalateAction: "manual_investigation",
+		Outcome: agent.DiagnosisOutcome{Kind: agent.DiagnosisManual},
 	}
 	if got := incident.ControlProposalForTest(approval, "", ""); !strings.Contains(got, "escalate") {
 		t.Errorf("expected an escalation-flavored proposal, got %q", got)

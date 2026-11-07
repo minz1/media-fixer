@@ -255,14 +255,19 @@ func (s *Service) evaluateDiagnosis(
 	conversation []openai.ChatCompletionMessage,
 	attempt, maxAttempts int,
 ) diagnosisOutcome {
+	owner, err := needsOwner(result.Outcome.Kind)
+	if err != nil {
+		s.handleAgentError(ctx, inc, gen, err)
+		return diagnosisOutcome{done: true}
+	}
 	riskReason := s.reviewRiskReason(ctx, inc.ID, result)
-	if !result.RequiresApproval && riskReason == "" {
+	if !owner && riskReason == "" {
 		s.handleAgentResolved(ctx, inc, gen, result)
 		return diagnosisOutcome{done: true}
 	}
 
 	if s.control == nil {
-		if result.RequiresApproval {
+		if owner {
 			s.surfaceToOwner(ctx, inc, gen, result, "")
 		} else {
 			// No reviewer configured to double-check a repeat/low-confidence
@@ -287,7 +292,7 @@ func (s *Service) evaluateDiagnosis(
 		// auto-approved because the reviewer was unreachable or returned
 		// something unparseable.
 		s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
-		if result.RequiresApproval {
+		if owner {
 			s.surfaceToOwner(ctx, inc, gen, result, " (control review failed)")
 		} else {
 			s.surfaceToOwner(ctx, inc, gen, result, fmt.Sprintf(
@@ -298,7 +303,7 @@ func (s *Service) evaluateDiagnosis(
 
 	switch verdict.Verdict {
 	case agent.VerdictApprove:
-		if result.RequiresApproval {
+		if owner {
 			s.surfaceToOwner(ctx, inc, gen, result, "")
 		} else {
 			// The reviewer approved a fix the model didn't itself flag for
@@ -350,7 +355,7 @@ func (s *Service) evaluateDiagnosis(
 // reviewRiskReason reports why an otherwise-autonomous diagnosis (one the
 // model itself didn't flag requires_approval for) should still be routed
 // through control review, or "" if it shouldn't need one. Checked in addition
-// to result.RequiresApproval in runAgent.
+// to the outcome kind in evaluateDiagnosis.
 func (s *Service) reviewRiskReason(ctx context.Context, incidentID string, result *agent.DiagnosticResult) string {
 	if strings.EqualFold(result.Confidence, "low") {
 		return "the agent's own confidence in this diagnosis is low"
@@ -442,7 +447,7 @@ func (s *Service) actionHistorySummary(ctx context.Context, incidentID string) s
 // passed to ControlReviewer.Review — see controlSystemPrompt in
 // internal/agent/control.go for how the two trigger cases are meant to read.
 func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory string) string {
-	if result.RequiresApproval {
+	if owner, _ := needsOwner(result.Outcome.Kind); owner {
 		return fmt.Sprintf(
 			"The agent wants to escalate the following action for owner approval:\n\n%s%s",
 			agent.EscalationSummary(result), actionHistory,
@@ -456,6 +461,18 @@ func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory s
 }
 
 var errRunNotExited = errors.New("the agent run returned without an exit")
+
+var errUnclassified = errors.New("the diagnosis has no outcome")
+
+func needsOwner(k agent.DiagnosisKind) (bool, error) {
+	switch k {
+	case agent.DiagnosisNeedsApproval, agent.DiagnosisManual:
+		return true, nil
+	case agent.DiagnosisFixNow, agent.DiagnosisDeferredVerify, agent.DiagnosisAwaitDownload:
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: kind %q", errUnclassified, k)
+}
 
 func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, c card.Card) {
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)

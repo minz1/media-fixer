@@ -74,11 +74,17 @@ func untilVerdict(ctx context.Context, gate agent.Gate, want agent.Verdict) bool
 }
 
 func confident() *agent.DiagnosticResult {
-	return &agent.DiagnosticResult{RootCause: "x", Confidence: "high", PrimaryAction: "run-a", PrimaryReason: "x"}
+	return classified(
+		&agent.DiagnosticResult{RootCause: "x", Confidence: "high", PrimaryAction: "run-a", PrimaryReason: "x"},
+		nil,
+	)
 }
 
 func lowConfidence() *agent.DiagnosticResult {
-	return &agent.DiagnosticResult{RootCause: "x", Confidence: "low", PrimaryAction: "run-a", PrimaryReason: "x"}
+	return classified(
+		&agent.DiagnosticResult{RootCause: "x", Confidence: "low", PrimaryAction: "run-a", PrimaryReason: "x"},
+		nil,
+	)
 }
 
 func controlServer(t *testing.T, onReview func(), verdict string) *agent.ControlReviewer {
