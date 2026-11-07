@@ -5,6 +5,8 @@ import (
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 // Exported for internal/agent/registry_test.go (package agent_test).
@@ -89,6 +91,8 @@ const (
 	EvBudgetTripped = evBudgetTripped
 	EvBatchFailed   = evBatchFailed
 	EvBatchDone     = evBatchDone
+	EvPaused        = evPaused
+	EvStale         = evStale
 
 	EffRecordStarted = effRecordStarted
 	EffAnswerPending = effAnswerPending
@@ -131,3 +135,5 @@ func AnswerPendingForTest(
 ) []openai.ChatCompletionMessage {
 	return answerPending(messages, calls, reason)
 }
+
+func (a *Agent) DBForTest() *db.DB { return a.db }

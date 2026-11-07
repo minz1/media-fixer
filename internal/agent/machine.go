@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 type RunState string
@@ -22,6 +24,7 @@ const (
 	RunSuperseded     RunState = "superseded"
 	RunNotClaimed     RunState = "not_claimed"
 	RunClaimFailed    RunState = "claim_failed"
+	RunPaused         RunState = "paused"
 )
 
 type RunStateMeta struct {
@@ -38,6 +41,8 @@ type RunExit struct {
 	Finding      *DiagnosticResult
 	Conversation []openai.ChatCompletionMessage
 	Err          error
+	Started      bool
+	Journal      *db.Event
 }
 
 func RunMeta(s RunState) RunStateMeta {
@@ -47,7 +52,7 @@ func RunMeta(s RunState) RunStateMeta {
 func runStates() []RunState {
 	return []RunState{
 		RunClaiming, RunAwaitingReply, RunInBatch, RunConcluded, RunBudgetTripped, RunStoppedNoTools,
-		RunExhausted, RunLLMFailed, RunBatchFailed, RunSuperseded, RunNotClaimed, RunClaimFailed,
+		RunExhausted, RunLLMFailed, RunBatchFailed, RunSuperseded, RunNotClaimed, RunClaimFailed, RunPaused,
 	}
 }
 
@@ -79,6 +84,7 @@ func runMetas() map[RunState]RunStateMeta {
 		RunClaimFailed: {
 			Terminal: true, WritesFinding: true, Label: "claim failed", Reason: "the run could not claim the incident",
 		},
+		RunPaused: {Terminal: true, Label: "paused", NotRun: "autonomous actions paused"},
 	}
 }
 
@@ -95,12 +101,14 @@ const (
 	evBudgetTripped runEventKind = "budget_tripped"
 	evBatchFailed   runEventKind = "batch_failed"
 	evBatchDone     runEventKind = "batch_done"
+	evPaused        runEventKind = "paused"
+	evStale         runEventKind = "stale"
 )
 
 func runEventKinds() []runEventKind {
 	return []runEventKind{
 		evClaimed, evClaimRefused, evClaimFailed, evToolCalls, evTextOnly,
-		evLLMFailed, evConcluded, evBudgetTripped, evBatchFailed, evBatchDone,
+		evLLMFailed, evConcluded, evBudgetTripped, evBatchFailed, evBatchDone, evPaused, evStale,
 	}
 }
 
@@ -111,6 +119,8 @@ func replyKinds() []runEventKind { return []runEventKind{evToolCalls, evTextOnly
 func batchKinds() []runEventKind {
 	return []runEventKind{evConcluded, evBudgetTripped, evBatchFailed, evBatchDone}
 }
+
+func gateKinds() []runEventKind { return []runEventKind{evPaused, evStale} }
 
 type runEvent struct {
 	kind      runEventKind
@@ -192,6 +202,10 @@ func runAllowedRows() []runRow {
 		{RunInBatch, evBatchDone, guardMore, RunAwaitingReply, "", ap},
 		{RunInBatch, evBatchDone, guardLast, RunExhausted, "", apf},
 		{RunInBatch, evBatchDone, guardCancelled, RunSuperseded, "", apf},
+		{RunAwaitingReply, evPaused, guardAny, RunPaused, "", fin},
+		{RunAwaitingReply, evStale, guardAny, RunSuperseded, "", fin},
+		{RunInBatch, evPaused, guardAny, RunPaused, "", apf},
+		{RunInBatch, evStale, guardAny, RunSuperseded, "", apf},
 	}
 }
 
@@ -207,6 +221,7 @@ func runRejectRows() []runRow {
 	var rows []runRow
 	rows = append(rows, rejectAll(RunClaiming, replyKinds(), "the run has not started")...)
 	rows = append(rows, rejectAll(RunClaiming, batchKinds(), "the run has not started")...)
+	rows = append(rows, rejectAll(RunClaiming, gateKinds(), "the run has not started")...)
 	rows = append(rows, rejectAll(RunAwaitingReply, claimKinds(), "no batch is open")...)
 	rows = append(rows, rejectAll(RunAwaitingReply, batchKinds(), "no batch is open")...)
 	rows = append(rows, rejectAll(RunInBatch, claimKinds(), "a batch is open")...)
@@ -261,8 +276,11 @@ func failState(cur runSnapshot, ev runEvent) RunState {
 	if RunMeta(cur.State).Terminal {
 		return cur.State
 	}
-	if ev.cancelled {
+	if ev.cancelled || ev.kind == evStale {
 		return RunSuperseded
+	}
+	if ev.kind == evPaused && cur.State != RunClaiming {
+		return RunPaused
 	}
 	switch cur.State {
 	case RunClaiming:
@@ -272,7 +290,7 @@ func failState(cur runSnapshot, ev runEvent) RunState {
 	case RunInBatch:
 		return RunBatchFailed
 	case RunConcluded, RunBudgetTripped, RunStoppedNoTools, RunExhausted, RunLLMFailed,
-		RunBatchFailed, RunSuperseded, RunNotClaimed, RunClaimFailed:
+		RunBatchFailed, RunSuperseded, RunNotClaimed, RunClaimFailed, RunPaused:
 	}
 	return cur.State
 }
@@ -331,11 +349,19 @@ func checkRunState(s runSnapshot) error {
 		if !s.Started || s.Replies < 1 {
 			return errors.New("R6: ended a batch without a reply")
 		}
-	case RunLLMFailed:
-		if !s.Started {
-			return errors.New("R7: LLM failed before the run started")
-		}
+	case RunLLMFailed, RunPaused:
+		return requireStarted(s)
 	case RunSuperseded:
 	}
 	return nil
+}
+
+func requireStarted(s runSnapshot) error {
+	switch {
+	case s.Started:
+		return nil
+	case s.State == RunPaused:
+		return errors.New("R9: paused before the run started")
+	}
+	return errors.New("R7: LLM failed before the run started")
 }

@@ -33,7 +33,7 @@ type fixedExitAgent struct {
 	exit agent.RunExit
 }
 
-func (a *fixedExitAgent) Run(context.Context, *db.Incident, []openai.ChatCompletionMessage) agent.RunExit {
+func (a *fixedExitAgent) Run(context.Context, *db.Incident, []openai.ChatCompletionMessage, agent.Gate) agent.RunExit {
 	return a.exit
 }
 

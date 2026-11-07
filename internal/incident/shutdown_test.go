@@ -46,7 +46,9 @@ func newDrainingAgent(d *db.DB) *drainingAgent {
 	}
 }
 
-func (a *drainingAgent) Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) agent.RunExit {
+func (a *drainingAgent) Run(
+	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, _ agent.Gate,
+) agent.RunExit {
 	a.mu.Lock()
 	a.seeds = append(a.seeds, seed)
 	a.mu.Unlock()

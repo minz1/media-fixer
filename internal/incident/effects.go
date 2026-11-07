@@ -136,7 +136,7 @@ func (s *Service) launchRun(inc *db.Incident, e lifecycle.Effect) {
 			return s.buildReinvestigateSeed(seedCtx, inc.ID, inc)
 		}
 	}
-	s.startRun(runCtx, tok, inc, seed)
+	s.startRun(runCtx, tok, inc, e.Gen, seed)
 }
 
 func (s *Service) scheduleCheck(inc *db.Incident, e lifecycle.Effect) {

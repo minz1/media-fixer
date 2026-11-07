@@ -97,7 +97,7 @@ func (s *Service) RouteExitForTest(ctx context.Context, inc *db.Incident, exit a
 }
 
 func (s *Service) RunAgentForTest(ctx context.Context, inc *db.Incident) {
-	s.runAgent(ctx, inc, nil, s.timers(ctx))
+	s.runAgent(ctx, inc, nil, s.timers(ctx), s.gateFor(inc.ID, inc.Generation))
 }
 
 type WorkersForTest struct{ w *workers }

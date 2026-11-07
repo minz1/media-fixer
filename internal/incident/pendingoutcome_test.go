@@ -33,7 +33,7 @@ type scriptedPendingOutcomeAgent struct {
 }
 
 func (a *scriptedPendingOutcomeAgent) Run(
-	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	if a.searchParams != nil {
 		_ = a.database.LogAction(ctx, &db.ActionLog{

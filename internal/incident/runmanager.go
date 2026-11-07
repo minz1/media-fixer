@@ -253,3 +253,9 @@ func (m *runManager) liveness() liveness {
 	}
 	return l
 }
+
+func (m *runManager) currentGen(id string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.current[id]
+}

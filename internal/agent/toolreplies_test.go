@@ -121,7 +121,7 @@ func TestA3_7_CompleteDiagnosisAnswersEveryToolCall(t *testing.T) {
 	ag, database := newRunTestAgent(t, llm, withMediaAgent(t, stub))
 	inc := seedRunIncident(t, database)
 
-	result, conv, err := runOnce(context.Background(), ag, inc)
+	result, conv, err := runOnce(context.Background(), t, ag, inc)
 	if err != nil || result == nil {
 		t.Fatalf("Run = %+v, %v", result, err)
 	}
@@ -164,7 +164,7 @@ func TestA6_10_BudgetTripAnswersDroppedCalls(t *testing.T) {
 		}
 	}
 
-	_, conv, err := runOnce(ctx, ag, inc)
+	_, conv, err := runOnce(ctx, t, ag, inc)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRun_CancelledRunDispatchesNothingMore(t *testing.T) {
 	ag, database := newRunTestAgent(t, llm, withMediaAgent(t, stub))
 	inc := seedRunIncident(t, database)
 
-	_, conv, _ := runOnce(ctx, ag, inc)
+	_, conv, _ := runOnce(ctx, t, ag, inc)
 	if !cancelled.Load() {
 		t.Fatal("the first call never reached the media agent")
 	}

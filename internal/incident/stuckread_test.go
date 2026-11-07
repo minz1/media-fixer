@@ -54,7 +54,7 @@ func newStuckReadAgent(t *testing.T) *stuckReadAgent {
 }
 
 func (a *stuckReadAgent) Run(
-	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	if a.logTo != nil {
 		_ = a.logTo.LogAction(ctx, &db.ActionLog{

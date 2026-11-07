@@ -41,7 +41,7 @@ func newEscalationAgent() *escalationAgent {
 }
 
 func (a *escalationAgent) Run(
-	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	if a.runBlocks {
 		a.runStart <- struct{}{}

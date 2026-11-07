@@ -45,7 +45,7 @@ type stubEscalationAgent struct {
 }
 
 func (a *stubEscalationAgent) Run(
-	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	return exitOf(nil, nil, nil)
 }

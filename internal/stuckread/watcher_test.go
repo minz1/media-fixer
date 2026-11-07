@@ -27,7 +27,7 @@ import (
 type blockingAgent struct{ incident.AgentRunner }
 
 func (blockingAgent) Run(
-	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	<-ctx.Done()
 	return exitOf(nil, nil, ctx.Err())

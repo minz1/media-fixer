@@ -485,7 +485,7 @@ func newBlockingAgent() *blockingAgent {
 }
 
 func (a *blockingAgent) Run(
-	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	a.started <- struct{}{}
 	<-ctx.Done()
@@ -606,7 +606,7 @@ func newSequencedAgent() *sequencedAgent {
 }
 
 func (a *sequencedAgent) Run(
-	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	n := a.calls.Add(1)
 	a.runCalls <- n
@@ -799,7 +799,7 @@ func newAlwaysFixedAgent() *alwaysFixedAgent {
 }
 
 func (a *alwaysFixedAgent) Run(
-	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	a.runCalls <- struct{}{}
 	return exitOf(&agent.DiagnosticResult{
@@ -935,7 +935,7 @@ func newConcurrencyTrackingAgent() *concurrencyTrackingAgent {
 }
 
 func (a *concurrencyTrackingAgent) Run(
-	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	n := a.inFlight.Add(1)
 	for {
@@ -1207,7 +1207,7 @@ func newLowConfidenceOnceAgent() *lowConfidenceOnceAgent {
 }
 
 func (a *lowConfidenceOnceAgent) Run(
-	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	a.runCalls <- struct{}{}
 	result := &agent.DiagnosticResult{
@@ -1491,7 +1491,7 @@ type verifyingAgent struct {
 }
 
 func (a *verifyingAgent) Run(
-	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
 ) agent.RunExit {
 	n := a.calls.Add(1)
 	a.runCalls <- n

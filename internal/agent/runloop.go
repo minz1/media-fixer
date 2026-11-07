@@ -9,6 +9,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const journalWriteTimeout = 5 * time.Second
@@ -22,7 +23,8 @@ type runLoop struct {
 	assistant openai.ChatCompletionMessage
 	toolStart int
 	seen      map[string]int
-	actions   int
+	gate      Gate
+	journal   *db.Event
 	result    *DiagnosticResult
 	finding   *DiagnosticResult
 	err       error
@@ -45,6 +47,10 @@ func (l *runLoop) run(ctx context.Context, seed []openai.ChatCompletionMessage) 
 }
 
 func (l *runLoop) reply(ctx context.Context) {
+	if kind, stop := gateStop(l.gate.Live(ctx)); stop {
+		l.fire(ctx, runEvent{kind: kind})
+		return
+	}
 	round := l.snap.Round
 	resp, err := l.a.llmCall(ctx, openai.ChatCompletionRequest{
 		Model:    l.a.model,
@@ -69,7 +75,7 @@ func (l *runLoop) reply(ctx context.Context) {
 
 func (l *runLoop) batch(ctx context.Context) {
 	ev, result := l.a.processToolCalls(
-		ctx, l.inc, l.preFix, l.assistant.ToolCalls, l.seen, &l.actions, &l.messages,
+		ctx, l.inc, l.preFix, l.assistant.ToolCalls, l.seen, l.gate, &l.messages,
 	)
 	l.result = result
 	l.fire(ctx, ev)
@@ -107,27 +113,15 @@ func (l *runLoop) finish(ctx context.Context) {
 	if state == RunConcluded {
 		l.finding = l.result
 	}
-	var finding any
 	if meta.WritesFinding {
 		l.finding = manualFinding(state, l.err)
-		finding = l.finding
 	}
 	runErr := l.err
 	if state == RunExhausted && runErr == nil {
 		runErr = errLoopExhausted
 	}
-	wctx, cancel := detached(ctx)
-	defer cancel()
-	if l.snap.Started && l.a.journal != nil {
-		if err := l.a.journal.RunExit(wctx, l.inc.ID, finding, l.snap.Replies, string(state), runErr); err != nil {
-			l.a.log.WarnContext(ctx, "record run_finished", "incident", l.inc.ID, "error", err)
-		}
-		return
-	}
-	if meta.WritesFinding {
-		if err := l.a.db.SetIncidentFinding(wctx, l.inc.ID, finding, finding); err != nil {
-			l.a.log.WarnContext(ctx, "record run exit finding", "incident", l.inc.ID, "error", err)
-		}
+	if l.snap.Started {
+		l.journal = journal.RunFinishedEvent(l.inc.ID, l.snap.Replies, string(state), runErr)
 	}
 }
 
@@ -138,6 +132,8 @@ func (l *runLoop) exit() RunExit {
 		Finding:      l.finding,
 		Conversation: l.messages,
 		Err:          l.err,
+		Started:      l.snap.Started,
+		Journal:      l.journal,
 	}
 }
 

@@ -454,8 +454,9 @@ func (a *Agent) Run(
 	ctx context.Context,
 	inc *db.Incident,
 	seed []openai.ChatCompletionMessage,
+	gate Gate,
 ) RunExit {
-	l := &runLoop{a: a, inc: inc, snap: runSnapshot{State: RunClaiming}, seen: make(map[string]int)}
+	l := &runLoop{a: a, inc: inc, snap: runSnapshot{State: RunClaiming}, seen: make(map[string]int), gate: gate}
 	return l.run(ctx, seed)
 }
 
@@ -467,27 +468,13 @@ func (l *runLoop) claim(ctx context.Context, seed []openai.ChatCompletionMessage
 	a.disp.IncidentWhat = inc.What
 	a.disp.IncidentTime = inc.CreatedAt
 
-	// Gate on the transition (not a raw status write) so a stale, superseded run
-	// can never clobber a finished incident's status back to "investigating" if it
-	// happens to reach this point after a newer run already completed. AgentFixed
-	// and ManualTestNeeded are included so a rerun (Service.Rerun, which sets
-	// status to Reopened before launching) still succeeds even if that write is
-	// lost to a race — without them, a stale terminal status here left the
-	// "Re-run diagnosis" button applying no-op runs, silently swallowed further
-	// downstream by runVerification's own gate never allowing a terminal status in.
-	changed, claimErr := a.db.TransitionStatus(ctx, inc.ID, db.StatusInvestigating,
-		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
-		db.StatusAgentFixed, db.StatusManualTestNeeded)
-	if claimErr != nil {
-		l.fire(ctx, runEvent{kind: evClaimFailed, err: claimErr})
+	if claimErr := l.gate.Claim(ctx); claimErr != nil {
+		if errors.Is(claimErr, ErrIncidentNotInvestigatable) {
+			a.log.WarnContext(ctx, "run could not claim incident; status changed before start", "incident", inc.ID)
+		}
+		l.fire(ctx, claimEvent(claimErr))
 		return
 	}
-	if !changed {
-		a.log.WarnContext(ctx, "run could not claim incident; status changed before start", "incident", inc.ID)
-		l.fire(ctx, runEvent{kind: evClaimRefused, err: ErrIncidentNotInvestigatable})
-		return
-	}
-	a.recordStatusChanged(ctx, inc.ID, string(db.StatusInvestigating))
 
 	// Snapshot the target item's state before any tool runs, so a fix can be
 	// verified against what actually changed rather than just how healthy the
@@ -498,12 +485,6 @@ func (l *runLoop) claim(ctx context.Context, seed []openai.ChatCompletionMessage
 
 	l.messages = a.initMessages(ctx, inc, seed)
 
-	// Seeded from what this incident has already spent, not reset to zero.
-	// A per-run budget meant runAgent's retry loop (up to 3 attempts) and any
-	// dashboard re-run each handed out a fresh 3, so an incident could burn 9
-	// or more autonomous actions while the prompt told the model its cap was
-	// 3 — potentially two Jellyfin restarts and two decypharr restarts.
-	l.actions = inc.ActionCount
 	l.fire(ctx, runEvent{kind: evClaimed})
 }
 
@@ -565,21 +546,6 @@ func (a *Agent) recordRound(
 	}
 }
 
-// recordStatusChanged notifies live subscribers (see incidentEvents in
-// internal/server) that this incident's status moved, for the two status
-// transitions Agent itself performs directly (claiming the incident into
-// "investigating", and the max-autonomous-actions escalation) — every other
-// transition happens one layer up in Service, which has its own identical
-// helper for the same reason.
-func (a *Agent) recordStatusChanged(ctx context.Context, incidentID, status string) {
-	if a.journal == nil {
-		return
-	}
-	if err := a.journal.StatusChanged(ctx, incidentID, status); err != nil {
-		a.log.WarnContext(ctx, "record status_changed", "incident", incidentID, "error", err)
-	}
-}
-
 // initMessages returns the starting message list for a run.
 func (a *Agent) initMessages(
 	ctx context.Context,
@@ -603,7 +569,7 @@ func (a *Agent) processToolCalls(
 	preFix *FixSignature,
 	calls []openai.ToolCall,
 	seenCalls map[string]int,
-	autonomousActions *int,
+	gate Gate,
 	messages *[]openai.ChatCompletionMessage,
 ) (runEvent, *DiagnosticResult) {
 	for _, call := range calls {
@@ -613,16 +579,10 @@ func (a *Agent) processToolCalls(
 		fn := call.Function.Name
 
 		if fn == toolCompleteDiagnosis {
-			result, err := a.handleCompleteDiagnosis(ctx, inc, preFix, call.Function.Arguments)
-			if err != nil {
-				return runEvent{kind: evBatchFailed, err: err}, nil
-			}
-			*messages = append(*messages, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				Content:    jsonResult(map[string]any{keyStatus: "recorded"}),
-				ToolCallID: call.ID,
-			})
-			return runEvent{kind: evConcluded}, result
+			return a.conclude(ctx, inc, preFix, call, messages)
+		}
+		if kind, stop := gateStop(gate.Live(ctx)); stop {
+			return runEvent{kind: kind}, nil
 		}
 
 		if isAutonomousAction(fn) {
@@ -651,22 +611,12 @@ func (a *Agent) processToolCalls(
 				continue
 			}
 
-			if n, incErr := a.db.IncrementActionCount(ctx, inc.ID); incErr == nil {
-				*autonomousActions = n
-			} else {
-				*autonomousActions++
+			ev, skip := a.act(ctx, gate, call, messages)
+			if ev.kind != "" {
+				return ev, nil
 			}
-
-			if *autonomousActions > MaxAutonomousActions {
-				// Lock autonomous action, but deliberately do NOT write
-				// manual_test_needed here. Service.escalateToOwner owns that
-				// transition, and its TransitionStatus allow-list does not
-				// include manual_test_needed — so setting it here made the
-				// subsequent escalation a no-op that logged "already escalated
-				// by another run" and never called NotifyOwner. Three
-				// service-wide disruptions would land and nobody was told.
-				_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
-				return runEvent{kind: evBudgetTripped}, nil
+			if skip {
+				continue
 			}
 		}
 
@@ -725,14 +675,6 @@ func (a *Agent) handleCompleteDiagnosis(
 		}
 	}
 
-	// A lost finding is not survivable: PreviewEscalation/ApproveEscalation
-	// reconstruct the DiagnosticResult from this row, so returning success
-	// here would DM the owner a recommendation that errors with "has no
-	// diagnostic finding" the moment they click Preview. Fail the run instead
-	// and let routeExit escalate honestly.
-	if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
-		return nil, fmt.Errorf("persist diagnosis for incident %s: %w", inc.ID, err)
-	}
 	if a.journal != nil {
 		jctx, cancel := detached(ctx)
 		defer cancel()

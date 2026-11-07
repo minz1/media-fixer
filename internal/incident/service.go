@@ -44,6 +44,7 @@ type Service struct {
 	timersWarn  atomic.Bool
 	// shortcut: in memory, so a restart during a lock sends one more alert; persist it if that turns out noisy.
 	lockAlertAt atomic.Int64
+	paused      atomic.Bool
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -74,7 +75,7 @@ func NewService(
 	log *slog.Logger,
 ) *Service {
 	work := newWorkers(base)
-	return &Service{
+	s := &Service{
 		db:         database,
 		journal:    jrnl,
 		agent:      ag,
@@ -85,6 +86,10 @@ func NewService(
 		runs:       newRunManager(work.base),
 		work:       work,
 	}
+	if paused, err := database.IsAutonomousPaused(base); err == nil {
+		s.paused.Store(paused)
+	}
+	return s
 }
 
 func (s *Service) Start() {
@@ -143,7 +148,7 @@ func (s *Service) SetStuckRead(c StuckReadChecker) {
 // for a fresh run).
 func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) {
 	ctx, tok, _ := s.runs.supersede(inc.ID)
-	s.startRun(ctx, tok, inc, func(context.Context) []openai.ChatCompletionMessage { return seed })
+	s.startRun(ctx, tok, inc, inc.Generation, func(context.Context) []openai.ChatCompletionMessage { return seed })
 }
 
 // startRun runs the background agent pipeline for an incident under a token
@@ -157,6 +162,7 @@ func (s *Service) startRun(
 	ctx context.Context,
 	tok *runToken,
 	inc *db.Incident,
+	gen int64,
 	buildSeed func(context.Context) []openai.ChatCompletionMessage,
 ) {
 	started := s.work.goNamed("run:"+inc.ShortID(), func(context.Context) {
@@ -170,7 +176,7 @@ func (s *Service) startRun(
 		seedCtx, cancel := context.WithTimeout(ctx, seedTimeout)
 		seed := buildSeed(seedCtx)
 		cancel()
-		s.runAgent(ctx, inc, seed, t)
+		s.runAgent(ctx, inc, seed, t, s.gateFor(inc.ID, gen))
 	})
 	if !started {
 		s.runs.end(inc.ID, tok)
@@ -288,7 +294,9 @@ func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) 
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
 }
 
-func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, t Timers) {
+func (s *Service) runAgent(
+	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, t Timers, gate *runGate,
+) {
 	if s.agent == nil {
 		return
 	}
@@ -317,7 +325,7 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 			}
 		}
 
-		exit := s.runDiagnosis(ctx, inc, seed)
+		exit := s.runDiagnosis(ctx, inc, seed, gate)
 		outcome := s.routeExit(ctx, inc, exit, attempt, len(retryDelays))
 		if outcome.done {
 			return
@@ -333,13 +341,19 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 // escalation's durable outcome tracking; only the ~10s tool-calling loop itself
 // is serialized.
 func (s *Service) runDiagnosis(
-	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage,
+	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, gate *runGate,
 ) agent.RunExit {
 	if err := s.runs.acquireGlobal(ctx); err != nil {
 		return agent.RunExit{State: agent.RunSuperseded, Err: err}
 	}
-	defer s.runs.releaseGlobal()
-	return s.agent.Run(ctx, inc, seed)
+	exit := func() agent.RunExit {
+		defer s.runs.releaseGlobal()
+		return s.agent.Run(ctx, inc, seed, gate)
+	}()
+	if exit.Started {
+		s.attemptFinished(ctx, gate, exit)
+	}
+	return exit
 }
 
 // diagnosisOutcome is what runAgent's retry loop does next after evaluating
@@ -736,7 +750,7 @@ func (s *Service) routeExit(
 		s.handleAgentError(ctx, inc, errRunNotExited)
 	case agent.RunLLMFailed, agent.RunBatchFailed, agent.RunClaimFailed:
 		s.handleAgentError(ctx, inc, exit.Err)
-	case agent.RunSuperseded, agent.RunNotClaimed:
+	case agent.RunSuperseded, agent.RunNotClaimed, agent.RunPaused:
 		s.log.InfoContext(ctx, "run superseded, exiting quietly", "incident", inc.ID, "exit", string(exit.State))
 	case agent.RunClaiming, agent.RunAwaitingReply, agent.RunInBatch:
 		s.log.ErrorContext(ctx, "agent run returned without exiting", "incident", inc.ID, "state", string(exit.State))
@@ -1053,7 +1067,7 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin, stal
 		_ = s.notif.NotifyOwner(ctx, c)
 	case rerunRestart:
 	}
-	s.startRun(runCtx, tok, inc, func(seedCtx context.Context) []openai.ChatCompletionMessage {
+	s.startRun(runCtx, tok, inc, inc.Generation, func(seedCtx context.Context) []openai.ChatCompletionMessage {
 		return s.buildReinvestigateSeed(seedCtx, id, inc)
 	})
 	return nil
@@ -1276,6 +1290,7 @@ func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
 	if err = s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
 		return err
 	}
+	s.paused.Store(paused)
 	if s.journal != nil {
 		s.journal.AutonomousPauseChanged()
 	}

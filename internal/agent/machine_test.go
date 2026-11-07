@@ -34,6 +34,8 @@ func runSamples(s agent.RunState) []agent.RunSnapshot {
 		return []agent.RunSnapshot{{State: s, Started: true}, {State: s, Started: true, Round: 3, Replies: 3}}
 	case agent.RunSuperseded:
 		return []agent.RunSnapshot{{State: s}, {State: s, Started: true, Round: 2, Replies: 3}}
+	case agent.RunPaused:
+		return []agent.RunSnapshot{{State: s, Started: true}, {State: s, Started: true, Round: 2, Replies: 3}}
 	case agent.RunConcluded, agent.RunBudgetTripped, agent.RunStoppedNoTools, agent.RunBatchFailed:
 		return []agent.RunSnapshot{
 			{State: s, Started: true, Replies: 1},
@@ -92,6 +94,9 @@ func effectObligations(
 	}
 	if ev.Cancelled() && meta.WritesFinding {
 		return fmt.Errorf("E5: cancelled %v lands in %v, which writes a finding", ev.Kind(), next.State)
+	}
+	if (ev.Kind() == agent.EvPaused || ev.Kind() == agent.EvStale) && meta.WritesFinding {
+		return fmt.Errorf("E5: %v lands in %v, which writes a finding", ev.Kind(), next.State)
 	}
 	return nil
 }
@@ -252,6 +257,10 @@ func rowCases() []rowCase {
 		{batch(2), agent.EvBatchDone, false, ended(agent.RunAwaitingReply, 3, 3), ap},
 		{batch(maxR - 1), agent.EvBatchDone, false, ended(agent.RunExhausted, maxR-1, maxR), apf},
 		{batch(2), agent.EvBatchDone, true, ended(agent.RunSuperseded, 2, 3), apf},
+		{waiting, agent.EvPaused, false, ended(agent.RunPaused, 2, 2), fin},
+		{waiting, agent.EvStale, false, ended(agent.RunSuperseded, 2, 2), fin},
+		{batch(2), agent.EvPaused, false, ended(agent.RunPaused, 2, 3), apf},
+		{batch(2), agent.EvStale, false, ended(agent.RunSuperseded, 2, 3), apf},
 	}
 }
 
@@ -358,8 +367,8 @@ func TestRunMeta_EveryStateHasMeta(t *testing.T) {
 		agent.RunBudgetTripped, agent.RunStoppedNoTools, agent.RunExhausted,
 		agent.RunLLMFailed, agent.RunBatchFailed, agent.RunClaimFailed,
 	}
-	if len(agent.RunStates()) != 12 {
-		t.Fatalf("%d states, want 12", len(agent.RunStates()))
+	if len(agent.RunStates()) != 13 {
+		t.Fatalf("%d states, want 13", len(agent.RunStates()))
 	}
 	for _, s := range agent.RunStates() {
 		m := agent.RunMeta(s)
