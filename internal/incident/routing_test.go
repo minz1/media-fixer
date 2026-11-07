@@ -310,7 +310,6 @@ func TestRun_NoDanglingRunStartedAcrossRetries(t *testing.T) {
 	env := newRoutingEnv(t, ag, control, func(tm *incident.Timers) {
 		tm.RetryFirstMinutes, tm.RetrySecondMinutes = 1, 1
 	})
-	env.svc.SetUnitForTest(time.Nanosecond)
 	id := env.report(t, "Retries")
 	eventuallyWithin(t, loadedWaitTimeout, "the escalation", func() bool {
 		return env.snap(t, id).Status == lifecycle.ManualTestNeeded

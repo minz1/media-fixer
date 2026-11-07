@@ -569,8 +569,22 @@ func seedNoRelease(t *testing.T, database *db.DB, title string) *db.Incident {
 
 func TestEscalationPreview_SurvivesStreamFrame(t *testing.T) {
 	t.Parallel()
+	assertPreviewSurvivesStreamFrame(t, map[string]any{"MediaType": "tv", "Title": "T"}, "")
+}
+
+func TestEscalationPreview_ReadableWarningSurvivesStreamFrame(t *testing.T) {
+	t.Parallel()
+	readable := "/tv/T/Season 01/T.S01E01.mkv"
+	assertPreviewSurvivesStreamFrame(t, &client.ReplacePlan{
+		MediaType: "tv", Title: "T",
+		Readability: &client.ReadabilityProbe{Checked: true, Probed: 1, ReadableFile: readable},
+	}, readable)
+}
+
+func assertPreviewSurvivesStreamFrame(t *testing.T, plan any, mustShow string) {
+	t.Helper()
 	ag := &stubEscalationAgent{
-		planResult: map[string]any{"MediaType": "tv", "Title": "T"},
+		planResult: plan,
 		runResult:  map[string]any{"deleted_files": []string{"ep01.mkv"}},
 	}
 	srv, database := newEscalationTestServer(t, ag)
@@ -604,6 +618,9 @@ func TestEscalationPreview_SurvivesStreamFrame(t *testing.T) {
 	streamHTML := strings.ReplaceAll(strings.TrimPrefix(frame, "data: "), "\ndata: ", "\n")
 	if !strings.Contains(streamHTML, string(previewHTML)) {
 		t.Fatalf("stream frame did not preserve the Preview response:\n%s", frame)
+	}
+	if !strings.Contains(string(previewHTML), mustShow) || !strings.Contains(streamHTML, mustShow) {
+		t.Fatalf("readable-file warning %q missing from the preview or the stream frame:\n%s", mustShow, frame)
 	}
 	for _, want := range []string{
 		"/media/incidents/" + inc.ID + "/approve-escalation", `name="plan_fp" value="` + fp + `"`,
