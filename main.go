@@ -250,6 +250,8 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 	renderers := map[string]card.Renderer{"inc": a.svc.CardRenderer()}
 	var maintenance []step
 	var unsub func()
+	signalled := make(chan time.Time, 1)
+	context.AfterFunc(ctx, func() { signalled <- time.Now() })
 	startup(startSteps{
 		maintenance: func() {
 			maintenance = startMaintenance(
@@ -261,8 +263,6 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 		service:  a.svc.Start,
 		recovery: a.svc.StartRecovery,
 	})
-	signalled := make(chan time.Time, 1)
-	context.AfterFunc(ctx, func() { signalled <- time.Now() })
 
 	a.log.InfoContext(ctx, "media-fixer started")
 	httpErr := a.srv.Start(ctx)
