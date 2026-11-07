@@ -137,3 +137,12 @@ func AnswerPendingForTest(
 }
 
 func (a *Agent) DBForTest() *db.DB { return a.db }
+
+const (
+	ImpactNone   = impactNone
+	ImpactItem   = impactItem
+	ImpactShared = impactShared
+	ImpactHeavy  = impactHeavy
+)
+
+func DisruptiveForTest(s ToolSpec) bool { return s.disruptive() }

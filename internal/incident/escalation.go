@@ -180,8 +180,7 @@ func partialOf(action string, execResult any) lifecycle.Partial {
 // mirroring Dispatcher.logAction but attributed to the owner rather than the
 // agent. Not tagged disruptive — remove_and_search (currently the only
 // automated escalation) is item-scoped, not service-wide, so it's outside
-// what Agent.disruptionNote warns concurrent runs about (see
-// isDisruptiveAction in internal/agent/tools.go).
+// what Agent.disruptionNote warns concurrent runs about.
 func (s *Service) logEscalation(
 	ctx context.Context, incidentID string, result *agent.DiagnosticResult, execResult any, runErr error,
 ) {

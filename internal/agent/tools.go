@@ -153,12 +153,22 @@ const (
 	riskControl
 )
 
+type toolImpact int
+
+const (
+	impactNone toolImpact = iota
+	impactItem
+	impactShared
+	impactHeavy
+)
+
 // toolSpec is one entry in the tool registry: its LLM-facing definition, its
 // risk class, and the dispatcher method that executes it.
 type toolSpec struct {
 	Name       string
 	Def        *openai.FunctionDefinition
 	Risk       toolRisk
+	Impact     toolImpact
 	Handler    func(*Dispatcher, context.Context, map[string]any) (any, error)
 	UserPhrase string
 }
@@ -183,6 +193,7 @@ func toolRegistry() []toolSpec {
 		repairReadToolSpecs(),
 		decypharrActionToolSpecs(),
 		jellyfinAndArrActionToolSpecs(),
+		arrActionToolSpecs(),
 		approvalToolSpecs(),
 		[]toolSpec{completionSpec()},
 	)
@@ -419,6 +430,7 @@ func decypharrActionToolSpecs() []toolSpec {
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactShared,
 			Handler:    (*Dispatcher).dispatchRefreshLinks,
 			UserPhrase: phraseStorage,
 		},
@@ -430,6 +442,7 @@ func decypharrActionToolSpecs() []toolSpec {
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactShared,
 			Handler:    (*Dispatcher).dispatchRepairSweep,
 			UserPhrase: phraseStorage,
 		},
@@ -443,6 +456,7 @@ func decypharrActionToolSpecs() []toolSpec {
 				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactShared,
 			Handler:    (*Dispatcher).dispatchCacheCleanup,
 			UserPhrase: phraseStorage,
 		},
@@ -458,6 +472,7 @@ func decypharrActionToolSpecs() []toolSpec {
 				}, []string{paramName}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactItem,
 			Handler:    (*Dispatcher).dispatchDecypharrRecheck,
 			UserPhrase: phraseStorage,
 		},
@@ -478,6 +493,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactHeavy,
 			Handler:    (*Dispatcher).dispatchLibraryScan,
 			UserPhrase: phraseLibrary,
 		},
@@ -489,6 +505,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactHeavy,
 			Handler:    (*Dispatcher).dispatchRestartDecypharr,
 			UserPhrase: phraseStorage,
 		},
@@ -500,9 +517,15 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				Parameters:  jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactHeavy,
 			Handler:    (*Dispatcher).dispatchRestartJellyfin,
 			UserPhrase: phraseReload,
 		},
+	}
+}
+
+func arrActionToolSpecs() []toolSpec {
+	return []toolSpec{
 		{
 			Name: toolSonarrRescan,
 			Def: &openai.FunctionDefinition{
@@ -513,6 +536,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				}, []string{paramTitle}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactItem,
 			Handler:    (*Dispatcher).dispatchSonarrRescan,
 			UserPhrase: phraseLibrary,
 		},
@@ -526,6 +550,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				}, []string{paramTitle}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactItem,
 			Handler:    (*Dispatcher).dispatchRadarrRescan,
 			UserPhrase: phraseLibrary,
 		},
@@ -539,6 +564,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				}, []string{paramItemID}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactItem,
 			Handler:    (*Dispatcher).dispatchClearJellyfinCache,
 			UserPhrase: phraseReload,
 		},
@@ -561,6 +587,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 				}, []string{paramMediaType, paramTitle}),
 			},
 			Risk:       riskWrite,
+			Impact:     impactItem,
 			Handler:    (*Dispatcher).dispatchArrSearchMissing,
 			UserPhrase: phraseNewCopy,
 		},
@@ -714,6 +741,38 @@ func ToolNames() []string {
 		names[i] = spec.Name
 	}
 	return names
+}
+
+type LiveTier string
+
+const (
+	LiveTierRead       LiveTier = "read"
+	LiveTierWrite      LiveTier = "write"
+	LiveTierDisruptive LiveTier = "disrupt"
+	LiveTierPreview    LiveTier = "approval-preview"
+)
+
+func (s toolSpec) disruptive() bool { return s.Impact >= impactShared }
+
+func LiveTierOf(name string) (LiveTier, bool) {
+	spec, ok := specByName(name)
+	if !ok {
+		return "", false
+	}
+	switch spec.Risk {
+	case riskRead:
+		return LiveTierRead, true
+	case riskWrite:
+		if spec.Impact == impactHeavy {
+			return LiveTierDisruptive, true
+		}
+		return LiveTierWrite, true
+	case riskApproval:
+		return LiveTierPreview, true
+	case riskControl:
+		return "", false
+	}
+	return "", false
 }
 
 // ExcludedFromLiveCheck reports whether a tool has no external system to
@@ -1634,22 +1693,9 @@ func intArgOrSentinel(args map[string]any, key string) int {
 	return n
 }
 
-// isDisruptiveAction reports whether action mutates service-wide state (a
-// restart, a full library scan, a mount-wide cache cleanup or repair sweep)
-// rather than one item. Their side effects can outlast the run that
-// triggered them and be mistaken by a concurrently-starting run for evidence
-// about its own incident — see Agent.disruptionNote. Deliberately excludes
-// item-scoped actions (clear_jellyfin_cache, decypharr_recheck, the
-// *_rescan tools, arr_search_missing): those only ever affect the one title
-// they name.
-func isDisruptiveAction(action string) bool {
-	switch action {
-	case toolRestartDecypharr, toolRestartJellyfin, toolJellyfinLibraryScan,
-		toolCacheCleanup, toolRepairSweep, toolRefreshLinks:
-		return true
-	default:
-		return false
-	}
+func isDisruptiveTool(name string) bool {
+	spec, ok := specByName(name)
+	return ok && spec.disruptive()
 }
 
 // logAction records a completed action via the event log: an action_applied
@@ -1670,7 +1716,7 @@ func (d *Dispatcher) logAction(ctx context.Context, action string, params map[st
 		Params:      params,
 		TriggeredBy: triggeredByAgent,
 		Status:      db.ActionApplied,
-	}, isDisruptiveAction(action))
+	}, isDisruptiveTool(action))
 }
 
 // --- helpers ---

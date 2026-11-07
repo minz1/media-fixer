@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -178,5 +179,77 @@ func TestUserPhrase_Values(t *testing.T) {
 		if got := agent.UserPhrase(tool); got != phrase {
 			t.Errorf("UserPhrase(%q) = %q, want %q", tool, got, phrase)
 		}
+	}
+}
+
+func TestA6_ThreeListsOneRegistry(t *testing.T) {
+	t.Parallel()
+	wantDisruptive := []string{
+		"restart_decypharr", "restart_jellyfin", "jellyfin_library_scan",
+		"decypharr_cache_cleanup", "decypharr_repair_sweep", "refresh_decypharr_links",
+	}
+	var gotDisruptive []string
+	for _, spec := range agent.ToolRegistry() {
+		if agent.DisruptiveForTest(spec) {
+			gotDisruptive = append(gotDisruptive, spec.Name)
+		}
+	}
+	slices.Sort(wantDisruptive)
+	slices.Sort(gotDisruptive)
+	if !slices.Equal(gotDisruptive, wantDisruptive) {
+		t.Errorf("disruptive = %v, want %v", gotDisruptive, wantDisruptive)
+	}
+
+	wantTier := map[string]agent.LiveTier{
+		"jellyfin_search": agent.LiveTierRead, "jellyfin_playback_info": agent.LiveTierRead,
+		"jellyfin_list_episodes": agent.LiveTierRead, "jellyfin_scan_status": agent.LiveTierRead,
+		"dd_readability_test": agent.LiveTierRead, "get_torrent_state": agent.LiveTierRead,
+		"loki_query": agent.LiveTierRead, "list_directory": agent.LiveTierRead,
+		"get_disk_info": agent.LiveTierRead, "get_repair_status": agent.LiveTierRead,
+		"get_repair_health": agent.LiveTierRead, "arr_media_status": agent.LiveTierRead,
+		"arr_grab_history":        agent.LiveTierRead,
+		"refresh_decypharr_links": agent.LiveTierWrite, "decypharr_repair_sweep": agent.LiveTierWrite,
+		"decypharr_cache_cleanup": agent.LiveTierWrite, "decypharr_recheck": agent.LiveTierWrite,
+		"sonarr_rescan": agent.LiveTierWrite, "radarr_rescan": agent.LiveTierWrite,
+		"clear_jellyfin_cache": agent.LiveTierWrite, "arr_search_missing": agent.LiveTierWrite,
+		"restart_decypharr": agent.LiveTierDisruptive, "restart_jellyfin": agent.LiveTierDisruptive,
+		"jellyfin_library_scan": agent.LiveTierDisruptive,
+		"arr_remove_and_search": agent.LiveTierPreview, "decypharr_delete_readd": agent.LiveTierPreview,
+	}
+	for name, want := range wantTier {
+		got, ok := agent.LiveTierOf(name)
+		if !ok || got != want {
+			t.Errorf("LiveTierOf(%q) = %q, %v; want %q", name, got, ok, want)
+		}
+	}
+	if _, ok := agent.LiveTierOf("complete_diagnosis"); ok {
+		t.Error("complete_diagnosis must have no live tier")
+	}
+	if len(wantTier) != len(agent.ToolNames())-1 {
+		t.Errorf("table covers %d tools, registry has %d plus the excluded one", len(wantTier), len(agent.ToolNames()))
+	}
+}
+
+func TestRegistry_WriteToolsDeclareImpact(t *testing.T) {
+	t.Parallel()
+	for _, spec := range agent.ToolRegistry() {
+		isWrite := spec.Risk == agent.RiskWrite
+		hasImpact := spec.Impact != agent.ImpactNone
+		if isWrite != hasImpact {
+			t.Errorf("%s: write = %v but impact = %v", spec.Name, isWrite, spec.Impact)
+		}
+	}
+}
+
+func TestLiveTier_TotalOverTools(t *testing.T) {
+	t.Parallel()
+	for _, name := range agent.ToolNames() {
+		_, ok := agent.LiveTierOf(name)
+		if ok == agent.ExcludedFromLiveCheck(name) {
+			t.Errorf("%s: LiveTierOf ok = %v, excluded = %v", name, ok, agent.ExcludedFromLiveCheck(name))
+		}
+	}
+	if _, ok := agent.LiveTierOf("no_such_tool"); ok {
+		t.Error("unknown tool must have no live tier")
 	}
 }

@@ -50,3 +50,12 @@ func DiscoverTorrentAndSampleForTest(ctx context.Context, disp *agent.Dispatcher
 func DiscoverArrTitlesForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	discoverArrTitles(ctx, disp, fx)
 }
+
+func RunOneForTest(ctx context.Context, r *Runner, tool string) (Result, bool) {
+	for _, spec := range checkRegistry() {
+		if spec.Tool == tool {
+			return r.runOne(ctx, spec, &Fixtures{}), true
+		}
+	}
+	return Result{}, false
+}

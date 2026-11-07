@@ -12,18 +12,6 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 )
 
-// tier classifies when a check is allowed to run.
-type tier string
-
-const (
-	tierRead       tier = "read"
-	tierWrite      tier = "write"
-	tierDisruptive tier = "disrupt"
-	// tierDryRun checks are read-only previews of an otherwise destructive
-	// action (arr_remove_and_search's PlanReplace) — always safe to run.
-	tierDryRun tier = "approval-preview"
-)
-
 // Tool argument keys, matching the param names in internal/agent/tools.go.
 const (
 	argTitle       = "title"
@@ -50,7 +38,6 @@ type checkFunc func(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, o
 
 type checkSpec struct {
 	Tool string
-	Tier tier
 	Run  checkFunc
 }
 
@@ -68,47 +55,47 @@ func checkRegistry() []checkSpec {
 
 func readCheckSpecs() []checkSpec {
 	return []checkSpec{
-		{Tool: "jellyfin_search", Tier: tierRead, Run: checkJellyfinSearch},
-		{Tool: "jellyfin_playback_info", Tier: tierRead, Run: checkJellyfinPlayback},
-		{Tool: "jellyfin_list_episodes", Tier: tierRead, Run: checkJellyfinListEpisodes},
-		{Tool: "jellyfin_scan_status", Tier: tierRead, Run: checkJellyfinScanStatus},
-		{Tool: "dd_readability_test", Tier: tierRead, Run: checkDDReadability},
-		{Tool: "get_torrent_state", Tier: tierRead, Run: checkGetTorrentState},
-		{Tool: "loki_query", Tier: tierRead, Run: checkLokiQuery},
-		{Tool: "list_directory", Tier: tierRead, Run: checkListDirectory},
-		{Tool: "get_disk_info", Tier: tierRead, Run: checkGetDiskInfo},
-		{Tool: "get_repair_status", Tier: tierRead, Run: checkRepairStatus},
-		{Tool: "get_repair_health", Tier: tierRead, Run: checkRepairHealth},
-		{Tool: "arr_media_status", Tier: tierRead, Run: checkArrMediaStatus},
-		{Tool: "arr_grab_history", Tier: tierRead, Run: checkArrGrabHistory},
+		{Tool: "jellyfin_search", Run: checkJellyfinSearch},
+		{Tool: "jellyfin_playback_info", Run: checkJellyfinPlayback},
+		{Tool: "jellyfin_list_episodes", Run: checkJellyfinListEpisodes},
+		{Tool: "jellyfin_scan_status", Run: checkJellyfinScanStatus},
+		{Tool: "dd_readability_test", Run: checkDDReadability},
+		{Tool: "get_torrent_state", Run: checkGetTorrentState},
+		{Tool: "loki_query", Run: checkLokiQuery},
+		{Tool: "list_directory", Run: checkListDirectory},
+		{Tool: "get_disk_info", Run: checkGetDiskInfo},
+		{Tool: "get_repair_status", Run: checkRepairStatus},
+		{Tool: "get_repair_health", Run: checkRepairHealth},
+		{Tool: "arr_media_status", Run: checkArrMediaStatus},
+		{Tool: "arr_grab_history", Run: checkArrGrabHistory},
 	}
 }
 
 func writeCheckSpecs() []checkSpec {
 	return []checkSpec{
-		{Tool: "refresh_decypharr_links", Tier: tierWrite, Run: checkRefreshLinks},
-		{Tool: "decypharr_repair_sweep", Tier: tierWrite, Run: checkRepairSweep},
-		{Tool: "decypharr_cache_cleanup", Tier: tierWrite, Run: checkCacheCleanup},
-		{Tool: "decypharr_recheck", Tier: tierWrite, Run: checkDecypharrRecheck},
-		{Tool: "sonarr_rescan", Tier: tierWrite, Run: checkSonarrRescan},
-		{Tool: "radarr_rescan", Tier: tierWrite, Run: checkRadarrRescan},
-		{Tool: "clear_jellyfin_cache", Tier: tierWrite, Run: checkClearJellyfinCache},
-		{Tool: "arr_search_missing", Tier: tierWrite, Run: checkArrSearchMissing},
+		{Tool: "refresh_decypharr_links", Run: checkRefreshLinks},
+		{Tool: "decypharr_repair_sweep", Run: checkRepairSweep},
+		{Tool: "decypharr_cache_cleanup", Run: checkCacheCleanup},
+		{Tool: "decypharr_recheck", Run: checkDecypharrRecheck},
+		{Tool: "sonarr_rescan", Run: checkSonarrRescan},
+		{Tool: "radarr_rescan", Run: checkRadarrRescan},
+		{Tool: "clear_jellyfin_cache", Run: checkClearJellyfinCache},
+		{Tool: "arr_search_missing", Run: checkArrSearchMissing},
 	}
 }
 
 func disruptiveCheckSpecs() []checkSpec {
 	return []checkSpec{
-		{Tool: "restart_decypharr", Tier: tierDisruptive, Run: checkRestartDecypharr},
-		{Tool: "restart_jellyfin", Tier: tierDisruptive, Run: checkRestartJellyfin},
-		{Tool: "jellyfin_library_scan", Tier: tierDisruptive, Run: checkJellyfinLibraryScan},
+		{Tool: "restart_decypharr", Run: checkRestartDecypharr},
+		{Tool: "restart_jellyfin", Run: checkRestartJellyfin},
+		{Tool: "jellyfin_library_scan", Run: checkJellyfinLibraryScan},
 	}
 }
 
 func approvalCheckSpecs() []checkSpec {
 	return []checkSpec{
-		{Tool: "arr_remove_and_search", Tier: tierDryRun, Run: checkArrRemoveAndSearch},
-		{Tool: "decypharr_delete_readd", Tier: tierDryRun, Run: checkDecypharrDeleteReadd},
+		{Tool: "arr_remove_and_search", Run: checkArrRemoveAndSearch},
+		{Tool: "decypharr_delete_readd", Run: checkDecypharrDeleteReadd},
 	}
 }
 

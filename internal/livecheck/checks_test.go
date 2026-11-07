@@ -338,3 +338,33 @@ func TestD11_3_UnconfiguredArrShowsAsUnconfigured(t *testing.T) {
 		}
 	}
 }
+
+func TestRunOne_TierFromRegistry(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		tool   string
+		opts   livecheck.Options
+		risk   string
+		detail string
+	}{
+		{"clear_jellyfin_cache", livecheck.Options{}, "write", "needs -write"},
+		{"refresh_decypharr_links", livecheck.Options{}, "write", "needs -write"},
+		{"jellyfin_library_scan", livecheck.Options{AllowWrite: true}, "disrupt", "needs -disruptive"},
+		{"restart_jellyfin", livecheck.Options{AllowWrite: true}, "disrupt", "needs -disruptive"},
+		{"restart_decypharr", livecheck.Options{}, "disrupt", "needs -disruptive"},
+	}
+	for _, tc := range cases {
+		runner := livecheck.New(&agent.Dispatcher{}, tc.opts)
+		result, found := livecheck.RunOneForTest(context.Background(), runner, tc.tool)
+		if !found {
+			t.Fatalf("no check registered for %q", tc.tool)
+		}
+		tier, ok := agent.LiveTierOf(tc.tool)
+		if !ok || string(tier) != tc.risk {
+			t.Errorf("%s: LiveTierOf = %q, %v; want %q", tc.tool, tier, ok, tc.risk)
+		}
+		if result.Status != livecheck.StatusSkipped || result.Risk != tc.risk || result.Detail != tc.detail {
+			t.Errorf("%s: status = %s, risk = %s, detail = %s", tc.tool, result.Status, result.Risk, result.Detail)
+		}
+	}
+}

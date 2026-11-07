@@ -251,9 +251,8 @@ type actionAppliedPayload struct {
 	Status      string `json:"status"`
 	Result      string `json:"result,omitempty"`
 	Error       string `json:"error,omitempty"`
-	// Disruptive marks a service-wide action (restart, scan, cleanup, sweep —
-	// see isDisruptiveAction in internal/agent/tools.go, the source of truth
-	// this is tagged from) rather than an item-scoped one. LastDisruption
+	// Disruptive marks a service-wide action (restart, scan, cleanup, sweep)
+	// rather than an item-scoped one. LastDisruption
 	// scans for the most recent event with this set, replacing the old
 	// last_disruption single-row table.
 	Disruptive bool `json:"disruptive"`

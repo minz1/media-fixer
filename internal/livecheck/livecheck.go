@@ -113,11 +113,12 @@ func (r *Runner) Run(ctx context.Context) *Report {
 // runOne executes a single check, honoring the write/disruptive gates and
 // timing the call.
 func (r *Runner) runOne(ctx context.Context, spec checkSpec, fx *Fixtures) Result {
-	if spec.Tier == tierWrite && !r.opts.AllowWrite {
-		return Result{Tool: spec.Tool, Risk: string(spec.Tier), Status: StatusSkipped, Detail: "needs -write"}
+	tier, _ := agent.LiveTierOf(spec.Tool)
+	if tier == agent.LiveTierWrite && !r.opts.AllowWrite {
+		return Result{Tool: spec.Tool, Risk: string(tier), Status: StatusSkipped, Detail: "needs -write"}
 	}
-	if spec.Tier == tierDisruptive && !r.opts.AllowDisruptive {
-		return Result{Tool: spec.Tool, Risk: string(spec.Tier), Status: StatusSkipped, Detail: "needs -disruptive"}
+	if tier == agent.LiveTierDisruptive && !r.opts.AllowDisruptive {
+		return Result{Tool: spec.Tool, Risk: string(tier), Status: StatusSkipped, Detail: "needs -disruptive"}
 	}
 
 	start := time.Now()
@@ -125,7 +126,7 @@ func (r *Runner) runOne(ctx context.Context, spec checkSpec, fx *Fixtures) Resul
 	result.Latency = time.Since(start)
 	result.LatencyMS = result.Latency.Milliseconds()
 	result.Tool = spec.Tool
-	result.Risk = string(spec.Tier)
+	result.Risk = string(tier)
 	return result
 }
 
