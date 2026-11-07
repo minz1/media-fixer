@@ -503,7 +503,7 @@
         Preview
       </button>
     </div>
-    <div id="escalation-preview" class="mt-3"></div>
+    <div id="escalation-preview" class="mt-3">{{with .StoredPreview}}{{template "escalation_preview" .}}{{end}}</div>
   </div>
   {{end}}
 

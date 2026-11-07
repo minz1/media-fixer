@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
@@ -71,6 +72,11 @@ func (s *Service) CurrentVersion(ctx context.Context, id string) Version {
 		return Version{}
 	}
 	return Version{N: snap.Version, Set: true}
+}
+
+func (s *Service) Actions(ctx context.Context, snap lifecycle.Snapshot) []lifecycle.Action {
+	snap.In.Limits = s.limits(s.timers(ctx))
+	return lifecycle.Actions(snap, time.Now())
 }
 
 func (s *Service) SystemRerun(ctx context.Context, id string, gen int64) error {

@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"time"
 
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
@@ -37,12 +36,12 @@ func actionViewOf(k lifecycle.ActionKind) (actionView, bool) {
 	return actionView{}, false
 }
 
-func (s *Server) ownerView(ctx context.Context, snap lifecycle.Snapshot) ownerView {
+func (s *Server) ownerView(ctx context.Context, snap lifecycle.Snapshot, actions []lifecycle.Action) ownerView {
 	v := ownerView{
 		Version: snap.Version, Meta: lifecycle.Meta(snap.Status), Parked: snap.Parked,
 		BudgetSpent: incident.BudgetSpent(snap), Partial: s.svc.PartialLine(ctx, snap),
 	}
-	for _, a := range lifecycle.Actions(snap, time.Now()) {
+	for _, a := range actions {
 		switch a.Kind {
 		case lifecycle.ActKeepSearching:
 			v.Keep = true

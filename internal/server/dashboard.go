@@ -200,9 +200,11 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 	if err != nil {
 		return nil, err
 	}
+	availableActions := s.svc.Actions(ctx, snap)
 
 	return map[string]any{
-		"Owner":             s.ownerView(ctx, snap),
+		"Owner":             s.ownerView(ctx, snap, availableActions),
+		"StoredPreview":     s.storedPreview(ctx, snap, availableActions),
 		"KeepSearchingSpan": "up to " + incident.KeepSearchingSpan(timers.KeepSearchingDays),
 		"Incident":          inc,
 		"Actions":           actions,
@@ -410,17 +412,54 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 		// the preview renders several plan types and only one of them has a
 		// readability probe, so a template field access would error on the
 		// others.
-		if rp, isReplace := plan.(*client.ReplacePlan); isReplace && rp.Readability != nil {
-			data["ReadableFile"] = rp.Readability.ReadableFile
-			data["ReadabilityUnknown"] = !rp.Readability.Checked
-			if inc, incErr := s.db.GetIncident(r.Context(), id); incErr == nil && inc.What == agent.WhatStuckRead {
-				data["StuckRead"] = true
-			}
-			data["Reason"] = rp.Reason
+		if rp, isReplace := plan.(*client.ReplacePlan); isReplace {
+			s.readabilityFields(r.Context(), id, rp, data)
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "escalation_preview", data)
+}
+
+func (s *Server) readabilityFields(ctx context.Context, id string, rp *client.ReplacePlan, data map[string]any) {
+	if rp.Readability == nil {
+		return
+	}
+	data["ReadableFile"] = rp.Readability.ReadableFile
+	data["ReadabilityUnknown"] = !rp.Readability.Checked
+	if inc, incErr := s.db.GetIncident(ctx, id); incErr == nil && inc.What == agent.WhatStuckRead {
+		data["StuckRead"] = true
+	}
+	data["Reason"] = rp.Reason
+}
+
+func (s *Server) storedPreview(
+	ctx context.Context,
+	snap lifecycle.Snapshot,
+	actions []lifecycle.Action,
+) map[string]any {
+	if snap.Plan == nil || !hasAction(actions, lifecycle.ActApprove) {
+		return nil
+	}
+	data := map[string]any{
+		"BaseURL": s.baseURL, "IncidentID": snap.ID, "Version": snap.Version,
+		"Plan": json.RawMessage(snap.Plan.JSON), "PlanFP": snap.Plan.FP,
+	}
+	if snap.Finding.EscalateAction == agent.EscalateRemoveAndSearch {
+		var rp client.ReplacePlan
+		if json.Unmarshal(snap.Plan.JSON, &rp) == nil {
+			s.readabilityFields(ctx, snap.ID, &rp, data)
+		}
+	}
+	return data
+}
+
+func hasAction(actions []lifecycle.Action, want lifecycle.ActionKind) bool {
+	for _, action := range actions {
+		if action.Kind == want {
+			return true
+		}
+	}
+	return false
 }
 
 // approveEscalation executes the incident's recommended escalation after

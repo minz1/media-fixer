@@ -566,3 +566,61 @@ func seedNoRelease(t *testing.T, database *db.DB, title string) *db.Incident {
 	}
 	return inc
 }
+
+func TestEscalationPreview_SurvivesStreamFrame(t *testing.T) {
+	t.Parallel()
+	ag := &stubEscalationAgent{
+		planResult: map[string]any{"MediaType": "tv", "Title": "T"},
+		runResult:  map[string]any{"deleted_files": []string{"ep01.mkv"}},
+	}
+	srv, database := newEscalationTestServer(t, ag)
+	inc := newManualTestNeededIncident(t, database)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	t.Cleanup(cancelStream)
+	events := openSSEContext(streamCtx, t, ts, "/media/incidents/"+inc.ID+"/events")
+	if _, ok := nextSSE(t, events, sseEventDeadline); !ok {
+		t.Fatal("no first stream frame")
+	}
+	previewResp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewHTML, readErr := io.ReadAll(previewResp.Body)
+	previewResp.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if previewResp.StatusCode != http.StatusOK {
+		t.Fatalf("preview status = %d, body = %s", previewResp.StatusCode, previewHTML)
+	}
+	v, fp := curV(t, database, inc.ID), storedPlanFP(t, database, inc.ID)
+	frame, ok := nextSSE(t, events, sseEventDeadline)
+	if !ok {
+		t.Fatal("no stream frame after the preview")
+	}
+	streamHTML := strings.ReplaceAll(strings.TrimPrefix(frame, "data: "), "\ndata: ", "\n")
+	if !strings.Contains(streamHTML, string(previewHTML)) {
+		t.Fatalf("stream frame did not preserve the Preview response:\n%s", frame)
+	}
+	for _, want := range []string{
+		"/media/incidents/" + inc.ID + "/approve-escalation", `name="plan_fp" value="` + fp + `"`,
+		`name="v" value="` + v + `"`,
+	} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("stream frame after the preview lost %q:\n%s", want, frame)
+		}
+	}
+	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
+		url.Values{"plan_fp": {fp}, "v": {v}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || ag.approvedPlanJSON() == nil {
+		t.Fatalf("approve from the streamed form: status %d, ran %v", resp.StatusCode, ag.approvedPlanJSON() != nil)
+	}
+	waitForStatus(t, database, inc.ID, db.StatusVerifying)
+}

@@ -24,6 +24,11 @@ func openSSE(t *testing.T, ts *httptest.Server, path string) <-chan string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), sseEventDeadline)
 	t.Cleanup(cancel)
+	return openSSEContext(ctx, t, ts, path)
+}
+
+func openSSEContext(ctx context.Context, t *testing.T, ts *httptest.Server, path string) <-chan string {
+	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+path, nil)
 	if err != nil {
 		t.Fatal(err)
