@@ -484,11 +484,11 @@ func newBlockingAgent() *blockingAgent {
 
 func (a *blockingAgent) Run(
 	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	a.started <- struct{}{}
 	<-ctx.Done()
 	a.done <- ctx.Err()
-	return nil, nil, ctx.Err()
+	return exitOf(nil, nil, ctx.Err())
 }
 
 func (a *blockingAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -613,23 +613,23 @@ func newSequencedAgent() *sequencedAgent {
 
 func (a *sequencedAgent) Run(
 	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	n := a.calls.Add(1)
 	a.runCalls <- n
 	if n == 1 {
 		// First run: defers to verification with a long delay. Only cancellation
 		// (from a superseding run) should end this wait within the test's timeout.
-		return &agent.DiagnosticResult{
+		return exitOf(&agent.DiagnosticResult{
 			RootCause: "test", Confidence: "high",
 			PrimaryAction: "run-a", PrimaryReason: "test",
 			VerifyAfterSeconds: 30,
-		}, nil, nil
+		}, nil, nil)
 	}
 	// Second+ run: resolves immediately, no verification needed.
-	return &agent.DiagnosticResult{
+	return exitOf(&agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high",
 		PrimaryAction: "run-b", PrimaryReason: "test",
-	}, nil, nil
+	}, nil, nil)
 }
 
 func (a *sequencedAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -805,12 +805,12 @@ func newAlwaysFixedAgent() *alwaysFixedAgent {
 
 func (a *alwaysFixedAgent) Run(
 	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	a.runCalls <- struct{}{}
-	return &agent.DiagnosticResult{
+	return exitOf(&agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high",
 		PrimaryAction: "test-action", PrimaryReason: "test",
-	}, nil, nil
+	}, nil, nil)
 }
 
 func (a *alwaysFixedAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -940,7 +940,7 @@ func newConcurrencyTrackingAgent() *concurrencyTrackingAgent {
 
 func (a *concurrencyTrackingAgent) Run(
 	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	n := a.inFlight.Add(1)
 	for {
 		cur := a.maxInFlight.Load()
@@ -951,10 +951,10 @@ func (a *concurrencyTrackingAgent) Run(
 	time.Sleep(50 * time.Millisecond)
 	a.inFlight.Add(-1)
 	a.runCalls <- struct{}{}
-	return &agent.DiagnosticResult{
+	return exitOf(&agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high",
 		PrimaryAction: "test-action", PrimaryReason: "test",
-	}, nil, nil
+	}, nil, nil)
 }
 
 func (a *concurrencyTrackingAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -1211,7 +1211,7 @@ func newLowConfidenceOnceAgent() *lowConfidenceOnceAgent {
 
 func (a *lowConfidenceOnceAgent) Run(
 	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	a.runCalls <- struct{}{}
 	result := &agent.DiagnosticResult{
 		RootCause: "test", Confidence: "low",
@@ -1220,7 +1220,7 @@ func (a *lowConfidenceOnceAgent) Run(
 	conversation := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleUser, Content: "test conversation"},
 	}
-	return result, conversation, nil
+	return exitOf(result, conversation, nil)
 }
 
 func (a *lowConfidenceOnceAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -1492,18 +1492,18 @@ type verifyingAgent struct {
 
 func (a *verifyingAgent) Run(
 	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	n := a.calls.Add(1)
 	a.runCalls <- n
 	if n == 1 {
-		return &agent.DiagnosticResult{
+		return exitOf(&agent.DiagnosticResult{
 			RootCause: "test", Confidence: "high",
 			PrimaryAction: "run-a", PrimaryReason: "test",
 			VerifyAfterSeconds: 1,
-		}, nil, nil
+		}, nil, nil)
 	}
 	<-ctx.Done()
-	return nil, nil, ctx.Err()
+	return exitOf(nil, nil, ctx.Err())
 }
 
 func (a *verifyingAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {

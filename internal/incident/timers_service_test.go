@@ -105,12 +105,12 @@ type countingVerifyAgent struct {
 
 func (a *countingVerifyAgent) Run(
 	context.Context, *db.Incident, []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
-	return &agent.DiagnosticResult{
+) agent.RunExit {
+	return exitOf(&agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high",
 		PrimaryAction: "run-a", PrimaryReason: "test",
 		VerifyAfterSeconds: 1,
-	}, nil, nil
+	}, nil, nil)
 }
 
 func (a *countingVerifyAgent) VerifyResolved(context.Context, string, string, *agent.FixSignature) bool {

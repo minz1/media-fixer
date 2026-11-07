@@ -90,3 +90,11 @@ func ErrPlanChangedForTest() error { return errPlanChanged }
 func ErrPlanExpiredForTest() error { return errPlanExpired }
 
 func (s *Service) RunningForTest(id string) bool { return s.runs.running(id) }
+
+func (s *Service) RouteExitForTest(ctx context.Context, inc *db.Incident, exit agent.RunExit) bool {
+	return s.routeExit(ctx, inc, exit, 0, 1).done
+}
+
+func (s *Service) RunAgentForTest(ctx context.Context, inc *db.Incident) {
+	s.runAgent(ctx, inc, nil, s.timers(ctx))
+}

@@ -454,8 +454,9 @@ func (a *Agent) Run(
 	ctx context.Context,
 	inc *db.Incident,
 	seed []openai.ChatCompletionMessage,
-) (*DiagnosticResult, []openai.ChatCompletionMessage, error) {
-	return a.runExit(ctx, inc, seed).legacy()
+) RunExit {
+	l := &runLoop{a: a, inc: inc, snap: runSnapshot{State: RunClaiming}, seen: make(map[string]int)}
+	return l.run(ctx, seed)
 }
 
 func (l *runLoop) claim(ctx context.Context, seed []openai.ChatCompletionMessage) {
@@ -732,7 +733,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	// reconstruct the DiagnosticResult from this row, so returning success
 	// here would DM the owner a recommendation that errors with "has no
 	// diagnostic finding" the moment they click Preview. Fail the run instead
-	// and let handleRunError escalate honestly.
+	// and let routeExit escalate honestly.
 	if err := a.db.SetIncidentFinding(ctx, inc.ID, result, result); err != nil {
 		return nil, fmt.Errorf("persist diagnosis for incident %s: %w", inc.ID, err)
 	}

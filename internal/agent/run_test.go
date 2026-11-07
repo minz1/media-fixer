@@ -144,7 +144,7 @@ func TestRun_MaxAutonomousActionsLeavesEscalationToTheService(t *testing.T) {
 	inc := seedRunIncident(t, database)
 	ctx := context.Background()
 
-	result, _, err := ag.Run(ctx, inc, nil)
+	result, _, err := runOnce(ctx, ag, inc)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestRun_EmptyChoicesIsAnErrorNotAPanic(t *testing.T) {
 	inc := seedRunIncident(t, database)
 
 	// A panic here fails the test by unwinding it, which is the point.
-	_, _, err := ag.Run(context.Background(), inc, nil)
+	_, _, err := runOnce(context.Background(), ag, inc)
 	if err == nil {
 		t.Fatal("Run returned nil error for a response with no choices, want an error")
 	}
@@ -291,7 +291,7 @@ func TestRun_ActionBudgetCountsActionsRecordedOutsideThisRun(t *testing.T) {
 		}
 	}
 
-	result, _, err := ag.Run(ctx, inc, nil)
+	result, _, err := runOnce(ctx, ag, inc)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestRunSkipsImmediateVerifyForStuckRead(t *testing.T) {
 			ag, database := newRunTestAgent(t, llm)
 			inc := seedRunIncident(t, database)
 			inc.What = tc.what
-			result, _, err := ag.Run(context.Background(), inc, nil)
+			result, _, err := runOnce(context.Background(), ag, inc)
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}

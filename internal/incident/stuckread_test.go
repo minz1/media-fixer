@@ -55,7 +55,7 @@ func newStuckReadAgent(t *testing.T) *stuckReadAgent {
 
 func (a *stuckReadAgent) Run(
 	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	if a.logTo != nil {
 		_ = a.logTo.LogAction(ctx, &db.ActionLog{
 			IncidentID: inc.ID, Action: a.action, TriggeredBy: "agent", Status: db.ActionApplied,
@@ -66,9 +66,9 @@ func (a *stuckReadAgent) Run(
 	a.ranAt = time.Now()
 	a.mu.Unlock()
 	a.started <- inc.ID
-	return &agent.DiagnosticResult{
+	return exitOf(&agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high", PrimaryAction: a.action, PrimaryReason: "test",
-	}, nil, nil
+	}, nil, nil)
 }
 
 func (a *stuckReadAgent) VerifyResolved(context.Context, string, string, *agent.FixSignature) bool {

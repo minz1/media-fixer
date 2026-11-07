@@ -292,13 +292,8 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 			}
 		}
 
-		result, conversation, runErr := s.runDiagnosis(ctx, inc, seed)
-		if runErr != nil {
-			s.handleRunError(ctx, inc, runErr)
-			return
-		}
-
-		outcome := s.evaluateDiagnosis(ctx, inc, result, conversation, attempt, len(retryDelays))
+		exit := s.runDiagnosis(ctx, inc, seed)
+		outcome := s.routeExit(ctx, inc, exit, attempt, len(retryDelays))
 		if outcome.done {
 			return
 		}
@@ -314,9 +309,9 @@ func (s *Service) runAgent(ctx context.Context, inc *db.Incident, seed []openai.
 // is serialized.
 func (s *Service) runDiagnosis(
 	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	if err := s.runs.acquireGlobal(ctx); err != nil {
-		return nil, nil, err
+		return agent.RunExit{State: agent.RunSuperseded, Err: err}
 	}
 	defer s.runs.releaseGlobal()
 	return s.agent.Run(ctx, inc, seed)
@@ -705,19 +700,27 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, c card.
 	}
 }
 
-// handleRunError distinguishes a superseded run from a genuine diagnostic
-// failure. A run is superseded either because its context was cancelled by a
-// newer rerun (LLM call fails with [context.Canceled]) or because it lost the
-// race to claim the incident's status before starting
-// (agent.ErrIncidentNotInvestigatable). Either way it exits quietly instead of
-// escalating to the owner.
-func (s *Service) handleRunError(ctx context.Context, inc *db.Incident, err error) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, agent.ErrIncidentNotInvestigatable) {
-		s.log.InfoContext(ctx, "run superseded, exiting quietly", "incident", inc.ID)
-		return
+func (s *Service) routeExit(
+	ctx context.Context, inc *db.Incident, exit agent.RunExit, attempt, maxAttempts int,
+) diagnosisOutcome {
+	switch exit.State {
+	case agent.RunConcluded, agent.RunBudgetTripped, agent.RunStoppedNoTools, agent.RunExhausted:
+		if exit.Finding != nil {
+			return s.evaluateDiagnosis(ctx, inc, exit.Finding, exit.Conversation, attempt, maxAttempts)
+		}
+		s.handleAgentError(ctx, inc, errRunNotExited)
+	case agent.RunLLMFailed, agent.RunBatchFailed, agent.RunClaimFailed:
+		s.handleAgentError(ctx, inc, exit.Err)
+	case agent.RunSuperseded, agent.RunNotClaimed:
+		s.log.InfoContext(ctx, "run superseded, exiting quietly", "incident", inc.ID, "exit", string(exit.State))
+	case agent.RunClaiming, agent.RunAwaitingReply, agent.RunInBatch:
+		s.log.ErrorContext(ctx, "agent run returned without exiting", "incident", inc.ID, "state", string(exit.State))
+		s.handleAgentError(ctx, inc, errRunNotExited)
 	}
-	s.handleAgentError(ctx, inc, err)
+	return diagnosisOutcome{done: true}
 }
+
+var errRunNotExited = errors.New("the agent run returned without an exit")
 
 func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err error) {
 	s.log.ErrorContext(ctx, "agent error", "incident", inc.ID, "error", err)

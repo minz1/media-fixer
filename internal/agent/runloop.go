@@ -13,8 +13,6 @@ import (
 
 const journalWriteTimeout = 5 * time.Second
 
-var errRunNotExited = errors.New("the run ended without an exit")
-
 type runLoop struct {
 	a         *Agent
 	inc       *db.Incident
@@ -32,11 +30,6 @@ type runLoop struct {
 
 func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), journalWriteTimeout)
-}
-
-func (a *Agent) runExit(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) RunExit {
-	l := &runLoop{a: a, inc: inc, snap: runSnapshot{State: RunClaiming}, seen: make(map[string]int)}
-	return l.run(ctx, seed)
 }
 
 func (l *runLoop) run(ctx context.Context, seed []openai.ChatCompletionMessage) RunExit {
@@ -168,20 +161,4 @@ func manualFinding(s RunState, err error) *DiagnosticResult {
 		EscalateAction:   EscalateManualInvestigation,
 		RequiresApproval: true,
 	}
-}
-
-func (e RunExit) legacy() (*DiagnosticResult, []openai.ChatCompletionMessage, error) {
-	switch e.State {
-	case RunConcluded, RunBudgetTripped, RunStoppedNoTools, RunExhausted:
-		return e.Finding, e.Conversation, nil
-	case RunLLMFailed, RunBatchFailed, RunClaimFailed, RunNotClaimed:
-		return nil, e.Conversation, e.Err
-	case RunSuperseded:
-		if e.Err == nil {
-			return nil, e.Conversation, context.Canceled
-		}
-		return nil, e.Conversation, e.Err
-	case RunClaiming, RunAwaitingReply, RunInBatch:
-	}
-	return nil, e.Conversation, errRunNotExited
 }

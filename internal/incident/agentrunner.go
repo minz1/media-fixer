@@ -16,8 +16,7 @@ import (
 type AgentRunner interface {
 	// Run executes the diagnostic loop for an incident, optionally seeded with a
 	// prior conversation, and returns the result plus the full conversation.
-	Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) (
-		*agent.DiagnosticResult, []openai.ChatCompletionMessage, error)
+	Run(ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage) agent.RunExit
 	// VerifyResolved reports whether a previously-applied fix now looks
 	// resolved, by comparing the item's current state (itemID, title — title
 	// is used for a best-effort *arr file-existence check) against pre (the

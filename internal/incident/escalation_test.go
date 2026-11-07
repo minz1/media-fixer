@@ -42,12 +42,12 @@ func newEscalationAgent() *escalationAgent {
 
 func (a *escalationAgent) Run(
 	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+) agent.RunExit {
 	if a.runBlocks {
 		a.runStart <- struct{}{}
 		<-ctx.Done()
 	}
-	return nil, nil, ctx.Err()
+	return exitOf(nil, nil, ctx.Err())
 }
 
 func (a *escalationAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
@@ -90,6 +90,13 @@ type escalationFixture struct {
 
 func newEscalationFixture(t *testing.T, ag incident.AgentRunner) *escalationFixture {
 	t.Helper()
+	return newEscalationFixtureNotifier(t, ag, &captureNotifier{})
+}
+
+func newEscalationFixtureNotifier(
+	t *testing.T, ag incident.AgentRunner, notif *captureNotifier,
+) *escalationFixture {
+	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +110,7 @@ func newEscalationFixture(t *testing.T, ag incident.AgentRunner) *escalationFixt
 	base, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	jrnl := journal.New(database)
-	svc := incident.NewService(base, database, jrnl, ag, nil, nil, &captureNotifier{}, slog.New(slog.DiscardHandler))
+	svc := incident.NewService(base, database, jrnl, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
 	return &escalationFixture{svc: svc, db: database, jrnl: jrnl, dbPath: f.Name()}
 }
 

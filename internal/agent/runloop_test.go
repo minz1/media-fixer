@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	openai "github.com/sashabaranov/go-openai"
+
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 )
@@ -185,7 +187,7 @@ func TestA3_5_TextOnlyReplyExitsStoppedNoTools(t *testing.T) {
 	ag, database := newRunTestAgent(t, &scriptedLLM{responses: []string{textResponse("I think it is fine.")}})
 	inc := seedRunIncident(t, database)
 
-	result, _, err := ag.Run(context.Background(), inc, nil)
+	result, _, err := runOnce(context.Background(), ag, inc)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -227,7 +229,7 @@ func TestA4_4_RunFinishedRoundsMatchLLMRounds(t *testing.T) {
 			if c.spent {
 				spendBudget(t, database, inc.ID)
 			}
-			_, _, _ = ag.Run(context.Background(), inc, nil)
+			_, _, _ = runOnce(context.Background(), ag, inc)
 			tr := traceRuns(t, database, inc.ID)
 			checkJ1J2(t, tr)
 			if tr.last.Exit != c.exit || tr.last.Rounds != c.rounds {
@@ -250,7 +252,7 @@ func TestA4_8_SupersededRunStillRecordsRunFinished(t *testing.T) {
 		cancel()
 	}()
 
-	_, _, err := ag.Run(ctx, inc, nil)
+	_, _, err := runOnce(ctx, ag, inc)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Run error = %v, want it to wrap context.Canceled", err)
 	}
@@ -271,7 +273,7 @@ func TestA3_8_BudgetTripReplacesOldFinding(t *testing.T) {
 	seedOldFinding(t, database, inc.ID)
 	spendBudget(t, database, inc.ID)
 
-	if _, _, err := ag.Run(context.Background(), inc, nil); err != nil {
+	if _, _, err := runOnce(context.Background(), ag, inc); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	checkJ4(t, database, inc.ID, "max autonomous actions reached without resolution")
@@ -283,7 +285,7 @@ func TestA3_8_LLMFailureReplacesOldFinding(t *testing.T) {
 	inc := seedRunIncident(t, database)
 	seedOldFinding(t, database, inc.ID)
 
-	if _, _, err := ag.Run(context.Background(), inc, nil); err == nil {
+	if _, _, err := runOnce(context.Background(), ag, inc); err == nil {
 		t.Fatal("Run succeeded against a failing LLM")
 	}
 	checkJ4(t, database, inc.ID, "the LLM call failed")
@@ -302,7 +304,7 @@ func TestA3_8_CancelAroundReplyEndsSupersededWithoutFinding(t *testing.T) {
 	inc := seedRunIncident(t, database)
 	seedOldFinding(t, database, inc.ID)
 
-	_, _, _ = ag.Run(ctx, inc, nil)
+	_, _, _ = runOnce(ctx, ag, inc)
 	tr := traceRuns(t, database, inc.ID)
 	checkJ1J2(t, tr)
 	if tr.last.Exit != "superseded" {
@@ -317,7 +319,7 @@ func TestA3_11_ExhaustedReplacesOldFinding(t *testing.T) {
 	inc := seedRunIncident(t, database)
 	seedOldFinding(t, database, inc.ID)
 
-	if _, _, err := ag.Run(context.Background(), inc, nil); err != nil {
+	if _, _, err := runOnce(context.Background(), ag, inc); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	checkJ4(t, database, inc.ID, "diagnostic loop exhausted without conclusion")
@@ -342,7 +344,7 @@ func TestA7_8_SyntheticExitFindingsArePersisted(t *testing.T) {
 			if c.spent {
 				spendBudget(t, database, inc.ID)
 			}
-			result, _, err := ag.Run(context.Background(), inc, nil)
+			result, _, err := runOnce(context.Background(), ag, inc)
 			if err != nil || result == nil {
 				t.Fatalf("Run = %+v, %v", result, err)
 			}
@@ -363,7 +365,7 @@ func TestRun_NotClaimedRecordsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err := ag.Run(context.Background(), inc, nil)
+	_, _, err := runOnce(context.Background(), ag, inc)
 	if !errors.Is(err, agent.ErrIncidentNotInvestigatable) {
 		t.Errorf("Run error = %v, want ErrIncidentNotInvestigatable", err)
 	}
@@ -403,8 +405,15 @@ func TestLLMCall_DoneContextReturnsWithoutRetryWarn(t *testing.T) {
 		cancel()
 	}()
 
-	_, _, _ = ag.Run(ctx, inc, nil)
+	_, _, _ = runOnce(ctx, ag, inc)
 	if strings.Contains(logs.String(), "llm transient error, retrying") {
 		t.Errorf("a cancelled run logged a retry warning:\n%s", logs.String())
 	}
+}
+
+func runOnce(
+	ctx context.Context, ag *agent.Agent, inc *db.Incident,
+) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
+	exit := ag.Run(ctx, inc, nil)
+	return exit.Finding, exit.Conversation, exit.Err
 }

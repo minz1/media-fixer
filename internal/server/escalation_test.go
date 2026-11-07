@@ -46,8 +46,8 @@ type stubEscalationAgent struct {
 
 func (a *stubEscalationAgent) Run(
 	_ context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage,
-) (*agent.DiagnosticResult, []openai.ChatCompletionMessage, error) {
-	return nil, nil, nil
+) agent.RunExit {
+	return exitOf(nil, nil, nil)
 }
 
 func (a *stubEscalationAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {
