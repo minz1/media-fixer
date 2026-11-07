@@ -189,7 +189,7 @@ func (s *Service) launchVerification(inc *db.Incident, result *agent.DiagnosticR
 	ctx, tok, _ := s.runs.supersede(inc.ID)
 	started := s.work.goNamed("verify:"+inc.ShortID(), func(context.Context) {
 		defer s.runs.end(inc.ID, tok)
-		s.runVerification(ctx, inc, result)
+		s.legacyVerification(ctx, inc, result)
 	})
 	if !started {
 		s.runs.end(inc.ID, tok)

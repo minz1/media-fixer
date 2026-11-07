@@ -47,7 +47,7 @@ func newDrainingAgent(d *db.DB) *drainingAgent {
 }
 
 func (a *drainingAgent) Run(
-	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, _ agent.Gate,
+	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, gate agent.Gate,
 ) agent.RunExit {
 	a.mu.Lock()
 	a.seeds = append(a.seeds, seed)
@@ -62,7 +62,7 @@ func (a *drainingAgent) Run(
 	if err := a.db.SetAutonomousLocked(context.WithoutCancel(ctx), inc.ID, false); err == nil {
 		a.finished.Store(true)
 	}
-	return exitOf(nil, nil, context.Canceled)
+	return gatedExit(ctx, gate, nil, nil, context.Canceled)
 }
 
 func waitStarted(t *testing.T, ch <-chan string) string {

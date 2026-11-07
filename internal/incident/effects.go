@@ -111,7 +111,7 @@ func (r *effectRun) run(ctx context.Context, e lifecycle.Effect) {
 	case lifecycle.CancelRun:
 		s.runs.cancelBelow(id, e.Gen)
 	case lifecycle.ScheduleCheck:
-		s.scheduleCheck(r.inc, e)
+		s.scheduleCheck(id, e)
 	case lifecycle.ExecutePlan:
 	case lifecycle.NotifyReporters:
 		r.notifyReporters(ctx, e)
@@ -139,10 +139,11 @@ func (s *Service) launchRun(inc *db.Incident, e lifecycle.Effect) {
 	s.startRun(runCtx, tok, inc, e.Gen, seed)
 }
 
-func (s *Service) scheduleCheck(inc *db.Incident, e lifecycle.Effect) {
-	id, gen, kind := inc.ID, e.Gen, e.Check
+func (s *Service) scheduleCheck(id string, e lifecycle.Effect) {
+	gen, kind := e.Gen, e.Check
+	short := (&db.Incident{ID: id}).ShortID()
 	s.runs.armCheck(id, gen, e.At, func() {
-		if !s.work.goNamed("check:"+inc.ShortID(), func(ctx context.Context) { s.runCheck(ctx, id, gen, kind) }) {
+		if !s.work.goNamed("check:"+short, func(ctx context.Context) { s.runCheck(ctx, id, gen, kind) }) {
 			s.log.Info("check not started, shutting down", "incident", id, "check", string(kind))
 		}
 	})
@@ -274,10 +275,6 @@ func (r *effectRun) seerrComment(ctx context.Context) {
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
 }
 
-func (s *Service) runCheck(ctx context.Context, id string, gen int64, kind lifecycle.CheckKind) {
-	s.log.InfoContext(ctx, "check fired", "incident", id, "gen", gen, "check", string(kind))
-}
-
 const (
 	toneInfo    = "info"
 	toneSuccess = "success"
@@ -295,4 +292,23 @@ func toneOf(s string) card.Tone {
 		return card.Alert
 	}
 	return card.Info
+}
+func toneName(t card.Tone) string {
+	switch t {
+	case card.Success:
+		return toneSuccess
+	case card.Warn:
+		return toneWarn
+	case card.Alert:
+		return toneAlert
+	case card.Info:
+	}
+	return toneInfo
+}
+func noticeOf(c card.Card) lifecycle.Notice {
+	n := lifecycle.Notice{Kind: lifecycle.NoticeCard, Tone: toneName(c.Tone), Title: c.Title, Body: c.Body}
+	for _, f := range c.Fields {
+		n.Fields = append(n.Fields, lifecycle.Field{Name: f.Name, Value: f.Value})
+	}
+	return n
 }

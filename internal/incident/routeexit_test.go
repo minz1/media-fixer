@@ -134,3 +134,24 @@ func TestRunAgent_BudgetTrippedExitReachesOwner(t *testing.T) {
 		t.Errorf("status = %s, want manual_test_needed", got)
 	}
 }
+
+func gatedExit(
+	ctx context.Context,
+	gate agent.Gate,
+	result *agent.DiagnosticResult,
+	conv []openai.ChatCompletionMessage,
+	err error,
+) agent.RunExit {
+	exit := exitOf(result, conv, err)
+	if exit.State == agent.RunSuperseded || exit.State == agent.RunNotClaimed {
+		return exit
+	}
+	if cerr := gate.Claim(ctx); cerr != nil {
+		if errors.Is(cerr, agent.ErrIncidentNotInvestigatable) {
+			return agent.RunExit{State: agent.RunNotClaimed, Err: cerr}
+		}
+		return agent.RunExit{State: agent.RunClaimFailed, Err: cerr}
+	}
+	exit.Started = true
+	return exit
+}

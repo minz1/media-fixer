@@ -445,7 +445,7 @@ func (s *Service) evaluateDiagnosis(
 				inc.Title, inc.ShortID(), attempt+1,
 			), "",
 				card.Field{Name: fieldRootCause, Value: result.RootCause},
-				card.Field{Name: "Action needed", Value: agent.EscalationSummary(result)}))
+				card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)}))
 			return diagnosisOutcome{done: true}
 		}
 		feedback := openai.ChatCompletionMessage{
@@ -627,13 +627,13 @@ func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, acti
 	s.resolveSeerrIssues(ctx, inc)
 }
 
-// runVerification re-checks, up to the configured number of times, whether a deferred
+// legacyVerification re-checks, up to the configured number of times, whether a deferred
 // non-destructive fix (e.g. a library scan) resolved the problem. While checking,
 // the incident sits in "verifying". On success it is marked fixed and reporters
 // are told. If it never verifies but a scan is still running, reporters get a
 // friendly ETA and the incident stays in "verifying" — it is NOT escalated. Only
 // when nothing is in progress and it is still broken do we escalate to the owner.
-func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+func (s *Service) legacyVerification(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
 	// Same precedence as handleCompleteDiagnosis: the incident's own item
 	// wins, so verification can't be pointed at a different item than the
 	// pre-fix baseline was captured against.
@@ -776,8 +776,8 @@ func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *
 		"🔍 Incident **%s** (#%s) needs your attention%s.", inc.Title, inc.ShortID(), note,
 	), "",
 		card.Field{Name: fieldRootCause, Value: result.RootCause},
-		card.Field{Name: "Action needed", Value: agent.EscalationSummary(result)},
-		card.Field{Name: "Reason", Value: result.PrimaryReason}))
+		card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)},
+		card.Field{Name: fieldReason, Value: result.PrimaryReason}))
 }
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
@@ -1116,7 +1116,7 @@ func (s *Service) buildReinvestigateSeed(
 // but has stopped making progress, which this cannot see (nothing here is
 // wrong from the process's point of view).
 func (s *Service) RecoverZombies(ctx context.Context) {
-	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened, db.StatusVerifying} {
+	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened} {
 		incidents, err := s.db.FindByStatus(ctx, status)
 		if ctx.Err() != nil {
 			return
@@ -1129,9 +1129,6 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			if status == db.StatusVerifying && inc.What != agent.WhatStuckRead {
-				continue
-			}
 			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
 			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil && ctx.Err() == nil {
 				s.logRerunErr(ctx, "zombie rerun failed", inc.ID, rerunErr)
@@ -1139,6 +1136,7 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 		}
 	}
 	s.recoverOpen(ctx)
+	s.armDueChecks(ctx)
 }
 
 func (s *Service) recoverOpen(ctx context.Context) {
@@ -1249,6 +1247,7 @@ func (s *Service) backgroundSweepLoop(base context.Context) {
 			return
 		case <-ticker.C:
 			s.SweepStaleRuns(base)
+			s.armDueChecks(base)
 			s.AdvancePendingOutcomes(base)
 			s.AdvanceReporterProgress(base, time.Now())
 			s.endLockEpisode(base)

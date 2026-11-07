@@ -2,6 +2,7 @@ package incident
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -155,7 +156,11 @@ func (s *Service) ApplyForTest(ctx context.Context, id string, ev lifecycle.Even
 
 func (s *Service) ScheduleCheckForTest(inc *db.Incident, gen int64, at time.Time) {
 	s.scheduleCheck(
-		inc,
+		inc.ID,
 		lifecycle.Effect{Kind: lifecycle.ScheduleCheck, Gen: gen, At: at, Check: lifecycle.CheckVerify},
 	)
 }
+
+func (s *Service) ArmedForTest(id string) int64 { return s.runs.liveness().armed[id] }
+
+func (s *Service) LogForTest() *slog.Logger { return s.log }

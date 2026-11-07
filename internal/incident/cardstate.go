@@ -197,7 +197,7 @@ func replaceSections(p *client.ReplacePlan, what string) []card.Field {
 	default:
 		readability = fmt.Sprintf("None of the %d files probed read fine", r.Probed)
 	}
-	secs := []card.Field{{Name: "Readability", Value: readability}, {Name: "Reason", Value: p.Reason}}
+	secs := []card.Field{{Name: "Readability", Value: readability}, {Name: fieldReason, Value: p.Reason}}
 	for _, f := range p.Files {
 		secs = append(secs, card.Field{Name: "Delete", Value: "`" + f.Path + "`"})
 	}

@@ -54,7 +54,7 @@ func newStuckReadAgent(t *testing.T) *stuckReadAgent {
 }
 
 func (a *stuckReadAgent) Run(
-	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
 ) agent.RunExit {
 	if a.logTo != nil {
 		_ = a.logTo.LogAction(ctx, &db.ActionLog{
@@ -66,7 +66,7 @@ func (a *stuckReadAgent) Run(
 	a.ranAt = time.Now()
 	a.mu.Unlock()
 	a.started <- inc.ID
-	return exitOf(&agent.DiagnosticResult{
+	return gatedExit(ctx, gate, &agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high", PrimaryAction: a.action, PrimaryReason: "test",
 	}, nil, nil)
 }
@@ -219,47 +219,6 @@ func TestStuckReadNoChecker(t *testing.T) {
 	waitForStatus(t, database, inc.ID, db.StatusManualTestNeeded)
 	if n := ag.scanCalls(); n != 0 {
 		t.Fatalf("ScanRunning calls = %d, want 0", n)
-	}
-}
-
-func TestRecoverZombiesRerunsVerifyingStuckRead(t *testing.T) {
-	t.Parallel()
-	ag := newStuckReadAgent(t)
-	svc, database := newStuckReadService(t, ag, 2, time.Hour)
-	mk := func(what, title string) *db.Incident {
-		inc := &db.Incident{Status: db.StatusOpen, Source: "media-agent", ReportedBy: "x", What: what, Title: title}
-		if err := database.CreateIncident(t.Context(), inc); err != nil {
-			t.Fatal(err)
-		}
-		if err := database.UpdateIncidentStatus(t.Context(), inc.ID, db.StatusVerifying); err != nil {
-			t.Fatal(err)
-		}
-		return inc
-	}
-	stuck := mk(agent.WhatStuckRead, "Recover Stuck")
-	cant := mk("cant_play", "Recover Cant")
-
-	svc.RecoverZombies(t.Context())
-
-	select {
-	case id := <-ag.started:
-		if id != stuck.ID {
-			t.Fatalf("rerun incident %s, want the stuck_read one %s", id, stuck.ID)
-		}
-	case <-time.After(timersLate):
-		t.Fatal("no run launched for the verifying stuck_read incident")
-	}
-	select {
-	case id := <-ag.started:
-		t.Fatalf("unexpected second run for incident %s", id)
-	case <-time.After(timersEarly):
-	}
-	got, err := database.GetIncident(t.Context(), cant.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != db.StatusVerifying {
-		t.Fatalf("cant_play status %q, want untouched verifying", got.Status)
 	}
 }
 

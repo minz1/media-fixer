@@ -33,7 +33,7 @@ type scriptedPendingOutcomeAgent struct {
 }
 
 func (a *scriptedPendingOutcomeAgent) Run(
-	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
 ) agent.RunExit {
 	if a.searchParams != nil {
 		_ = a.database.LogAction(ctx, &db.ActionLog{
@@ -47,7 +47,7 @@ func (a *scriptedPendingOutcomeAgent) Run(
 	if a.runCalls != nil {
 		a.runCalls <- struct{}{}
 	}
-	return exitOf(a.runResult, nil, nil)
+	return gatedExit(ctx, gate, a.runResult, nil, nil)
 }
 
 func (a *scriptedPendingOutcomeAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {

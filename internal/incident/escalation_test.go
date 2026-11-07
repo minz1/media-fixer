@@ -41,13 +41,13 @@ func newEscalationAgent() *escalationAgent {
 }
 
 func (a *escalationAgent) Run(
-	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, _ agent.Gate,
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
 ) agent.RunExit {
 	if a.runBlocks {
 		a.runStart <- struct{}{}
 		<-ctx.Done()
 	}
-	return exitOf(nil, nil, ctx.Err())
+	return gatedExit(ctx, gate, nil, nil, ctx.Err())
 }
 
 func (a *escalationAgent) VerifyResolved(_ context.Context, _, _ string, _ *agent.FixSignature) bool {

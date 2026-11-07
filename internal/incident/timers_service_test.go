@@ -105,9 +105,9 @@ type countingVerifyAgent struct {
 }
 
 func (a *countingVerifyAgent) Run(
-	context.Context, *db.Incident, []openai.ChatCompletionMessage, agent.Gate,
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
 ) agent.RunExit {
-	return exitOf(&agent.DiagnosticResult{
+	return gatedExit(ctx, gate, &agent.DiagnosticResult{
 		RootCause: "test", Confidence: "high",
 		PrimaryAction: "run-a", PrimaryReason: "test",
 		VerifyAfterSeconds: 1,

@@ -161,9 +161,11 @@ func (sd *seeder) drive(sp Spec) {
 func (sd *seeder) conclude(sp Spec) {
 	switch sp.State {
 	case lifecycle.Verifying:
-		sd.finish(
-			lifecycle.Outcome{Kind: lifecycle.OutcomeVerify, Spec: lifecycle.VerifySpec{Kind: lifecycle.VerifyGeneric}},
-		)
+		spec := lifecycle.VerifySpec{Kind: lifecycle.VerifyGeneric}
+		if sp.What == lifecycle.WhatStuckRead {
+			spec.Kind = lifecycle.VerifyStuckRead
+		}
+		sd.finish(lifecycle.Outcome{Kind: lifecycle.OutcomeVerify, Spec: spec})
 	case lifecycle.AwaitingDownload:
 		sd.finish(lifecycle.Outcome{Kind: lifecycle.OutcomeAwaitDownload, Target: Target()})
 	case lifecycle.AgentFixed:
