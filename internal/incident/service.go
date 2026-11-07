@@ -1184,5 +1184,11 @@ func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
 	if paused {
 		v = "true"
 	}
-	return s.db.SetSetting(ctx, "autonomous_paused", v)
+	if err := s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
+		return err
+	}
+	if s.journal != nil {
+		s.journal.AutonomousPauseChanged()
+	}
+	return nil
 }

@@ -63,6 +63,8 @@ const (
 	// purely a live-update signal for incidentEvents (see StatusChanged's
 	// doc comment); no reader treats its payload as authoritative.
 	KindStatusChanged Kind = "status_changed"
+
+	KindAutonomousPauseChanged Kind = "autonomous_pause_changed"
 )
 
 // Journal owns the event log: appending (with atomic projection writes) and
@@ -194,6 +196,16 @@ func (j *Journal) notify(e *db.Event) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	send(j.subs[e.IncidentID], e)
+	send(j.allSubs, e)
+}
+
+func (j *Journal) AutonomousPauseChanged() {
+	e := &db.Event{At: time.Now(), Kind: string(KindAutonomousPauseChanged)}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, subs := range j.subs {
+		send(subs, e)
+	}
 	send(j.allSubs, e)
 }
 
