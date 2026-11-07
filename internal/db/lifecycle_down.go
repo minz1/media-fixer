@@ -75,8 +75,15 @@ type downReport struct {
 }
 
 func MigrateDown(ctx context.Context, path string, version int, out io.Writer) error {
-	if version != migIncidentLifecycle {
-		return fmt.Errorf("%w: only migration %d can be rolled back", ErrDownRefused, migIncidentLifecycle)
+	var run func(context.Context, *sql.Conn, string, io.Writer) error
+	switch version {
+	case migIncidentLifecycle:
+		run = migrateDownOn
+	case migOperations:
+		run = migrateDown22On
+	default:
+		return fmt.Errorf("%w: only migrations %d and %d can be rolled back",
+			ErrDownRefused, migIncidentLifecycle, migOperations)
 	}
 	lock, err := takeLock(path, true)
 	if err != nil {
@@ -97,7 +104,7 @@ func MigrateDown(ctx context.Context, path string, version int, out io.Writer) e
 		return err
 	}
 	defer func() { _ = pinned.Close() }()
-	return migrateDownOn(ctx, pinned, path, out)
+	return run(ctx, pinned, path, out)
 }
 
 func migrateDownOn(ctx context.Context, conn *sql.Conn, path string, out io.Writer) error {
@@ -123,7 +130,7 @@ func migrateDownOn(ctx context.Context, conn *sql.Conn, path string, out io.Writ
 	if rep.changed, err = queryIDs(ctx, conn, downChangedIDs); err != nil {
 		return err
 	}
-	if rep.backup, err = backupInto(ctx, conn, path); err != nil {
+	if rep.backup, err = backupInto(ctx, conn, path, migIncidentLifecycle); err != nil {
 		return err
 	}
 	if err = rebuildDown(ctx, conn); err != nil {
@@ -190,8 +197,8 @@ func downState(ctx context.Context, conn *sql.Conn) (int, error) {
 		ErrDownRefused, maxVersion.Int64, saved, versionCol)
 }
 
-func backupInto(ctx context.Context, conn *sql.Conn, path string) (string, error) {
-	dest := fmt.Sprintf("%s.pre-down-21-%s.db", path, time.Now().UTC().Format("20060102T150405"))
+func backupInto(ctx context.Context, conn *sql.Conn, path string, version int) (string, error) {
+	dest := fmt.Sprintf("%s.pre-down-%d-%s.db", path, version, time.Now().UTC().Format("20060102T150405"))
 	if _, err := os.Stat(dest); err == nil {
 		return "", fmt.Errorf("%w: backup %s already exists", ErrDownRefused, dest)
 	} else if !errors.Is(err, os.ErrNotExist) {

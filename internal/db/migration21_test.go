@@ -197,8 +197,8 @@ func TestMigration21_ForeignKeyCheckBeforeCommit(t *testing.T) {
 	d := openDB(t, path)
 	d.Close()
 	dangle(raw)
-	strip22(t, path)
 	raw.Close()
+	strip22(t, path)
 	var out bytes.Buffer
 	if err := db.MigrateDown(context.Background(), path, 21, &out); err == nil ||
 		!strings.Contains(err.Error(), "foreign_key_check") {

@@ -404,12 +404,13 @@ func TestMigrateDown_PrintsCountsChangedRowsAndIdsOnly(t *testing.T) {
 func strip22(t *testing.T, path string) {
 	t.Helper()
 	raw := rawOpen(t, path)
-	for _, q := range []string{
-		`DROP INDEX IF EXISTS operations_one_running`, `DROP INDEX IF EXISTS operations_subject`,
-		`DROP TABLE IF EXISTS operations`,
-		`DELETE FROM schema_version WHERE version = 22`,
-	} {
-		mustExec(t, raw, q)
-	}
+	v := maxVersion(t, raw)
 	raw.Close()
+	if v != 22 {
+		return
+	}
+	var out bytes.Buffer
+	if err := db.MigrateDown(context.Background(), path, 22, &out); err != nil {
+		t.Fatalf("migrate down 22: %v", err)
+	}
 }
