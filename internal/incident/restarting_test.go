@@ -43,7 +43,9 @@ func TestA10_10_ApproveDuringShutdownIsRefused(t *testing.T) {
 	<-ag.runStart
 
 	done := make(chan error, 1)
-	go func() { done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	go func() {
+		done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp, fx.svc.CurrentVersion(context.Background(), inc.ID))
+	}()
 	time.Sleep(escalationSettle)
 	shutdownNow(t, fx.svc)
 
@@ -67,7 +69,9 @@ func TestShutdown_WaitsForInFlightApprove(t *testing.T) {
 	fp := fx.preview(t, inc.ID)
 
 	approved := make(chan error, 1)
-	go func() { approved <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	go func() {
+		approved <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp, fx.svc.CurrentVersion(context.Background(), inc.ID))
+	}()
 	<-ag.execStart
 	stopped := make(chan error, 1)
 	go func() {
@@ -115,7 +119,9 @@ func TestShutdown_DoesNotCancelApprovedPlanCtx(t *testing.T) {
 	fp := fx.preview(t, inc.ID)
 
 	approved := make(chan error, 1)
-	go func() { approved <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	go func() {
+		approved <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp, fx.svc.CurrentVersion(context.Background(), inc.ID))
+	}()
 	<-ag.execStart
 	stopped := make(chan struct{})
 	go func() {
@@ -177,7 +183,7 @@ func TestA10_10_OwnerActionsRefusedBeforeAnyWrite(t *testing.T) {
 		{"Unlock", func() error { return fx.svc.Unlock(ctx, inc.ID, incident.Version{}) }},
 		{"KeepSearching", func() error { return fx.svc.KeepSearching(ctx, inc.ID, incident.Version{}) }},
 		{"PreviewEscalation", func() error {
-			_, _, err := fx.svc.PreviewEscalation(ctx, inc.ID)
+			_, _, err := fx.svc.PreviewEscalation(ctx, inc.ID, fx.svc.CurrentVersion(ctx, inc.ID))
 			return err
 		}},
 		{"SetAutonomousPaused", func() error { return fx.svc.SetAutonomousPaused(ctx, true) }},

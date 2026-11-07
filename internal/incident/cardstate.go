@@ -148,7 +148,7 @@ func (s *Service) freshPlan(ctx context.Context, inc *db.Incident, action string
 	if err != nil {
 		return cardPlan{}, false, err
 	}
-	expires := at.Add(escalationPlanTTL)
+	expires := at.Add(s.minutes(planTTLMinutes))
 	if time.Now().After(expires) {
 		return cardPlan{}, false, nil
 	}
@@ -269,7 +269,7 @@ func (s *Service) cardAction(ctx context.Context, id string, a card.Action) (car
 		}
 		return done("🔓 Unlocked")
 	case verbPreview, verbRefresh:
-		if _, _, err := s.PreviewEscalation(ctx, id); err != nil {
+		if _, _, err := s.PreviewEscalation(ctx, id, v); err != nil {
 			return card.Result{}, err
 		}
 		return done("📋 Plan ready")
@@ -285,12 +285,12 @@ func (s *Service) cardAction(ctx context.Context, id string, a card.Action) (car
 func (s *Service) cardApprove(ctx context.Context, id string, a card.Action) (card.Result, error) {
 	fp := a.Args[fpArgs-1]
 	if a.Verb == verbConfirm {
-		if err := s.ApproveEscalation(ctx, id, fp); err != nil {
+		if err := s.ApproveEscalation(ctx, id, fp, s.CurrentVersion(ctx, id)); err != nil {
 			return card.Result{}, err
 		}
 		return card.Result{Line: fmt.Sprintf("🚀 Approved · <t:%d:t>", time.Now().Unix())}, nil
 	}
-	_, result, _, err := s.approvable(ctx, id, fp)
+	result, err := s.approvable(ctx, id, fp)
 	if err != nil {
 		return card.Result{}, err
 	}

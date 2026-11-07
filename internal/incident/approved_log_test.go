@@ -126,7 +126,7 @@ func (fx *approvedFixture) approve(t *testing.T, id string, plan any) error {
 	if setErr := fx.db.SetEscalationPlan(ctx, id, planJSON); setErr != nil {
 		t.Fatal(setErr)
 	}
-	return fx.svc.ApproveEscalation(ctx, id, card.Fingerprint(planJSON))
+	return fx.svc.ApproveEscalation(ctx, id, card.Fingerprint(planJSON), fx.svc.CurrentVersion(ctx, id))
 }
 
 func (fx *approvedFixture) actions(t *testing.T, id string) []*db.ActionLog {

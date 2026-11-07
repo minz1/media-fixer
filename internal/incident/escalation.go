@@ -9,19 +9,12 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
-// escalationVerifyETAMinutes is the reporter ETA after an approved fix: a delete, re-search and
-// re-download lands slower than a library scan.
-const (
-	escalationVerifyETAMinutes = 15
-	// escalationPlanTTL bounds how long an owner's approval stays valid. The
-	// plan names specific file IDs, so approving one from days ago would
-	// delete whatever those IDs point at now. Long enough for a human to
-	// think it over, short enough that the library hasn't moved on.
-	escalationPlanTTL = time.Hour
-)
+const nullResult = "null"
 
 var (
 	errNotAwaitingDecision = errors.New("this incident is not waiting for an escalation decision")
@@ -34,7 +27,7 @@ var (
 // PreviewEscalation resolves an incident's recommended escalation action into
 // a concrete, read-only plan (e.g. exactly which files would be deleted) for
 // the dashboard's Preview button. It makes no changes.
-func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string, error) {
+func (s *Service) PreviewEscalation(ctx context.Context, id string, v Version) (any, string, error) {
 	leave, err := s.ownerSection("preview", id)
 	if err != nil {
 		return nil, "", err
@@ -47,6 +40,9 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string
 	if inc.Status != db.StatusManualTestNeeded {
 		return nil, "", errNotAwaitingDecision
 	}
+	if r := lifecycle.Reason(inc.Reason); r == lifecycle.ReasonPlanInterrupted || r == lifecycle.ReasonPlanPartial {
+		return nil, "", lifecycle.ErrPlanHalfRun
+	}
 	result, err := escalationResult(inc)
 	if err != nil {
 		return nil, "", err
@@ -55,83 +51,61 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string
 	if err != nil {
 		return nil, "", err
 	}
-	// Persist exactly what the owner is about to see. ApproveEscalation
-	// executes this, not a re-resolution — see approvable.
-	planJSON, marshalErr := json.Marshal(plan)
-	if marshalErr != nil {
-		return nil, "", fmt.Errorf("encode escalation plan: %w", marshalErr)
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode escalation plan: %w", err)
 	}
-	if setErr := s.db.SetEscalationPlan(ctx, id, planJSON); errors.Is(setErr, db.ErrPlanNotStored) {
-		return nil, "", errNotAwaitingDecision
-	} else if setErr != nil {
-		return nil, "", fmt.Errorf("store escalation plan: %w", setErr)
+	fp := card.Fingerprint(planJSON)
+	ev := lifecycle.Event{Kind: lifecycle.OwnerPreview, Version: v.N, HasVersion: v.Set, Plan: planJSON, PlanFP: fp}
+	if _, err = s.apply(ctx, id, ev, nil); err != nil {
+		return nil, "", err
 	}
-	s.recordStatusChanged(ctx, id, "")
-	return plan, card.Fingerprint(planJSON), nil
+	return plan, fp, nil
 }
 
 // ApproveEscalation executes an incident's recommended escalation after
 // owner approval, logs the outcome, and drops the incident into the same
 // verification loop non-destructive fixes use rather than marking it fixed
 // immediately — a re-search takes time to actually resolve the incident.
-func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) error {
-	if _, _, _, err := s.approvable(ctx, id, planFp); err != nil {
+func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string, v Version) error {
+	if _, err := s.approvable(ctx, id, planFp); err != nil {
 		return err
 	}
-
-	// Escalation execution deletes files and triggers a re-search — as
-	// disruptive as anything the autonomous loop does — so it shares the same
-	// global diagnostic lock a concurrent incident's Agent.Run holds (see
-	// runManager.globalSlot) rather than racing it.
-	if lockErr := s.runs.acquireGlobal(ctx); lockErr != nil {
-		return lockErr
+	if err := s.runs.acquireGlobal(ctx); err != nil {
+		return err
 	}
-	// Deferred, not called inline: chi's Recoverer catches a panic in
-	// the escalation and returns 500, so a non-deferred release leaked the
-	// single global slot permanently and every later diagnosis blocked on
-	// acquireGlobal forever.
 	defer s.runs.releaseGlobal()
 	leave, err := s.ownerSection("approve", id)
 	if err != nil {
 		return err
 	}
 	defer leave()
-
-	inc, result, planJSON, err := s.approvable(ctx, id, planFp)
+	planDone := s.runs.planStarted(id)
+	defer planDone()
+	ev := lifecycle.Event{Kind: lifecycle.OwnerApprove, Version: v.N, HasVersion: v.Set, PlanFP: planFp}
+	a, err := s.apply(ctx, id, ev, nil)
 	if err != nil {
 		return err
 	}
-	claimed, err := s.db.ClaimEscalationPlan(ctx, id, planJSON)
+	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
-		return fmt.Errorf("claim escalation plan: %w", err)
+		return err
 	}
-	if !claimed {
-		return errNotAwaitingDecision
+	result, err := escalationResult(inc)
+	if err != nil {
+		return err
 	}
-
-	// ExecuteReplace is blocklist -> delete files -> trigger search, with no
-	// compensation if it stops partway. Running it on the caller's HTTP
-	// request context meant a closed tab or a proxy idle timeout could cancel
-	// it after the files were deleted and before the re-search fired, losing
-	// the media with nothing queued to replace it. WithoutCancel keeps the
-	// request's values (and its deadline-free lifetime) while detaching the
-	// cancellation, matching what launchVerification already does below.
 	execCtx := context.WithoutCancel(ctx)
-	execResult, runErr := s.agent.ExecuteApprovedPlan(execCtx, result, planJSON)
+	execResult, runErr := s.agent.ExecuteApprovedPlan(execCtx, result, a.Snap.Plan.JSON)
 	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
-	// A preview stored while the plan ran describes the library before the run.
-	s.clearEscalationPlan(execCtx, id)
-	s.recordStatusChanged(execCtx, id, "")
+	done := lifecycle.Event{Kind: lifecycle.PlanExecuted, Gen: a.Snap.Generation}
 	if runErr != nil {
-		return runErr
+		done.Err, done.Partial = runErr.Error(), partialOf(result.EscalateAction, execResult)
 	}
-
-	s.launchVerification(inc, &agent.DiagnosticResult{
-		PrimaryAction:      result.EscalateAction,
-		VerifyAfterSeconds: int(s.minutes(s.timers(execCtx).ApprovedVerifyMinutes) / time.Second),
-		UserETAMinutes:     escalationVerifyETAMinutes,
-	})
-	return nil
+	if _, err = s.apply(execCtx, id, done, nil); err != nil {
+		s.logCheckErr(execCtx, id, err)
+	}
+	return runErr
 }
 
 // approvable returns the plan the owner was actually shown. Re-resolving it at
@@ -140,60 +114,67 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) erro
 // no second confirmation.
 func (s *Service) approvable(
 	ctx context.Context, id, planFp string,
-) (*db.Incident, *agent.DiagnosticResult, []byte, error) {
+) (*agent.DiagnosticResult, error) {
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if inc.Status != db.StatusManualTestNeeded {
-		return nil, nil, nil, errNotAwaitingDecision
+		return nil, errNotAwaitingDecision
 	}
 	result, err := escalationResult(inc)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	planJSON, previewedAt, err := s.db.GetEscalationPlan(ctx, id)
 	if errors.Is(err, db.ErrNoEscalationPlan) {
-		return nil, nil, nil, errNoPlan
+		return nil, errNoPlan
 	}
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	if age := time.Since(previewedAt); age > escalationPlanTTL {
-		s.clearEscalationPlan(ctx, id)
-		s.recordStatusChanged(ctx, id, "")
-		return nil, nil, nil, fmt.Errorf(
+	if age := time.Since(previewedAt); age > s.minutes(planTTLMinutes) {
+		return nil, fmt.Errorf(
 			"this plan was previewed %s ago and %w",
 			age.Round(time.Minute),
 			errPlanExpired,
 		)
 	}
 	if card.Fingerprint(planJSON) != planFp {
-		return nil, nil, nil, errPlanChanged
+		return nil, errPlanChanged
 	}
-	return inc, result, planJSON, nil
+	return result, nil
 }
 
-func (s *Service) clearEscalationPlan(ctx context.Context, id string) {
-	if err := s.db.ClearEscalationPlan(ctx, id); err != nil {
-		s.log.ErrorContext(ctx, "clear escalation plan", "incident", id, "error", err)
+func partialOf(action string, execResult any) lifecycle.Partial {
+	b, err := json.Marshal(execResult)
+	unreadable := lifecycle.Partial{Applied: true, Line: "Partial: the result could not be read"}
+	if err != nil || string(b) == nullResult {
+		return unreadable
 	}
-}
-
-// launchVerification starts a background verification loop for inc under the
-// run manager, the same cancel-on-supersede context lifecycle launch() gives
-// full agent runs — so it outlives the HTTP request that triggered it, and a
-// later reopen/reinvestigate cancels it cleanly instead of racing it.
-func (s *Service) launchVerification(inc *db.Incident, result *agent.DiagnosticResult) {
-	ctx, tok, _ := s.runs.supersede(inc.ID)
-	started := s.work.goNamed("verify:"+inc.ShortID(), func(context.Context) {
-		defer s.runs.end(inc.ID, tok)
-		s.legacyVerification(ctx, inc, result)
-	})
-	if !started {
-		s.runs.end(inc.ID, tok)
-		s.log.InfoContext(ctx, "verification not started, shutting down", "incident", inc.ID)
+	switch action {
+	case agent.EscalateRemoveAndSearch:
+		var r client.ReplaceResult
+		if json.Unmarshal(b, &r) != nil {
+			return unreadable
+		}
+		search := "search not sent"
+		if r.SearchTriggered != "" {
+			search = "search sent"
+		}
+		return lifecycle.Partial{
+			Applied: len(r.DeletedFiles) > 0 || len(r.BlocklistedGrabs) > 0 || r.SearchTriggered != "",
+			Line: fmt.Sprintf("Partial: deleted %d files, blocklisted %d, %s",
+				len(r.DeletedFiles), len(r.BlocklistedGrabs), search),
+		}
+	case agent.EscalateDeleteTorrentReadd:
+		var r client.ReaddResult
+		if json.Unmarshal(b, &r) != nil {
+			return unreadable
+		}
+		return lifecycle.Partial{Applied: r.Deleted, Line: "Partial: torrent deleted, re-add failed"}
 	}
+	return unreadable
 }
 
 // logEscalation records an owner-approved escalation to the event log,
@@ -215,7 +196,7 @@ func (s *Service) logEscalation(
 		errMsg = runErr.Error()
 	}
 	resultJSON, _ := json.Marshal(execResult)
-	if string(resultJSON) == "null" {
+	if string(resultJSON) == nullResult {
 		resultJSON = nil
 	}
 	if logErr := s.journal.LogAction(ctx, &db.ActionLog{

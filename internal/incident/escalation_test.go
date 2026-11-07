@@ -3,7 +3,6 @@ package incident_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -82,6 +82,7 @@ func (a *escalationAgent) CheckPendingOutcome(
 }
 
 type escalationFixture struct {
+	lastID string
 	svc    *incident.Service
 	db     *db.DB
 	jrnl   *journal.Journal
@@ -139,7 +140,7 @@ func (fx *escalationFixture) incident(t *testing.T) *db.Incident {
 
 func (fx *escalationFixture) preview(t *testing.T, id string) string {
 	t.Helper()
-	_, fp, err := fx.svc.PreviewEscalation(context.Background(), id)
+	_, fp, err := fx.svc.PreviewEscalation(context.Background(), id, fx.svc.CurrentVersion(context.Background(), id))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,26 +154,17 @@ func (fx *escalationFixture) preview(t *testing.T, id string) string {
 	return fp
 }
 
-func waitForEmptyStatusChanged(t *testing.T, ch <-chan *db.Event, after string) {
+func waitForStatusEvent(t *testing.T, ch <-chan *db.Event, after string) {
 	t.Helper()
 	deadline := time.After(notifyWaitTimeout)
 	for {
 		select {
 		case e := <-ch:
-			if e.Kind != string(journal.KindStatusChanged) {
-				continue
-			}
-			var p struct {
-				Status string `json:"status"`
-			}
-			if err := json.Unmarshal(e.Payload, &p); err != nil {
-				t.Fatal(err)
-			}
-			if p.Status == "" {
+			if e.Kind == string(journal.KindStatusChanged) {
 				return
 			}
 		case <-deadline:
-			t.Fatalf("after %s: no status_changed event with an empty status", after)
+			t.Fatalf("after %s: no status_changed event", after)
 		}
 	}
 }
@@ -187,9 +179,23 @@ func TestApproveEscalation_ConcurrentRunsOnce(t *testing.T) {
 
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
-	wg.Go(func() { errs[0] = fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) })
+	wg.Go(func() {
+		errs[0] = fx.svc.ApproveEscalation(
+			context.Background(),
+			inc.ID,
+			fp,
+			fx.svc.CurrentVersion(context.Background(), inc.ID),
+		)
+	})
 	<-ag.execStart
-	wg.Go(func() { errs[1] = fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) })
+	wg.Go(func() {
+		errs[1] = fx.svc.ApproveEscalation(
+			context.Background(),
+			inc.ID,
+			fp,
+			fx.svc.CurrentVersion(context.Background(), inc.ID),
+		)
+	})
 	time.Sleep(escalationSettle)
 	close(ag.execGate)
 	wg.Wait()
@@ -202,7 +208,7 @@ func TestApproveEscalation_ConcurrentRunsOnce(t *testing.T) {
 	}
 }
 
-func TestApproveEscalation_PlanConsumedBeforeExecute(t *testing.T) {
+func TestApproveEscalation_PlanClaimedBeforeExecute(t *testing.T) {
 	t.Parallel()
 	ag := newEscalationAgent()
 	ag.execGate = make(chan struct{})
@@ -211,19 +217,27 @@ func TestApproveEscalation_PlanConsumedBeforeExecute(t *testing.T) {
 	fp := fx.preview(t, inc.ID)
 
 	done := make(chan error, 1)
-	go func() { done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	go func() {
+		done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp, fx.svc.CurrentVersion(context.Background(), inc.ID))
+	}()
 	<-ag.execStart
-	_, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID)
+	during := status(t, fx.db, inc.ID)
+	again := fx.svc.ApproveEscalation(
+		context.Background(),
+		inc.ID,
+		fp,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	)
 	close(ag.execGate)
 	if approveErr := <-done; approveErr != nil {
 		t.Fatal(approveErr)
 	}
-	if !errors.Is(err, db.ErrNoEscalationPlan) {
-		t.Errorf("plan during execution: err = %v, want ErrNoEscalationPlan (consumed before it runs)", err)
+	if during != db.IncidentStatus(lifecycle.ExecutingPlan) || again == nil {
+		t.Errorf("during execution: status %s, second approve %v; want executing_plan and a refusal", during, again)
 	}
 }
 
-func TestApproveEscalation_PreviewDuringRunIsCleared(t *testing.T) {
+func TestApproveEscalation_PreviewDuringRunRefused(t *testing.T) {
 	t.Parallel()
 	ag := newEscalationAgent()
 	ag.execGate = make(chan struct{})
@@ -232,15 +246,24 @@ func TestApproveEscalation_PreviewDuringRunIsCleared(t *testing.T) {
 	fp := fx.preview(t, inc.ID)
 
 	done := make(chan error, 1)
-	go func() { done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp) }()
+	go func() {
+		done <- fx.svc.ApproveEscalation(context.Background(), inc.ID, fp, fx.svc.CurrentVersion(context.Background(), inc.ID))
+	}()
 	<-ag.execStart
-	fx.preview(t, inc.ID)
+	_, _, previewErr := fx.svc.PreviewEscalation(
+		context.Background(),
+		inc.ID,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	)
 	close(ag.execGate)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	if !errors.Is(previewErr, incident.ErrNotAwaitingDecisionForTest()) {
+		t.Errorf("preview during the run: %v, want a refusal", previewErr)
+	}
 	if _, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID); !errors.Is(err, db.ErrNoEscalationPlan) {
-		t.Errorf("a plan previewed during the run survived it: err = %v", err)
+		t.Errorf("a plan survived the run: err = %v", err)
 	}
 }
 
@@ -251,8 +274,14 @@ func TestPreviewEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 	if err := fx.db.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusReopened); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := fx.svc.PreviewEscalation(context.Background(), inc.ID); !errors.Is(
-		err, incident.ErrNotAwaitingDecisionForTest()) {
+	if _, _, err := fx.svc.PreviewEscalation(
+		context.Background(),
+		inc.ID,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	); !errors.Is(
+		err,
+		incident.ErrNotAwaitingDecisionForTest(),
+	) {
 		t.Errorf("err = %v, want errNotAwaitingDecision", err)
 	}
 	if _, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID); !errors.Is(err, db.ErrNoEscalationPlan) {
@@ -270,7 +299,12 @@ func TestApproveEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := fx.svc.ApproveEscalation(context.Background(), inc.ID, fp)
+	err := fx.svc.ApproveEscalation(
+		context.Background(),
+		inc.ID,
+		fp,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	)
 	if !errors.Is(err, incident.ErrNotAwaitingDecisionForTest()) {
 		t.Errorf("err = %v, want errNotAwaitingDecision", err)
 	}
@@ -286,7 +320,12 @@ func TestApproveEscalation_RefusedOnFingerprintMismatch(t *testing.T) {
 	inc := fx.incident(t)
 	fx.preview(t, inc.ID)
 
-	err := fx.svc.ApproveEscalation(context.Background(), inc.ID, "000000000000")
+	err := fx.svc.ApproveEscalation(
+		context.Background(),
+		inc.ID,
+		"000000000000",
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	)
 	if !errors.Is(err, incident.ErrPlanChangedForTest()) {
 		t.Errorf("err = %v, want errPlanChanged", err)
 	}
@@ -343,15 +382,20 @@ func TestPreviewAndApprove_EmitStatusChanged(t *testing.T) {
 	defer unsubscribe()
 
 	fp := fx.preview(t, inc.ID)
-	waitForEmptyStatusChanged(t, ch, "Preview")
+	waitForStatusEvent(t, ch, "Preview")
 
-	if err := fx.svc.ApproveEscalation(ctx, inc.ID, fp); err == nil {
+	if err := fx.svc.ApproveEscalation(
+		ctx,
+		inc.ID,
+		fp,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	); err == nil {
 		t.Fatal("Approve succeeded, want the execution error")
 	}
-	waitForEmptyStatusChanged(t, ch, "failed Approve")
+	waitForStatusEvent(t, ch, "failed Approve")
 
 	fp = fx.preview(t, inc.ID)
-	waitForEmptyStatusChanged(t, ch, "second Preview")
+	waitForStatusEvent(t, ch, "second Preview")
 	raw, err := sql.Open("sqlite", fx.dbPath+"?_time_format=sqlite&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
@@ -367,13 +411,13 @@ func TestPreviewAndApprove_EmitStatusChanged(t *testing.T) {
 		ctx,
 		inc.ID,
 		fp,
+		fx.svc.CurrentVersion(ctx, inc.ID),
 	); !errors.Is(
 		approveErr,
 		incident.ErrPlanExpiredForTest(),
 	) {
 		t.Fatalf("err = %v, want errPlanExpired", approveErr)
 	}
-	waitForEmptyStatusChanged(t, ch, "expired Approve")
 }
 
 func TestApproveEscalation_StaleRefusedWithoutWaiting(t *testing.T) {
@@ -392,7 +436,7 @@ func TestApproveEscalation_StaleRefusedWithoutWaiting(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), staleRefusalWait)
 	defer cancel()
-	err := fx.svc.ApproveEscalation(ctx, inc.ID, "000000000000")
+	err := fx.svc.ApproveEscalation(ctx, inc.ID, "000000000000", fx.svc.CurrentVersion(context.Background(), inc.ID))
 	if !errors.Is(err, incident.ErrPlanChangedForTest()) {
 		t.Errorf("err = %v, want errPlanChanged before waiting for the global slot", err)
 	}

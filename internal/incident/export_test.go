@@ -191,3 +191,5 @@ func (s *Service) ReservedOrRunningForTest(id string) bool {
 	_, running := l.runs[id]
 	return l.reserved[id] || running
 }
+
+func (s *Service) PlanLiveForTest(id string) bool { return s.runs.liveness().plans[id] }

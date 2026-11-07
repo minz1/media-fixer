@@ -24,11 +24,6 @@ import (
 
 const SystematicIncidentThreshold = 5
 
-const (
-	// defaultUserETAMinutes is the fallback "try again in N minutes" estimate.
-	defaultUserETAMinutes = 10
-)
-
 // Service manages incident lifecycle and orchestrates agent runs.
 type Service struct {
 	db          *db.DB
@@ -475,147 +470,6 @@ func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory s
 	)
 }
 
-// legacyFixed atomically flips the incident to agent_fixed and DMs reporters
-// only if this goroutine actually performed the transition. agent_fixed is excluded
-// from the allowed source states, so a second concurrent finisher (e.g. a stale
-// verification loop after a reopen) transitions nothing and stays silent — the fix
-// for the duplicate "fixed automatically" DM.
-func (s *Service) legacyFixed(ctx context.Context, inc *db.Incident, action string) {
-	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed,
-		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened)
-	if err != nil {
-		s.log.ErrorContext(ctx, "mark fixed transition", "incident", inc.ID, "error", err)
-		return
-	}
-	if !changed {
-		s.log.InfoContext(ctx, "fix already recorded by another run, not re-notifying", "incident", inc.ID)
-		return
-	}
-	s.recordStatusChanged(ctx, inc.ID, string(db.StatusAgentFixed))
-	s.log.InfoContext(ctx, "agent fixed", "incident", inc.ID, "action", action)
-	s.notifyReporters(
-		ctx,
-		inc,
-		reporterCard(
-			card.Success,
-			fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title),
-		),
-	)
-	s.resolveSeerrIssues(ctx, inc)
-}
-
-// legacyVerification re-checks, up to the configured number of times, whether a deferred
-// non-destructive fix (e.g. a library scan) resolved the problem. While checking,
-// the incident sits in "verifying". On success it is marked fixed and reporters
-// are told. If it never verifies but a scan is still running, reporters get a
-// friendly ETA and the incident stays in "verifying" — it is NOT escalated. Only
-// when nothing is in progress and it is still broken do we escalate to the owner.
-func (s *Service) legacyVerification(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
-	// Same precedence as handleCompleteDiagnosis: the incident's own item
-	// wins, so verification can't be pointed at a different item than the
-	// pre-fix baseline was captured against.
-	itemID := inc.JellyfinItemID
-	if itemID == "" {
-		itemID = result.VerifyItemID
-	}
-
-	// Gate entry the same way as every other transition: if a concurrent run has
-	// already finished this incident, do not resurrect it into "verifying".
-	// StatusManualTestNeeded is included so ApproveEscalation (owner ran a fix
-	// from manual_test_needed) can drop into the same re-check loop.
-	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusVerifying,
-		db.StatusOpen, db.StatusInvestigating, db.StatusReopened, db.StatusManualTestNeeded)
-	if err != nil {
-		s.log.ErrorContext(ctx, "enter verifying transition", "incident", inc.ID, "error", err)
-		return
-	}
-	if !changed {
-		s.log.InfoContext(ctx, "not entering verification, incident already progressed", "incident", inc.ID)
-		return
-	}
-	s.recordStatusChanged(ctx, inc.ID, string(db.StatusVerifying))
-
-	t := s.timers(ctx)
-	firstDelay := min(time.Duration(result.VerifyAfterSeconds)*time.Second, s.minutes(t.FirstVerifyCapMinutes))
-	stuckRead := inc.What == agent.WhatStuckRead
-	if stuckRead {
-		firstDelay = max(firstDelay, s.minutes(stuckReadVerifyFloorMinutes))
-	}
-
-	for i := range t.VerifyChecks {
-		delay := s.minutes(t.VerifyGapMinutes)
-		if i == 0 {
-			delay = firstDelay
-		}
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return
-		}
-		var fixed bool
-		if stuckRead {
-			fixed = s.stuckRead != nil && s.stuckRead.Clear(inc.Title)
-		} else {
-			fixed = s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix)
-		}
-		if fixed {
-			s.legacyFixed(ctx, inc, result.PrimaryAction)
-			return
-		}
-	}
-
-	// Exhausted the verification budget. If a scan is still in progress, the fix
-	// is likely still landing — give the reporter an ETA instead of escalating.
-	if !stuckRead && s.agent.ScanRunning(ctx) {
-		eta := result.UserETAMinutes
-		if eta <= 0 {
-			eta = defaultUserETAMinutes
-		}
-		s.log.InfoContext(ctx, "fix still applying, advising reporters", "incident", inc.ID, "eta_min", eta)
-		s.notifyReporters(ctx, inc, reporterCard(card.Info, fmt.Sprintf(
-			"🔧 We're still rebuilding the library for **%s** — it should be playable in about %d minute(s). Give it a try then!",
-			inc.Title,
-			eta,
-		)))
-		return
-	}
-
-	// Nothing in progress and still broken — escalate to the owner.
-	s.log.WarnContext(ctx, "fix not verified, escalating", "incident", inc.ID)
-	s.legacyEscalate(ctx, inc, surfaceCard(inc, result, " (autonomous fix applied but could not be verified)"))
-}
-
-// legacyEscalate atomically marks the incident manual_test_needed and DMs the
-// owner, but only if this call actually performs the transition. Every "give up
-// and ask a human" path (agent error, control-review escalation, verification
-// exhausted, max retries hit) routes through here so escalation is idempotent
-// under concurrent/superseded runs — the same TransitionStatus pattern used for
-// the "fixed" notification, applied once structurally instead of per call site.
-func (s *Service) legacyEscalate(ctx context.Context, inc *db.Incident, c card.Card) {
-	prior, getErr := s.db.GetIncident(ctx, inc.ID)
-	if getErr != nil {
-		s.log.ErrorContext(ctx, "read status before escalation", "incident", inc.ID, "error", getErr)
-	}
-	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusManualTestNeeded,
-		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
-		db.StatusBlocked, db.StatusAgentFixed)
-	if err != nil {
-		s.log.ErrorContext(ctx, "escalate transition", "incident", inc.ID, "error", err)
-		return
-	}
-	if !changed {
-		s.log.InfoContext(ctx, "already escalated by another run, not re-notifying owner", "incident", inc.ID)
-		return
-	}
-	s.recordStatusChanged(ctx, inc.ID, string(db.StatusManualTestNeeded))
-	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), escalationVerbs()
-	_ = s.notif.NotifyOwner(ctx, c)
-	if getErr == nil && prior.Status != db.StatusAgentFixed {
-		s.notifyReporters(ctx, inc,
-			reporterCard(card.Info, fmt.Sprintf("🧑‍🔧 Handed **%s** to minz1. You'll hear back here.", inc.Title)))
-	}
-}
-
 var errRunNotExited = errors.New("the agent run returned without an exit")
 
 func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, c card.Card) {
@@ -787,7 +641,6 @@ func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin, stal
 		return err
 	}
 	inc.Status = db.StatusReopened
-	s.clearEscalationPlan(ctx, id)
 	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
 	switch origin {
 	case rerunManual:

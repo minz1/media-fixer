@@ -868,11 +868,12 @@ func (d *DB) CreateIncident(ctx context.Context, inc *Incident) error {
 	inc.UpdatedAt = inc.CreatedAt
 
 	_, err := d.write.ExecContext(ctx, `
-		INSERT INTO incidents (id, created_at, updated_at, status, source, reported_by, what, title, jellyfin_item_id, details)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO incidents (id, created_at, updated_at, status, source, reported_by, what, title, jellyfin_item_id, details,
+			reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'manual_test_needed' THEN 'needs_owner' END)`,
 		inc.ID, inc.CreatedAt, inc.UpdatedAt, inc.Status,
 		inc.Source, inc.ReportedBy, inc.What, inc.Title,
-		nullStr(inc.JellyfinItemID), nullStr(inc.Details),
+		nullStr(inc.JellyfinItemID), nullStr(inc.Details), inc.Status,
 	)
 	return err
 }
@@ -1027,8 +1028,8 @@ func likeEscape(s string) string {
 // UpdateIncidentStatus sets the status of an incident.
 func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status IncidentStatus) error {
 	_, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?`,
-		status, time.Now(), id)
+		`UPDATE incidents SET status = ?, updated_at = ?, reason = `+legacyReason+` WHERE id = ?`,
+		status, time.Now(), status, id)
 	return err
 }
 
@@ -1042,8 +1043,10 @@ func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status Inciden
 // length, and the actual status values travel as ordinary bound data (a JSON
 // string), never as SQL syntax.
 const (
-	transitionStatusUnconditional = `UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?`
-	transitionStatusRestricted    = `UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?
+	legacyReason                  = `CASE WHEN ? = 'manual_test_needed' THEN COALESCE(reason, 'needs_owner') END`
+	transitionStatusUnconditional = `UPDATE incidents SET status = ?, updated_at = ?, reason = ` + legacyReason +
+		` WHERE id = ?`
+	transitionStatusRestricted = `UPDATE incidents SET status = ?, updated_at = ?, reason = ` + legacyReason + ` WHERE id = ?
 		AND status IN (SELECT value FROM json_each(?))`
 )
 
@@ -1062,13 +1065,13 @@ func (d *DB) TransitionStatus(
 		err error
 	)
 	if len(allowedFrom) == 0 {
-		res, err = d.write.ExecContext(ctx, transitionStatusUnconditional, to, now, id)
+		res, err = d.write.ExecContext(ctx, transitionStatusUnconditional, to, now, to, id)
 	} else {
 		allowedJSON, marshalErr := json.Marshal(allowedFrom)
 		if marshalErr != nil {
 			return false, marshalErr
 		}
-		res, err = d.write.ExecContext(ctx, transitionStatusRestricted, to, now, id, string(allowedJSON))
+		res, err = d.write.ExecContext(ctx, transitionStatusRestricted, to, now, to, id, string(allowedJSON))
 	}
 	if err != nil {
 		return false, err

@@ -187,7 +187,12 @@ func TestApproveEscalation_VerifyAfterFromSavedTimers(t *testing.T) {
 	inc := fx.incident(t)
 	fp := fx.preview(t, inc.ID)
 
-	if err := fx.svc.ApproveEscalation(t.Context(), inc.ID, fp); err != nil {
+	if err := fx.svc.ApproveEscalation(
+		t.Context(),
+		inc.ID,
+		fp,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	); err != nil {
 		t.Fatal(err)
 	}
 

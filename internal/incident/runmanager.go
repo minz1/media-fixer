@@ -259,3 +259,19 @@ func (m *runManager) currentGen(id string) int64 {
 	defer m.mu.Unlock()
 	return m.current[id]
 }
+
+func (m *runManager) planStarted(id string) func() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.plans[id]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.plans[id]--; m.plans[id] <= 0 {
+				delete(m.plans, id)
+			}
+		})
+	}
+}

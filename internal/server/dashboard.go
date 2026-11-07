@@ -335,7 +335,7 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{"BaseURL": s.baseURL, "IncidentID": id}
-	plan, fp, err := s.svc.PreviewEscalation(r.Context(), id)
+	plan, fp, err := s.svc.PreviewEscalation(r.Context(), id, s.formVersion(r, id))
 	switch {
 	case errors.Is(err, card.ErrRestarting):
 		data["Error"] = card.RestartingNotice
@@ -368,7 +368,7 @@ func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp"))
+	err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp"), s.formVersion(r, id))
 	s.finishIncidentAction(w, r, id, "approve", err)
 }
 
