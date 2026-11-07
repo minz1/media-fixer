@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"errors"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 type EventKind string
@@ -27,6 +29,7 @@ const (
 	Relaunch           EventKind = "relaunch"
 	Resumed            EventKind = "resumed"
 	PlanLost           EventKind = "plan_lost"
+	OwnerResumeOp      EventKind = "owner_resume_op"
 	Tick               EventKind = "tick"
 )
 
@@ -34,7 +37,7 @@ func EventKinds() []EventKind {
 	return []EventKind{
 		Reported, RunClaimed, ActionAttempted, AttemptFinished, RunFinished, VerifyObserved, DownloadObserved,
 		PlanExecuted, OwnerRerun, OwnerResolve, OwnerUnlock, OwnerKeepSearching, OwnerPreview, OwnerApprove,
-		SystemRerun, StaleRun, Relaunch, Resumed, PlanLost, Tick,
+		SystemRerun, StaleRun, Relaunch, Resumed, PlanLost, Tick, OwnerResumeOp,
 	}
 }
 
@@ -111,6 +114,12 @@ type Event struct {
 	Partial    Partial
 	Report     *Report
 	Notice     Notice
+	Spec       *operation.Spec
+	BuildErr   string
+	OpID       int64
+	OpVersion  int64
+	Probes     []operation.Probe
+	Cause      operation.Cause
 }
 
 var (
@@ -135,6 +144,11 @@ var (
 	ErrPlanChanged = errors.New("the plan changed since you previewed it; preview it again")
 	ErrNotParked   = errors.New("not parked")
 	ErrNoop        = errors.New("nothing to do")
+
+	ErrOpRunning     = errors.New("another operation for this incident is running")
+	ErrOpMismatch    = errors.New("the operation does not match this incident")
+	ErrOpNotFinished = errors.New("the operation has not finished")
+	ErrNotResumable  = errors.New("this incident has nothing to resume")
 )
 
 func workerEvent(k EventKind) bool {
@@ -142,14 +156,15 @@ func workerEvent(k EventKind) bool {
 	case RunClaimed, ActionAttempted, AttemptFinished, RunFinished, VerifyObserved, DownloadObserved,
 		PlanExecuted, SystemRerun, StaleRun, Relaunch, Resumed, PlanLost:
 		return true
-	case Reported, OwnerRerun, OwnerResolve, OwnerUnlock, OwnerKeepSearching, OwnerPreview, OwnerApprove, Tick:
+	case Reported, OwnerRerun, OwnerResolve, OwnerUnlock, OwnerKeepSearching, OwnerPreview, OwnerApprove,
+		OwnerResumeOp, Tick:
 	}
 	return false
 }
 
 func versionChecked(k EventKind) bool {
 	switch k {
-	case OwnerApprove, OwnerPreview, OwnerKeepSearching:
+	case OwnerApprove, OwnerPreview, OwnerKeepSearching, OwnerResumeOp:
 		return true
 	case OwnerRerun, OwnerResolve, OwnerUnlock, Reported, RunClaimed, ActionAttempted, AttemptFinished,
 		RunFinished, VerifyObserved, DownloadObserved, PlanExecuted, SystemRerun, StaleRun, Relaunch, Resumed,

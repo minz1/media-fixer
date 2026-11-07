@@ -330,7 +330,10 @@ func effectKinds(effs []lifecycle.Effect) []K {
 
 func TestIncidentMachine_RowsMatchDoc(t *testing.T) {
 	t.Parallel()
-	all := slices.Concat(reportedRows(), runRows(), verifyRows(), downloadRows(), planRows(), ownerRows(), systemRows())
+	all := slices.Concat(
+		reportedRows(), runRows(), verifyRows(), downloadRows(), planRows(), ownerRows(), systemRows(),
+		approveOpRows(), executedOpRows(), lostOpRows(), resumeOpRows(),
+	)
 	for _, r := range all {
 		t.Run(r.name, func(t *testing.T) {
 			t.Parallel()

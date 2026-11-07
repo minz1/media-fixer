@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/machinetest"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 func obligations(before lifecycle.Snapshot, t tev) error {
@@ -45,6 +47,9 @@ func decisionObligations(before, cur lifecycle.Snapshot, t tev, d lifecycle.Deci
 	if err := effectObligations(cur, d); err != nil {
 		return err
 	}
+	if err := opObligations(t, d); err != nil {
+		return err
+	}
 	if d.JournalOnly && (n.Status != before.Status || n.Generation != before.Generation) {
 		return errors.New("journal-only decision changed the row")
 	}
@@ -57,6 +62,27 @@ func decisionObligations(before, cur lifecycle.Snapshot, t tev, d lifecycle.Deci
 	}
 	if n.Generation < before.Generation || n.Version < before.Version {
 		return errors.New("a counter went backwards")
+	}
+	return nil
+}
+
+func opObligations(t tev, d lifecycle.Decision) error {
+	n := d.Next
+	if err := lifecycle.CheckDecision(d); err != nil {
+		return err
+	}
+	halfRun := n.Status == lifecycle.ManualTestNeeded &&
+		(n.Reason == lifecycle.ReasonPlanPartial || n.Reason == lifecycle.ReasonPlanInterrupted)
+	if halfRun && n.Op != nil && n.Op.Status != operation.FailedAtStep {
+		return errors.New("half-run plan with an op that did not fail")
+	}
+	if t.ev.Kind == lifecycle.OwnerResumeOp && n.Status == lifecycle.ExecutingPlan && n.Plan == nil {
+		return errors.New("I12: resumed into executing_plan without a plan")
+	}
+	for _, e := range d.Effects {
+		if e.Kind == lifecycle.ExecutePlan && n.Op != nil && e.OpID != n.Op.ID {
+			return fmt.Errorf("execute_plan carries op %d, snapshot has %d", e.OpID, n.Op.ID)
+		}
 	}
 	return nil
 }
@@ -96,7 +122,9 @@ func FuzzIncidentMachine(f *testing.F) {
 
 func TestVersionChecked_MatchesRuling(t *testing.T) {
 	t.Parallel()
-	checked := []lifecycle.EventKind{lifecycle.OwnerApprove, lifecycle.OwnerPreview, lifecycle.OwnerKeepSearching}
+	checked := []lifecycle.EventKind{
+		lifecycle.OwnerApprove, lifecycle.OwnerPreview, lifecycle.OwnerKeepSearching, lifecycle.OwnerResumeOp,
+	}
 	for _, k := range lifecycle.EventKinds() {
 		if got, want := lifecycle.VersionChecked(k), slices.Contains(checked, k); got != want {
 			t.Errorf("VersionChecked(%s) = %v, want %v", k, got, want)
@@ -151,13 +179,21 @@ func TestIncidentMachine_VersionBumpsOnEveryOwnerVisibleChange(t *testing.T) {
 			s.Download = download(lifecycle.StageSearching, false, false)
 			s.Download.Episode = 9
 		},
+		"op id":      func(s *lifecycle.Snapshot) { s.Op.ID++ },
+		"op version": func(s *lifecycle.Snapshot) { s.Op.Version++ },
+		"op status":  func(s *lifecycle.Snapshot) { s.Op.Status = operation.FailedAtStep },
+		"op set":     setOp(runningOp()),
 	}
 	from := with(b, planAt(base()), dl(download(lifecycle.StageSearching, false, false)))
+	withOp := with(b, setOp(runningOp()))
 	for name, change := range changes {
 		cur := from
 		if name == "plan" || name == "stage" || name == "keep searching" || name == "queue status" ||
-			name == "target" {
+			name == "target" || name == "op set" {
 			cur = b
+		}
+		if strings.HasPrefix(name, "op ") && name != "op set" {
+			cur = withOp
 		}
 		next := with(cur.Clone(), change)
 		if got := lifecycle.Versioned(cur, next).Version; got != cur.Version+1 {

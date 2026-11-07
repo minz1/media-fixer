@@ -89,6 +89,7 @@ type Effect struct {
 	At         time.Time
 	Check      CheckKind
 	Plan       []byte
+	OpID       int64
 	Note       Note
 	ETAMinutes int
 	Notice     Notice

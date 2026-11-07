@@ -2,7 +2,10 @@ package lifecycle
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const (
@@ -27,6 +30,7 @@ type Snapshot struct {
 	Verify      *Verify
 	Download    *Download
 	Plan        *Plan
+	Op          *operation.Op
 	In          Inputs
 }
 
@@ -94,6 +98,7 @@ type Plan struct {
 
 type Inputs struct {
 	Paused      bool
+	OpRunning   bool
 	ActiveCount int
 	Limits      Limits
 }
@@ -121,6 +126,8 @@ type Decision struct {
 	Next        Snapshot
 	Effects     []Effect
 	JournalOnly bool
+	OpWrite     *operation.Op
+	OpNew       bool
 }
 
 func (s Snapshot) PlanFresh(now time.Time) bool {
@@ -140,6 +147,11 @@ func (s Snapshot) Clone() Snapshot {
 	if s.Plan != nil {
 		p := *s.Plan
 		n.Plan = &p
+	}
+	if s.Op != nil {
+		o := *s.Op
+		o.Results = slices.Clone(s.Op.Results)
+		n.Op = &o
 	}
 	return n
 }

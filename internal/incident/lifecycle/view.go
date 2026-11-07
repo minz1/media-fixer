@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"crypto/sha256"
 	"encoding/hex"
+
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 type View struct {
@@ -19,6 +21,9 @@ type View struct {
 	QueueStatus   string
 	KeepSearching bool
 	Target        string
+	OpID          int64
+	OpVersion     int64
+	OpStatus      operation.Status
 }
 
 func OwnerView(s Snapshot) View {
@@ -31,6 +36,9 @@ func OwnerView(s Snapshot) View {
 	}
 	if s.Plan != nil {
 		v.HasPlan, v.PlanFP, v.PlanAt = true, s.Plan.FP, s.Plan.At.UnixNano()
+	}
+	if o := s.Op; o != nil {
+		v.OpID, v.OpVersion, v.OpStatus = o.ID, o.Version, o.Status
 	}
 	if d := s.Download; d != nil {
 		v.Stage, v.QueueStatus, v.KeepSearching = d.Stage, d.QueueStatus, d.KeepSearching

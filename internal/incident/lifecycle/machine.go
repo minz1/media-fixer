@@ -50,6 +50,7 @@ func transitions() []row {
 		{[]State{None}, Relaunch, rejectWith(ErrStale)},
 		{[]State{None}, Resumed, rejectWith(ErrStale)},
 		{[]State{None}, PlanLost, rejectWith(ErrStale)},
+		{[]State{None}, OwnerResumeOp, rejectWith(ErrStale)},
 		{[]State{None}, Tick, rejectWith(ErrNoop)},
 
 		{launchable, RunClaimed, stepClaim},
@@ -94,6 +95,9 @@ func transitions() []row {
 		{[]State{ManualTestNeeded}, OwnerApprove, stepApprove},
 		{except(ManualTestNeeded), OwnerApprove, rejectWith(ErrNotAwaitingDecision)},
 
+		{[]State{ManualTestNeeded}, OwnerResumeOp, stepResumeOp},
+		{except(ManualTestNeeded), OwnerResumeOp, rejectWith(ErrNotAwaitingDecision)},
+
 		{[]State{AgentFixed}, SystemRerun, stepSystemRerun},
 		{except(AgentFixed), SystemRerun, rejectWith(ErrStale)},
 
@@ -130,6 +134,7 @@ func Next(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 			if err != nil {
 				return Decision{Next: cur}, err
 			}
+			d.Next = scopeOp(d.Next)
 			return d, nil
 		}
 	}
@@ -215,7 +220,7 @@ func toOwner(cur, next Snapshot, reason Reason, n Notice) (Decision, error) {
 	if n.Kind != NoticeNone {
 		effs = append(effs, owner(n))
 	}
-	if cur.Status != AgentFixed && cur.Status != ExecutingPlan {
+	if cur.Status != AgentFixed && cur.Status != ExecutingPlan && cur.Status != ManualTestNeeded {
 		effs = append(effs, note(NoteHanded))
 	}
 	return moved(next, effs...)
@@ -384,29 +389,6 @@ func etaMinutes(s VerifySpec) int {
 	return s.ETAMinutes
 }
 
-func stepPlanExecuted(cur Snapshot, ev Event, now time.Time) (Decision, error) {
-	next := cur
-	switch {
-	case ev.Err == "":
-		spec := VerifySpec{
-			Kind: VerifyGeneric, ItemID: cur.ItemID, Action: cur.Finding.EscalateAction, ETAMinutes: planETAMinutes,
-		}
-		delay := next.In.Limits.ApprovedVerify
-		if cur.What == WhatStuckRead {
-			spec.Kind = VerifyStuckRead
-			delay = max(delay, next.In.Limits.StuckReadFloor)
-		}
-		enter(&next, Verifying)
-		next.NextCheck = now.Add(delay)
-		next.Verify = &Verify{ChecksLeft: max(next.In.Limits.VerifyChecks, 1), Spec: spec}
-		gen := bump(&next)
-		return moved(next, check(gen, next.NextCheck, CheckVerify))
-	case ev.Partial.Applied:
-		return toOwner(cur, next, ReasonPlanPartial, Notice{})
-	}
-	return toOwner(cur, next, ReasonPlanFailed, Notice{})
-}
-
 const planETAMinutes = 15
 
 func stepOwnerRerun(cur Snapshot, _ Event, _ time.Time) (Decision, error) {
@@ -481,21 +463,6 @@ func stepPreview(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 	return moved(cur)
 }
 
-func stepApprove(cur Snapshot, ev Event, now time.Time) (Decision, error) {
-	switch {
-	case cur.Plan == nil:
-		return Decision{Next: cur}, ErrNoPlan
-	case !cur.PlanFresh(now):
-		return Decision{Next: cur}, ErrPlanExpired
-	case cur.Plan.FP != ev.PlanFP:
-		return Decision{Next: cur}, ErrPlanChanged
-	}
-	next := cur
-	enter(&next, ExecutingPlan)
-	gen := bump(&next)
-	return moved(next, Effect{Kind: ExecutePlan, Gen: gen, Plan: next.Plan.JSON})
-}
-
 func stepSystemRerun(cur Snapshot, _ Event, _ time.Time) (Decision, error) {
 	next := cur
 	enter(&next, Reopened)
@@ -548,10 +515,6 @@ func stepResumed(cur Snapshot, _ Event, _ time.Time) (Decision, error) {
 	cur.Parked = false
 	gen := bump(&cur)
 	return moved(cur, launch(gen, seedFor(cur.Status), OriginResume))
-}
-
-func stepPlanLost(cur Snapshot, _ Event, _ time.Time) (Decision, error) {
-	return toOwner(cur, cur, ReasonPlanInterrupted, Notice{Kind: NoticePlanInterrupted})
 }
 
 func stepTick(cur Snapshot, _ Event, now time.Time) (Decision, error) {

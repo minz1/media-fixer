@@ -7,6 +7,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/machinetest"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 func base() time.Time { return time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC) }
@@ -136,24 +137,31 @@ func samples(s lifecycle.State) []lifecycle.Snapshot {
 			with(b, finding(escalatable()), planAt(base())),
 			with(b, finding(escalatable()), planAt(base().Add(-2*time.Hour))),
 			with(b, reason(lifecycle.ReasonNoRelease), finding(escalatable()), planAt(base())))
-	case lifecycle.ExecutingPlan, lifecycle.AgentFixed, lifecycle.Blocked, lifecycle.Resolved, lifecycle.None:
+	case lifecycle.ExecutingPlan:
+		out = append(out, execSamples()...)
+	case lifecycle.AgentFixed, lifecycle.Blocked, lifecycle.Resolved, lifecycle.None:
 	}
 	return out
 }
 
 type tev struct {
-	ev       lifecycle.Event
-	stale    bool
-	badVer   bool
-	badFP    bool
-	paused   bool
-	late     bool
-	systemic bool
+	ev        lifecycle.Event
+	stale     bool
+	badVer    bool
+	badFP     bool
+	paused    bool
+	late      bool
+	systemic  bool
+	opRunning bool
+	badOp     bool
+	verdict   operation.Verdict
+	advance   string
 }
 
 func (t tev) String() string {
-	return fmt.Sprintf("%s stale=%v badVer=%v badFP=%v paused=%v late=%v systemic=%v err=%q", t.ev.Kind,
-		t.stale, t.badVer, t.badFP, t.paused, t.late, t.systemic, t.ev.Err)
+	return fmt.Sprintf("%s stale=%v badVer=%v badFP=%v paused=%v late=%v systemic=%v err=%q op=%v/%v/%s/%s",
+		t.ev.Kind, t.stale, t.badVer, t.badFP, t.paused, t.late, t.systemic, t.ev.Err, t.opRunning, t.badOp,
+		t.verdict, t.advance)
 }
 
 func nowFor(t tev) time.Time {
@@ -171,6 +179,11 @@ func prepare(s lifecycle.Snapshot, t tev) (lifecycle.Snapshot, lifecycle.Event) 
 	if t.systemic {
 		cur.In.ActiveCount = limits().SystemicThreshold
 	}
+	cur.In.OpRunning = t.opRunning
+	if cur.Op != nil && t.advance != "" {
+		op := advanced(*cur.Op, t.advance)
+		cur.Op = &op
+	}
 	ev := t.ev
 	ev.Gen = s.Generation
 	if t.stale {
@@ -182,6 +195,9 @@ func prepare(s lifecycle.Snapshot, t tev) (lifecycle.Snapshot, lifecycle.Event) 
 	}
 	if ev.Kind == lifecycle.OwnerApprove && s.Plan != nil && !t.badFP {
 		ev.PlanFP = s.Plan.FP
+	}
+	if ev.Kind == lifecycle.OwnerResumeOp {
+		ev = resumeFor(cur, ev, t)
 	}
 	return cur, ev
 }
@@ -241,7 +257,19 @@ func payloads(k lifecycle.EventKind) []lifecycle.Event {
 			e,
 			{Kind: k, Err: "boom"},
 			{Kind: k, Err: "boom", Partial: lifecycle.Partial{Applied: true}},
+			{Kind: k, OpID: opID},
+			{Kind: k, OpID: opID + 1},
 		}
+	case lifecycle.PlanLost:
+		return []lifecycle.Event{
+			e, {Kind: k, Cause: operation.CauseRestart}, {Kind: k, Cause: operation.CauseStore},
+			{Kind: k, Cause: operation.CauseError},
+		}
+	case lifecycle.OwnerApprove:
+		spec := opSpec()
+		return []lifecycle.Event{e, {Kind: k, Spec: &spec}, {Kind: k, BuildErr: "premise changed"}}
+	case lifecycle.OwnerResumeOp:
+		return []lifecycle.Event{{Kind: k, PlanFP: "fp1"}}
 	case lifecycle.StaleRun:
 		return []lifecycle.Event{{Kind: k, Origin: lifecycle.OriginRestart}, {Kind: k, Origin: lifecycle.OriginStale}}
 	case lifecycle.OwnerPreview:
@@ -249,8 +277,8 @@ func payloads(k lifecycle.EventKind) []lifecycle.Event {
 	case lifecycle.Reported:
 		return []lifecycle.Event{{Kind: k, Report: &lifecycle.Report{What: "cant_play"}}}
 	case lifecycle.RunClaimed, lifecycle.ActionAttempted, lifecycle.OwnerRerun, lifecycle.OwnerResolve,
-		lifecycle.OwnerUnlock, lifecycle.OwnerKeepSearching, lifecycle.OwnerApprove, lifecycle.SystemRerun,
-		lifecycle.Relaunch, lifecycle.Resumed, lifecycle.PlanLost, lifecycle.Tick:
+		lifecycle.OwnerUnlock, lifecycle.OwnerKeepSearching, lifecycle.SystemRerun, lifecycle.Relaunch,
+		lifecycle.Resumed, lifecycle.Tick:
 	}
 	return []lifecycle.Event{e}
 }
@@ -262,7 +290,7 @@ func pausable(k lifecycle.EventKind) bool {
 		return true
 	case lifecycle.AttemptFinished, lifecycle.RunFinished, lifecycle.VerifyObserved, lifecycle.DownloadObserved,
 		lifecycle.PlanExecuted, lifecycle.OwnerResolve, lifecycle.OwnerKeepSearching, lifecycle.OwnerPreview,
-		lifecycle.OwnerApprove, lifecycle.PlanLost, lifecycle.Tick:
+		lifecycle.OwnerApprove, lifecycle.PlanLost, lifecycle.OwnerResumeOp, lifecycle.Tick:
 	}
 	return false
 }
@@ -281,16 +309,36 @@ func events(k lifecycle.EventKind) []tev {
 		if timed(k) {
 			out = append(out, tev{ev: p, late: true})
 		}
+		if k == lifecycle.PlanExecuted || k == lifecycle.PlanLost {
+			for _, mode := range []string{"started", "failed", "done"} {
+				out = append(out, tev{ev: p, advance: mode})
+			}
+		}
 	}
 	first := payloads(k)[0]
 	out = append(out, tev{ev: first, stale: true}, tev{ev: first, badVer: true})
-	if k == lifecycle.OwnerApprove {
-		out = append(out, tev{ev: first, badFP: true})
+	return append(out, extraEvents(k)...)
+}
+
+func extraEvents(k lifecycle.EventKind) []tev {
+	ps := payloads(k)
+	switch k {
+	case lifecycle.OwnerApprove:
+		return []tev{{ev: ps[0], badFP: true}, {ev: ps[1], opRunning: true}}
+	case lifecycle.Reported:
+		return []tev{{ev: ps[0], systemic: true}}
+	case lifecycle.OwnerResumeOp:
+		return []tev{
+			{ev: ps[0], verdict: operation.VerdictDone}, {ev: ps[0], verdict: operation.VerdictConflict},
+			{ev: ps[0], badOp: true},
+		}
+	case lifecycle.RunClaimed, lifecycle.ActionAttempted, lifecycle.AttemptFinished, lifecycle.RunFinished,
+		lifecycle.VerifyObserved, lifecycle.DownloadObserved, lifecycle.PlanExecuted, lifecycle.OwnerRerun,
+		lifecycle.OwnerResolve, lifecycle.OwnerUnlock, lifecycle.OwnerKeepSearching, lifecycle.OwnerPreview,
+		lifecycle.SystemRerun, lifecycle.StaleRun, lifecycle.Relaunch, lifecycle.Resumed, lifecycle.PlanLost,
+		lifecycle.Tick:
 	}
-	if k == lifecycle.Reported {
-		out = append(out, tev{ev: first, systemic: true})
-	}
-	return out
+	return nil
 }
 
 func states() []lifecycle.State {
@@ -306,6 +354,7 @@ func key(s lifecycle.Snapshot) string {
 	if d := s.Download; d != nil {
 		k += fmt.Sprintf("|d%s/%v/%v/%s", d.Stage, d.GrabNotified, d.KeepSearching, d.QueueStatus)
 	}
+	k += opKey(s)
 	return k
 }
 

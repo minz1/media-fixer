@@ -1,15 +1,18 @@
 package lifecycle
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 var ErrIllegal = errors.New("lifecycle: illegal snapshot")
 
 func Check(s Snapshot) error {
-	for _, c := range []func(Snapshot) error{checkSets, checkOwnership, checkSchedule, checkCounters} {
+	for _, c := range []func(Snapshot) error{checkSets, checkOwnership, checkOp, checkSchedule, checkCounters} {
 		if err := c(s); err != nil {
 			return fmt.Errorf("%w: %s: %w", ErrIllegal, s.ID, err)
 		}
@@ -83,6 +86,33 @@ func checkSchedule(s Snapshot) error {
 func checkCounters(s Snapshot) error {
 	if s.Version < 0 || s.Generation < 0 || s.ActionCount < 0 {
 		return fmt.Errorf("I10: negative counter v%d g%d n%d", s.Version, s.Generation, s.ActionCount)
+	}
+	return nil
+}
+
+func checkOp(s Snapshot) error {
+	if s.Op == nil {
+		return nil
+	}
+	if !inPlanStates(s) {
+		return fmt.Errorf("I13: op in %s/%s", s.Status, s.Reason)
+	}
+	if s.Status == ExecutingPlan && (s.Plan == nil || !bytes.Equal(s.Op.Source, s.Plan.JSON)) {
+		return errors.New("I14: op source differs from the plan")
+	}
+	return nil
+}
+
+func CheckDecision(d Decision) error {
+	if d.OpWrite == nil {
+		return nil
+	}
+	want := operation.Subject{Kind: operation.SubjectIncident, ID: d.Next.ID}
+	if d.OpWrite.Subject != want {
+		return fmt.Errorf("%w: %s: I11: op write for %v", ErrIllegal, d.Next.ID, d.OpWrite.Subject)
+	}
+	if err := operation.Check(*d.OpWrite); err != nil {
+		return fmt.Errorf("%w: %s: I11: %w", ErrIllegal, d.Next.ID, err)
 	}
 	return nil
 }
