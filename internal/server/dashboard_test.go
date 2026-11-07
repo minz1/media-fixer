@@ -88,9 +88,7 @@ func TestDashboardIncident_RendersWithHtmx4AndTailwind4(t *testing.T) {
 	srv, database := newDashboardTestServer(t)
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "The Wire"}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	req := httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID, nil)
 	rec := httptest.NewRecorder()
@@ -127,9 +125,7 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 		t.Parallel()
 		srv, database := newDashboardTestServer(t)
 		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
-		if err := database.CreateIncident(context.Background(), inc); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Incident(t, database, inc)
 		mustExecuteIncidentTemplate(t, srv, inc.ID)
 	})
 
@@ -157,9 +153,7 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 		t.Parallel()
 		srv, database := newDashboardTestServer(t)
 		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
-		if err := database.CreateIncident(context.Background(), inc); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Incident(t, database, inc)
 		data, err := srv.BuildIncidentPageDataForTest(context.Background(), inc.ID, true)
 		if err != nil {
 			t.Fatal(err)
@@ -197,9 +191,7 @@ func TestIncidentEvents_OpenIncidentStreamsThenClosesOnContextDone(t *testing.T)
 	inc := &db.Incident{
 		Status: db.StatusInvestigating, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -247,9 +239,7 @@ func TestDashboardEvents_RendersIncidentsListInitially(t *testing.T) {
 	inc := &db.Incident{
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Severance",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -290,9 +280,7 @@ func TestIncidentTranscript_Renders(t *testing.T) {
 	inc := &db.Incident{
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Chernobyl",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	req := httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID+"/transcript", nil)
 	rec := httptest.NewRecorder()
@@ -317,9 +305,7 @@ func TestIncidentExport_DownloadsBundleWithEventsAndActions(t *testing.T) {
 	srv, database := newDashboardTestServer(t)
 	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	// Use journal.LogAction, not the plain database.LogAction, to also
 	// produce the action_applied event this test asserts on — production
 	// code (Dispatcher.logAction) always goes through the journal; a bare
@@ -378,9 +364,7 @@ func TestActionRerun_SurvivesCancelledRequest(t *testing.T) {
 	inc := &db.Incident{
 		Status: db.StatusAgentFixed, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -431,9 +415,7 @@ func TestActionResolve_SurvivesCancelledRequest(t *testing.T) {
 	inc := &db.Incident{
 		Status: db.StatusAgentFixed, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/resolve")
 
@@ -471,7 +453,7 @@ func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != db.IncidentStatus(lifecycle.AwaitingDownload) {
+	if got.Status != lifecycle.AwaitingDownload {
 		t.Errorf("status = %q, want awaiting_download", got.Status)
 	}
 	armed, err := database.GetPendingOutcome(ctx, inc.ID)

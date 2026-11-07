@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/server"
@@ -68,13 +67,13 @@ func TestStatusReaders_UseMeta(t *testing.T) {
 	t.Parallel()
 	for _, st := range lifecycle.States() {
 		m := lifecycle.Meta(st)
-		if got := server.StatusTone(db.IncidentStatus(st)); got != string(m.Tone) {
+		if got := server.StatusTone(st); got != string(m.Tone) {
 			t.Errorf("%s tone %q, want %q", st, got, m.Tone)
 		}
-		if got := server.StatusWord(db.IncidentStatus(st)); got != m.Label {
+		if got := server.StatusWord(st); got != m.Label {
 			t.Errorf("%s word %q, want %q", st, got, m.Label)
 		}
-		if got := server.IncidentLive(db.IncidentStatus(st)); got != m.Live {
+		if got := server.IncidentLive(st); got != m.Live {
 			t.Errorf("%s live %v, want %v", st, got, m.Live)
 		}
 	}

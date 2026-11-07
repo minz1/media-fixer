@@ -12,6 +12,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 const (
@@ -159,16 +160,18 @@ func newEscalationService(t *testing.T, status db.IncidentStatus) (*incident.Ser
 	t.Cleanup(func() { database.Close() })
 	ctx := context.Background()
 
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "Lost"}
-	if err = database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
+	inc := &db.Incident{
+		Status:     db.StatusOpen,
+		Source:     "discord",
+		ReportedBy: "fixture",
+		What:       "cant_play",
+		Title:      "Lost",
 	}
+	lifecycletest.Incident(t, database, inc)
 	if err = database.AddReporter(ctx, inc.ID, "alice", "discord", "discord-alice"); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.UpdateIncidentStatus(ctx, inc.ID, status); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, database, inc.ID, status)
 	notif := newSyncNotifier()
 	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { stopService(t, svc) })

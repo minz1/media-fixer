@@ -1,12 +1,12 @@
 package server_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 func seedCSRFIncident(t *testing.T, database *db.DB) string {
@@ -15,9 +15,7 @@ func seedCSRFIncident(t *testing.T, database *db.DB) string {
 		Status: db.StatusManualTestNeeded, Source: "discord", ReportedBy: "t",
 		What: "cant_play", Title: "CSRF Fixture",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	return inc.ID
 }
 

@@ -134,9 +134,7 @@ func newManualTestNeededIncidentWhat(t *testing.T, database *db.DB, what string)
 	t.Helper()
 	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: what, Title: "The Boys"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	finding := agent.DiagnosticResult{
 		RootCause:        "bad release",
 		Confidence:       "high",
@@ -153,12 +151,8 @@ func newManualTestNeededIncidentWhat(t *testing.T, database *db.DB, what string)
 			"blocklist":  true,
 		},
 	}
-	if err := database.SetIncidentFinding(ctx, inc.ID, finding, finding); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Finding(t, database, inc.ID, finding)
+	lifecycletest.MoveTo(t, database, inc.ID, db.StatusManualTestNeeded)
 	got, err := database.GetIncident(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -225,13 +219,10 @@ func TestEscalationPreview_NoFinding(t *testing.T) {
 	ag := &stubEscalationAgent{}
 	srv, database := newEscalationTestServer(t, ag)
 
-	ctx := context.Background()
 	inc := &db.Incident{
 		Status: db.StatusManualTestNeeded, Source: "discord", What: "cant_play", Title: "No Finding Show",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -522,9 +513,7 @@ func TestResolve_AlreadyResolvedRedirects(t *testing.T) {
 	t.Parallel()
 	srv, database := newEscalationTestServer(t, &stubEscalationAgent{})
 	inc := newManualTestNeededIncident(t, database)
-	if err := database.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusResolved); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, database, inc.ID, db.StatusResolved)
 
 	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/resolve")
 	if rec.Code != http.StatusSeeOther {

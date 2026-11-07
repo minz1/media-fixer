@@ -395,7 +395,7 @@ func parseUUIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func statusMeta(s db.IncidentStatus) lifecycle.StateMeta {
-	m := lifecycle.Meta(lifecycle.State(s))
+	m := lifecycle.Meta(s)
 	if m.Label == "" {
 		m.Label, m.Tone = string(s), toneGray
 	}

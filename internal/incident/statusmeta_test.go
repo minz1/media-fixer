@@ -12,12 +12,12 @@ import (
 func TestStatusReaders_UseMeta(t *testing.T) {
 	t.Parallel()
 	for _, st := range lifecycle.States() {
-		if got, want := incident.StatusLineForTest(db.IncidentStatus(st)), lifecycle.Meta(st).Line; got != want {
+		if got, want := incident.StatusLineForTest(st), lifecycle.Meta(st).Line; got != want {
 			t.Errorf("%s line %q, want %q", st, got, want)
 		}
 	}
 	for _, st := range lifecycle.States() {
-		inDB := slices.Contains(db.ActiveIncidentStatuses(), db.IncidentStatus(st))
+		inDB := slices.Contains(db.ActiveIncidentStatuses(), st)
 		if inDB != lifecycle.Meta(st).Active {
 			t.Errorf("%s active in db %v, in Meta %v", st, inDB, lifecycle.Meta(st).Active)
 		}

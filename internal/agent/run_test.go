@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -115,9 +116,7 @@ func seedRunIncident(t *testing.T, database *db.DB) *db.Incident {
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "tester",
 		What: "cant_play", Title: "Run Fixture",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	return inc
 }
 
@@ -286,9 +285,7 @@ func TestRun_ActionBudgetCountsActionsRecordedOutsideThisRun(t *testing.T) {
 	inc := seedRunIncident(t, database)
 	ctx := context.Background()
 	for range 2 {
-		if _, err := database.IncrementActionCount(ctx, inc.ID); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Spend(t, database, inc.ID, 1)
 	}
 
 	result, _, err := runOnce(ctx, t, ag, inc)

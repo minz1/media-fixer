@@ -151,6 +151,7 @@ func TestMigration21_RehearsalOnSnapshot(t *testing.T) {
 		t.Logf("pre-up sqlite_master vs fresh v20: differing %v", diff)
 	}
 	t.Logf("dry run: %s", dryRun(t, raw))
+	logCheckExposure(t, raw)
 	logCounts(t, "before 20", rehearsalSnapshot(t, raw))
 	d, err := db.Open(path)
 	if err != nil {
@@ -194,5 +195,21 @@ func logCleared(t *testing.T, cleared []string) {
 		t.Logf("cleared set matches MF_EXPECT_CLEARED (%d ids)", len(want))
 	} else {
 		t.Errorf("cleared set differs from MF_EXPECT_CLEARED: %d expected, %d cleared", len(want), len(gotIDs))
+	}
+}
+
+func logCheckExposure(t *testing.T, raw *sql.DB) {
+	t.Helper()
+	for _, c := range []struct{ name, where string }{
+		{"incident_status", `status NOT IN ('open','reopened','investigating','verifying','manual_test_needed',
+			'agent_fixed','blocked','resolved')`},
+		{"incident_blocked_locked", `status = 'blocked' AND autonomous_locked = 0`},
+		{"incident_pending_outcome_owner", `pending_outcome IS NOT NULL
+			AND status NOT IN ('verifying', 'manual_test_needed')`},
+		{"incident_plan_owner", `escalation_plan IS NOT NULL AND status <> 'manual_test_needed'`},
+		{"incident_verify_schedule", `status = 'verifying'`},
+		{"incident_reason_owner (mtn needing a reason)", `status = 'manual_test_needed'`},
+	} {
+		t.Logf("check exposure %s: %d rows", c.name, countInt(t, raw, `SELECT COUNT(*) FROM incidents WHERE `+c.where))
 	}
 }

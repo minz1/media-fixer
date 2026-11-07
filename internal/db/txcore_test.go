@@ -65,14 +65,15 @@ func TestAppendEvents_RollsBackAll(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
 	id := newClaimIncident(t, d)
+	base := len(eventKinds(t, d, id))
 
 	first := &db.Event{IncidentID: id, Kind: "status_changed", Payload: json.RawMessage(`{}`)}
 	second := &db.Event{IncidentID: "no-such-incident", Kind: "status_changed", Payload: json.RawMessage(`{}`)}
 	if err := d.AppendEvents(ctx, first, second); err == nil {
 		t.Fatal("append with an unknown incident succeeded")
 	}
-	if kinds := eventKinds(t, d, id); len(kinds) != 0 {
-		t.Fatalf("events after rollback = %v, want none", kinds)
+	if kinds := eventKinds(t, d, id); len(kinds) != base {
+		t.Fatalf("events after rollback = %v, want the %d fixture events only", kinds, base)
 	}
 }
 

@@ -131,22 +131,16 @@ func seedRound(ctx context.Context, jr *journal.Journal, id string, round int, s
 
 func seedInvestigating(ctx context.Context, d *db.DB) (map[string]string, map[string]string, error) {
 	title := "Frieren S01E07 audio out of sync"
-	inc := &db.Incident{
-		Status: db.StatusOpen, Source: "discord", ReportedBy: "viewer", What: "playback",
-		Title: title, Details: "Reported from the e2e seed.",
-	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		return nil, nil, err
-	}
-	if err := d.UpdateIncidentStatus(ctx, inc.ID, db.StatusInvestigating); err != nil {
+	id, err := seedIncident(ctx, d, title, db.StatusInvestigating, nil)
+	if err != nil {
 		return nil, nil, err
 	}
 	rounds := [][]step{
 		{{"get_sonarr_queue", `{"series_id": 5}`, "{\n  \"totalRecords\": 0,\n  \"records\": []\n}"}},
 		{{"list_directory", `{"path": "/tv/S01"}`, lines("Frieren.S01E%02d.mkv  1.2 GiB", seasonFiles)}},
 	}
-	if err := seedRounds(ctx, journal.New(d), inc.ID, conversation(title).seed, rounds); err != nil {
+	if err = seedRounds(ctx, journal.New(d), id, conversation(title).seed, rounds); err != nil {
 		return nil, nil, err
 	}
-	return map[string]string{"investigating": inc.ID}, map[string]string{title: string(db.StatusInvestigating)}, nil
+	return map[string]string{"investigating": id}, map[string]string{title: string(db.StatusInvestigating)}, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 type dlFixture struct {
@@ -99,8 +100,8 @@ func TestI2_16_OrphanPendingOutcomeNeverSwept(t *testing.T) {
 	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{Kind: lifecycle.OwnerResolve}); err != nil {
 		t.Fatal(err)
 	}
-	if err := setTrack(t.Context(), f.db, f.inc.ID, freshTrack(), time.Now().Add(-time.Hour)); err != nil {
-		t.Fatal(err)
+	if err := setResolvedTrack(t.Context(), f.db, f.inc.ID); !errors.Is(err, lifecycle.ErrIllegal) {
+		t.Fatalf("an orphan pending outcome was stored on a resolved incident: %v", err)
 	}
 	f.svc.ReconcileForTest(t.Context())
 	if f.svc.ArmedForTest(f.inc.ID) != 0 || f.checks.Load() != 0 {
@@ -128,6 +129,7 @@ func TestI2_18_DownloadCheckStaleGenerationRejected(t *testing.T) {
 func TestI1_15_StaleDownloadCheckAfterRerunIgnored(t *testing.T) {
 	t.Parallel()
 	f := newDLFixture(t, statusAwaiting, freshTrack())
+	lifecycletest.Force(t, f.db, f.inc.ID, func(n *lifecycle.Snapshot) { n.NextCheck = time.Now().Add(time.Hour) })
 	f.svc.ReconcileForTest(t.Context())
 	gen := f.snap(t).Generation
 	if f.svc.ArmedForTest(f.inc.ID) != gen {
@@ -199,4 +201,14 @@ func TestDownload_QueueStatusKeptSeparately(t *testing.T) {
 	if d == nil || d.Stage != lifecycle.StageDownloading || d.QueueStatus != "importPending" {
 		t.Fatalf("download %+v", d)
 	}
+}
+
+func setResolvedTrack(ctx context.Context, d *db.DB, id string) error {
+	_, err := d.ApplyIncident(ctx, id, func(cur lifecycle.Snapshot) (db.Decision, error) {
+		n := cur.Clone()
+		n.Download = lifecycletest.Target()
+		n.Download.Stage = lifecycle.StageSearching
+		return db.Decision{Next: n}, nil
+	})
+	return err
 }

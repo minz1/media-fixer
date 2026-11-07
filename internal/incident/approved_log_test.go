@@ -16,6 +16,7 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -95,11 +96,8 @@ func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrC
 
 func (fx *approvedFixture) awaiting(t *testing.T, action string, params map[string]any) *db.Incident {
 	t.Helper()
-	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "The Boys"}
-	if err := fx.db.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, fx.db, inc)
 	finding := agent.DiagnosticResult{
 		RootCause:        "bad release",
 		PrimaryAction:    "manual_investigation",
@@ -107,12 +105,8 @@ func (fx *approvedFixture) awaiting(t *testing.T, action string, params map[stri
 		EscalateParams:   params,
 		RequiresApproval: true,
 	}
-	if err := fx.db.SetIncidentFinding(ctx, inc.ID, finding, finding); err != nil {
-		t.Fatal(err)
-	}
-	if err := fx.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Finding(t, fx.db, inc.ID, finding)
+	lifecycletest.MoveTo(t, fx.db, inc.ID, db.StatusManualTestNeeded)
 	return inc
 }
 
@@ -123,9 +117,7 @@ func (fx *approvedFixture) approve(t *testing.T, id string, plan any) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setErr := fx.db.SetEscalationPlan(ctx, id, planJSON); setErr != nil {
-		t.Fatal(setErr)
-	}
+	lifecycletest.StorePlan(t, fx.db, id, planJSON)
 	return fx.svc.ApproveEscalation(ctx, id, card.Fingerprint(planJSON), fx.svc.CurrentVersion(ctx, id))
 }
 

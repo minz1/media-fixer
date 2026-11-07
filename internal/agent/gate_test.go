@@ -151,9 +151,7 @@ func TestRun_LockedRunsDiagnosisOnly(t *testing.T) {
 		toolCallResponse("complete_diagnosis", diagnosisArgs),
 	}})
 	inc := seedRunIncident(t, database)
-	if err := database.SetAutonomousLocked(context.Background(), inc.ID, true); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Lock(t, database, inc.ID, true)
 	exit := runGated(context.Background(), t, ag, database, inc, newRecGate(database, inc))
 	if exit.State != agent.RunConcluded {
 		t.Fatalf("exit %s: %v", exit.State, exit.Err)

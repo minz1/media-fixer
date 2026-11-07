@@ -16,6 +16,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -164,13 +165,9 @@ func TestA10_10_OwnerActionsRefusedBeforeAnyWrite(t *testing.T) {
 	ctx := context.Background()
 	inc := fx.incident(t)
 	fx.preview(t, inc.ID)
-	if err := fx.db.SetAutonomousLocked(ctx, inc.ID, true); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Lock(t, fx.db, inc.ID, true)
 	po := &db.PendingOutcome{MediaType: "tv", Title: "The Boys", Season: 1, Episode: 1, StartedAt: time.Now()}
-	if err := fx.db.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Track(t, fx.db, inc.ID, po, time.Now())
 	shutdownNow(t, fx.svc)
 	before := ownerSnapshot(t, fx, inc.ID)
 

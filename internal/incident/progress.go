@@ -16,7 +16,7 @@ import (
 
 func (s *Service) AdvanceReporterProgress(ctx context.Context, now time.Time) {
 	for _, status := range lifecycle.StatesWhere(func(m lifecycle.StateMeta) bool { return m.Progress }) {
-		incs, err := s.db.FindByStatus(ctx, db.IncidentStatus(status))
+		incs, err := s.db.FindByStatus(ctx, status)
 		if err != nil {
 			s.log.ErrorContext(ctx, "find incidents for progress", "status", status, "error", err)
 			continue

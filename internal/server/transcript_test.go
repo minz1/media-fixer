@@ -10,6 +10,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -124,9 +125,7 @@ func TestD9_8_TranscriptMarksTheRunsStepCount(t *testing.T) {
 	inc := &db.Incident{
 		Status: db.StatusInvestigating, Source: "discord", ReportedBy: "t", What: "cant_play", Title: "T",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	j := journal.New(database)
 	seed := []openai.ChatCompletionMessage{
 		{Role: openai.ChatMessageRoleSystem, Content: "sys"},

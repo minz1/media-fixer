@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/livecheck"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -17,6 +18,7 @@ func TestStatusTone(t *testing.T) {
 		db.StatusOpen: "yellow", db.StatusInvestigating: "blue", db.StatusAgentFixed: "green",
 		db.StatusManualTestNeeded: "orange", db.StatusResolved: "gray", db.StatusReopened: "red",
 		db.StatusBlocked: "red", db.StatusVerifying: "purple", "unknown": "gray",
+		lifecycle.AwaitingDownload: "purple", lifecycle.ExecutingPlan: "blue", lifecycle.None: "gray",
 	} {
 		if got := server.StatusTone(in); got != want {
 			t.Errorf("StatusTone(%q) = %q, want %q", in, got, want)

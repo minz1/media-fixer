@@ -101,7 +101,7 @@ type ReplaceFile struct {
 // ExecuteReplace does.
 //
 // Tagged explicitly because a plan is now persisted between the owner's
-// preview and their approval (see db.SetEscalationPlan), so its stored shape
+// preview and their approval (see db.ApplyIncident), so its stored shape
 // is a format that has to survive field renames, not an incidental rendering
 // of Go identifiers.
 type ReplacePlan struct {

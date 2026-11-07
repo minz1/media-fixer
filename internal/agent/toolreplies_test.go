@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -159,9 +160,7 @@ func TestA6_10_BudgetTripAnswersDroppedCalls(t *testing.T) {
 	inc := seedRunIncident(t, database)
 	ctx := context.Background()
 	for range 3 {
-		if _, err := database.IncrementActionCount(ctx, inc.ID); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Spend(t, database, inc.ID, 1)
 	}
 
 	_, conv, err := runOnce(ctx, t, ag, inc)

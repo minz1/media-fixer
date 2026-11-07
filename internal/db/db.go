@@ -822,21 +822,24 @@ func columnExists(ctx context.Context, conn *sql.DB, table, column string) (bool
 // --- Incidents ---
 
 // IncidentStatus is the lifecycle state of an incident.
-type IncidentStatus string
+type IncidentStatus = lifecycle.State
 
 const (
-	StatusOpen             IncidentStatus = "open"
-	StatusInvestigating    IncidentStatus = "investigating"
-	StatusAgentFixed       IncidentStatus = "agent_fixed"
-	StatusManualTestNeeded IncidentStatus = "manual_test_needed"
-	StatusResolved         IncidentStatus = "resolved"
-	StatusReopened         IncidentStatus = "reopened"
+	StatusOpen             = lifecycle.Open
+	StatusInvestigating    = lifecycle.Investigating
+	StatusAgentFixed       = lifecycle.AgentFixed
+	StatusManualTestNeeded = lifecycle.ManualTestNeeded
+	StatusResolved         = lifecycle.Resolved
+	StatusReopened         = lifecycle.Reopened
 	// StatusBlocked marks an incident the agent will not act on autonomously
 	// (e.g. locked due to a suspected systemic failure) until the owner intervenes.
-	StatusBlocked IncidentStatus = "blocked"
+	StatusBlocked = lifecycle.Blocked
 	// StatusVerifying marks an incident where a non-destructive fix was applied
 	// and the system is waiting/re-checking whether it resolved the problem.
-	StatusVerifying IncidentStatus = "verifying"
+	StatusVerifying = lifecycle.Verifying
+
+	StatusAwaitingDownload = lifecycle.AwaitingDownload
+	StatusExecutingPlan    = lifecycle.ExecutingPlan
 )
 
 // Incident is a single tracked playback problem.
@@ -859,25 +862,6 @@ type Incident struct {
 	Generation         int64          `json:"generation"`
 	Parked             bool           `json:"parked"`
 	Reason             string         `json:"reason,omitempty"`
-}
-
-// CreateIncident inserts a new incident, setting ID and timestamps.
-func (d *DB) CreateIncident(ctx context.Context, inc *Incident) error {
-	if inc.ID == "" {
-		inc.ID = uuid.New().String()
-	}
-	inc.CreatedAt = time.Now()
-	inc.UpdatedAt = inc.CreatedAt
-
-	_, err := d.write.ExecContext(ctx, `
-		INSERT INTO incidents (id, created_at, updated_at, status, source, reported_by, what, title, jellyfin_item_id, details,
-			reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'manual_test_needed' THEN 'needs_owner' END)`,
-		inc.ID, inc.CreatedAt, inc.UpdatedAt, inc.Status,
-		inc.Source, inc.ReportedBy, inc.What, inc.Title,
-		nullStr(inc.JellyfinItemID), nullStr(inc.Details), inc.Status,
-	)
-	return err
 }
 
 // GetIncident retrieves an incident by ID.
@@ -908,16 +892,11 @@ func ActiveIncidentStatuses() []IncidentStatus {
 }
 
 func statusesWhere(pred func(lifecycle.StateMeta) bool) []IncidentStatus {
-	var out []IncidentStatus
-	for _, s := range lifecycle.StatesWhere(pred) {
-		out = append(out, IncidentStatus(s))
-	}
-	return out
+	return lifecycle.StatesWhere(pred)
 }
 
 // activeStatusesJSON is ActiveIncidentStatuses as one JSON-array bind
-// parameter, for `status IN (SELECT value FROM json_each(?))` — the same
-// fixed-query-text pattern TransitionStatus uses, so no query below has to
+// parameter, for `status IN (SELECT value FROM json_each(?))`, so no query below has to
 // concatenate a placeholder list into its SQL.
 func activeStatusesJSON() (string, error) {
 	b, err := json.Marshal(ActiveIncidentStatuses())
@@ -1030,102 +1009,6 @@ const (
 func likeEscape(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
 	return r.Replace(s)
-}
-
-// UpdateIncidentStatus sets the status of an incident.
-func (d *DB) UpdateIncidentStatus(ctx context.Context, id string, status IncidentStatus) error {
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET status = ?, updated_at = ?, reason = `+legacyReason+` WHERE id = ?`,
-		status, time.Now(), status, id)
-	return err
-}
-
-// transitionStatusUnconditional and transitionStatusRestricted implement
-// TransitionStatus's two cases as fixed, literal query strings — no case
-// needs to build a WHERE clause whose shape depends on how many allowedFrom
-// values were passed. The restricted case matches allowedFrom via
-// json_each(?) over one JSON-array parameter instead of a hand-built
-// "IN (?,?,?)" whose placeholder count varies with len(allowedFrom): the
-// query text itself is then identical on every call regardless of that
-// length, and the actual status values travel as ordinary bound data (a JSON
-// string), never as SQL syntax.
-const (
-	legacyReason                  = `CASE WHEN ? = 'manual_test_needed' THEN COALESCE(reason, 'needs_owner') END`
-	transitionStatusUnconditional = `UPDATE incidents SET status = ?, updated_at = ?, reason = ` + legacyReason +
-		` WHERE id = ?`
-	transitionStatusRestricted = `UPDATE incidents SET status = ?, updated_at = ?, reason = ` + legacyReason + ` WHERE id = ?
-		AND status IN (SELECT value FROM json_each(?))`
-)
-
-// TransitionStatus atomically sets an incident's status to `to`, but only when its
-// current status is one of allowedFrom. It returns true iff this call actually
-// performed the change. Callers gate side effects (notifications) on the result so
-// that concurrent runs racing to the same terminal state notify exactly once: the
-// first transition wins, and any later caller sees a status not in allowedFrom and
-// gets false. Passing no allowedFrom transitions unconditionally.
-func (d *DB) TransitionStatus(
-	ctx context.Context, id string, to IncidentStatus, allowedFrom ...IncidentStatus,
-) (bool, error) {
-	now := time.Now()
-	var (
-		res sql.Result
-		err error
-	)
-	if len(allowedFrom) == 0 {
-		res, err = d.write.ExecContext(ctx, transitionStatusUnconditional, to, now, to, id)
-	} else {
-		allowedJSON, marshalErr := json.Marshal(allowedFrom)
-		if marshalErr != nil {
-			return false, marshalErr
-		}
-		res, err = d.write.ExecContext(ctx, transitionStatusRestricted, to, now, to, id, string(allowedJSON))
-	}
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n == 1, nil
-}
-
-// SetIncidentFinding persists the diagnostic result for an incident.
-func (d *DB) SetIncidentFinding(ctx context.Context, id string, finding, actions any) error {
-	fb, _ := json.Marshal(finding)
-	ab, _ := json.Marshal(actions)
-	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
-		return writeFinding(ctx, tx, id, fb, ab)
-	})
-}
-
-func writeFinding(ctx context.Context, tx *sql.Tx, id string, finding, actions []byte) error {
-	_, err := tx.ExecContext(ctx,
-		`UPDATE incidents SET finding = ?, recommended_actions = ?, updated_at = ? WHERE id = ?`,
-		string(finding), string(actions), time.Now(), id)
-	return err
-}
-
-// IncrementActionCount atomically increments the action counter and returns the new value.
-func (d *DB) IncrementActionCount(ctx context.Context, id string) (int, error) {
-	var n int
-	err := d.write.QueryRowContext(ctx,
-		`UPDATE incidents SET action_count = action_count + 1, updated_at = ? WHERE id = ?
-		 RETURNING action_count`,
-		time.Now(), id).Scan(&n)
-	return n, err
-}
-
-// SetAutonomousLocked sets or clears the autonomous-action lock on an incident.
-func (d *DB) SetAutonomousLocked(ctx context.Context, id string, locked bool) error {
-	v := 0
-	if locked {
-		v = 1
-	}
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET autonomous_locked = ?, updated_at = ? WHERE id = ?`,
-		v, time.Now(), id)
-	return err
 }
 
 // --- Reporters ---
@@ -1377,67 +1260,6 @@ func (d *DB) FindByStatus(ctx context.Context, status IncidentStatus) ([]*Incide
 	return d.ListIncidents(ctx, string(status), findByStatusLimit, 0)
 }
 
-// FindStaleInvestigating returns incidents stuck in "investigating" whose most
-// recent incident_events activity (or, if nothing has been logged yet,
-// updated_at — set when the run entered "investigating") is older than
-// staleBefore. Formerly driven by a dedicated last_heartbeat column touched
-// once per LLM round; any event append now serves the same purpose (see
-// internal/journal), so no separate heartbeat write exists — this is a plain
-// read over incidents joined against incident_events, both this package's own
-// tables. RecoverZombies only catches a crashed process (nothing left running
-// to check); this catches a hung one — a run whose goroutine is still alive
-// but stopped making progress, which zombie recovery cannot see at all.
-func (d *DB) FindStaleInvestigating(ctx context.Context, staleBefore time.Time) ([]*Incident, error) {
-	q := `SELECT i.id, i.created_at, i.updated_at, i.status, i.source, i.reported_by, i.what, i.title,
-	             COALESCE(i.jellyfin_item_id,''), COALESCE(i.details,''),
-	             COALESCE(i.finding,''), COALESCE(i.recommended_actions,''),
-	             i.action_count, i.autonomous_locked, i.version, i.generation, i.parked, COALESCE(i.reason, '')
-	      FROM incidents i
-	      LEFT JOIN (
-	        SELECT incident_id, MAX(at) AS last_activity FROM incident_events GROUP BY incident_id
-	      ) e ON e.incident_id = i.id
-	      WHERE i.status = ? AND COALESCE(e.last_activity, i.updated_at) < ?`
-	rows, err := d.read.QueryContext(ctx, q, StatusInvestigating, staleBefore)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*Incident
-	for rows.Next() {
-		inc, scanErr := scanIncident(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		out = append(out, inc)
-	}
-	return out, rows.Err()
-}
-
-func (d *DB) FindStaleReopened(ctx context.Context, staleBefore time.Time) ([]*Incident, error) {
-	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
-	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
-	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
-	      FROM incidents
-	      WHERE status = ? AND updated_at < ?`
-	rows, err := d.read.QueryContext(ctx, q, StatusReopened, staleBefore)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []*Incident
-	for rows.Next() {
-		inc, scanErr := scanIncident(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		out = append(out, inc)
-	}
-	return out, rows.Err()
-}
-
 // --- Pending outcome tracking (async fixes, e.g. arr_search_missing) ---
 
 // PendingOutcome tracks an asynchronous fix from trigger through resolution.
@@ -1472,28 +1294,6 @@ type PendingOutcome struct {
 	KeepSearchingUntil time.Time `json:"keep_searching_until"`
 }
 
-// SetPendingOutcome upserts the pending-outcome state for an incident and
-// schedules its next sweep check.
-func (d *DB) SetPendingOutcome(ctx context.Context, id string, po *PendingOutcome, nextCheck time.Time) error {
-	b, err := json.Marshal(po)
-	if err != nil {
-		return err
-	}
-	_, err = d.write.ExecContext(ctx,
-		`UPDATE incidents SET pending_outcome = ?, pending_outcome_next_check = ?, updated_at = ? WHERE id = ?`,
-		string(b), nextCheck, time.Now(), id)
-	return err
-}
-
-// ClearPendingOutcome removes any pending-outcome state for an incident
-// (called once it resolves, so the sweeper stops touching it).
-func (d *DB) ClearPendingOutcome(ctx context.Context, id string) error {
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET pending_outcome = NULL, pending_outcome_next_check = NULL, updated_at = ? WHERE id = ?`,
-		time.Now(), id)
-	return err
-}
-
 // GetPendingOutcome returns the current pending-outcome state for an
 // incident, or ErrNotFound if it has none.
 func (d *DB) GetPendingOutcome(ctx context.Context, id string) (*PendingOutcome, error) {
@@ -1523,25 +1323,6 @@ var (
 	ErrPlanNotStored    = errors.New("escalation plan not stored: the incident is not awaiting a decision")
 )
 
-// SetEscalationPlan stores the exact plan an owner is being shown, so
-// approving it executes that plan rather than whatever a re-resolution would
-// produce later. See Service.ApproveEscalation for why re-resolving is unsafe
-// for an operation that deletes files.
-func (d *DB) SetEscalationPlan(ctx context.Context, id string, planJSON []byte) error {
-	now := time.Now()
-	res, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET escalation_plan = ?, escalation_plan_at = ?, updated_at = ? WHERE id = ? AND status = ?`,
-		string(planJSON), now, now, id, StatusManualTestNeeded)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil || n == 1 {
-		return err
-	}
-	return ErrPlanNotStored
-}
-
 // GetEscalationPlan returns the stored plan and when it was previewed, or
 // ErrNoEscalationPlan if none is stored.
 func (d *DB) GetEscalationPlan(ctx context.Context, id string) ([]byte, time.Time, error) {
@@ -1561,29 +1342,6 @@ func (d *DB) GetEscalationPlan(ctx context.Context, id string) ([]byte, time.Tim
 		return nil, time.Time{}, ErrNoEscalationPlan
 	}
 	return []byte(plan.String), at.Time, nil
-}
-
-// ClaimEscalationPlan clears planJSON only while it is still the stored plan of an incident awaiting a decision, so
-// it runs at most once. It reports whether it did.
-func (d *DB) ClaimEscalationPlan(ctx context.Context, id string, planJSON []byte) (bool, error) {
-	res, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET escalation_plan = NULL, escalation_plan_at = NULL, updated_at = ?
-		 WHERE id = ? AND status = ? AND escalation_plan = ?`,
-		time.Now(), id, StatusManualTestNeeded, string(planJSON))
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
-}
-
-// ClearEscalationPlan drops a stored plan when it no longer applies, so the
-// owner has to preview again.
-func (d *DB) ClearEscalationPlan(ctx context.Context, id string) error {
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET escalation_plan = NULL, escalation_plan_at = NULL, updated_at = ? WHERE id = ?`,
-		time.Now(), id)
-	return err
 }
 
 // --- Events (append-only incident_events log; see internal/journal) ---

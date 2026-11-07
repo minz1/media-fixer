@@ -2,7 +2,6 @@ package incident_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -118,23 +118,16 @@ func newEscalationFixtureNotifier(
 
 func (fx *escalationFixture) incident(t *testing.T) *db.Incident {
 	t.Helper()
-	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "The Boys"}
-	if err := fx.db.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, fx.db, inc)
 	finding := agent.DiagnosticResult{
 		RootCause:      "bad release",
 		PrimaryAction:  "manual_investigation",
 		EscalateAction: agent.EscalateRemoveAndSearch,
 		EscalateParams: map[string]any{"media_type": "tv", "title": "The Boys"},
 	}
-	if err := fx.db.SetIncidentFinding(ctx, inc.ID, finding, finding); err != nil {
-		t.Fatal(err)
-	}
-	if err := fx.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Finding(t, fx.db, inc.ID, finding)
+	lifecycletest.MoveTo(t, fx.db, inc.ID, db.StatusManualTestNeeded)
 	return inc
 }
 
@@ -232,7 +225,7 @@ func TestApproveEscalation_PlanClaimedBeforeExecute(t *testing.T) {
 	if approveErr := <-done; approveErr != nil {
 		t.Fatal(approveErr)
 	}
-	if during != db.IncidentStatus(lifecycle.ExecutingPlan) || again == nil {
+	if during != lifecycle.ExecutingPlan || again == nil {
 		t.Errorf("during execution: status %s, second approve %v; want executing_plan and a refusal", during, again)
 	}
 }
@@ -271,9 +264,7 @@ func TestPreviewEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 	t.Parallel()
 	fx := newEscalationFixture(t, newEscalationAgent())
 	inc := fx.incident(t)
-	if err := fx.db.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusReopened); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, fx.db, inc.ID, db.StatusReopened)
 	if _, _, err := fx.svc.PreviewEscalation(
 		context.Background(),
 		inc.ID,
@@ -295,9 +286,7 @@ func TestApproveEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 	fx := newEscalationFixture(t, ag)
 	inc := fx.incident(t)
 	fp := fx.preview(t, inc.ID)
-	if err := fx.db.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusAgentFixed); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, fx.db, inc.ID, db.StatusAgentFixed)
 
 	err := fx.svc.ApproveEscalation(
 		context.Background(),
@@ -352,16 +341,8 @@ func TestRerunAndResolve_ClearStoredPlan(t *testing.T) {
 		{"Resolve", func() error { return svc.Resolve(ctx, inc.ID, incident.Version{}) }},
 		{"Rerun", func() error { return svc.Rerun(ctx, inc.ID, incident.Version{}) }},
 	} {
-		if setErr := database.SetEscalationPlan(ctx, inc.ID, []byte(`{"Title":"x"}`)); !errors.Is(
-			setErr, db.ErrPlanNotStored) {
-			t.Fatalf("before %s: plan stored on a %s incident: %v", step.name, inc.Status, setErr)
-		}
-		if stErr := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); stErr != nil {
-			t.Fatal(stErr)
-		}
-		if setErr := database.SetEscalationPlan(ctx, inc.ID, []byte(`{"Title":"x"}`)); setErr != nil {
-			t.Fatal(setErr)
-		}
+		lifecycletest.MoveTo(t, database, inc.ID, db.StatusManualTestNeeded)
+		lifecycletest.StorePlan(t, database, inc.ID, []byte(`{"Title":"x"}`))
 		if runErr := step.run(); runErr != nil {
 			t.Fatal(runErr)
 		}
@@ -396,17 +377,7 @@ func TestPreviewAndApprove_EmitStatusChanged(t *testing.T) {
 
 	fp = fx.preview(t, inc.ID)
 	waitForStatusEvent(t, ch, "second Preview")
-	raw, err := sql.Open("sqlite", fx.dbPath+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, execErr := raw.ExecContext(ctx, `UPDATE incidents SET escalation_plan_at = ? WHERE id = ?`,
-		time.Now().Add(-expiredPlanAge), inc.ID); execErr != nil {
-		t.Fatal(execErr)
-	}
-	if closeErr := raw.Close(); closeErr != nil {
-		t.Fatal(closeErr)
-	}
+	lifecycletest.Force(t, fx.db, inc.ID, func(n *lifecycle.Snapshot) { n.Plan.At = time.Now().Add(-expiredPlanAge) })
 	if approveErr := fx.svc.ApproveEscalation(
 		ctx,
 		inc.ID,

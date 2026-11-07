@@ -417,10 +417,12 @@ func insertIncident(ctx context.Context, tx *sql.Tx, s lifecycle.Snapshot, r *Ne
 	}
 	now := time.Now()
 	_, err = tx.ExecContext(ctx, `INSERT INTO incidents (id, created_at, updated_at, status, source, reported_by,
-		what, title, jellyfin_item_id, details, action_count, autonomous_locked, version, generation, parked, reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		what, title, jellyfin_item_id, details, action_count, autonomous_locked, version, generation, parked, reason,
+		pending_outcome, escalation_plan, escalation_plan_at, verify_next_check, verify_checks_left, verify_spec)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, now, now, s.Status, r.Source, r.ReportedBy, r.What, r.Title, nullStr(r.JellyfinItemID),
-		nullStr(r.Details), s.ActionCount, c.locked, s.Version, s.Generation, c.parked, c.reason)
+		nullStr(r.Details), s.ActionCount, c.locked, s.Version, s.Generation, c.parked, c.reason,
+		c.po, c.plan, c.planAt, c.next, c.checksLeft, c.spec)
 	return err
 }
 
@@ -464,4 +466,10 @@ func parseActivity(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+func writeFinding(ctx context.Context, tx *sql.Tx, id string, finding, actions []byte) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE incidents SET finding = ?, recommended_actions = ?, updated_at = ? WHERE id = ?`,
+		string(finding), string(actions), time.Now(), id)
+	return err
 }

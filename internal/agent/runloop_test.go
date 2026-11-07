@@ -15,6 +15,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 type finishedPayload struct {
@@ -128,9 +129,7 @@ func seedOldFinding(t *testing.T, database *db.DB, id string) {
 		RootCause: "old run", PrimaryAction: "x", RequiresApproval: true,
 		EscalateAction: agent.EscalateRemoveAndSearch,
 	}
-	if err := database.SetIncidentFinding(context.Background(), id, old, old); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Finding(t, database, id, old)
 }
 
 func storedFinding(t *testing.T, database *db.DB, id string) *agent.DiagnosticResult {
@@ -176,9 +175,7 @@ func checkJ5(t *testing.T, database *db.DB, id string) {
 func spendBudget(t *testing.T, database *db.DB, id string) {
 	t.Helper()
 	for range 3 {
-		if _, err := database.IncrementActionCount(context.Background(), id); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Spend(t, database, id, 1)
 	}
 }
 
@@ -361,16 +358,15 @@ func TestRun_NotClaimedRecordsNothing(t *testing.T) {
 	ag, database := newRunTestAgent(t, &scriptedLLM{responses: []string{textResponse("x")}})
 	inc := seedRunIncident(t, database)
 	seedOldFinding(t, database, inc.ID)
-	if err := database.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusResolved); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, database, inc.ID, db.StatusResolved)
+	base := len(traceRuns(t, database, inc.ID).kinds)
 
 	_, _, err := runOnce(context.Background(), t, ag, inc)
 	if !errors.Is(err, agent.ErrIncidentNotInvestigatable) {
 		t.Errorf("Run error = %v, want ErrIncidentNotInvestigatable", err)
 	}
-	if tr := traceRuns(t, database, inc.ID); len(tr.kinds) != 0 {
-		t.Errorf("events = %v, want none", tr.kinds)
+	if tr := traceRuns(t, database, inc.ID); len(tr.kinds) != base {
+		t.Errorf("events = %v, want only the %d fixture events", tr.kinds, base)
 	}
 	checkJ5(t, database, inc.ID)
 }

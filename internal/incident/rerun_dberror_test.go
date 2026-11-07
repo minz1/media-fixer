@@ -11,6 +11,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 const quietWindow = 300 * time.Millisecond
@@ -34,7 +35,7 @@ func (b *syncBuffer) String() string {
 
 func newRunningIncident(
 	t *testing.T, logs *syncBuffer, notif *syncNotifier,
-) (*incident.Service, *db.DB, string, *blockingAgent, string) {
+) (*incident.Service, *db.DB, *blockingAgent, string) {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
 	if err != nil {
@@ -53,9 +54,7 @@ func newRunningIncident(
 	t.Cleanup(func() { stopService(t, svc) })
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Slow"}
-	if err = database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	if err = svc.Rerun(context.Background(), inc.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
@@ -64,12 +63,12 @@ func newRunningIncident(
 	case <-time.After(notifyWaitTimeout):
 		t.Fatal("timed out waiting for the first run to start")
 	}
-	return svc, database, f.Name(), ag, inc.ID
+	return svc, database, ag, inc.ID
 }
 
 func TestRerun_ReadFailureLeavesTheRunningRunAlone(t *testing.T) {
 	t.Parallel()
-	svc, database, _, ag, id := newRunningIncident(t, &syncBuffer{}, newSyncNotifier())
+	svc, database, ag, id := newRunningIncident(t, &syncBuffer{}, newSyncNotifier())
 
 	if err := database.Close(); err != nil {
 		t.Fatal(err)

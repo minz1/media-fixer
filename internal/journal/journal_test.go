@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -34,9 +36,7 @@ func openTestJournal(t *testing.T) (*journal.Journal, *db.DB) {
 func mustCreateIncident(t *testing.T, d *db.DB, title string) *db.Incident {
 	t.Helper()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
-	if err := d.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	return inc
 }
 
@@ -65,7 +65,8 @@ func TestLogAction_WritesEventAndProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Kind != string(journal.KindActionApplied) {
+	events = slices.DeleteFunc(events, func(e *db.Event) bool { return e.Kind != string(journal.KindActionApplied) })
+	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1 action_applied event: %+v", len(events), events)
 	}
 
@@ -268,14 +269,18 @@ func TestSince_ReturnsEventsInSeqOrderAfterCursor(t *testing.T) {
 	j, d := openTestJournal(t)
 	ctx := context.Background()
 	inc := mustCreateIncident(t, d, "T")
+	before, err := j.Events(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := j.IncidentCreated(ctx, inc); err != nil {
+	if err = j.IncidentCreated(ctx, inc); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.ReporterAdded(ctx, inc.ID, "alice", "discord", "123"); err != nil {
+	if err = j.ReporterAdded(ctx, inc.ID, "alice", "discord", "123"); err != nil {
 		t.Fatal(err)
 	}
-	if err := j.RunFinished(ctx, inc.ID, 3, nil); err != nil {
+	if err = j.RunFinished(ctx, inc.ID, 3, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -283,8 +288,9 @@ func TestSince_ReturnsEventsInSeqOrderAfterCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	all = all[len(before):]
 	if len(all) != 3 {
-		t.Fatalf("got %d events, want 3", len(all))
+		t.Fatalf("got %d new events, want 3", len(all))
 	}
 	// Ascending seq is the contract the transcript and export rely on to
 	// render a run in the order it happened.

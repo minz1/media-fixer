@@ -33,7 +33,7 @@ type runManager struct {
 	// Jellyfin was still warming up.
 	//
 	// Deliberately NOT held across the whole run: a deferred fix's verification
-	// wait (runVerification) and Phase 4's durable outcome tracking can run for
+	// wait and Phase 4's durable outcome tracking can run for
 	// minutes to hours and must never block the queue — those poll read-only
 	// state and don't need exclusivity. Diagnostic rounds are ~10s each and this
 	// app sees roughly a handful of incidents a day, so full serialization of

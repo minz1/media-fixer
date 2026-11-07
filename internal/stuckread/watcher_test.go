@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 	"github.com/minz1/mediafixer/internal/stuckread"
 )
@@ -136,9 +137,7 @@ func (h *harness) incidents() []*db.Incident {
 
 func (h *harness) setStatus(id string, s db.IncidentStatus) {
 	h.t.Helper()
-	if err := h.db.UpdateIncidentStatus(h.t.Context(), id, s); err != nil {
-		h.t.Fatal(err)
-	}
+	lifecycletest.MoveTo(h.t, h.db, id, s)
 }
 
 func (h *harness) status(id string) db.IncidentStatus {
@@ -334,9 +333,7 @@ func TestRerunGatedByOpenCount(t *testing.T) {
 	}
 	fixed := &db.Incident{Status: db.StatusAgentFixed, Source: "media-agent", ReportedBy: "media-agent",
 		What: "stuck_read", Title: "T"}
-	if err := h.db.CreateIncident(t.Context(), fixed); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, h.db, fixed)
 	for range 3 {
 		h.poll(three("T", 7)...)
 	}
@@ -514,9 +511,7 @@ func TestClearedTitlesForgotten(t *testing.T) {
 func (h *harness) otherIncident(status db.IncidentStatus) *db.Incident {
 	h.t.Helper()
 	inc := &db.Incident{Status: status, Source: "discord", ReportedBy: "u", What: "cant_play", Title: "T"}
-	if err := h.db.CreateIncident(h.t.Context(), inc); err != nil {
-		h.t.Fatal(err)
-	}
+	lifecycletest.Incident(h.t, h.db, inc)
 	return inc
 }
 
@@ -585,9 +580,7 @@ func TestWatcher_SystemRerunOnlyFromFixed(t *testing.T) {
 	inc := openOne(t, h)
 	h.setStatus(inc.ID, db.StatusAgentFixed)
 	for range 2 {
-		if _, err := h.db.IncrementActionCount(t.Context(), inc.ID); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Spend(t, h.db, inc.ID, 1)
 	}
 	h.poll(three("T", 7)...)
 	got, err := h.db.GetIncident(t.Context(), inc.ID)

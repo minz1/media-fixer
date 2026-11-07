@@ -12,6 +12,7 @@ import (
 	_ "modernc.org/sqlite" // raw connection, for asserting stored text
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 // modernc.org/sqlite stores a [time.Time] as RFC3339 text carrying the writing
@@ -74,22 +75,18 @@ func TestTimestampsAreStoredAsUTC(t *testing.T) {
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "tester",
 		What: "cant_play", Title: "UTC Fixture",
 	}
-	if err = d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	if err = d.AddReporter(ctx, inc.ID, "alice", "discord", "d-alice"); err != nil {
 		t.Fatal(err)
 	}
 	po := &db.PendingOutcome{MediaType: "tv", Title: "UTC Fixture", StartedAt: time.Now()}
-	if err = d.SetPendingOutcome(ctx, inc.ID, po, time.Now().Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Track(t, d, inc.ID, po, time.Now().Add(time.Minute))
 	d.Close()
 
 	for _, q := range []string{
 		"SELECT CAST(created_at AS TEXT) FROM incidents LIMIT 1",
 		"SELECT CAST(updated_at AS TEXT) FROM incidents LIMIT 1",
-		"SELECT CAST(pending_outcome_next_check AS TEXT) FROM incidents LIMIT 1",
+		"SELECT CAST(verify_next_check AS TEXT) FROM incidents LIMIT 1",
 		"SELECT CAST(reported_at AS TEXT) FROM incident_reporters LIMIT 1",
 	} {
 		got := rawQuery(t, path, q)
@@ -115,15 +112,12 @@ func TestUTCTimestampsMigration_RewritesOffsetBearingRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
 
 	inc := &db.Incident{
 		Status: db.StatusInvestigating, Source: "discord", ReportedBy: "tester",
 		What: "cant_play", Title: "Legacy Row",
 	}
-	if err = d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	d.Close()
 
 	// Exactly what the old driver default wrote: Go's time.Time.String()
@@ -152,13 +146,10 @@ func TestUTCTimestampsMigration_RewritesOffsetBearingRows(t *testing.T) {
 	// The point of the rewrite: a genuinely stale row is now found by a
 	// threshold bound as a normal Go time. Before it, the digits of a
 	// -04:00 value could sort as newer than a UTC threshold two hours later.
-	stale, err := d2.FindStaleInvestigating(ctx, time.Date(2026, 9, 20, 19, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(stale) != 1 {
-		t.Errorf("FindStaleInvestigating returned %d rows, want 1: a row last touched at "+
-			"18:30 UTC is stale against a 19:00 UTC threshold", len(stale))
+	stale := rawQuery(t, path, "SELECT COUNT(*) FROM incidents WHERE updated_at < '2026-09-20 19:00:00+00:00'")
+	if stale != "1" {
+		t.Errorf("%s rows stale, want 1: a row last touched at "+
+			"18:30 UTC is stale against a 19:00 UTC threshold", stale)
 	}
 }
 
@@ -176,9 +167,7 @@ func TestUTCTimestampsMigration_LeavesUnparseableValuesAlone(t *testing.T) {
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "t",
 		What: "cant_play", Title: "Odd Row",
 	}
-	if err = d.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	d.Close()
 
 	rawExec(t, path,

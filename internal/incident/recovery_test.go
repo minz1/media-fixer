@@ -2,7 +2,6 @@ package incident_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,12 +17,13 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const staleAge = 20 * time.Minute
 
-func newReopenedIncident(t *testing.T, age time.Duration) (*db.DB, *db.Incident) {
+func newReopenedIncident(t *testing.T, _ time.Duration) (*db.DB, *db.Incident) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "reopened.db")
 	database, err := db.Open(path)
@@ -31,24 +31,10 @@ func newReopenedIncident(t *testing.T, age time.Duration) (*db.DB, *db.Incident)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Left"}
-	if err = database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-	if err = database.UpdateIncidentStatus(ctx, inc.ID, db.StatusReopened); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := sql.Open("sqlite", path+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	if _, err = raw.ExecContext(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
-		time.Now().Add(-age), inc.ID); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
+	lifecycletest.MoveTo(t, database, inc.ID, db.StatusReopened)
 	return database, inc
 }
 
@@ -153,24 +139,13 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing
 	t.Parallel()
 	logs := &syncBuffer{}
 	notif := newSyncNotifier()
-	svc, database, dbPath, _, _ := newRunningIncident(t, logs, notif)
+	svc, database, _, _ := newRunningIncident(t, logs, notif)
 	ctx := context.Background()
 	waiting := &db.Incident{
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Queued",
 	}
-	if err := database.CreateIncident(ctx, waiting); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, waiting)
 	if err := svc.Rerun(ctx, waiting.ID, incident.Version{}); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	if _, err = raw.ExecContext(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
-		time.Now().Add(-staleAge), waiting.ID); err != nil {
 		t.Fatal(err)
 	}
 

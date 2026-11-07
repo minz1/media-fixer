@@ -147,11 +147,11 @@ func (e *lcEnv) exec(t *testing.T, q string, args ...any) {
 	}
 }
 
-const statusAwaiting = db.IncidentStatus(lifecycle.AwaitingDownload)
+const statusAwaiting = lifecycle.AwaitingDownload
 
 func seedTracked(t *testing.T, database *db.DB, inc *db.Incident) {
 	t.Helper()
-	sp := lifecycletest.Spec{Title: inc.Title, What: inc.What, State: lifecycle.State(inc.Status)}
+	sp := lifecycletest.Spec{Title: inc.Title, What: inc.What, State: inc.Status}
 	if inc.Status == db.StatusVerifying || inc.Status == statusAwaiting {
 		sp.State = lifecycle.AwaitingDownload
 	}
@@ -164,10 +164,8 @@ func seedTracked(t *testing.T, database *db.DB, inc *db.Incident) {
 }
 
 func setTrack(ctx context.Context, database *db.DB, id string, po *db.PendingOutcome, next time.Time) error {
-	if po.LastStage == "" {
-		po.LastStage = string(lifecycle.StageSearching)
-	}
-	return database.SetPendingOutcome(ctx, id, po, next)
+	_, err := database.ApplyIncident(ctx, id, lifecycletest.TrackDecide(po, next))
+	return err
 }
 
 func dueNow(t *testing.T, database *db.DB, id string) {

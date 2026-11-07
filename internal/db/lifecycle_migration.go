@@ -185,7 +185,24 @@ const incidentsLifecycleDDL = `CREATE TABLE incidents (
 	reason                     TEXT,
 	verify_next_check          DATETIME,
 	verify_checks_left         INTEGER,
-	verify_spec                TEXT
+	verify_spec                TEXT,
+	CONSTRAINT incident_status CHECK (status IN ('open', 'reopened', 'investigating', 'verifying',
+		'awaiting_download', 'manual_test_needed', 'executing_plan', 'agent_fixed', 'blocked', 'resolved')),
+	CONSTRAINT incident_flags CHECK (autonomous_locked IN (0, 1) AND parked IN (0, 1)),
+	CONSTRAINT incident_blocked_locked CHECK (status <> 'blocked' OR autonomous_locked = 1),
+	CONSTRAINT incident_pending_outcome_owner CHECK (pending_outcome IS NULL
+		OR status = 'awaiting_download' OR (status = 'manual_test_needed' AND reason = 'no_release')),
+	CONSTRAINT incident_download_has_outcome CHECK (status <> 'awaiting_download' OR pending_outcome IS NOT NULL),
+	CONSTRAINT incident_plan_owner CHECK (escalation_plan IS NULL
+		OR status IN ('manual_test_needed', 'executing_plan')),
+	CONSTRAINT incident_plan_claimed CHECK (status <> 'executing_plan' OR escalation_plan IS NOT NULL),
+	CONSTRAINT incident_reason_owner CHECK (reason IS NULL OR status = 'manual_test_needed'),
+	CONSTRAINT incident_parked_owner CHECK (parked = 0 OR status IN ('open', 'reopened')),
+	CONSTRAINT incident_counters CHECK (version >= 0 AND generation >= 0 AND action_count >= 0),
+	CONSTRAINT incident_verify_schedule CHECK (status NOT IN ('verifying', 'awaiting_download')
+		OR verify_next_check IS NOT NULL),
+	CONSTRAINT incident_verify_spec CHECK (verify_spec IS NULL
+		OR (status = 'verifying' AND json_valid(verify_spec)))
 )`
 
 const poStageNormal = `CASE WHEN COALESCE(json_extract(pending_outcome, '$.last_stage'), '') IN ('', 'searching')`

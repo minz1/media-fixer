@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
@@ -47,9 +48,7 @@ func TestAttemptHistory_EmptyForFreshIncident(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 	if got := a.AttemptHistoryForTest(ctx, inc.ID); got != "" {
@@ -72,9 +71,7 @@ func TestAttemptHistory_RendersPriorActions(t *testing.T) {
 		What:       "cant_play",
 		Title:      "Backrooms",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	if err := database.LogAction(ctx, &db.ActionLog{
 		IncidentID:  inc.ID,
 		Action:      "clear_jellyfin_cache",
@@ -115,9 +112,7 @@ func TestBuildSummarySeed_LabelsFindingsUnverifiedAndRequiresFullProtocol(t *tes
 		What:       "cant_play",
 		Title:      "100 meters",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	seed := a.BuildSummarySeed(ctx, inc, "ffprobe failed for President.Curtis.S01E05")
 	if len(seed) != 2 {
@@ -155,13 +150,9 @@ func TestActionAlreadyApplied(t *testing.T) {
 		What:       "cant_play",
 		Title:      "Backrooms",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	other := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Other"}
-	if err := database.CreateIncident(ctx, other); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, other)
 
 	if err := database.LogAction(ctx, &db.ActionLog{
 		IncidentID:  inc.ID,
@@ -207,9 +198,7 @@ func TestActionAlreadyApplied_DifferentEpisodesSameSeries_DoNotCollide(t *testin
 		What:       "cant_play",
 		Title:      "Rick and Morty",
 	}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	if err := database.LogAction(ctx, &db.ActionLog{
 		IncidentID: inc.ID,
 		Action:     "arr_search_missing",
@@ -250,9 +239,7 @@ func TestActionAlreadyApplied_ParameterlessAction(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusReopened, Source: "discord", ReportedBy: "x", What: "other", Title: "Infra"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	if err := database.LogAction(ctx, &db.ActionLog{
 		IncidentID:  inc.ID,
 		Action:      "restart_jellyfin",
@@ -495,11 +482,9 @@ func TestDisruptionNote(t *testing.T) {
 	// wrote to a last_disruption row with no such constraint — both fixture
 	// incidents need to exist for real.
 	for _, id := range []string{incidentA, incidentB} {
-		if createErr := database.CreateIncident(ctx, &db.Incident{
+		lifecycletest.Incident(t, database, &db.Incident{
 			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
-		}); createErr != nil {
-			t.Fatal(createErr)
-		}
+		})
 	}
 
 	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))

@@ -12,6 +12,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -53,9 +54,7 @@ func TestServer_OwnerPostWhileClosingShowsNotice(t *testing.T) {
 	srv, database, svc := newServiceServer(t)
 	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusManualTestNeeded, Source: "discord", What: "cant_play", Title: "Dark"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	stopService(t, svc)
 
 	for _, verb := range []string{"rerun", "resolve", "unlock", "keep-searching"} {

@@ -3,7 +3,6 @@ package incident_test
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +19,8 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 const tooManyPlanFiles = 16
@@ -75,20 +76,13 @@ func newCardService(t *testing.T, notif incident.Notifier, logs *bytes.Buffer) (
 
 func cardIncident(t *testing.T, d *db.DB, status db.IncidentStatus, action string) *db.Incident {
 	t.Helper()
-	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "The Boys"}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	if action != "" {
 		finding := agent.DiagnosticResult{RootCause: "bad release", EscalateAction: action}
-		if err := d.SetIncidentFinding(ctx, inc.ID, finding, finding); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Finding(t, d, inc.ID, finding)
 	}
-	if err := d.UpdateIncidentStatus(ctx, inc.ID, status); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, d, inc.ID, status)
 	inc.Status = status
 	return inc
 }
@@ -99,23 +93,13 @@ func storePlan(t *testing.T, d *db.DB, id string, plan any) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = d.SetEscalationPlan(context.Background(), id, b); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.StorePlan(t, d, id, b)
 	return card.Fingerprint(b)
 }
 
-func agePlan(t *testing.T, dbPath, id string, age time.Duration) {
+func agePlan(t *testing.T, d *db.DB, id string, age time.Duration) {
 	t.Helper()
-	raw, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	if _, err = raw.ExecContext(context.Background(),
-		`UPDATE incidents SET escalation_plan_at = ? WHERE id = ?`, time.Now().Add(-age), id); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Force(t, d, id, func(n *lifecycle.Snapshot) { n.Plan.At = time.Now().Add(-age) })
 }
 
 func renderInc(t *testing.T, svc *incident.Service, id string) card.Update {
@@ -165,32 +149,21 @@ func TestRenderer_ButtonRules(t *testing.T) {
 		{"open offers Resolve and Rerun", db.StatusOpen, "", nil, []string{"rerun", "resolve"}},
 		{"locked offers Unlock", db.StatusBlocked, "", func(t *testing.T, d *db.DB, _, id string) {
 			t.Helper()
-			if err := d.SetAutonomousLocked(context.Background(), id, true); err != nil {
-				t.Fatal(err)
-			}
+			lifecycletest.Lock(t, d, id, true)
 		}, []string{"rerun", "resolve", "unlock"}},
 		{"keep searching with a pending outcome", db.StatusManualTestNeeded, agent.EscalateManualInvestigation,
-			func(t *testing.T, d *db.DB, path, id string) {
+			func(t *testing.T, d *db.DB, _, id string) {
 				t.Helper()
-				po := &db.PendingOutcome{
-					MediaType: "tv",
-					Title:     "The Boys",
-					Season:    1,
-					Episode:   2,
-					LastStage: "searching",
-				}
-				if err := d.SetPendingOutcome(context.Background(), id, po, time.Now()); err != nil {
-					t.Fatal(err)
-				}
-				rawExec(t, path, `UPDATE incidents SET reason = 'no_release' WHERE id = ?`, id)
+				lifecycletest.Force(t, d, id, func(n *lifecycle.Snapshot) {
+					n.Reason, n.Download = lifecycle.ReasonNoRelease, lifecycletest.Target()
+					n.Download.Stage = lifecycle.StageSearching
+				})
 			}, []string{"rerun", "resolve", "keep"}},
 		{"keep searching needs manual_test_needed", db.StatusVerifying, "",
 			func(t *testing.T, d *db.DB, _, id string) {
 				t.Helper()
 				po := &db.PendingOutcome{MediaType: "tv", Title: "The Boys", Season: 1, Episode: 2}
-				if err := d.SetPendingOutcome(context.Background(), id, po, time.Now()); err != nil {
-					t.Fatal(err)
-				}
+				lifecycletest.Track(t, d, id, po, time.Now())
 			}, []string{"rerun", "resolve"}},
 		{"preview without a plan", db.StatusManualTestNeeded, agent.EscalateRemoveAndSearch, nil,
 			[]string{"preview", "rerun", "resolve"}},
@@ -199,10 +172,10 @@ func TestRenderer_ButtonRules(t *testing.T) {
 		{"no preview for manual investigation", db.StatusManualTestNeeded, agent.EscalateManualInvestigation, nil,
 			[]string{"rerun", "resolve"}},
 		{"stale plan offers Preview", db.StatusManualTestNeeded, agent.EscalateRemoveAndSearch,
-			func(t *testing.T, d *db.DB, path, id string) {
+			func(t *testing.T, d *db.DB, _, id string) {
 				t.Helper()
 				storePlan(t, d, id, readablePlan(1))
-				agePlan(t, path, id, expiredPlanAge)
+				agePlan(t, d, id, expiredPlanAge)
 			}, []string{"preview", "rerun", "resolve"}},
 		{"fresh plan offers Approve and Refresh", db.StatusManualTestNeeded, agent.EscalateRemoveAndSearch,
 			func(t *testing.T, d *db.DB, _, id string) {
@@ -233,17 +206,23 @@ func TestRenderer_ButtonRules(t *testing.T) {
 
 func TestRenderer_StatusLines(t *testing.T) {
 	t.Parallel()
-	want := map[db.IncidentStatus]string{
-		db.StatusOpen:             "🆕 Open",
-		db.StatusInvestigating:    "🔁 Investigating…",
-		db.StatusVerifying:        "⏳ Verifying the fix",
-		db.StatusReopened:         "🔁 Re-opened",
-		db.StatusBlocked:          "⛔ Blocked",
-		db.StatusAgentFixed:       "✅ Fixed by the agent",
-		db.StatusManualTestNeeded: "🧑‍🔧 Needs you",
-		db.StatusResolved:         "✅ Resolved",
+	want := []struct {
+		st   db.IncidentStatus
+		line string
+	}{
+		{db.StatusOpen, "🆕 Open"},
+		{db.StatusInvestigating, "🔁 Investigating…"},
+		{db.StatusVerifying, "⏳ Verifying the fix"},
+		{db.StatusReopened, "🔁 Re-opened"},
+		{db.StatusBlocked, "⛔ Blocked"},
+		{db.StatusAgentFixed, "✅ Fixed by the agent"},
+		{db.StatusManualTestNeeded, "🧑‍🔧 Needs you"},
+		{db.StatusResolved, "✅ Resolved"},
+		{db.StatusAwaitingDownload, "📥 Waiting for the download"},
+		{db.StatusExecutingPlan, "🚀 Running the approved plan"},
 	}
-	for status, line := range want {
+	for _, c := range want {
+		status, line := c.st, c.line
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 			svc, d, _ := newCardService(t, &cardNotifier{}, nil)
@@ -446,16 +425,14 @@ func TestHandler_RefusalLines(t *testing.T) {
 		"Refused: "+incident.ErrPlanChangedForTest().Error() {
 		t.Errorf("confirm with a changed plan: line %q", res.Line)
 	}
-	agePlan(t, fx.dbPath, inc.ID, expiredPlanAge)
+	agePlan(t, fx.db, inc.ID, expiredPlanAge)
 	if res := clickInc(t, fx.svc, "confirm", inc.ID, db.StatusManualTestNeeded, "000000000000"); !strings.Contains(
 		res.Line, incident.ErrPlanExpiredForTest().Error()) || !strings.HasPrefix(res.Line, "Refused: ") {
 		t.Errorf("confirm with an expired plan: line %q", res.Line)
 	}
 
 	agentFixed := fx.incident(t)
-	if err := fx.db.UpdateIncidentStatus(ctx, agentFixed.ID, db.StatusAgentFixed); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, fx.db, agentFixed.ID, db.StatusAgentFixed)
 	if res := clickInc(t, fx.svc, "confirm", agentFixed.ID, db.StatusAgentFixed, "000000000000"); res.Line !=
 		"Refused: "+incident.ErrNotAwaitingDecisionForTest().Error() {
 		t.Errorf("confirm when not awaiting a decision: line %q", res.Line)
@@ -465,9 +442,7 @@ func TestHandler_RefusalLines(t *testing.T) {
 	if err := fx.svc.Resolve(ctx, resolved.ID, incident.Version{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := fx.db.UpdateIncidentStatus(ctx, resolved.ID, db.StatusResolved); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, fx.db, resolved.ID, db.StatusResolved)
 	if res := clickInc(t, fx.svc, "resolve", resolved.ID, db.StatusResolved); res.Line !=
 		"Refused: "+incident.ErrAlreadyResolved.Error() {
 		t.Errorf("resolve when already resolved: line %q", res.Line)
@@ -607,35 +582,16 @@ func TestSystemicLock_UntrackedIsDelivered(t *testing.T) {
 func TestRenderer_PlanSectionStuckReadNotProbed(t *testing.T) {
 	t.Parallel()
 	svc, d, _ := newCardService(t, &cardNotifier{}, nil)
-	ctx := context.Background()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "media-agent", What: agent.WhatStuckRead, Title: "The Boys"}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	finding := agent.DiagnosticResult{RootCause: "stuck read", EscalateAction: agent.EscalateRemoveAndSearch}
-	if err := d.SetIncidentFinding(ctx, inc.ID, finding, finding); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Finding(t, d, inc.ID, finding)
+	lifecycletest.MoveTo(t, d, inc.ID, db.StatusManualTestNeeded)
 	p := readablePlan(1)
 	p.Readability = &client.ReadabilityProbe{}
 	storePlan(t, d, inc.ID, p)
 
 	if got := renderInc(t, svc, inc.ID).Sections[0].Value; got != "Not probed: reading a stuck file would hang" {
 		t.Errorf("readability = %q, want the not-probed line", got)
-	}
-}
-
-func rawExec(t *testing.T, path, q string, args ...any) {
-	t.Helper()
-	raw, err := sql.Open("sqlite", path+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	if _, err = raw.ExecContext(context.Background(), q, args...); err != nil {
-		t.Fatal(err)
 	}
 }

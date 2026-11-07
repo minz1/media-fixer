@@ -34,6 +34,6 @@ type AgentRunner interface {
 	// so an owner's approval applies to the files they were shown.
 	ExecuteApprovedPlan(ctx context.Context, result *agent.DiagnosticResult, planJSON []byte) (any, error)
 	// CheckPendingOutcome polls live state for one pending arr_search_missing
-	// outcome — see Service.advancePendingOutcome, the sweeper that drives it.
+	// outcome — see Service.downloadCheck, the sweeper that drives it.
 	CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
@@ -44,9 +45,7 @@ func TestServer_RestartingNoticeIsYellowOnPages(t *testing.T) {
 	t.Parallel()
 	srv, database, svc := newServiceServer(t)
 	inc := &db.Incident{Status: db.StatusManualTestNeeded, Source: "discord", What: "cant_play", Title: "Dark"}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	stopService(t, svc)
 
 	wantRestartingTone(t, "incident page", getBody(srv, "/media/incidents/"+inc.ID+"?done=restarting"))

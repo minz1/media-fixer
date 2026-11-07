@@ -8,6 +8,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 func TestA9_4_AttemptHistoryLabelsFailedRows(t *testing.T) {
@@ -16,9 +17,7 @@ func TestA9_4_AttemptHistoryLabelsFailedRows(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusReopened, Source: "discord", What: "cant_play", Title: "The Boys"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	for _, row := range []*db.ActionLog{
 		{IncidentID: inc.ID, Action: "clear_jellyfin_cache", TriggeredBy: "agent", Status: db.ActionApplied},
 		{

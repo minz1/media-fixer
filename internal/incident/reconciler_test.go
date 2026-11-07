@@ -175,7 +175,7 @@ func TestReconciler_TickClearsExpiredPlan(t *testing.T) {
 	s := lifecycletest.SeedReport(t, env.db, lcReport("Old plan"), lifecycletest.Spec{
 		State: lifecycle.ManualTestNeeded, Finding: lifecycletest.Escalatable(), Plan: []byte(`{"files":[]}`),
 	})
-	env.exec(t, `UPDATE incidents SET escalation_plan_at = ? WHERE id = ?`, time.Now().Add(-2*time.Hour), s.ID)
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) { n.Plan.At = time.Now().Add(-2 * time.Hour) })
 	env.svc.ReconcileForTest(t.Context())
 	if got := env.snap(t, s.ID); got.Plan != nil {
 		t.Fatal("an expired plan survived the tick")

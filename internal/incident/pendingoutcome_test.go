@@ -23,7 +23,7 @@ import (
 // without waiting on real *arr state. Run optionally logs an
 // arr_search_missing action (searchLogged) and returns a fixed result, for
 // tests that drive the tracking-start path through Service.Handle rather
-// than calling AdvancePendingOutcomes directly.
+// than calling CheckNowForTest directly.
 type scriptedPendingOutcomeAgent struct {
 	database     *db.DB
 	runResult    *agent.DiagnosticResult
@@ -477,7 +477,7 @@ func TestAdvancePendingOutcome_CheckErrors_RescheduledNotEscalated(t *testing.T)
 // test for the "brand new content" case: after a no-release escalation, an
 // owner approving "Keep searching" must move the incident back into
 // StatusVerifying so the sweeper resumes checking it, and a subsequent
-// AdvancePendingOutcomes call (still observing no queue item) must NOT
+// CheckNowForTest call (still observing no queue item) must NOT
 // escalate again immediately — it's within the keep-searching window now.
 func TestKeepSearching_ReArmsAndResumesSweeping(t *testing.T) {
 	t.Parallel()
@@ -727,8 +727,7 @@ func TestKeepSearching_ResetsTrack(t *testing.T) {
 		StartedAt:       time.Now().Add(-48 * time.Hour),
 		LastProgressAt:  time.Now().Add(-24 * time.Hour),
 		LastProgressPct: 80,
-		LastStage:       "downloading",
-		GrabNotified:    true,
+		LastStage:       "searching",
 	}
 	f := newKeepSearchingFixture(t, db.StatusManualTestNeeded, po)
 
@@ -752,8 +751,7 @@ func TestKeepSearching_NoDownloadingProgressNote(t *testing.T) {
 		StartedAt:       time.Now().Add(-48 * time.Hour),
 		LastProgressAt:  time.Now().Add(time.Minute),
 		LastProgressPct: 80,
-		LastStage:       "downloading",
-		GrabNotified:    true,
+		LastStage:       "searching",
 	}
 	f := newKeepSearchingFixture(t, db.StatusManualTestNeeded, po)
 

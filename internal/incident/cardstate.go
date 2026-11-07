@@ -137,7 +137,7 @@ func (s *Service) PartialLine(ctx context.Context, snap lifecycle.Snapshot) stri
 }
 
 func statusLine(st db.IncidentStatus) string {
-	if line := lifecycle.Meta(lifecycle.State(st)).Line; line != "" {
+	if line := lifecycle.Meta(st).Line; line != "" {
 		return line
 	}
 	return string(st)

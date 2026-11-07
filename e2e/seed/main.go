@@ -75,32 +75,18 @@ func seedIncidents(ctx context.Context, d *db.DB) (map[string]string, map[string
 	}
 	ids, statuses := map[string]string{}, map[string]string{}
 	for _, sp := range specs {
-		inc := &db.Incident{
-			Status: db.StatusOpen, Source: "discord", ReportedBy: "viewer", What: "playback",
-			Title: sp.title, Details: "Reported from the e2e seed.",
-		}
-		if err := d.CreateIncident(ctx, inc); err != nil {
+		id, err := seedIncident(ctx, d, sp.title, sp.status, finding)
+		if err != nil {
 			return nil, nil, err
-		}
-		if err := d.SetIncidentFinding(ctx, inc.ID, finding, nil); err != nil {
-			return nil, nil, err
-		}
-		if err := d.UpdateIncidentStatus(ctx, inc.ID, sp.status); err != nil {
-			return nil, nil, err
-		}
-		if sp.status == db.StatusBlocked {
-			if err := d.SetAutonomousLocked(ctx, inc.ID, true); err != nil {
-				return nil, nil, err
-			}
 		}
 		statuses[sp.title] = string(sp.status)
 		if sp.status == db.StatusBlocked {
-			if err := seedConversation(ctx, journal.New(d), inc.ID, sp.title); err != nil {
+			if err = seedConversation(ctx, journal.New(d), id, sp.title); err != nil {
 				return nil, nil, err
 			}
 		}
 		if sp.key != "" {
-			ids[sp.key] = inc.ID
+			ids[sp.key] = id
 		}
 	}
 	return ids, statuses, nil

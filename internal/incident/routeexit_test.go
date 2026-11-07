@@ -11,6 +11,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 func exitOf(result *agent.DiagnosticResult, conv []openai.ChatCompletionMessage, err error) agent.RunExit {
@@ -57,9 +58,7 @@ func routeFixture(t *testing.T) (*escalationFixture, *captureNotifier, *db.Incid
 	notif := &captureNotifier{}
 	fx := newEscalationFixtureNotifier(t, newEscalationAgent(), notif)
 	inc := &db.Incident{Status: db.StatusInvestigating, Source: "discord", What: "cant_play", Title: "The Boys"}
-	if err := fx.db.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, fx.db, inc)
 	return fx, notif, inc
 }
 
@@ -123,9 +122,7 @@ func TestRunAgent_BudgetTrippedExitReachesOwner(t *testing.T) {
 	ag := &fixedExitAgent{escalationAgent: newEscalationAgent(), exit: manualExit(agent.RunBudgetTripped)}
 	fx := newEscalationFixtureNotifier(t, ag, notif)
 	inc := &db.Incident{Status: db.StatusInvestigating, Source: "discord", What: "cant_play", Title: "The Boys"}
-	if err := fx.db.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, fx.db, inc)
 	fx.svc.RunAgentForTest(context.Background(), inc)
 	if len(notif.msgs) != 1 || !strings.Contains(notif.msgs[0], "needs your attention") {
 		t.Fatalf("owner messages = %v, want the budget exit surfaced", notif.msgs)

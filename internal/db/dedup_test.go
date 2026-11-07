@@ -7,24 +7,21 @@ import (
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 // seedIncidentWithStatus creates an incident at a given status, since
-// CreateIncident always starts at whatever the caller set.
+// lifecycletest.Incident always starts at whatever the caller set.
 func seedIncidentWithStatus(t *testing.T, d *db.DB, title string, status db.IncidentStatus) *db.Incident {
 	t.Helper()
 	inc := &db.Incident{
 		Status: status, Source: "discord", ReportedBy: "tester",
 		What: "cant_play", Title: title,
 	}
-	if err := d.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
-	// CreateIncident may default the status; force it so the test controls it.
+	lifecycletest.Incident(t, d, inc)
+	// lifecycletest.Incident may default the status; force it so the test controls it.
 	if inc.Status != status {
-		if err := d.UpdateIncidentStatus(context.Background(), inc.ID, status); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.MoveTo(t, d, inc.ID, status)
 	}
 	return inc
 }

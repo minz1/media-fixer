@@ -167,7 +167,7 @@ func condenseTurns(turns []transcriptTurn, full bool) ([]transcriptTurn, int) {
 
 // incidentLive reports whether the agent may still add steps to the incident.
 func incidentLive(s db.IncidentStatus) bool {
-	return lifecycle.Meta(lifecycle.State(s)).Live
+	return lifecycle.Meta(s).Live
 }
 
 // incidentTranscript renders the full, untruncated thought-process page for

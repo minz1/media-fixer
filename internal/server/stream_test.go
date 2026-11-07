@@ -14,6 +14,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -38,9 +39,7 @@ func TestDashboardTemplates_HxSSEAttributesHaveTheirExtensionLoaded(t *testing.T
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "tester",
 		What: "cant_play", Title: "Stream Fixture",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	for _, path := range []string{
 		"/media/",
@@ -241,9 +240,7 @@ func eventDuringFirstRender(t *testing.T, path string) {
 	inc := &db.Incident{
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "tester", What: "cant_play", Title: "Race",
 	}
-	if err = database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -384,7 +384,7 @@ type FixSignature struct {
 }
 
 // ParseDiagnosticResult re-decodes an incident's stored finding — persisted
-// generically as `any` by db.SetIncidentFinding, so db.Incident.Finding comes
+// generically as `any` by db.ApplyIncident, so db.Incident.Finding comes
 // back as a map[string]any, not a *DiagnosticResult — into its typed form,
 // for rendering a structured report instead of a raw JSON dump. Returns
 // (nil, false) on any decode failure (an old row in an unexpected shape, or
@@ -911,7 +911,7 @@ func (a *Agent) ExecuteApprovedPlan(ctx context.Context, result *DiagnosticResul
 // PendingOutcomeObservation is what CheckPendingOutcome reports after polling
 // live *arr state for one pending arr_search_missing outcome. Deliberately
 // pure observation with no time-based decisions (grace periods, stall
-// timeouts) — those live in Service.advancePendingOutcome, which has the
+// timeouts) — those live in lifecycle.Next, which has the
 // outcome's history (StartedAt, LastProgressAt) to compare a fresh
 // observation against.
 type PendingOutcomeObservation struct {
@@ -949,7 +949,7 @@ func (a *Agent) CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) 
 	queue, queueErr := a.fetchQueue(ctx, po.MediaType)
 	if queueErr != nil {
 		// Propagate rather than degrade to "nothing in the queue": the
-		// caller (Service.advancePendingOutcome) already treats a
+		// caller (Service.downloadCheck) already treats a
 		// CheckPendingOutcome error as "reschedule and retry, don't advance
 		// any grace-period/stall state" — exactly what a transient fetch
 		// failure needs. Returning obs (HasFile:false, QueueStage:"") here
@@ -1184,7 +1184,7 @@ func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID, action, ar
 // logTurn is process-wide operational visibility (journalctl/Loki), separate
 // from the durable per-incident transcript recordRound writes to the event
 // log — the two serve different audiences and neither replaces the other.
-// The "run that's still making progress" signal FindStaleInvestigating's
+// The "run that's still making progress" signal lifecycle.Reconcile's
 // sweeper needs no longer lives here: any event append (recordRound above,
 // via a.journal) already updates the incident's most recent activity, so a
 // dedicated heartbeat write is no longer necessary.

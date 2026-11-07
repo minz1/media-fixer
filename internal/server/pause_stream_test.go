@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -110,9 +111,7 @@ func TestD4_12_PauseAndResumeRerenderOpenStreams(t *testing.T) {
 			inc := &db.Incident{
 				Status: db.StatusInvestigating, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T",
 			}
-			if err := database.CreateIncident(context.Background(), inc); err != nil {
-				t.Fatal(err)
-			}
+			lifecycletest.Incident(t, database, inc)
 			ts := httptest.NewServer(srv.Handler())
 			defer ts.Close()
 

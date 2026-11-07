@@ -16,6 +16,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 const stopServiceTimeout = 5 * time.Second
@@ -59,7 +60,7 @@ func (a *drainingAgent) Run(
 		<-ctx.Done()
 	}
 	time.Sleep(50 * time.Millisecond)
-	if err := a.db.SetAutonomousLocked(context.WithoutCancel(ctx), inc.ID, false); err == nil {
+	if _, err := a.db.GetIncident(context.WithoutCancel(ctx), inc.ID); err == nil {
 		a.finished.Store(true)
 	}
 	return gatedExit(ctx, gate, nil, nil, context.Canceled)
@@ -197,9 +198,7 @@ func TestBackgroundLoop_LockEpisodeTickRearmsAlert(t *testing.T) {
 		first = append(first, report(t, svc, title))
 	}
 	for _, inc := range first[:2] {
-		if err := database.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusResolved); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.MoveTo(t, database, inc.ID, db.StatusResolved)
 	}
 	if svc.LockAlertArmedForTest() {
 		t.Fatal("the lock alert never fired for six open incidents")
@@ -213,9 +212,7 @@ func TestBackgroundLoop_LockEpisodeTickRearmsAlert(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	for _, inc := range first[:2] {
-		if err := database.UpdateIncidentStatus(context.Background(), inc.ID, db.StatusReopened); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.MoveTo(t, database, inc.ID, db.StatusReopened)
 	}
 	report(t, svc, "G")
 	notif.mu.Lock()
@@ -282,9 +279,7 @@ func openIncidents(t *testing.T, d *db.DB, titles ...string) []*db.Incident {
 	var out []*db.Incident
 	for _, title := range titles {
 		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
-		if err := d.CreateIncident(context.Background(), inc); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Incident(t, d, inc)
 		out = append(out, inc)
 	}
 	return out
@@ -315,9 +310,7 @@ func TestA10_10_RecoveryRunsLockedOpenIncidentDiagnosisOnly(t *testing.T) {
 	t.Parallel()
 	database := openTimersDB(t)
 	incs := openIncidents(t, database, "Locked", "Free")
-	if err := database.SetAutonomousLocked(context.Background(), incs[0].ID, true); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Lock(t, database, incs[0].ID, true)
 	ag := newDrainingAgent(database)
 	svc := incident.NewService(
 		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler))

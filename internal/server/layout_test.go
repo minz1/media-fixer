@@ -15,6 +15,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/sweep"
 )
@@ -23,9 +24,7 @@ func TestLayout_EveryPageHasShell(t *testing.T) {
 	t.Parallel()
 	e := newMonitorTestServer(t)
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
-	if err := e.db.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, e.db, inc)
 	pages := []struct{ path, tab string }{
 		{"/media/", "/media/"},
 		{"/media/incidents/" + inc.ID, "/media/"},
@@ -144,9 +143,7 @@ func TestIncidentAction_DoneNotice(t *testing.T) {
 	inc := &db.Incident{
 		Status: db.StatusAgentFixed, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
 	}
-	if err := database.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, database, inc)
 	page := "/media/incidents/" + inc.ID
 	rec := doWith(t, srv, http.MethodPost, page+"/rerun", url.Values{}, nil)
 	if rec.Header().Get("Location") != page+"?done=rerun" {

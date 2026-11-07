@@ -416,8 +416,7 @@ type statusChangedPayload struct {
 // StatusChanged appends a status_changed event to notify live subscribers
 // that the incident's status (or, loosely, its autonomous-lock flag — see
 // Service.Unlock) moved. The transition itself is already durably written by
-// the caller's own db.TransitionStatus/UpdateIncidentStatus/
-// SetAutonomousLocked call; this only makes that visible on an open SSE
+// the caller's own db.ApplyIncident call; this only makes that visible on an open SSE
 // connection instead of requiring a manual reload. Status is carried for
 // completeness in the export/transcript — incidentEvents always re-reads
 // current state from the DB rather than trusting this payload for anything

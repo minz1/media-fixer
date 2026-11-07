@@ -13,6 +13,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 type planAgent struct {
@@ -38,9 +39,7 @@ func (fx *escalationFixture) withAction(t *testing.T, action string) *db.Inciden
 		RootCause: "bad", PrimaryAction: "manual_investigation", EscalateAction: action,
 		EscalateParams: map[string]any{"media_type": "tv", "title": "The Boys"},
 	}
-	if err := fx.db.SetIncidentFinding(context.Background(), inc.ID, finding, finding); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Finding(t, fx.db, inc.ID, finding)
 	return inc
 }
 

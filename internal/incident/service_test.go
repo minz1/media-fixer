@@ -24,6 +24,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -202,9 +203,7 @@ func TestHandle_SystemicLockAlertsOncePerEpisode(t *testing.T) {
 		t.Fatalf("owner cards after 8 titles = %d, want 1 lock alert", len(notif.cards))
 	}
 
-	if err := database.UpdateIncidentStatus(ctx, first.ID, db.StatusResolved); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, database, first.ID, db.StatusResolved)
 	report("I")
 	report("J")
 	if len(notif.cards) != 2 {
@@ -237,15 +236,11 @@ func TestHandle_SystemicLockEndsWhenActiveCountDrops(t *testing.T) {
 		t.Fatalf("owner cards after a tick with 5 still active = %d, want 1", len(notif.cards))
 	}
 	for _, id := range []string{a.ID, b.ID} {
-		if err := database.UpdateIncidentStatus(ctx, id, db.StatusResolved); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.MoveTo(t, database, id, db.StatusResolved)
 	}
 	svc.EndLockEpisodeForTest(ctx)
 	for _, id := range []string{a.ID, b.ID} {
-		if err := database.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.MoveTo(t, database, id, db.StatusReopened)
 	}
 	report("G")
 	if len(notif.cards) != 2 {
@@ -309,9 +304,7 @@ func TestUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lockErr := database.SetAutonomousLocked(ctx, inc.ID, true); lockErr != nil {
-		t.Fatal(lockErr)
-	}
+	lifecycletest.Lock(t, database, inc.ID, true)
 
 	if unlockErr := svc.Unlock(ctx, inc.ID, incident.Version{}); unlockErr != nil {
 		t.Fatal(unlockErr)
@@ -336,9 +329,7 @@ func TestRerunClearsLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lockErr := database.SetAutonomousLocked(ctx, inc.ID, true); lockErr != nil {
-		t.Fatal(lockErr)
-	}
+	lifecycletest.Lock(t, database, inc.ID, true)
 
 	// Rerun is a deliberate human override — it must clear the lock.
 	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {

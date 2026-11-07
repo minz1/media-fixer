@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 func openTestDB(t *testing.T) *db.DB {
@@ -40,9 +41,7 @@ func TestCreateAndGetIncident(t *testing.T) {
 		Title:      "Breaking Bad",
 		Details:    "won't load",
 	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	if inc.ID == "" {
 		t.Fatal("expected ID to be set")
 	}
@@ -59,118 +58,6 @@ func TestCreateAndGetIncident(t *testing.T) {
 	}
 }
 
-func TestTransitionStatus_Idempotent(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	inc := &db.Incident{
-		Status: db.StatusOpen, Source: "discord",
-		ReportedBy: "alice", What: "cant_play", Title: "T",
-	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-
-	allowed := []db.IncidentStatus{
-		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened,
-	}
-
-	// First finisher wins the transition.
-	changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed, allowed...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Fatal("first transition open→agent_fixed should return true")
-	}
-
-	// Second finisher: already agent_fixed (not in allowedFrom) → no change, no notify.
-	changed, err = d.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed, allowed...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed {
-		t.Error("second transition should return false (already agent_fixed)")
-	}
-
-	// After a legitimate reopen, the transition is allowed again.
-	if err = d.UpdateIncidentStatus(ctx, inc.ID, db.StatusReopened); err != nil {
-		t.Fatal(err)
-	}
-	changed, err = d.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed, allowed...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Error("transition reopened→agent_fixed should return true")
-	}
-}
-
-// TestTransitionStatus_NoAllowedFrom_IsUnconditional covers TransitionStatus's
-// other query path (transitionStatusUnconditional) — no allowedFrom values at
-// all, which must transition regardless of current status.
-func TestTransitionStatus_NoAllowedFrom_IsUnconditional(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	inc := &db.Incident{
-		Status: db.StatusBlocked, Source: "discord",
-		ReportedBy: "alice", What: "cant_play", Title: "T",
-	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-
-	changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusReopened)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Error("no allowedFrom values should transition unconditionally")
-	}
-	got, err := d.GetIncident(ctx, inc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != db.StatusReopened {
-		t.Errorf("status: got %q, want %q", got.Status, db.StatusReopened)
-	}
-}
-
-// TestTransitionStatus_SingleAllowedFrom covers the one-element case of the
-// json_each(?)-based allowedFrom match (transitionStatusRestricted) — a
-// single-element JSON array is a different shape than the multi-element one
-// TestTransitionStatus_Idempotent already exercises.
-func TestTransitionStatus_SingleAllowedFrom(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	inc := &db.Incident{
-		Status: db.StatusOpen, Source: "discord",
-		ReportedBy: "alice", What: "cant_play", Title: "T",
-	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-
-	if changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusInvestigating, db.StatusVerifying); err != nil {
-		t.Fatal(err)
-	} else if changed {
-		t.Error("open is not in allowedFrom=[verifying]; must not transition")
-	}
-
-	changed, err := d.TransitionStatus(ctx, inc.ID, db.StatusInvestigating, db.StatusOpen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Error("open IS in allowedFrom=[open]; must transition")
-	}
-}
-
 func TestFindOpenByTitle_Dedup(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
@@ -183,9 +70,7 @@ func TestFindOpenByTitle_Dedup(t *testing.T) {
 		What:       "cant_play",
 		Title:      "The Wire",
 	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 
 	found, err := d.FindOpenByTitle(ctx, "The Wire")
 	if err != nil {
@@ -196,9 +81,7 @@ func TestFindOpenByTitle_Dedup(t *testing.T) {
 	}
 
 	// Resolved incidents should not match.
-	if updateErr := d.UpdateIncidentStatus(ctx, inc.ID, db.StatusResolved); updateErr != nil {
-		t.Fatal(updateErr)
-	}
+	lifecycletest.MoveTo(t, d, inc.ID, db.StatusResolved)
 	_, err = d.FindOpenByTitle(ctx, "The Wire")
 	if !errors.Is(err, db.ErrNotFound) {
 		t.Errorf("expected ErrNotFound for resolved incident, got %v", err)
@@ -213,15 +96,13 @@ func TestCountOpenIncidents(t *testing.T) {
 	ctx := context.Background()
 
 	for i := range testIncidentCount {
-		if err := d.CreateIncident(ctx, &db.Incident{
+		lifecycletest.Incident(t, d, &db.Incident{
 			Status:     db.StatusOpen,
 			Source:     "discord",
 			ReportedBy: "user",
 			What:       "cant_play",
 			Title:      string(rune('A' + i)),
-		}); err != nil {
-			t.Fatal(err)
-		}
+		})
 	}
 
 	n, err := d.CountOpenIncidents(ctx)
@@ -230,30 +111,6 @@ func TestCountOpenIncidents(t *testing.T) {
 	}
 	if n != testIncidentCount {
 		t.Errorf("count: got %d want %d", n, testIncidentCount)
-	}
-}
-
-func TestIncrementActionCount(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	inc := &db.Incident{
-		Status: db.StatusOpen, Source: "discord",
-		ReportedBy: "x", What: "cant_play", Title: "T",
-	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-
-	for want := range testIncidentCount {
-		n, err := d.IncrementActionCount(ctx, inc.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if n != want+1 {
-			t.Errorf("increment %d: got %d", want+1, n)
-		}
 	}
 }
 
@@ -266,9 +123,7 @@ func TestLogAndListActions(t *testing.T) {
 		Status: db.StatusOpen, Source: "discord",
 		ReportedBy: "x", What: "cant_play", Title: "T",
 	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 
 	a := &db.ActionLog{
 		IncidentID:  inc.ID,
@@ -312,12 +167,14 @@ func TestReporters(t *testing.T) {
 		Status: db.StatusOpen, Source: "discord",
 		ReportedBy: "a", What: "cant_play", Title: "T",
 	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
+	lifecycletest.Incident(t, d, inc)
+
+	base, err := d.ListReporters(ctx, inc.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-
 	for _, r := range []string{"alice", "bob", "alice"} { // alice twice → dedup
-		if err := d.AddReporter(ctx, inc.ID, r, "discord", ""); err != nil {
+		if err = d.AddReporter(ctx, inc.ID, r, "discord", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -326,8 +183,8 @@ func TestReporters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reporters) != testReporterCount {
-		t.Errorf("reporters: got %d want %d", len(reporters), testReporterCount)
+	if len(reporters) != len(base)+testReporterCount {
+		t.Errorf("reporters: got %d want %d more than %d", len(reporters), testReporterCount, len(base))
 	}
 }
 
@@ -344,11 +201,9 @@ func TestReporters_DedupeSameDiscordUserDifferentDisplayName(t *testing.T) {
 
 	inc := &db.Incident{
 		Status: db.StatusOpen, Source: "discord",
-		ReportedBy: "alice", What: "cant_play", Title: "T",
+		ReportedBy: "fixture", What: "cant_play", Title: "T",
 	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 
 	if err := d.AddReporter(ctx, inc.ID, "alice", "discord", "discord-user-1"); err != nil {
 		t.Fatal(err)
@@ -365,8 +220,8 @@ func TestReporters_DedupeSameDiscordUserDifferentDisplayName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reporters) != 2 {
-		t.Errorf("reporter rows: got %d want 2 (alice + bob) — %v", len(reporters), reporters)
+	if len(reporters) != 3 {
+		t.Errorf("reporter rows: got %d want 3 (fixture + alice + bob) — %v", len(reporters), reporters)
 	}
 
 	ids, err := d.ListDiscordReporterIDs(ctx, inc.ID)
@@ -403,107 +258,8 @@ func TestSettings(t *testing.T) {
 	}
 }
 
-func TestSetIncidentFinding(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	inc := &db.Incident{
-		Status: db.StatusOpen, Source: "discord",
-		ReportedBy: "x", What: "cant_play", Title: "T",
-	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-
-	finding := map[string]any{"root_cause": "stale links", "confidence": "high"}
-	actions := map[string]any{"primary": "refresh_links"}
-	if err := d.SetIncidentFinding(ctx, inc.ID, finding, actions); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := d.GetIncident(ctx, inc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, ok := got.Finding.(map[string]any)
-	if !ok {
-		t.Fatalf("finding type: %T", got.Finding)
-	}
-	if m["root_cause"] != "stale links" {
-		t.Errorf("root_cause: %v", m["root_cause"])
-	}
-}
-
-// TestFindStaleInvestigating is the regression test for the heartbeat/stale
-// run detection: an incident that has been sitting in "investigating" since
-// before staleBefore, with no heartbeat written, must be found; one whose
-// heartbeat was touched after staleBefore must not, even though its
-// updated_at (when it first entered "investigating") is older.
-func TestFindStaleInvestigating(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	stale := &db.Incident{
-		Status:     db.StatusInvestigating,
-		Source:     "discord",
-		ReportedBy: "x",
-		What:       "cant_play",
-		Title:      "Stale",
-	}
-	if err := d.CreateIncident(ctx, stale); err != nil {
-		t.Fatal(err)
-	}
-	fresh := &db.Incident{
-		Status:     db.StatusInvestigating,
-		Source:     "discord",
-		ReportedBy: "x",
-		What:       "cant_play",
-		Title:      "Fresh",
-	}
-	if err := d.CreateIncident(ctx, fresh); err != nil {
-		t.Fatal(err)
-	}
-	notInvestigating := &db.Incident{
-		Status:     db.StatusOpen,
-		Source:     "discord",
-		ReportedBy: "x",
-		What:       "cant_play",
-		Title:      "Open",
-	}
-	if err := d.CreateIncident(ctx, notInvestigating); err != nil {
-		t.Fatal(err)
-	}
-
-	// fresh gets an event (any event append counts as activity, replacing the
-	// old dedicated heartbeat write — see FindStaleInvestigating) after the
-	// cutoff; stale gets none at all, so it falls back to (also pre-cutoff)
-	// updated_at.
-	cutoff := time.Now()
-	time.Sleep(10 * time.Millisecond)
-	const insertEvent = `INSERT INTO incident_events (incident_id, at, kind, payload, source)
-		VALUES (?, ?, 'llm_round', '{}', 'live')`
-	if err := d.ExecForTest(ctx, insertEvent, fresh.ID, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := d.FindStaleInvestigating(ctx, cutoff)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].ID != stale.ID {
-		ids := make([]string, len(got))
-		for i, inc := range got {
-			ids[i] = inc.Title
-		}
-		t.Fatalf("expected only %q, got %v", stale.Title, ids)
-	}
-}
-
 // TestPendingOutcome_SetGetClear covers the basic CRUD lifecycle: not found
-// before anything is set, round-trips through JSON correctly, and is really
-// gone (not just cleared to a zero value) after ClearPendingOutcome.
+// before anything is set, round-trips through JSON correctly.
 func TestPendingOutcome_SetGetClear(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
@@ -516,9 +272,7 @@ func TestPendingOutcome_SetGetClear(t *testing.T) {
 		What:       "cant_play",
 		Title:      "Rick and Morty",
 	}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 
 	if _, err := d.GetPendingOutcome(ctx, inc.ID); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound before anything is set, got %v", err)
@@ -528,9 +282,7 @@ func TestPendingOutcome_SetGetClear(t *testing.T) {
 		MediaType: "tv", Title: "Rick and Morty", Season: 9, Episode: 9,
 		StartedAt: time.Now(), LastStage: "searching",
 	}
-	if err := d.SetPendingOutcome(ctx, inc.ID, po, time.Now().Add(5*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Track(t, d, inc.ID, po, time.Now().Add(5*time.Minute))
 	got, err := d.GetPendingOutcome(ctx, inc.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -539,9 +291,7 @@ func TestPendingOutcome_SetGetClear(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 
-	if clearErr := d.ClearPendingOutcome(ctx, inc.ID); clearErr != nil {
-		t.Fatal(clearErr)
-	}
+	lifecycletest.MoveTo(t, d, inc.ID, db.StatusResolved)
 	if _, getErr := d.GetPendingOutcome(ctx, inc.ID); !errors.Is(getErr, db.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound after clearing, got %v", getErr)
 	}
@@ -582,9 +332,7 @@ func TestOpen_ForeignKeyCascadeDeletesChildren(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "X"}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	if err := d.AddReporter(ctx, inc.ID, "alice", "discord", "123"); err != nil {
 		t.Fatal(err)
 	}
@@ -649,9 +397,7 @@ func TestOpen_Idempotent(t *testing.T) {
 
 	// And the database still works normally afterward.
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "bob", What: "cant_play", Title: "Y"}
-	if createErr := second.CreateIncident(context.Background(), inc); createErr != nil {
-		t.Fatalf("db unusable after reopen: %v", createErr)
-	}
+	lifecycletest.Incident(t, second, inc)
 }
 
 func TestOpen_BootstrapsLegacyDatabase(t *testing.T) {
@@ -712,9 +458,7 @@ func TestOpen_BootstrapsLegacyDatabase(t *testing.T) {
 
 	// And the database is fully usable afterward.
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "carol", What: "cant_play", Title: "Z"}
-	if createErr := d.CreateIncident(context.Background(), inc); createErr != nil {
-		t.Fatalf("db unusable after legacy bootstrap: %v", createErr)
-	}
+	lifecycletest.Incident(t, d, inc)
 }
 
 func TestOpen_DetectsExistingForeignKeyViolations(t *testing.T) {
@@ -787,9 +531,7 @@ func TestSeerrIssues(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Andor"}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	for _, id := range []string{"12", "13", "12"} {
 		if _, err := d.AddSeerrIssue(ctx, inc.ID, id); err != nil {
 			t.Fatal(err)
@@ -841,9 +583,7 @@ func TestMigration15_AddsLastReporterNoteAt(t *testing.T) {
 func newClaimIncident(t *testing.T, d *db.DB) string {
 	t.Helper()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "seerr", ReportedBy: "alice", What: "cant_play", Title: "Andor"}
-	if err := d.CreateIncident(context.Background(), inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	return inc.ID
 }
 
@@ -927,9 +667,7 @@ func TestListActions_DistinctAppliedAt(t *testing.T) {
 	ctx := context.Background()
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "T"}
-	if err := d.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.Incident(t, d, inc)
 	first := time.Now().Add(-time.Hour).UTC()
 	for _, at := range []time.Time{first, time.Now().UTC()} {
 		if err := d.LogAction(ctx, &db.ActionLog{
@@ -952,48 +690,6 @@ func TestListActions_DistinctAppliedAt(t *testing.T) {
 	}
 }
 
-func TestFindStaleReopened(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-
-	create := func(title string, status db.IncidentStatus) *db.Incident {
-		inc := &db.Incident{Status: status, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
-		if err := d.CreateIncident(ctx, inc); err != nil {
-			t.Fatal(err)
-		}
-		return inc
-	}
-	stale := create("Stale", db.StatusReopened)
-	fresh := create("Fresh", db.StatusReopened)
-	staleInvestigating := create("Investigating", db.StatusInvestigating)
-
-	cutoff := time.Now().Add(-time.Hour)
-	for _, inc := range []*db.Incident{stale, staleInvestigating} {
-		if err := d.ExecForTest(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
-			cutoff.Add(-time.Minute), inc.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const insertEvent = `INSERT INTO incident_events (incident_id, at, kind, payload, source)
-		VALUES (?, ?, 'llm_round', '{}', 'live')`
-	if err := d.ExecForTest(ctx, insertEvent, stale.ID, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := d.FindStaleReopened(ctx, cutoff)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].ID != stale.ID {
-		titles := make([]string, len(got))
-		for i, inc := range got {
-			titles[i] = inc.Title
-		}
-		t.Fatalf("got %v, want only %q (fresh %q must not match)", titles, stale.Title, fresh.Title)
-	}
-}
-
 func TestFindUnresolvedByTitle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1002,9 +698,7 @@ func TestFindUnresolvedByTitle(t *testing.T) {
 		inc := &db.Incident{
 			Status: status, Source: "media-agent", ReportedBy: "media-agent", What: "stuck_read", Title: title,
 		}
-		if err := d.CreateIncident(ctx, inc); err != nil {
-			t.Fatal(err)
-		}
+		lifecycletest.Incident(t, d, inc)
 		return inc
 	}
 

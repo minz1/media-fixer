@@ -8,6 +8,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 func action(name string, status db.ActionStatus, at time.Time) *db.ActionLog {
@@ -60,16 +61,12 @@ func newProgressIncident(
 	t.Helper()
 	svc, database, notif := newTestService(t)
 	ctx := context.Background()
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "X"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "fixture", What: "cant_play", Title: "X"}
+	lifecycletest.Incident(t, database, inc)
 	if err := database.AddReporter(ctx, inc.ID, "alice", "discord", "discord-alice"); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpdateIncidentStatus(ctx, inc.ID, status); err != nil {
-		t.Fatal(err)
-	}
+	lifecycletest.MoveTo(t, database, inc.ID, status)
 	return svc, database, inc, notif
 }
 

@@ -52,7 +52,7 @@ func (a *observingAgent) ScanRunning(context.Context) bool {
 func (e *lcEnv) verifying(t *testing.T, title, what string) lifecycle.Snapshot {
 	t.Helper()
 	s := lifecycletest.Seed(t, e.db, lifecycletest.Spec{Title: title, What: what, State: lifecycle.Verifying})
-	e.exec(t, `UPDATE incidents SET verify_next_check = ? WHERE id = ?`, time.Now().Add(-time.Minute), s.ID)
+	lifecycletest.Force(t, e.db, s.ID, func(n *lifecycle.Snapshot) { n.NextCheck = time.Now().Add(-time.Minute) })
 	return s
 }
 
@@ -86,7 +86,7 @@ func TestI1_12_ServiceScanRunningRechecks(t *testing.T) {
 	ag.scan.Store(true)
 	env := newLifecycleEnv(t, ag)
 	s := env.verifying(t, "Scan running", "cant_play")
-	env.exec(t, `UPDATE incidents SET verify_checks_left = 1 WHERE id = ?`, s.ID)
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) { n.Verify.ChecksLeft = 1 })
 	env.svc.StartRecovery()
 	var got lifecycle.Snapshot
 	eventually(t, "the extension", func() bool {

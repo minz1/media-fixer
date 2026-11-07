@@ -213,7 +213,7 @@ func (s *Service) logEscalation(
 }
 
 // escalationResult reconstructs the agent.DiagnosticResult from an incident's
-// stored finding (persisted generically as `any` by db.SetIncidentFinding) so
+// stored finding (persisted generically as `any` by db.ApplyIncident) so
 // PreviewEscalation/ApproveEscalation can reuse Agent's escalation methods.
 func escalationResult(inc *db.Incident) (*agent.DiagnosticResult, error) {
 	if inc.Finding == nil {
