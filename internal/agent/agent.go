@@ -521,7 +521,7 @@ func (a *Agent) Run(
 		}
 
 		toolMsgStart := len(messages)
-		result, done, err := a.processToolCalls(
+		ev, result := a.processToolCalls(
 			ctx,
 			inc,
 			preFix,
@@ -530,6 +530,7 @@ func (a *Agent) Run(
 			&autonomousActions,
 			&messages,
 		)
+		messages = closeBatch(ctx, round, ev, msg.ToolCalls, messages)
 		// Recorded once per round, AFTER tool calls are processed — not, as the
 		// old per-round SaveConversation did, right after the assistant message
 		// and before this. That ordering was the reason the final round's tool
@@ -537,11 +538,20 @@ func (a *Agent) Run(
 		// to re-save) were never persisted at all, and every other round's
 		// landed one round late.
 		a.recordRound(ctx, inc.ID, round, msg, messages[toolMsgStart:])
-		if err != nil {
-			a.recordRunFinished(ctx, inc.ID, round, err)
-			return nil, messages, err
+		if ev.kind == evBatchFailed {
+			a.recordRunFinished(ctx, inc.ID, round, ev.err)
+			return nil, messages, ev.err
 		}
-		if done {
+		if ev.kind == evBudgetTripped {
+			result = &DiagnosticResult{
+				RootCause:        "max autonomous actions reached without resolution",
+				Confidence:       "low",
+				PrimaryAction:    "manual_investigation",
+				PrimaryReason:    "agent applied 3 actions without confirming fix",
+				RequiresApproval: true,
+			}
+		}
+		if result != nil {
 			a.recordRunFinished(ctx, inc.ID, round, nil)
 			return result, messages, nil
 		}
@@ -634,7 +644,10 @@ func (a *Agent) initMessages(
 
 // processToolCalls handles one batch of tool calls from the LLM.
 // It appends tool result messages to *messages in place.
-// Returns (result, true, nil) when complete_diagnosis is called or the action limit is hit.
+// Returns evConcluded with the result when complete_diagnosis is recorded,
+// evBudgetTripped when the action limit is hit, evBatchFailed when the
+// diagnosis can't be recorded, and evBatchDone otherwise, including when ctx
+// is done before a call is dispatched.
 func (a *Agent) processToolCalls(
 	ctx context.Context,
 	inc *db.Incident,
@@ -643,16 +656,24 @@ func (a *Agent) processToolCalls(
 	seenCalls map[string]int,
 	autonomousActions *int,
 	messages *[]openai.ChatCompletionMessage,
-) (*DiagnosticResult, bool, error) {
+) (runEvent, *DiagnosticResult) {
 	for _, call := range calls {
+		if ctx.Err() != nil {
+			return runEvent{kind: evBatchDone}, nil
+		}
 		fn := call.Function.Name
 
 		if fn == toolCompleteDiagnosis {
 			result, err := a.handleCompleteDiagnosis(ctx, inc, preFix, call.Function.Arguments)
 			if err != nil {
-				return nil, false, err
+				return runEvent{kind: evBatchFailed, err: err}, nil
 			}
-			return result, true, nil
+			*messages = append(*messages, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				Content:    jsonResult(map[string]any{keyStatus: "recorded"}),
+				ToolCallID: call.ID,
+			})
+			return runEvent{kind: evConcluded}, result
 		}
 
 		if isAutonomousAction(fn) {
@@ -696,13 +717,7 @@ func (a *Agent) processToolCalls(
 				// by another run" and never called NotifyOwner. Three
 				// service-wide disruptions would land and nobody was told.
 				_ = a.db.SetAutonomousLocked(ctx, inc.ID, true)
-				return &DiagnosticResult{
-					RootCause:        "max autonomous actions reached without resolution",
-					Confidence:       "low",
-					PrimaryAction:    "manual_investigation",
-					PrimaryReason:    "agent applied 3 actions without confirming fix",
-					RequiresApproval: true,
-				}, true, nil
+				return runEvent{kind: evBudgetTripped}, nil
 			}
 		}
 
@@ -713,7 +728,7 @@ func (a *Agent) processToolCalls(
 			ToolCallID: call.ID,
 		})
 	}
-	return nil, false, nil
+	return runEvent{kind: evBatchDone}, nil
 }
 
 // handleCompleteDiagnosis parses the complete_diagnosis tool call arguments and

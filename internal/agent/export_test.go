@@ -125,3 +125,9 @@ func RejectReasonsForTest() []string {
 	}
 	return out
 }
+
+func AnswerPendingForTest(
+	messages []openai.ChatCompletionMessage, calls []openai.ToolCall, reason string,
+) []openai.ChatCompletionMessage {
+	return answerPending(messages, calls, reason)
+}

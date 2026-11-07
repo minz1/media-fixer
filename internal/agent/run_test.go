@@ -65,7 +65,7 @@ func toolCallResponse(name, args string) string {
 
 // newRunTestAgent wires a real Agent against a scripted LLM and a decypharr
 // stub that accepts every write, plus a real on-disk DB and journal.
-func newRunTestAgent(t *testing.T, llm *scriptedLLM) (*agent.Agent, *db.DB) {
+func newRunTestAgent(t *testing.T, llm http.Handler, opts ...func(*agent.Dispatcher)) (*agent.Agent, *db.DB) {
 	t.Helper()
 
 	llmSrv := httptest.NewServer(llm)
@@ -96,7 +96,11 @@ func newRunTestAgent(t *testing.T, llm *scriptedLLM) (*agent.Agent, *db.DB) {
 		DB:        database,
 		Journal:   jrnl,
 	}
-	return agent.New(openai.NewClientWithConfig(cfg), "stub", disp, database, jrnl,
+	for _, opt := range opts {
+		opt(disp)
+	}
+	return agent.New(
+		openai.NewClientWithConfig(cfg), "stub", disp, database, jrnl,
 		slog.New(slog.DiscardHandler)), database
 }
 

@@ -115,6 +115,7 @@ func batchKinds() []runEventKind {
 type runEvent struct {
 	kind      runEventKind
 	cancelled bool
+	err       error
 }
 
 type runSnapshot struct {
