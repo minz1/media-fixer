@@ -668,7 +668,7 @@ func (a *Agent) executeRead(ctx context.Context, inc *db.Incident, fn, argsJSON 
 	result, err := a.disp.call(ctx, c, fn, args)
 	resultJSON := jsonResult(result)
 	if err != nil {
-		resultJSON = jsonResult(map[string]any{keyError: err.Error()})
+		resultJSON = errorReply(err.Error())
 	}
 	a.log.DebugContext(ctx, "tool call", "tool", fn, "result", resultJSON)
 	return resultJSON
@@ -729,7 +729,7 @@ type stepInfo struct {
 }
 
 func errorReply(text string) string {
-	return jsonResult(map[string]any{keyError: text})
+	return jsonResult(map[string]any{keyError: client.RedactCredentials(text)})
 }
 
 func notRunReply(v Verdict) string {
@@ -825,11 +825,11 @@ func (v *invocation) beforeAct(args map[string]any, err error) {
 	var ref *refusal
 	switch {
 	case errors.As(err, &ref):
-		reply := ref.reply
-		if reply == nil {
-			reply = map[string]any{keyError: ref.reason}
+		reply := errorReply(ref.reason)
+		if ref.reply != nil {
+			reply = jsonResult(ref.reply)
 		}
-		v.step(evRefusal, stepInfo{reply: jsonResult(reply), errText: ref.reason, params: identitySubset(args)})
+		v.step(evRefusal, stepInfo{reply: reply, errText: ref.reason, params: identitySubset(args)})
 	case err != nil:
 		v.step(evPreconditionFailed, stepInfo{reply: errorReply("not run: " + err.Error())})
 	default:
@@ -883,7 +883,7 @@ func (a *Agent) recordCall(
 		Params:      params,
 		TriggeredBy: triggeredByAgent,
 		Status:      status,
-		Error:       errText,
+		Error:       client.RedactCredentials(errText),
 	}, disruptive)
 	if err != nil {
 		a.log.ErrorContext(ctx, "action record lost", "tool", tool, "outcome", status, "error", err)

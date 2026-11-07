@@ -228,3 +228,15 @@ func (a *Agent) SetSideEffectBoundForTest(d time.Duration) { a.sideBound = d }
 func BoundForTest(s ToolSpec) time.Duration { return s.bound() }
 
 const JournalWriteTimeoutForTest = journalWriteTimeout
+
+func (a *Agent) RefuseForTest(ctx context.Context, inc *db.Incident, tool, reason string, g Gate) string {
+	spec, _ := specByName(tool)
+	v := &invocation{
+		a: a, ctx: ctx, fn: tool,
+		snap: callSnap{State: callProposed, Impact: spec.Impact},
+		c:    &toolCall{scope: Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt}, gate: g},
+	}
+	v.step(evCleared, stepInfo{})
+	v.beforeAct(nil, refuse(reason))
+	return v.reply
+}

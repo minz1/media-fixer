@@ -12,7 +12,7 @@ func answerPending(
 	for _, c := range unansweredCalls(messages, calls) {
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:       openai.ChatMessageRoleTool,
-			Content:    jsonResult(map[string]any{keyError: "not run: " + reason}),
+			Content:    errorReply("not run: " + reason),
 			ToolCallID: c.ID,
 		})
 	}
