@@ -58,9 +58,6 @@ const (
 	// (see the migration). Never emitted live.
 	KindConversationImported Kind = "conversation_imported"
 
-	// KindStatusChanged marks a status (or autonomous-lock) transition —
-	// purely a live-update signal for incidentEvents; no reader treats its
-	// payload as authoritative.
 	KindStatusChanged Kind = "status_changed"
 
 	KindAutonomousPauseChanged Kind = "autonomous_pause_changed"

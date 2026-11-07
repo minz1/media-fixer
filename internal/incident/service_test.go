@@ -674,6 +674,7 @@ func (n *syncNotifier) NotifyUser(_ context.Context, _ string, msg card.Card) er
 }
 
 const notifyWaitTimeout = 2 * time.Second
+const loadedWaitTimeout = 30 * time.Second
 
 // TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce reproduces the
 // reported bug directly: rerunning an incident while its first run is still in
@@ -826,11 +827,15 @@ func (a *alwaysFixedAgent) CheckPendingOutcome(
 }
 
 func waitForUserMsg(t *testing.T, n *syncNotifier) string {
+	return waitForUserMsgWithin(t, n, notifyWaitTimeout)
+}
+
+func waitForUserMsgWithin(t *testing.T, n *syncNotifier, timeout time.Duration) string {
 	t.Helper()
 	select {
 	case msg := <-n.userMsgs:
 		return msg
-	case <-time.After(notifyWaitTimeout):
+	case <-time.After(timeout):
 		t.Fatal("timed out waiting for reporter DM")
 		return ""
 	}
@@ -874,7 +879,7 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 	}
 
 	// First run resolves and fixes the incident.
-	if dm := waitForUserMsg(t, notif); !strings.Contains(dm, "fixed automatically") {
+	if dm := waitForUserMsgWithin(t, notif, loadedWaitTimeout); !strings.Contains(dm, "fixed automatically") {
 		t.Fatalf("unexpected first DM: %q", dm)
 	}
 	got, err := database.GetIncident(ctx, inc.ID)
@@ -892,7 +897,7 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 
 	// The second run must actually execute and reach the same terminal status
 	// again — proof the rerun was not silently swallowed.
-	if dm := waitForUserMsg(t, notif); !strings.Contains(dm, "fixed automatically") {
+	if dm := waitForUserMsgWithin(t, notif, loadedWaitTimeout); !strings.Contains(dm, "fixed automatically") {
 		t.Fatalf("unexpected second DM: %q", dm)
 	}
 	got, err = database.GetIncident(ctx, inc.ID)

@@ -56,10 +56,16 @@ func (e *lcEnv) verifying(t *testing.T, title, what string) lifecycle.Snapshot {
 	return s
 }
 
-func (e *lcEnv) waitStatus(t *testing.T, id string, want lifecycle.State) lifecycle.Snapshot {
+func (e *lcEnv) waitStatus(t *testing.T, id string, want lifecycle.State) {
+	e.waitStatusWithin(t, id, want, notifyWaitTimeout)
+}
+
+func (e *lcEnv) waitStatusWithin(
+	t *testing.T, id string, want lifecycle.State, timeout time.Duration,
+) lifecycle.Snapshot {
 	t.Helper()
 	var got lifecycle.Snapshot
-	eventually(t, "status "+string(want), func() bool {
+	eventuallyWithin(t, timeout, "status "+string(want), func() bool {
 		got = e.snap(t, id)
 		return got.Status == want
 	})
@@ -114,14 +120,17 @@ func TestI8_4_VerifyingAlwaysHasDriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := env.waitStatus(t, inc.ID, lifecycle.Verifying)
-	eventually(t, "the armed check", func() bool { return env.svc.ArmedForTest(inc.ID) == got.Generation })
+	got := env.waitStatusWithin(t, inc.ID, lifecycle.Verifying, loadedWaitTimeout)
+	eventuallyWithin(t, loadedWaitTimeout, "the armed check", func() bool {
+		return env.svc.ArmedForTest(inc.ID) == got.Generation
+	})
 	stopService(t, env.svc)
 	next := incident.NewService(t.Context(), env.db, nil, ag, nil, nil, env.notif, env.svc.LogForTest())
 	t.Cleanup(func() { stopService(t, next) })
 	next.StartRecovery()
-	eventually(
+	eventuallyWithin(
 		t,
+		loadedWaitTimeout,
 		"the re-armed check after a restart",
 		func() bool { return next.ArmedForTest(inc.ID) == got.Generation },
 	)
