@@ -620,7 +620,7 @@ func TestA6_7_LostRecordLogsError(t *testing.T) {
 	broken.Close()
 	var out lockedBuffer
 	log := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	ag, database, inc := newRig(t, srv.URL, script("refresh_decypharr_links", `{}`),
+	ag, database, inc := newRig(t, srv.URL, script("clear_jellyfin_cache", `{}`),
 		rigOpts{journalDB: broken, log: log})
 	exit := ag.Run(context.Background(), inc, nil, newRecGate(database, inc))
 	if exit.State != agent.RunConcluded {
@@ -635,7 +635,7 @@ func TestA6_7_LostRecordLogsError(t *testing.T) {
 	if len(lost) != 1 {
 		t.Fatalf("%d \"action record lost\" lines, want 1:\n%s", len(lost), out.String())
 	}
-	for _, want := range []string{"level=ERROR", "tool=refresh_decypharr_links", "outcome=applied"} {
+	for _, want := range []string{"level=ERROR", "tool=clear_jellyfin_cache", "outcome=applied"} {
 		if !strings.Contains(lost[0], want) {
 			t.Errorf("line %q missing %q", lost[0], want)
 		}
@@ -711,7 +711,7 @@ func TestAttemptHistory_ShowsRefused(t *testing.T) {
 	}
 	a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
 	got := a.AttemptHistoryForTest(ctx, inc.ID)
-	for _, want := range []string{"each marked applied, failed or refused", "refused", "series not found in sonarr"} {
+	for _, want := range []string{"each marked applied, failed, refused or outcome unknown (interrupted)", "refused", "series not found in sonarr"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("attempt history missing %q; got:\n%s", want, got)
 		}

@@ -796,6 +796,10 @@ func (v *invocation) drive(argsJSON string, args map[string]any) {
 				"escalate_action and call complete_diagnosis.", v.fn))})
 		return
 	}
+	if reply, blocked := v.unknownBlock(args); blocked {
+		v.step(evUnknownBefore, stepInfo{reply: reply})
+		return
+	}
 	if rec, ok := v.earlierCall(args); ok {
 		v.a.log.WarnContext(v.ctx, "duplicate action blocked", "tool", v.fn)
 		v.step(evSeenInRun, stepInfo{reply: errorReply(repeatMessage(v.fn, rec))})
@@ -819,6 +823,63 @@ func (v *invocation) drive(argsJSON string, args map[string]any) {
 		v.step(evGateAllowed, stepInfo{})
 		v.afterAct(result, err)
 	}
+}
+
+func (v *invocation) unknownBlock(args map[string]any) (string, bool) {
+	spec, _ := specByName(v.fn)
+	if !spec.disruptive() || v.a.journal == nil {
+		return "", false
+	}
+	unknown, err := v.a.unknownAttempts(v.ctx, v.c.scope.IncidentID)
+	if err != nil {
+		v.a.log.ErrorContext(v.ctx, "read attempt history", "tool", v.fn, "error", err)
+		return errorReply("not run: the incident's attempt history could not be read; check the service or escalate"),
+			true
+	}
+	for _, u := range unknown {
+		if !u.lifted && u.Tool == v.fn && identityParamsMatch(args, u.Params) {
+			msg := "not run: an earlier %s attempt was interrupted and its outcome is unknown; " +
+				"check the service or escalate"
+			return errorReply(fmt.Sprintf(msg, v.fn)), true
+		}
+	}
+	return "", false
+}
+
+type unknownAttempt struct {
+	journal.Attempt
+
+	lifted bool
+}
+
+func (a *Agent) unknownAttempts(ctx context.Context, incidentID string) ([]unknownAttempt, error) {
+	if a.journal == nil {
+		return nil, nil
+	}
+	log, err := a.journal.ActionAttempts(ctx, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	paired := make([]bool, len(log.Attempts))
+	for _, done := range log.Applied {
+		if done.Status == string(db.ActionRefused) {
+			continue
+		}
+		for i, at := range log.Attempts {
+			if !paired[i] && at.Generation == done.Generation && at.Tool == done.Action &&
+				identityParamsMatch(at.Params, done.Params) {
+				paired[i] = true
+				break
+			}
+		}
+	}
+	var out []unknownAttempt
+	for i, at := range log.Attempts {
+		if !paired[i] {
+			out = append(out, unknownAttempt{Attempt: at, lifted: log.OwnerRerun > at.Generation})
+		}
+	}
+	return out, nil
 }
 
 func (v *invocation) beforeAct(args map[string]any, err error) {
@@ -1258,11 +1319,16 @@ func shortID(id string) string {
 // when nothing has been logged yet, the common case for a brand-new incident.
 func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 	actions, err := a.db.ListActions(ctx, incidentID)
-	if err != nil || len(actions) == 0 {
+	if err != nil {
+		return ""
+	}
+	unknown, _ := a.unknownAttempts(ctx, incidentID)
+	if len(actions) == 0 && len(unknown) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\nActions already attempted on this incident, each marked applied, failed or refused. They " +
+	sb.WriteString("\nActions already attempted on this incident, each marked applied, failed, refused or " +
+		"outcome unknown (interrupted). They " +
 		"did NOT resolve the problem (the incident is still open). Do not repeat any of them; if your " +
 		"evidence points toward one again, that is a signal to look for a different cause or to " +
 		"escalate, not to retry it:\n")
@@ -1277,6 +1343,10 @@ func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 			fmt.Fprintf(&sb, ": %s", act.Error)
 		}
 		sb.WriteString(")\n")
+	}
+	for _, u := range unknown {
+		params, _ := json.Marshal(u.Params)
+		fmt.Fprintf(&sb, "  - %s %s (outcome unknown (interrupted) %s)\n", u.Tool, params, u.At.Format(time.RFC3339))
 	}
 	return sb.String()
 }
