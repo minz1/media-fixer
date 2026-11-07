@@ -25,6 +25,16 @@ type followSender struct {
 	fmu       sync.Mutex
 	follows   []*discordgo.WebhookParams
 	deletions int
+	onDefer   func()
+}
+
+func (f *followSender) InteractionRespond(
+	i *discordgo.Interaction, r *discordgo.InteractionResponse, o ...discordgo.RequestOption,
+) error {
+	if f.onDefer != nil && r.Type == discordgo.InteractionResponseDeferredChannelMessageWithSource {
+		f.onDefer()
+	}
+	return f.clickSender.InteractionRespond(i, r, o...)
 }
 
 func (f *followSender) FollowupMessageCreate(
@@ -162,8 +172,14 @@ func reportInteraction(title string) *discordgo.InteractionCreate {
 
 func reportEnv(t *testing.T) (*discord.Bot, *followSender, *db.DB) {
 	t.Helper()
-	d := openCardDB(t)
 	api := &followSender{}
+	b, d := reportEnvWith(t, api)
+	return b, api, d
+}
+
+func reportEnvWith(t *testing.T, api *followSender) (*discord.Bot, *db.DB) {
+	t.Helper()
+	d := openCardDB(t)
 	b := discord.NewWithSenderForTest(slog.New(slog.DiscardHandler), api, "owner", "")
 	t.Cleanup(func() { _ = b.Close() })
 	svc := incident.NewService(
@@ -184,7 +200,7 @@ func reportEnv(t *testing.T) (*discord.Bot, *followSender, *db.DB) {
 		}
 	})
 	b.SetService(svc)
-	return b, api, d
+	return b, d
 }
 
 func TestBot_ReportWhileClosingIsStored(t *testing.T) {
@@ -218,5 +234,95 @@ func TestBot_ReportStoreFailureWhileClosingGetsEphemeralNotice(t *testing.T) {
 	defer api.fmu.Unlock()
 	if api.deletions != 1 {
 		t.Errorf("deferred public reply deletions = %d, want 1", api.deletions)
+	}
+}
+
+func TestBot_DisconnectWaitsForReportStartedAfterWaitHandlers(t *testing.T) {
+	t.Parallel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	api := &followSender{onDefer: func() {
+		close(entered)
+		<-release
+	}}
+	b, d := reportEnvWith(t, api)
+	b.StopIntake()
+	if err := b.WaitHandlers(context.Background()); err != nil {
+		t.Fatalf("WaitHandlers with nothing running = %v", err)
+	}
+	reported := make(chan struct{})
+	go func() {
+		discord.OnInteractionForTest(b, reportInteraction("Severance"))
+		close(reported)
+	}()
+	<-entered
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := b.Disconnect(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Disconnect with a /report still running = %v, want DeadlineExceeded", err)
+	}
+	disconnected := make(chan error, 1)
+	go func() { disconnected <- b.Disconnect(context.Background()) }()
+	select {
+	case err := <-disconnected:
+		t.Errorf("Disconnect returned %v before the /report finished", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-reported
+	select {
+	case err := <-disconnected:
+		if err != nil {
+			t.Errorf("Disconnect after the /report finished = %v", err)
+		}
+	case <-time.After(waitLimit):
+		t.Fatal("Disconnect did not return after the /report finished")
+	}
+	if _, err := d.FindOpenByTitle(context.Background(), "Severance"); err != nil {
+		t.Errorf("report started before Disconnect not stored: %v", err)
+	}
+}
+
+func TestBot_ReportAfterDisconnectGetsEphemeralNotice(t *testing.T) {
+	t.Parallel()
+	api := &followSender{}
+	b, d := reportEnvWith(t, api)
+	b.StopIntake()
+	if err := b.Disconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	discord.OnInteractionForTest(b, reportInteraction("Dark"))
+	rs := api.respondList()
+	if len(rs) != 1 {
+		t.Fatalf("responses = %d, want 1", len(rs))
+	}
+	if got := ephemeralContent(t, rs[0]); got != card.RestartingNotice {
+		t.Errorf("content = %q, want the restarting notice", got)
+	}
+	if _, err := d.FindOpenByTitle(context.Background(), "Dark"); err == nil {
+		t.Error("report after Disconnect was stored")
+	}
+}
+
+func TestBot_PressAfterDisconnectGetsEphemeralNotice(t *testing.T) {
+	t.Parallel()
+	e := newClickEnv(t, "owner")
+	var calls atomic.Int32
+	e.handlers["inc"] = countingHandler(&calls, card.Result{Line: "ran"})
+	e.track("inc:1", "m9", incCard("1"), time.Now())
+	e.start(map[string]card.Renderer{"inc": newRenderer(true).render})
+	e.bot.StopIntake()
+	if err := e.bot.Disconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.press(dmClick("owner", "m9", btn("inc", "resolve", "1", "s").ID))
+	rs := e.click.respondList()
+	if len(rs) != 1 {
+		t.Fatalf("responses = %d, want 1", len(rs))
+	}
+	if got := ephemeralContent(t, rs[0]); got != card.RestartingNotice {
+		t.Errorf("content = %q, want the restarting notice", got)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("handler ran %d times after Disconnect", calls.Load())
 	}
 }

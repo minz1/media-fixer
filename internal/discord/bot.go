@@ -211,13 +211,16 @@ func (b *Bot) WaitHandlers(ctx context.Context) error {
 }
 
 func (b *Bot) Disconnect(ctx context.Context) error {
-	var err error
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	err := b.WaitHandlers(ctx)
 	if b.stopCards != nil {
 		b.stopCards()
 		select {
 		case <-b.cardsDone:
 		case <-ctx.Done():
-			err = ctx.Err()
+			err = errors.Join(err, ctx.Err())
 		}
 	}
 	return errors.Join(err, b.session.Close())
@@ -294,6 +297,7 @@ func (b *Bot) onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 	if !b.track() {
+		b.ephemeral(context.Background(), i, card.RestartingNotice)
 		return
 	}
 	defer b.untrack()
