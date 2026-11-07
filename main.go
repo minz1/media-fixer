@@ -206,8 +206,6 @@ func run() error {
 	}
 	sr := newStuckRead(bundle.clients, svc, database, log)
 	bot.SetService(svc)
-
-	bot.Start(ctx)
 	defer bot.Close()
 
 	srv, err := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, jrnl, svc, log)
@@ -230,6 +228,7 @@ func run() error {
 	renderers := map[string]card.Renderer{"inc": svc.CardRenderer()}
 	defer startMaintenance(ctx, stop, cfg, bundle, database, bot, srv, log, handlers, renderers, sr)()
 	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
+	bot.Start(ctx)
 
 	go svc.RecoverZombies(context.WithoutCancel(ctx))
 

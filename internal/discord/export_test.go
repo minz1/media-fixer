@@ -68,3 +68,5 @@ func RenderOverlayForTest(
 }
 
 func TextLenForTest(cs []discordgo.MessageComponent) int { return textLen(cs) }
+
+func SetConnectForTest(b *Bot, connect func() error) { b.connect = connect }
