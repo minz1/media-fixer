@@ -737,6 +737,12 @@ func specByName(name string) (toolSpec, bool) {
 }
 
 func UserPhrase(tool string) string {
+	switch tool {
+	case EscalateRemoveAndSearch:
+		tool = toolArrRemoveAndSearch
+	case EscalateDeleteTorrentReadd:
+		tool = toolDecypharrDeleteReadd
+	}
 	spec, _ := specByName(tool)
 	return spec.UserPhrase
 }
@@ -1433,14 +1439,7 @@ func (d *Dispatcher) executeApprovedReaddPlan(ctx context.Context, planJSON []by
 	if err := json.Unmarshal(planJSON, &plan); err != nil {
 		return nil, fmt.Errorf("decode approved readd plan: %w", err)
 	}
-	result, err := d.Decypharr.ExecuteTorrentReadd(ctx, &plan)
-	// Logged even on failure: a partial run has already deleted the torrent,
-	// and that has to appear in the action log either way.
-	d.logAction(ctx, toolDecypharrDeleteReadd, map[string]any{paramName: plan.Name})
-	if err != nil {
-		return result, err
-	}
-	return result, nil
+	return d.Decypharr.ExecuteTorrentReadd(ctx, &plan)
 }
 
 // checkReplacePremise refuses a plan whose stated reason is contradicted by
@@ -1486,28 +1485,22 @@ func (d *Dispatcher) executeApprovedReplacePlan(ctx context.Context, planJSON []
 		return nil, fmt.Errorf("no client configured for media_type %q", plan.MediaType)
 	}
 	result, err := arrClient.ExecuteReplace(ctx, &plan)
-	if err != nil {
-		return result, err
-	}
 	// reason and readable_file are logged together on purpose: the enum is
 	// trusted rather than enforced for the non-readability cases, so the only
 	// way to find a model routinely claiming wrong_content over files that
 	// read fine is to have both recorded on every run.
-	d.logAction(ctx, toolArrRemoveAndSearch, map[string]any{
-		paramMediaType: plan.MediaType,
-		paramTitle:     plan.Title,
-		paramScope:     plan.Scope,
-		paramSeason:    plan.SeasonNumber,
-		paramEpisode:   plan.EpisodeNumber,
-		paramReason:    plan.Reason,
-		"readable_file": func() string {
-			if plan.Readability == nil {
-				return ""
-			}
-			return plan.Readability.ReadableFile
-		}(),
-	})
-	return result, nil
+	outcome := &approvedReplaceResult{ReplaceResult: result, Reason: plan.Reason}
+	if plan.Readability != nil {
+		outcome.ReadableFile = plan.Readability.ReadableFile
+	}
+	return outcome, err
+}
+
+type approvedReplaceResult struct {
+	*client.ReplaceResult
+
+	Reason       string `json:"reason"`
+	ReadableFile string `json:"readable_file"`
 }
 
 // buildReplaceRequest validates the arguments for the one tool that deletes

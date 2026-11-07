@@ -164,6 +164,8 @@ func TestUserPhrase_Values(t *testing.T) {
 		"radarr_rescan":           "updating the library",
 		"arr_search_missing":      "looking for a new copy",
 		"arr_remove_and_search":   "looking for a new copy",
+		"remove_and_search":       "looking for a new copy",
+		"delete_torrent_readd":    "fixing the media storage",
 		"nope":                    "",
 	}
 	for _, spec := range agent.ToolRegistry() {

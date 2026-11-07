@@ -142,6 +142,71 @@ func seasonPlan(files ...client.ReplaceFile) client.ReplacePlan {
 	}
 }
 
+func TestA2_3_ApprovedPlanLogsOnTheApprovedIncident(t *testing.T) {
+	t.Parallel()
+	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	x := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx.disp.IncidentID, fx.disp.IncidentWhat = x.ID, x.What
+
+	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := fx.actions(t, x.ID); len(got) != 0 {
+		t.Errorf("incident X, last run but never approved, got rows:%s", describeActions(got))
+	}
+	if got := fx.actions(t, y.ID); len(got) != 1 {
+		t.Errorf("approved incident Y got %d rows, want 1:%s", len(got), describeActions(got))
+	}
+}
+
+func TestA2_4_ApproveBeforeAnyRunRecordsTheExecution(t *testing.T) {
+	t.Parallel()
+	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+
+	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
+		t.Fatal(err)
+	}
+
+	got := fx.actions(t, y.ID)
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1:%s", len(got), describeActions(got))
+	}
+	row := got[0]
+	if row.Status != db.ActionApplied {
+		t.Errorf("status = %q, want applied", row.Status)
+	}
+	for _, want := range []string{"/mnt/s01e01.mkv", "SeasonSearch", `"readable_file":"/mnt/probe-ok.mkv"`} {
+		if !strings.Contains(row.Result, want) {
+			t.Errorf("result %q is missing %s", row.Result, want)
+		}
+	}
+}
+
+func TestA2_5_OwnerExecutionLogsOneRow(t *testing.T) {
+	t.Parallel()
+	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx.disp.IncidentID, fx.disp.IncidentWhat = y.ID, y.What
+
+	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
+		t.Fatal(err)
+	}
+
+	got := fx.actions(t, y.ID)
+	if len(got) != 1 {
+		t.Fatalf("one approval logged %d rows, want 1:%s", len(got), describeActions(got))
+	}
+	if got[0].Action != agent.EscalateRemoveAndSearch || got[0].TriggeredBy != "owner" {
+		t.Errorf("row = %s by %s, want %s by owner", got[0].Action, got[0].TriggeredBy, agent.EscalateRemoveAndSearch)
+	}
+	if phrase := agent.UserPhrase(got[0].Action); phrase == "" {
+		t.Errorf("UserPhrase(%q) is empty; progress notes would drop the approved replace", got[0].Action)
+	}
+}
+
 func TestS9_8_ReplaceKeepsItsPartialResult(t *testing.T) {
 	t.Parallel()
 	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}}, nil)
