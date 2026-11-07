@@ -68,3 +68,60 @@ func ImprovedForTest(pre, post *FixSignature) bool { return improved(pre, post) 
 func (a *Agent) DisruptionNoteForTest(ctx context.Context, incidentID string) string {
 	return a.disruptionNote(ctx, incidentID)
 }
+
+type (
+	RunSnapshot  = runSnapshot
+	RunEvent     = runEvent
+	RunEventKind = runEventKind
+	RunEffect    = runEffect
+)
+
+const (
+	MaxRoundsForTest = maxRounds
+
+	EvClaimed       = evClaimed
+	EvClaimRefused  = evClaimRefused
+	EvClaimFailed   = evClaimFailed
+	EvToolCalls     = evToolCalls
+	EvTextOnly      = evTextOnly
+	EvLLMFailed     = evLLMFailed
+	EvConcluded     = evConcluded
+	EvBudgetTripped = evBudgetTripped
+	EvBatchFailed   = evBatchFailed
+	EvBatchDone     = evBatchDone
+
+	EffRecordStarted = effRecordStarted
+	EffAnswerPending = effAnswerPending
+	EffRecordRound   = effRecordRound
+	EffFinish        = effFinish
+)
+
+func NewRunEvent(kind RunEventKind, cancelled bool) RunEvent {
+	return runEvent{kind: kind, cancelled: cancelled}
+}
+
+func (e runEvent) Kind() RunEventKind { return e.kind }
+
+func (e runEvent) Cancelled() bool { return e.cancelled }
+
+func RunStates() []RunState { return runStates() }
+
+func RunEventKinds() []RunEventKind { return runEventKinds() }
+
+func NextRun(cur RunSnapshot, ev RunEvent) (RunSnapshot, []RunEffect, error) { return nextRun(cur, ev) }
+
+func CheckRun(s RunSnapshot) error { return checkRun(s) }
+
+func RunMatches(s RunSnapshot, ev RunEvent) int { return runMatches(s, ev) }
+
+func FailRun(cur RunSnapshot, ev RunEvent) (RunSnapshot, []RunEffect) { return failRun(cur, ev) }
+
+func RunRowCountsForTest() (int, int) { return len(runAllowedRows()), len(runRejectRows()) }
+
+func RejectReasonsForTest() []string {
+	out := make([]string, 0, len(runRejectRows()))
+	for _, r := range runRejectRows() {
+		out = append(out, r.reject)
+	}
+	return out
+}
