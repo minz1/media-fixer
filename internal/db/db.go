@@ -1208,14 +1208,11 @@ func (d *DB) ListSeerrIssueIDs(ctx context.Context, incidentID string) ([]string
 type ActionStatus string
 
 const (
-	ActionPending  ActionStatus = "pending"
-	ActionApplied  ActionStatus = "applied"
-	ActionFailed   ActionStatus = "failed"
-	ActionApproved ActionStatus = "approved"
-	ActionDenied   ActionStatus = "denied"
+	ActionApplied ActionStatus = "applied"
+	ActionFailed  ActionStatus = "failed"
 )
 
-// ActionLog records a single action taken (or proposed) for an incident.
+// ActionLog records a single action taken for an incident.
 type ActionLog struct {
 	ID          string       `json:"id"`
 	IncidentID  string       `json:"incident_id"`
@@ -1229,7 +1226,7 @@ type ActionLog struct {
 }
 
 // LogAction inserts an action record, generating an ID if absent. Callers
-// only log an action after the underlying operation has already succeeded,
+// only log an action once the underlying operation has finished, applied or failed,
 // so "now" is an accurate applied_at — there is no separate "pending" phase
 // in this codebase's usage, unlike the applied_at pair the
 // schema was originally built for. Production code now writes actions_log

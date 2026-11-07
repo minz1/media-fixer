@@ -46,6 +46,24 @@ func (f *fakeArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func failingReaddDecypharr(t *testing.T) *client.DecypharrClient {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/torrents/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/v2/torrents/add", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return client.NewDecypharr(srv.URL, "token")
+}
+
 func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrClient) *approvedFixture {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
@@ -204,6 +222,34 @@ func TestA2_5_OwnerExecutionLogsOneRow(t *testing.T) {
 	}
 	if phrase := agent.UserPhrase(got[0].Action); phrase == "" {
 		t.Errorf("UserPhrase(%q) is empty; progress notes would drop the approved replace", got[0].Action)
+	}
+}
+
+func TestA9_3_FailedApprovedReaddIsLoggedFailed(t *testing.T) {
+	t.Parallel()
+	fx := newApprovedFixture(t, nil, failingReaddDecypharr(t))
+	y := fx.awaiting(t, agent.EscalateDeleteTorrentReadd, map[string]any{"name": "The.Boys.S01"})
+	fx.disp.IncidentID, fx.disp.IncidentWhat = y.ID, y.What
+
+	err := fx.approve(t, y.ID, client.ReaddPlan{
+		Name: "The.Boys.S01", InfoHash: "abc", Category: "sonarr", Magnet: "magnet:?xt=urn:btih:abc",
+	})
+	if err == nil {
+		t.Fatal("approve succeeded, want the re-add failure")
+	}
+
+	got := fx.actions(t, y.ID)
+	if len(got) == 0 {
+		t.Fatal("a re-add that deleted the torrent left no row")
+	}
+	for _, row := range got {
+		if row.Status != db.ActionFailed {
+			t.Errorf("row %s by %s is %q, want failed:%s",
+				row.Action, row.TriggeredBy, row.Status, describeActions(got))
+		}
+	}
+	if !strings.Contains(got[len(got)-1].Result, `"deleted":true`) {
+		t.Errorf("result %q does not record that the torrent was deleted", got[len(got)-1].Result)
 	}
 }
 
