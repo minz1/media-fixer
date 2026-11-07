@@ -74,6 +74,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		"season":         seasonLabel,
 		"ms":             lookupDuration,
 		"confidenceTone": confidenceTone,
+		"restarting":     func(s string) bool { return s == card.RestartingNotice },
 	}).ParseFS(templateFS, "templates/dashboard.html")
 	if err != nil {
 		return nil, err

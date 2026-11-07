@@ -281,7 +281,7 @@
         {{template "pause_toggle" (dict "BaseURL" .BaseURL "Paused" .Paused)}}
       </div>
       {{template "tabs" (dict "BaseURL" .BaseURL "Active" .Active)}}
-      <div id="notice" aria-live="polite">{{with .Done}}<p class="notice notice-ok">{{.}}</p>{{end}}</div>
+      <div id="notice" aria-live="polite">{{with .Done}}{{template "ok_notice" .}}{{end}}</div>
 {{end}}
 
 {{define "page_bottom"}}
@@ -298,7 +298,9 @@
 
 {{define "badge"}}<span class="badge tone-{{.Tone}}">{{.Word}}</span>{{end}}
 
-{{define "notice"}}{{if or .Ok .Err}}<div id="notice" hx-swap-oob="innerHTML">{{with .Ok}}<p class="notice notice-ok">{{.}}</p>{{end}}{{with .Err}}<p class="notice notice-err">{{.}}</p>{{end}}</div>{{end}}{{end}}
+{{define "ok_notice"}}<p class="notice {{if restarting .}}tone-yellow{{else}}notice-ok{{end}}">{{.}}</p>{{end}}
+
+{{define "notice"}}{{if or .Ok .Err}}<div id="notice" hx-swap-oob="innerHTML">{{with .Ok}}{{template "ok_notice" .}}{{end}}{{with .Err}}<p class="notice notice-err">{{.}}</p>{{end}}</div>{{end}}{{end}}
 
 {{define "pause_toggle"}}
 <div id="pause-toggle" class="flex items-center gap-3">
@@ -653,7 +655,7 @@
 {{define "escalation_preview"}}
 <div class="bg-purple-50 border border-purple-200 rounded-sm p-3">
   {{if .Error}}
-  <p class="text-xs text-red-600">{{.Error}}</p>
+  {{if restarting .Error}}<p class="notice tone-yellow">{{.Error}}</p>{{else}}<p class="text-xs text-red-600">{{.Error}}</p>{{end}}
   {{else}}
   <h4 class="text-xs font-semibold text-purple-800 mb-1">Plan preview</h4>
   {{if .ReadableFile}}
