@@ -482,7 +482,7 @@
     {{with .Next}}<span class="self-center text-sm text-gray-600">{{.}}</span>{{end}}
     {{end}}
   </div>
-  {{with .Owner.Partial}}<p class="mt-2 text-sm text-gray-600">{{.}}</p>{{end}}
+  {{with .Owner.Partial}}<p class="mt-2 flex items-center gap-1.5 text-sm text-gray-600">{{.}}{{with $.Owner.PartialInfo}}{{template "info" .}}{{end}}</p>{{end}}
 
   {{if and .Owner.Preview .Finding}}
   <div class="mt-4 border-t border-gray-200 pt-4">
@@ -916,6 +916,22 @@
       </div>
     </div>
     {{end}}
+  </div>
+  {{end}}
+  {{range .Failed}}
+  <div class="border border-gray-200 rounded-sm p-3 text-sm">
+    <div class="flex flex-wrap justify-between gap-x-4">
+      <span class="font-medium text-gray-900 break-all">{{.Title}}</span>
+      <span class="text-gray-600">{{.Line}}</span>
+    </div>
+    <form hx-post="{{$.BaseURL}}/maintenance/stuck-queue/resume" hx-target="#stuck-queue" hx-swap="outerHTML"
+      hx-disable="find button" class="mt-2">
+      <input type="hidden" name="app" value="{{.App}}" />
+      <input type="hidden" name="id" value="{{.DownloadID}}" />
+      <input type="hidden" name="op" value="{{.Op}}" />
+      <input type="hidden" name="v" value="{{.Version}}" />
+      <button type="submit" class="btn btn-secondary">Resume</button>
+    </form>
   </div>
   {{end}}
 </div>

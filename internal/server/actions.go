@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
@@ -25,6 +27,7 @@ type ownerView struct {
 	Parked      bool
 	BudgetSpent bool
 	Partial     string
+	PartialInfo string
 }
 
 func actionViewOf(snap lifecycle.Snapshot, k lifecycle.ActionKind) (actionView, bool) {
@@ -50,10 +53,24 @@ func actionViewOf(snap lifecycle.Snapshot, k lifecycle.ActionKind) (actionView, 
 	return actionView{}, false
 }
 
+func stepList(op operation.Op) string {
+	parts := make([]string, len(op.Steps))
+	for i, st := range op.Steps {
+		parts[i] = fmt.Sprintf("%d. %s %s", i+1, st.Kind, op.Results[i].State)
+		if st.Magnet != "" {
+			parts[i] += " " + st.Magnet
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
 func (s *Server) ownerView(ctx context.Context, snap lifecycle.Snapshot, actions []lifecycle.Action) ownerView {
 	v := ownerView{
 		Version: snap.Version, Meta: lifecycle.Meta(snap.Status), Parked: snap.Parked,
 		BudgetSpent: incident.BudgetSpent(snap), Partial: s.svc.PartialLine(ctx, snap),
+	}
+	if snap.Op != nil && operation.Resumable(*snap.Op) {
+		v.Partial, v.PartialInfo = operation.Line(*snap.Op), stepList(*snap.Op)
 	}
 	for _, a := range actions {
 		switch a.Kind {

@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -38,6 +40,15 @@ type stuckItemView struct {
 	ImportRefusal string
 	Rejections    []string
 	Buttons       []stuckButton
+}
+
+type stuckFailedView struct {
+	App        string
+	DownloadID string
+	Title      string
+	Line       string
+	Op         int64
+	Version    int64
 }
 
 type stuckAppView struct {
@@ -106,6 +117,25 @@ func (s *Server) stuckAction(w http.ResponseWriter, r *http.Request) {
 	s.renderStuckCard(r.Context(), w, notice, failure)
 }
 
+func (s *Server) stuckResume(w http.ResponseWriter, r *http.Request) {
+	app, appOK := stuckqueue.AppForCode(r.FormValue("app"))
+	opID, idErr := strconv.ParseInt(r.FormValue("op"), 10, 64)
+	opVersion, verErr := strconv.ParseInt(r.FormValue("v"), 10, 64)
+	if s.stuck == nil {
+		s.renderStuckCard(r.Context(), w, "", "")
+		return
+	}
+	if !appOK || idErr != nil || verErr != nil {
+		s.renderStuckCard(r.Context(), w, "", staleNotice)
+		return
+	}
+	notice, err := s.stuck.Resume(
+		context.WithoutCancel(r.Context()), app, r.FormValue("id"), opID, opVersion,
+	)
+	notice, failure := restartingNotice(notice, err)
+	s.renderStuckCard(r.Context(), w, notice, failure)
+}
+
 func validStuckAction(a stuckqueue.Action) bool {
 	switch a {
 	case stuckqueue.ActionImport, stuckqueue.ActionRegrab, stuckqueue.ActionRemove:
@@ -162,6 +192,7 @@ func (s *Server) stuckCardData(
 		"Bounds":      stuckqueue.SettingBounds(),
 		"Running":     running,
 		"StartedAt":   s.stuck.StartedAt(),
+		"Failed":      stuckFailed(s.stuck.FailedOperations()),
 	}
 	if res == nil {
 		return card
@@ -176,6 +207,18 @@ func (s *Server) stuckCardData(
 	}
 	card["Apps"] = apps
 	return card
+}
+
+func stuckFailed(ops []operation.Op) []stuckFailedView {
+	out := make([]stuckFailedView, 0, len(ops))
+	for _, op := range ops {
+		code, _, _ := strings.Cut(op.Subject.ID, ":")
+		out = append(out, stuckFailedView{
+			App: code, DownloadID: op.Steps[0].DownloadID, Title: op.Title, Line: operation.Line(op),
+			Op: op.ID, Version: op.Version,
+		})
+	}
+	return out
 }
 
 func stuckApp(ar stuckqueue.AppResult, minAgeHours int) stuckAppView {

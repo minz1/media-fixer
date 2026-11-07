@@ -25,10 +25,18 @@ type stuckArr struct {
 	records []map[string]any
 	deletes []string
 	hold    chan struct{}
+	reqs    int
+}
+
+func (f *stuckArr) requests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reqs
 }
 
 func (f *stuckArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
+	f.reqs++
 	hold := f.hold
 	f.mu.Unlock()
 	if hold != nil {

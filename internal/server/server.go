@@ -144,6 +144,7 @@ func New(
 		r.Get("/maintenance/stuck-queue/results", s.stuckResults)
 		r.Post("/maintenance/stuck-queue/settings", s.stuckSettingsSave)
 		r.Post("/maintenance/stuck-queue/run", s.stuckRun)
+		r.Post("/maintenance/stuck-queue/resume", s.stuckResume)
 		r.Post("/maintenance/stuck-queue/{action}", s.stuckAction)
 		r.Post("/maintenance/incident-timers/settings", s.timersSettingsSave)
 		r.Get("/monitoring", s.monitorIndex)

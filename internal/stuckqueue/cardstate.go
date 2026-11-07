@@ -54,6 +54,8 @@ func appCode(a App) string {
 	return ""
 }
 
+func AppForCode(code string) (App, bool) { return appOf(code) }
+
 func appOf(code string) (App, bool) {
 	for _, a := range []App{AppSonarr, AppRadarr} {
 		if appCode(a) == code {
