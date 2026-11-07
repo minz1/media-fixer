@@ -161,27 +161,3 @@ func (s *Service) notVerified(inc *db.Incident) lifecycle.Notice {
 		"🔍 Incident **%s** (#%s) needs your attention (autonomous fix applied but could not be verified).",
 		inc.Title, inc.ShortID()), "", fields...))
 }
-
-func (s *Service) armDueChecks(ctx context.Context) {
-	rows, err := s.db.ListDriven(ctx)
-	if err != nil {
-		s.log.ErrorContext(ctx, "list driven incidents", "error", err)
-		return
-	}
-	armed := s.runs.liveness().armed
-	for _, r := range rows {
-		snap := r.Snap
-		kind := lifecycle.CheckVerify
-		if snap.Status == lifecycle.AwaitingDownload {
-			kind = lifecycle.CheckDownload
-		} else if snap.Status != lifecycle.Verifying {
-			continue
-		}
-		if gen, ok := armed[snap.ID]; ok && gen == snap.Generation {
-			continue
-		}
-		s.scheduleCheck(snap.ID, lifecycle.Effect{
-			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: snap.NextCheck, Check: kind,
-		})
-	}
-}

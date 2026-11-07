@@ -2,7 +2,6 @@ package incident_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1350,80 +1349,6 @@ func TestNotifyReporters_FailedDMFallsBackToOwner(t *testing.T) {
 	}
 	if !strings.Contains(notif.ownerMsgs[0], "discord-alice") || !strings.Contains(notif.ownerMsgs[0], "House") {
 		t.Errorf("owner fallback message missing reporter/incident context: %q", notif.ownerMsgs[0])
-	}
-}
-
-// TestSweepStaleRuns_RerunsHungIncident is the regression test for the
-// heartbeat/stale-run detection gap named in ROADMAP.md: RecoverZombies only
-// catches a crashed process (nothing left running to check); this is what
-// catches a run whose goroutine is still alive but stopped making progress.
-func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
-	t.Parallel()
-
-	f, err := os.CreateTemp(t.TempDir(), "*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	dbPath := f.Name()
-
-	database, err := db.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	ctx := context.Background()
-
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Hung"}
-	if createErr := database.CreateIncident(ctx, inc); createErr != nil {
-		t.Fatal(createErr)
-	}
-	if repErr := database.AddReporter(ctx, inc.ID, "x", "discord", "discord-x"); repErr != nil {
-		t.Fatal(repErr)
-	}
-	if statusErr := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusInvestigating); statusErr != nil {
-		t.Fatal(statusErr)
-	}
-
-	// Backdate updated_at (no heartbeat written yet) well past the stale
-	// threshold, simulating a run whose goroutine hung mid-diagnosis — via a
-	// second raw connection, since db.DB exposes no "set an arbitrary past
-	// timestamp" method (nor should it, outside a test).
-	raw, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, execErr := raw.ExecContext(ctx, `UPDATE incidents SET updated_at = ? WHERE id = ?`,
-		time.Now().Add(-20*time.Minute), inc.ID); execErr != nil {
-		t.Fatal(execErr)
-	}
-	if closeErr := raw.Close(); closeErr != nil {
-		t.Fatal(closeErr)
-	}
-
-	fakeAgent := newAlwaysFixedAgent()
-	notif := newSyncNotifier()
-	svc := incident.NewService(
-		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
-	)
-	t.Cleanup(func() { stopService(t, svc) })
-
-	svc.SweepStaleRuns(ctx)
-
-	select {
-	case <-fakeAgent.runCalls:
-	case <-time.After(notifyWaitTimeout):
-		t.Fatal("timed out waiting for the stale run to be rerun")
-	}
-	notif.mu.Lock()
-	defer notif.mu.Unlock()
-	if n := countMsgs(notif.msgs, "🔁 Taking another look at **Hung**."); n != 0 {
-		t.Errorf("rerun notes = %d, want none for a stale-run recovery; msgs %q", n, notif.msgs)
-	}
-	stale := fmt.Sprintf(
-		"⏱️ Incident **Hung** (#%s) stopped making progress for 15 min and is being re-run.", inc.ID[:8])
-	if n := countMsgs(notif.msgs, stale); n != 1 {
-		t.Errorf("stale owner DMs = %d, want 1 %q; msgs %q", n, stale, notif.msgs)
 	}
 }
 

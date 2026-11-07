@@ -64,7 +64,7 @@ func (s *Service) ClaimSeerrAlertForTest(now time.Time, gap time.Duration) (time
 }
 
 func (s *Service) BackgroundSweepLoopForTest(ctx context.Context) {
-	s.backgroundSweepLoop(ctx)
+	s.reconcileLoop(ctx)
 }
 
 func (s *Service) ReleaseSeerrAlertForTest(claimed, prev time.Time) {
@@ -193,3 +193,9 @@ func (s *Service) ReservedOrRunningForTest(id string) bool {
 }
 
 func (s *Service) PlanLiveForTest(id string) bool { return s.runs.liveness().plans[id] }
+
+func (s *Service) ReconcileForTest(ctx context.Context) lifecycle.Counts { return s.reconcile(ctx) }
+
+func (s *Service) ReserveForTest(id string) func() { return s.runs.reserve(id) }
+
+func (s *Service) PlanStartedForTest(id string) func() { return s.runs.planStarted(id) }

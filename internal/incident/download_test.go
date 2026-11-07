@@ -102,7 +102,7 @@ func TestI2_16_OrphanPendingOutcomeNeverSwept(t *testing.T) {
 	if err := setTrack(t.Context(), f.db, f.inc.ID, freshTrack(), time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	f.svc.RecoverZombies(t.Context())
+	f.svc.ReconcileForTest(t.Context())
 	if f.svc.ArmedForTest(f.inc.ID) != 0 || f.checks.Load() != 0 {
 		t.Fatalf("an orphan pending outcome on a resolved incident was armed or checked (%d checks)", f.checks.Load())
 	}
@@ -128,7 +128,7 @@ func TestI2_18_DownloadCheckStaleGenerationRejected(t *testing.T) {
 func TestI1_15_StaleDownloadCheckAfterRerunIgnored(t *testing.T) {
 	t.Parallel()
 	f := newDLFixture(t, statusAwaiting, freshTrack())
-	f.svc.RecoverZombies(t.Context())
+	f.svc.ReconcileForTest(t.Context())
 	gen := f.snap(t).Generation
 	if f.svc.ArmedForTest(f.inc.ID) != gen {
 		t.Fatal("no download check armed")

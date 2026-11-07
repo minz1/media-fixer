@@ -128,15 +128,6 @@ func (m *runManager) setStaleFloor(tok *runToken, minutes int) {
 	tok.staleFloor = minutes
 }
 
-func (m *runManager) staleFloor(id string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if tok, ok := m.active[id]; ok {
-		return tok.staleFloor
-	}
-	return 0
-}
-
 func (m *runManager) supersedeGen(id string, gen int64) (context.Context, *runToken, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

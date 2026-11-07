@@ -508,17 +508,6 @@ func TestOwnerCards_HaveSubject(t *testing.T) {
 		}
 		assertSubject(t, notif.ownerCards(), card.IncidentSubject(inc.ID))
 	})
-	t.Run("stale rerun", func(t *testing.T) {
-		t.Parallel()
-		database, inc := newReopenedIncident(t, staleAge)
-		notif := &cardNotifier{}
-		ag := newAlwaysFixedAgent()
-		svc := incident.NewService(ctx, database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
-		t.Cleanup(func() { stopService(t, svc) })
-		svc.SweepStaleRuns(ctx)
-		waitForRun(t, ag)
-		assertSubject(t, notif.ownerCards(), card.IncidentSubject(inc.ID))
-	})
 	t.Run("could not DM reporter", func(t *testing.T) {
 		t.Parallel()
 		notif := &cardNotifier{userErr: errors.New("no mutual guilds")}

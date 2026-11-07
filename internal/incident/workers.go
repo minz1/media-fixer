@@ -95,11 +95,3 @@ func (s *Service) ownerSection(verb, id string) (func(), error) {
 	}
 	return leave, nil
 }
-
-func (s *Service) logRerunErr(ctx context.Context, msg, id string, err error) {
-	if errors.Is(err, card.ErrRestarting) {
-		s.log.InfoContext(ctx, "rerun refused, shutting down", "incident", id, "error", err)
-		return
-	}
-	s.log.ErrorContext(ctx, msg, "incident", id, "error", err)
-}

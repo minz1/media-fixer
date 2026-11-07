@@ -205,8 +205,8 @@ func TestRecovery_RefusedRerunLogsInfo(t *testing.T) {
 		age  time.Duration
 		call func(*incident.Service)
 	}{
-		{"recovery", 0, func(s *incident.Service) { s.RecoverZombies(context.Background()) }},
-		{"stale sweep", staleAge, func(s *incident.Service) { s.SweepStaleRuns(context.Background()) }},
+		{"recovery", 0, func(s *incident.Service) { s.ReconcileForTest(context.Background()) }},
+		{"stale sweep", staleAge, func(s *incident.Service) { s.ReconcileForTest(context.Background()) }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

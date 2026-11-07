@@ -2,8 +2,6 @@ package incident_test
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -315,65 +313,6 @@ func TestBackgroundLoop_ResetsToSavedInterval(t *testing.T) {
 	}
 }
 
-func backdateIncident(t *testing.T, path, id string, age time.Duration) {
-	t.Helper()
-	raw, err := sql.Open("sqlite", path+"?_time_format=sqlite&_timezone=UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer raw.Close()
-	for _, q := range []string{
-		`UPDATE incidents SET updated_at = ? WHERE id = ?`, `UPDATE incident_events SET at = ? WHERE incident_id = ?`,
-	} {
-		if _, err = raw.ExecContext(t.Context(), q, time.Now().Add(-age), id); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestSweepStaleRuns_CardPrintsSavedMinutes(t *testing.T) {
-	t.Parallel()
-	path := t.TempDir() + "/stale.db"
-	database, err := db.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	saveTimers(t, database, func(tm *incident.Timers) { tm.StaleRunMinutes = 40 })
-	ids := map[string]string{}
-	for title, age := range map[string]time.Duration{"Old": 41 * time.Minute, "Young": 39 * time.Minute} {
-		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
-		if err = database.CreateIncident(t.Context(), inc); err != nil {
-			t.Fatal(err)
-		}
-		if err = database.UpdateIncidentStatus(t.Context(), inc.ID, db.StatusInvestigating); err != nil {
-			t.Fatal(err)
-		}
-		backdateIncident(t, path, inc.ID, age)
-		ids[title] = inc.ID
-	}
-	ag := newAlwaysFixedAgent()
-	notif := newSyncNotifier()
-	svc := incident.NewService(t.Context(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
-	t.Cleanup(func() { stopService(t, svc) })
-
-	svc.SweepStaleRuns(t.Context())
-
-	waitForRun(t, ag)
-	notif.mu.Lock()
-	defer notif.mu.Unlock()
-	card := func(title, id string) string {
-		return fmt.Sprintf(
-			"⏱️ Incident **%s** (#%s) stopped making progress for 40 min and is being re-run.", title, id[:8])
-	}
-	if n := countMsgs(notif.msgs, card("Old", ids["Old"])); n != 1 {
-		t.Errorf("stale cards for the 41 min incident = %d, want 1; msgs %q", n, notif.msgs)
-	}
-	if n := countMsgs(notif.msgs, card("Young", ids["Young"])); n != 0 {
-		t.Errorf("the 39 min incident was rerun; msgs %q", notif.msgs)
-	}
-}
-
 func newTrackedIncident(t *testing.T, database *db.DB, status db.IncidentStatus, po *db.PendingOutcome) *db.Incident {
 	t.Helper()
 	inc := &db.Incident{
@@ -621,51 +560,6 @@ func TestRetryWait_EndsOnCancel(t *testing.T) {
 	}
 }
 
-func TestSweepStaleRuns_KeepsRunsRetryFloor(t *testing.T) {
-	t.Parallel()
-	path := t.TempDir() + "/floor.db"
-	database, err := db.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	saveTimers(t, database, func(tm *incident.Timers) {
-		tm.RetryFirstMinutes = 30
-		tm.StaleRunMinutes = 41
-	})
-	svc, ag, notif := newRetryingService(t.Context(), t, database)
-	running := handleRetryShow(t, svc, ag, "Retrying Show")
-	idle := &db.Incident{
-		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Idle Show",
-	}
-	if err = database.CreateIncident(t.Context(), idle); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{running.ID, idle.ID} {
-		if err = database.UpdateIncidentStatus(t.Context(), id, db.StatusInvestigating); err != nil {
-			t.Fatal(err)
-		}
-	}
-	saveTimers(t, database, func(tm *incident.Timers) { tm.StaleRunMinutes = 13 })
-	backdateIncident(t, path, running.ID, 20*time.Second)
-	backdateIncident(t, path, idle.ID, 20*time.Second)
-
-	svc.SweepStaleRuns(t.Context())
-
-	notif.mu.Lock()
-	defer notif.mu.Unlock()
-	card := func(inc *db.Incident) string {
-		return fmt.Sprintf(
-			"⏱️ Incident **%s** (#%s) stopped making progress for 13 min and is being re-run.", inc.Title, inc.ID[:8])
-	}
-	if n := countMsgs(notif.msgs, card(running)); n != 0 {
-		t.Errorf("run inside its 41 unit retry floor was rerun at the lowered stale value; msgs %q", notif.msgs)
-	}
-	if n := countMsgs(notif.msgs, card(idle)); n != 1 {
-		t.Errorf("stale cards for the idle incident = %d, want 1; msgs %q", n, notif.msgs)
-	}
-}
-
 func TestTimers_CorruptRowWarnsOncePerBadSpell(t *testing.T) {
 	t.Parallel()
 	database := openTimersDB(t)
@@ -681,15 +575,15 @@ func TestTimers_CorruptRowWarnsOncePerBadSpell(t *testing.T) {
 	warnings := func() int { return strings.Count(logs.String(), "incident timers unreadable") }
 
 	corrupt()
-	svc.SweepStaleRuns(t.Context())
-	svc.SweepStaleRuns(t.Context())
+	svc.ReconcileForTest(t.Context())
+	svc.ReconcileForTest(t.Context())
 	if n := warnings(); n != 1 {
 		t.Fatalf("warnings after two reads of a corrupt row = %d, want 1", n)
 	}
 	saveTimers(t, database, func(*incident.Timers) {})
-	svc.SweepStaleRuns(t.Context())
+	svc.ReconcileForTest(t.Context())
 	corrupt()
-	svc.SweepStaleRuns(t.Context())
+	svc.ReconcileForTest(t.Context())
 	if n := warnings(); n != 2 {
 		t.Errorf("warnings after a good read and a new corrupt row = %d, want 2", n)
 	}

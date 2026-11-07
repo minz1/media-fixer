@@ -270,7 +270,7 @@ func TestRerunNote_NotOnRestartRecovery(t *testing.T) {
 	t.Parallel()
 	svc, _, notif := newEscalationService(t, db.StatusInvestigating)
 
-	svc.RecoverZombies(context.Background())
+	svc.ReconcileForTest(context.Background())
 
 	notif.mu.Lock()
 	defer notif.mu.Unlock()

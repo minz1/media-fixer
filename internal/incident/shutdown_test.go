@@ -301,21 +301,17 @@ func TestA10_10_RecoveryLeavesOpenIncidentsWhilePaused(t *testing.T) {
 	if err := svc.SetAutonomousPaused(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	svc.RecoverZombies(context.Background())
+	c := svc.ReconcileForTest(context.Background())
 	stopService(t, svc)
-	out := logs.String()
-	if n := strings.Count(out, "starting open incident left without a run"); n != 0 {
-		t.Errorf("recovery started %d open incidents while paused", n)
+	if c.Parked != 2 || c.Runs != 0 || len(ag.started) != 0 {
+		t.Errorf("recovery while paused: %+v, %d runs started", c, len(ag.started))
 	}
-	if n := strings.Count(out, "level=WARN"); n != 0 {
-		t.Errorf("recovery while paused logged %d WARN lines:\n%s", n, out)
-	}
-	if n := strings.Count(out, "level=INFO msg=\"open incident recovery skipped"); n != 1 {
-		t.Errorf("recovery while paused logged %d skip lines, want 1:\n%s", n, out)
+	if n := strings.Count(logs.String(), "level=WARN"); n != 0 {
+		t.Errorf("recovery while paused logged %d WARN lines:\n%s", n, logs.String())
 	}
 }
 
-func TestA10_10_RecoveryLeavesLockedOpenIncident(t *testing.T) {
+func TestA10_10_RecoveryRunsLockedOpenIncidentDiagnosisOnly(t *testing.T) {
 	t.Parallel()
 	database := openTimersDB(t)
 	incs := openIncidents(t, database, "Locked", "Free")
@@ -323,16 +319,15 @@ func TestA10_10_RecoveryLeavesLockedOpenIncident(t *testing.T) {
 		t.Fatal(err)
 	}
 	ag := newDrainingAgent(database)
-	logs := &syncBuffer{}
 	svc := incident.NewService(
-		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.NewTextHandler(logs, nil)))
-	svc.RecoverZombies(context.Background())
-	if id := waitStarted(t, ag.started); id != incs[1].ID {
-		t.Errorf("recovery ran %s, want the unlocked %s", id, incs[1].ID)
+		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler))
+	if c := svc.ReconcileForTest(context.Background()); c.Runs != 2 {
+		t.Errorf("recovery relaunched %d incidents, want both", c.Runs)
+	}
+	for _, inc := range incs {
+		if !svc.ReservedOrRunningForTest(inc.ID) {
+			t.Errorf("%s has no run after recovery", inc.Title)
+		}
 	}
 	stopService(t, svc)
-	out := logs.String()
-	if strings.Contains(out, "incident="+incs[0].ID) {
-		t.Errorf("recovery touched the locked incident:\n%s", out)
-	}
 }

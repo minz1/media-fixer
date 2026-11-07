@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +42,7 @@ type Service struct {
 	// shortcut: in memory, so a restart during a lock sends one more alert; persist it if that turns out noisy.
 	lockAlertAt atomic.Int64
 	paused      atomic.Bool
+	wake        chan struct{}
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -82,22 +82,13 @@ func NewService(
 		notif:      notif,
 		log:        log,
 		runs:       newRunManager(work.base),
+		wake:       make(chan struct{}, 1),
 		work:       work,
 	}
 	if paused, err := database.IsAutonomousPaused(base); err == nil {
 		s.paused.Store(paused)
 	}
 	return s
-}
-
-func (s *Service) Start() {
-	if s.work.goNamed("sweep", s.backgroundSweepLoop) {
-		s.log.Info("incident sweep loop started")
-	}
-}
-
-func (s *Service) StartRecovery() {
-	s.work.goNamed("recovery", s.RecoverZombies)
 }
 
 func (s *Service) Stop() { s.work.stop() }
@@ -142,15 +133,8 @@ func (s *Service) SetStuckRead(c StuckReadChecker) {
 	s.stuckRead = c
 }
 
-// launch starts a background agent run for an incident with a fixed seed (nil
-// for a fresh run).
-func (s *Service) launch(inc *db.Incident, seed []openai.ChatCompletionMessage) {
-	ctx, tok, _ := s.runs.supersede(inc.ID)
-	s.startRun(ctx, tok, inc, inc.Generation, func(context.Context) []openai.ChatCompletionMessage { return seed })
-}
-
 // startRun runs the background agent pipeline for an incident under a token
-// from runs.supersede, which cancels any in-flight run for the same incident, so a
+// from runs.supersedeGen, which cancels any in-flight run for the same incident, so a
 // rerun supersedes a prior run instead of racing it. buildSeed runs on the new
 // run's own (background) context rather than the caller's, so a seed built from
 // an expensive call (buildReinvestigateSeed summarizes the prior conversation
@@ -590,85 +574,45 @@ func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
 	s.notifySeerrIssues(ctx, inc, "resolve", func(id string) error { return s.seerr.Resolve(ctx, id) })
 }
 
-// recordStatusChanged appends a status_changed event so an incident page's
-// live SSE connection re-renders and re-checks incidentSettled instead of
-// only updating on the next event the agent loop happens to emit — every
-// status transition this service performs (Resolve, Rerun, the verification/
-// escalation lifecycle, Unlock) happens here, one layer above Agent.Run's own
-// event recording, so without this call the live page would never see its
-// own final status: Agent.Run's last event (run_finished) fires before
-// Service.handleAgentResolved/legacyEscalate ever transitions status away
-// from "investigating".
-func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status string) {
-	if s.journal == nil {
+// endLockEpisode re-arms the lock alert once under the threshold, since reopen and rerun raise the count without Handle.
+func (s *Service) endLockEpisode(ctx context.Context) {
+	prev := s.lockAlertAt.Load()
+	if prev == 0 {
 		return
 	}
-	if err := s.journal.StatusChanged(ctx, incidentID, status); err != nil {
-		s.log.WarnContext(ctx, "record status_changed", "incident", incidentID, "error", err)
+	n, err := s.db.CountOpenIncidents(ctx)
+	if err != nil {
+		s.log.WarnContext(ctx, "count active incidents", "error", err)
+		return
+	}
+	if n < SystematicIncidentThreshold {
+		s.lockAlertAt.CompareAndSwap(prev, 0)
 	}
 }
 
-type rerunOrigin int
-
-const (
-	rerunManual rerunOrigin = iota
-	rerunRestart
-	rerunStale
-)
-
-func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin, staleMinutes int) error {
-	leave, err := s.ownerSection("rerun", id)
+// SetAutonomousPaused toggles the global pause switch.
+func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
+	leave, err := s.ownerSection("pause", "")
 	if err != nil {
 		return err
 	}
 	defer leave()
-	inc, err := s.db.GetIncident(ctx, id)
-	if err != nil {
+	v := "false"
+	if paused {
+		v = "true"
+	}
+	if err = s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
 		return err
 	}
-	runCtx, tok, replaced := s.runs.supersede(id)
-	// Deliberate human/system override — clear any autonomous lock so the
-	// re-run actually proceeds, even for a previously blocked/locked incident.
-	if lockErr := s.db.SetAutonomousLocked(ctx, id, false); lockErr == nil {
-		inc.AutonomousLocked = false
+	s.paused.Store(paused)
+	if !paused {
+		s.wakeReconciler()
 	}
-	if err = s.db.UpdateIncidentStatus(ctx, id, db.StatusReopened); err != nil {
-		s.runs.end(id, tok)
-		if replaced {
-			s.log.ErrorContext(ctx, "rerun cancelled the running run and started no replacement",
-				"incident", id, "error", err)
-		}
-		return err
+	if s.journal != nil {
+		s.journal.AutonomousPauseChanged()
 	}
-	inc.Status = db.StatusReopened
-	s.recordStatusChanged(ctx, id, string(db.StatusReopened))
-	switch origin {
-	case rerunManual:
-		s.noteReporters(
-			ctx,
-			inc,
-			reporterCard(
-				card.Info,
-				fmt.Sprintf("🔁 Taking another look at **%s**.", inc.Title),
-			),
-			time.Now(),
-			s.minutes(s.timers(ctx).RerunNoteGapMinutes),
-		)
-	case rerunStale:
-		c := ownerCard(inc, card.Info, fmt.Sprintf(
-			"⏱️ Incident **%s** (#%s) stopped making progress for %d min and is being re-run.",
-			inc.Title, inc.ShortID(), staleMinutes,
-		), "")
-		c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbResolve}
-		_ = s.notif.NotifyOwner(ctx, c)
-	case rerunRestart:
-	}
-	s.startRun(runCtx, tok, inc, inc.Generation, func(seedCtx context.Context) []openai.ChatCompletionMessage {
-		return s.buildReinvestigateSeed(seedCtx, id, inc)
-	})
 	return nil
 }
-
 func (s *Service) buildReinvestigateSeed(
 	ctx context.Context,
 	id string,
@@ -702,185 +646,4 @@ func (s *Service) buildReinvestigateSeed(
 	}
 	s.log.InfoContext(ctx, "reinvestigate with summary seed", "incident", id, "summary_len", len(summary))
 	return s.agent.BuildSummarySeed(ctx, inc, summary)
-}
-
-// RecoverZombies is called on startup to resume any incidents left in
-// "investigating" or "reopened" status, or a stuck_read incident left in
-// "verifying", from a previous process run — a crashed process
-// with nothing left running to check. SweepStaleRuns is the companion for a
-// process that never crashed at all: a run whose goroutine is still alive
-// but has stopped making progress, which this cannot see (nothing here is
-// wrong from the process's point of view).
-func (s *Service) RecoverZombies(ctx context.Context) {
-	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened} {
-		incidents, err := s.db.FindByStatus(ctx, status)
-		if ctx.Err() != nil {
-			return
-		}
-		if err != nil {
-			s.log.ErrorContext(ctx, "zombie recovery query", "status", status, "error", err)
-			continue
-		}
-		for _, inc := range incidents {
-			if ctx.Err() != nil {
-				return
-			}
-			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
-			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil && ctx.Err() == nil {
-				s.logRerunErr(ctx, "zombie rerun failed", inc.ID, rerunErr)
-			}
-		}
-	}
-	s.recoverOpen(ctx)
-	s.armDueChecks(ctx)
-}
-
-func (s *Service) recoverOpen(ctx context.Context) {
-	incidents, err := s.db.FindByStatus(ctx, db.StatusOpen)
-	if err != nil {
-		if ctx.Err() == nil {
-			s.log.ErrorContext(ctx, "open incident recovery query", "error", err)
-		}
-		return
-	}
-	if len(incidents) == 0 {
-		return
-	}
-	paused, err := s.db.IsAutonomousPaused(ctx)
-	if err != nil {
-		if ctx.Err() == nil {
-			s.log.ErrorContext(ctx, "open incident recovery: pause check", "error", err)
-		}
-		return
-	}
-	if paused {
-		s.log.InfoContext(ctx, "open incident recovery skipped, autonomous actions paused", "incidents", len(incidents))
-		return
-	}
-	for _, inc := range incidents {
-		if ctx.Err() != nil {
-			return
-		}
-		if inc.AutonomousLocked || s.runs.running(inc.ID) {
-			continue
-		}
-		s.log.InfoContext(ctx, "starting open incident left without a run", "incident", inc.ID)
-		s.launch(inc, nil)
-	}
-}
-
-// SweepStaleRuns reruns any incident stuck in "investigating" whose heartbeat
-// (see Agent.logTurn/db.TouchHeartbeat) is older than the saved stale-run minutes — a
-// run whose goroutine is still alive but stopped making progress.
-func (s *Service) SweepStaleRuns(ctx context.Context) {
-	staleMinutes := s.timers(ctx).StaleRunMinutes
-	now := time.Now()
-	staleBefore := now.Add(-s.minutes(staleMinutes))
-	stale, err := s.db.FindStaleInvestigating(ctx, staleBefore)
-	if err != nil {
-		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
-	}
-	for _, inc := range stale {
-		minutes := max(staleMinutes, s.runs.staleFloor(inc.ID))
-		if minutes > staleMinutes && !s.staleSince(ctx, inc.ID, now.Add(-s.minutes(minutes))) {
-			continue
-		}
-		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, minutes); rerunErr != nil {
-			s.logRerunErr(ctx, "stale run rerun failed", inc.ID, rerunErr)
-		}
-	}
-	s.sweepStaleReopened(ctx, staleBefore, staleMinutes)
-}
-
-func (s *Service) staleSince(ctx context.Context, id string, before time.Time) bool {
-	stale, err := s.db.FindStaleInvestigating(ctx, before)
-	if err != nil {
-		s.log.ErrorContext(ctx, "stale run sweep query", "error", err)
-		return false
-	}
-	return slices.ContainsFunc(stale, func(inc *db.Incident) bool { return inc.ID == id })
-}
-
-func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time, staleMinutes int) {
-	paused, err := s.db.IsAutonomousPaused(ctx)
-	if err != nil {
-		s.log.ErrorContext(ctx, "stale reopened sweep: pause check", "error", err)
-		return
-	}
-	if paused {
-		return
-	}
-	stale, err := s.db.FindStaleReopened(ctx, staleBefore)
-	if err != nil {
-		s.log.ErrorContext(ctx, "stale reopened sweep query", "error", err)
-		return
-	}
-	for _, inc := range stale {
-		if s.runs.running(inc.ID) {
-			continue
-		}
-		s.log.WarnContext(ctx, "recovering stale reopened incident", "incident", inc.ID, "title", inc.Title)
-		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, staleMinutes); rerunErr != nil {
-			s.logRerunErr(ctx, "stale reopened rerun failed", inc.ID, rerunErr)
-		}
-	}
-}
-
-func (s *Service) backgroundSweepLoop(base context.Context) {
-	d := s.minutes(s.timers(base).CheckEveryMinutes)
-	ticker := time.NewTicker(d)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-base.Done():
-			return
-		case <-ticker.C:
-			s.SweepStaleRuns(base)
-			s.armDueChecks(base)
-			s.AdvanceReporterProgress(base, time.Now())
-			s.endLockEpisode(base)
-			if next := s.minutes(s.timers(base).CheckEveryMinutes); next != d {
-				ticker.Reset(next)
-				d = next
-			}
-		}
-	}
-}
-
-// endLockEpisode re-arms the lock alert once under the threshold, since reopen and rerun raise the count without Handle.
-func (s *Service) endLockEpisode(ctx context.Context) {
-	prev := s.lockAlertAt.Load()
-	if prev == 0 {
-		return
-	}
-	n, err := s.db.CountOpenIncidents(ctx)
-	if err != nil {
-		s.log.WarnContext(ctx, "count active incidents", "error", err)
-		return
-	}
-	if n < SystematicIncidentThreshold {
-		s.lockAlertAt.CompareAndSwap(prev, 0)
-	}
-}
-
-// SetAutonomousPaused toggles the global pause switch.
-func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
-	leave, err := s.ownerSection("pause", "")
-	if err != nil {
-		return err
-	}
-	defer leave()
-	v := "false"
-	if paused {
-		v = "true"
-	}
-	if err = s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
-		return err
-	}
-	s.paused.Store(paused)
-	if s.journal != nil {
-		s.journal.AutonomousPauseChanged()
-	}
-	return nil
 }

@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,12 +25,8 @@ const staleAge = 20 * time.Minute
 
 func newReopenedIncident(t *testing.T, age time.Duration) (*db.DB, *db.Incident) {
 	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	database, err := db.Open(f.Name())
+	path := filepath.Join(t.TempDir(), "reopened.db")
+	database, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +40,7 @@ func newReopenedIncident(t *testing.T, age time.Duration) (*db.DB, *db.Incident)
 	if err = database.UpdateIncidentStatus(ctx, inc.ID, db.StatusReopened); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := sql.Open("sqlite", f.Name()+"?_time_format=sqlite&_timezone=UTC")
+	raw, err := sql.Open("sqlite", path+"?_time_format=sqlite&_timezone=UTC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +61,7 @@ func waitForRun(t *testing.T, ag *alwaysFixedAgent) {
 	}
 }
 
-func TestRecoverZombies_RerunsReopenedIncident(t *testing.T) {
+func TestReconciler_RelaunchesReopenedIncident(t *testing.T) {
 	t.Parallel()
 	database, _ := newReopenedIncident(t, 0)
 	ag := newAlwaysFixedAgent()
@@ -74,79 +70,43 @@ func TestRecoverZombies_RerunsReopenedIncident(t *testing.T) {
 	)
 	t.Cleanup(func() { stopService(t, svc) })
 
-	svc.RecoverZombies(context.Background())
+	svc.ReconcileForTest(context.Background())
 
 	waitForRun(t, ag)
 }
 
-func TestSweepStaleRuns_RerunsStaleReopenedIncident(t *testing.T) {
+func TestReconciler_ReopenedWithoutRunRelaunchesQuietly(t *testing.T) {
+	t.Parallel()
+	for _, age := range []time.Duration{time.Minute, staleAge} {
+		database, _ := newReopenedIncident(t, age)
+		ag := newAlwaysFixedAgent()
+		notif := newSyncNotifier()
+		svc := incident.NewService(
+			context.Background(),
+			database,
+			nil,
+			ag,
+			nil,
+			nil,
+			notif,
+			slog.New(slog.DiscardHandler),
+		)
+		t.Cleanup(func() { stopService(t, svc) })
+
+		svc.ReconcileForTest(context.Background())
+
+		waitForRun(t, ag)
+		notif.mu.Lock()
+		if n := countMsgs(notif.msgs, "stopped making progress"); n != 0 {
+			t.Errorf("age %v: a reopened incident without a run sent a stale card; msgs %q", age, notif.msgs)
+		}
+		notif.mu.Unlock()
+	}
+}
+
+func TestReconciler_PausedRelaunchParks(t *testing.T) {
 	t.Parallel()
 	database, inc := newReopenedIncident(t, staleAge)
-	ag := newAlwaysFixedAgent()
-	notif := newSyncNotifier()
-	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
-	t.Cleanup(func() { stopService(t, svc) })
-
-	svc.SweepStaleRuns(context.Background())
-
-	waitForRun(t, ag)
-	notif.mu.Lock()
-	defer notif.mu.Unlock()
-	stale := fmt.Sprintf(
-		"⏱️ Incident **Left** (#%s) stopped making progress for 15 min and is being re-run.", inc.ID[:8])
-	if n := countMsgs(notif.msgs, stale); n != 1 {
-		t.Errorf("stale owner DMs = %d, want 1; msgs %q", n, notif.msgs)
-	}
-}
-
-func TestSweepStaleReopened_CardPrintsSavedMinutes(t *testing.T) {
-	t.Parallel()
-	database, inc := newReopenedIncident(t, 41*time.Minute)
-	saveTimers(t, database, func(tm *incident.Timers) { tm.StaleRunMinutes = 40 })
-	ag := newAlwaysFixedAgent()
-	notif := newSyncNotifier()
-	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
-	t.Cleanup(func() { stopService(t, svc) })
-
-	svc.SweepStaleRuns(context.Background())
-
-	waitForRun(t, ag)
-	notif.mu.Lock()
-	defer notif.mu.Unlock()
-	stale := fmt.Sprintf(
-		"⏱️ Incident **Left** (#%s) stopped making progress for 40 min and is being re-run.", inc.ID[:8])
-	if n := countMsgs(notif.msgs, stale); n != 1 {
-		t.Errorf("stale owner DMs = %d, want 1 %q; msgs %q", n, stale, notif.msgs)
-	}
-}
-
-func TestSweepStaleRuns_LeavesFreshReopenedIncident(t *testing.T) {
-	t.Parallel()
-	database, inc := newReopenedIncident(t, time.Minute)
-	ag := newAlwaysFixedAgent()
-	notif := newSyncNotifier()
-	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
-	t.Cleanup(func() { stopService(t, svc) })
-
-	svc.SweepStaleRuns(context.Background())
-
-	got, err := database.GetIncident(context.Background(), inc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != db.StatusReopened {
-		t.Errorf("status = %q, want %q", got.Status, db.StatusReopened)
-	}
-	notif.mu.Lock()
-	defer notif.mu.Unlock()
-	if len(notif.msgs) != 0 {
-		t.Errorf("msgs = %q, want none for a fresh reopened incident", notif.msgs)
-	}
-}
-
-func TestSweepStaleRuns_LeavesReopenedIncidentWhilePaused(t *testing.T) {
-	t.Parallel()
-	database, _ := newReopenedIncident(t, staleAge)
 	ctx := context.Background()
 	notif := newSyncNotifier()
 	discard := slog.New(slog.DiscardHandler)
@@ -156,16 +116,20 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWhilePaused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc.SweepStaleRuns(ctx)
+	svc.ReconcileForTest(ctx)
 
+	got, err := database.GetIncident(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	notif.mu.Lock()
 	defer notif.mu.Unlock()
-	if len(notif.msgs) != 0 {
-		t.Errorf("msgs = %q, want no stale-run DM while autonomous actions are paused", notif.msgs)
+	if !got.Parked || len(notif.msgs) != 0 {
+		t.Errorf("paused relaunch: parked=%v msgs %q", got.Parked, notif.msgs)
 	}
 }
 
-func TestSweepStaleRuns_LogsAFailedPauseCheck(t *testing.T) {
+func TestReconciler_LogsAFailedListing(t *testing.T) {
 	t.Parallel()
 	database, _ := newReopenedIncident(t, staleAge)
 	logs := &syncBuffer{}
@@ -178,10 +142,10 @@ func TestSweepStaleRuns_LogsAFailedPauseCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc.SweepStaleRuns(context.Background())
+	svc.ReconcileForTest(context.Background())
 
-	if !strings.Contains(logs.String(), "stale reopened sweep: pause check") {
-		t.Errorf("logs = %q, want the failed pause check logged", logs.String())
+	if !strings.Contains(logs.String(), "reconciler: list driven incidents") {
+		t.Errorf("logs = %q, want the failed listing logged", logs.String())
 	}
 }
 
@@ -210,7 +174,7 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing
 		t.Fatal(err)
 	}
 
-	svc.SweepStaleRuns(ctx)
+	svc.ReconcileForTest(ctx)
 
 	if strings.Contains(logs.String(), "recovering stale reopened incident") {
 		t.Errorf("a reopened incident with a registered run was rerun; logs:\n%s", logs.String())
