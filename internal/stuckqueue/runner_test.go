@@ -549,3 +549,21 @@ func TestQ3_10_PausedRunSaysPaused(t *testing.T) {
 		t.Fatalf("dry-run result = %+v; want dry run, not paused", res)
 	}
 }
+
+func TestQ1_8_OversizedSingleItemNotifiedOnce(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(1, "D1", strings.Repeat("Very long title ", 200), 1, false, sample))
+	e.agedRun(liveSettings())
+	for range 5 {
+		e.runner.Run(context.Background(), liveSettings())
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.cards) != 1 || len(e.cards[0].Items) != 1 {
+		t.Fatalf("cards = %d; want one card carrying the oversized download once", len(e.cards))
+	}
+	if n := len(e.cards[0].Plain()); n > card.MaxPlain {
+		t.Fatalf("card plain length = %d, want at most %d", n, card.MaxPlain)
+	}
+}
