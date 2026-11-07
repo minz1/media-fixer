@@ -146,7 +146,10 @@ func (r *RunManagerForTest) Reserve(id string) func() { return r.m.reserve(id) }
 func (r *RunManagerForTest) CancelBelow(id string, gen int64) { r.m.cancelBelow(id, gen) }
 
 func (r *RunManagerForTest) ArmCheck(id string, gen int64, at time.Time, fire func()) bool {
-	return r.m.armCheck(id, gen, at, fire)
+	return r.m.armCheck(id, gen, at, func(done func()) {
+		done()
+		fire()
+	})
 }
 
 func (r *RunManagerForTest) Liveness() lifecycle.Liveness {

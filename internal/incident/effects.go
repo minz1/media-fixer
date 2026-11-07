@@ -140,8 +140,12 @@ func (s *Service) launchRun(inc *db.Incident, e lifecycle.Effect) {
 func (s *Service) scheduleCheck(id string, e lifecycle.Effect) {
 	gen, kind := e.Gen, e.Check
 	short := (&db.Incident{ID: id}).ShortID()
-	s.runs.armCheck(id, gen, e.At, func() {
-		if !s.work.goNamed("check:"+short, func(ctx context.Context) { s.runCheck(ctx, id, gen, kind) }) {
+	s.runs.armCheck(id, gen, e.At, func(done func()) {
+		if !s.work.goNamed("check:"+short, func(ctx context.Context) {
+			defer done()
+			s.runCheck(ctx, id, gen, kind)
+		}) {
+			done()
 			s.log.Info("check not started, shutting down", "incident", id, "check", string(kind))
 		}
 	})

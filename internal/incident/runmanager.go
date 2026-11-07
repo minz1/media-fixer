@@ -20,6 +20,7 @@ type runManager struct {
 	reserved map[string]int
 	plans    map[string]int
 	checks   map[string]armedCheck
+	inflight map[string]*inflightCheck
 
 	// globalSlot serializes the disruptive part of concurrent incident work: the
 	// LLM tool-calling diagnostic loop (Agent.Run) and owner-approved escalation
@@ -56,6 +57,10 @@ type armedCheck struct {
 	timer *time.Timer
 }
 
+type inflightCheck struct {
+	gen int64
+}
+
 func newRunManager(base context.Context) *runManager {
 	m := &runManager{
 		active:     make(map[string]*runToken),
@@ -63,6 +68,7 @@ func newRunManager(base context.Context) *runManager {
 		reserved:   make(map[string]int),
 		plans:      make(map[string]int),
 		checks:     make(map[string]armedCheck),
+		inflight:   make(map[string]*inflightCheck),
 		base:       base,
 		globalSlot: make(chan struct{}, 1),
 	}
@@ -187,7 +193,7 @@ func (m *runManager) reserve(id string) func() {
 	}
 }
 
-func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func()) bool {
+func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func(done func())) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if gen < m.current[id] {
@@ -201,17 +207,28 @@ func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func()) b
 		c.timer.Stop()
 	}
 	m.checks[id] = armedCheck{gen: gen, timer: time.AfterFunc(max(time.Until(at), 0), func() {
-		m.disarm(id, gen)
-		fire()
+		fire(m.claimCheck(id, gen))
 	})}
 	return true
 }
 
-func (m *runManager) disarm(id string, gen int64) {
+func (m *runManager) claimCheck(id string, gen int64) func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if c, ok := m.checks[id]; ok && c.gen == gen {
 		delete(m.checks, id)
+	}
+	mark := &inflightCheck{gen: gen}
+	m.inflight[id] = mark
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.inflight[id] == mark {
+				delete(m.inflight, id)
+			}
+		})
 	}
 }
 
@@ -239,8 +256,11 @@ func (m *runManager) liveness() liveness {
 	for id := range m.plans {
 		l.plans[id] = true
 	}
-	for id, c := range m.checks {
+	for id, c := range m.inflight {
 		l.armed[id] = c.gen
+	}
+	for id, c := range m.checks {
+		l.armed[id] = max(l.armed[id], c.gen)
 	}
 	return l
 }

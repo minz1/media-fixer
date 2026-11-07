@@ -168,3 +168,49 @@ func TestChecks_ReadOnlyWhilePaused(t *testing.T) {
 	env.svc.StartRecovery()
 	env.waitStatus(t, s.ID, lifecycle.AgentFixed)
 }
+
+type blockingObserver struct {
+	*observingAgent
+
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a *blockingObserver) VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool {
+	a.entered <- struct{}{}
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+	}
+	return a.observingAgent.VerifyResolved(ctx, itemID, title, pre)
+}
+
+func TestReconciler_RunningCheckCountsAsArmed(t *testing.T) {
+	t.Parallel()
+	ag := &blockingObserver{observingAgent: newObservingAgent(), entered: make(chan struct{}, 4),
+		release: make(chan struct{})}
+	env := newLifecycleEnv(t, ag)
+	s := env.verifying(t, "Running check", "cant_play")
+	env.svc.StartRecovery()
+	select {
+	case <-ag.entered:
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("timed out waiting for the first check")
+	}
+	if c := env.svc.ReconcileForTest(t.Context()); c.Checks != 0 {
+		t.Fatalf("reconcile armed %d checks while one was running", c.Checks)
+	}
+	if got := env.svc.ArmedForTest(s.ID); got != s.Generation {
+		t.Fatalf("running check reported armed at gen %d, want %d", got, s.Generation)
+	}
+	close(ag.release)
+	var got lifecycle.Snapshot
+	eventually(t, "the check result", func() bool {
+		got = env.snap(t, s.ID)
+		return got.Verify != nil && got.Verify.ChecksLeft == s.Verify.ChecksLeft-1
+	})
+	eventually(t, "the recheck", func() bool { return env.svc.ArmedForTest(s.ID) == got.Generation })
+	if n := ag.verifies.Load(); n != 1 {
+		t.Fatalf("VerifyResolved calls %d, want 1", n)
+	}
+}
