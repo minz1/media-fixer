@@ -535,6 +535,43 @@ func TestRulingA1_CapSpansRetryAttempts(t *testing.T) {
 	assertCapped(t, runGated(context.Background(), t, ag, database, inc, g))
 }
 
+func TestReviewP3_RerunSearchAppliedEarlierRunSaysSo(t *testing.T) {
+	t.Parallel()
+	_, srv := newCallServer(t)
+	claim := `{"root_cause":"rc","confidence":"medium","primary_action":"arr_search_missing",` +
+		`"requires_approval":false}`
+	ag, database, inc := newRig(t, srv.URL, []string{
+		toolCallResponse("arr_search_missing", searchEpisode7),
+		toolCallResponse("complete_diagnosis", claim),
+		toolCallResponse("arr_search_missing", searchEpisode7),
+		toolCallResponse("complete_diagnosis", claim),
+		toolCallResponse("complete_diagnosis", claim),
+		toolCallResponse("complete_diagnosis", claim),
+	}, rigOpts{})
+	first := runGated(context.Background(), t, ag, database, inc, newRecGate(database, inc))
+	if first.Finding == nil || first.Finding.Outcome.Kind != agent.DiagnosisAwaitDownload {
+		t.Fatalf("generation 1 = %s %+v, want await_download", first.State, first.Finding)
+	}
+	lifecycletest.Force(t, database, inc.ID, func(s *lifecycle.Snapshot) {
+		s.Generation, s.Status = inc.Generation+1, lifecycle.Open
+	})
+	next := newRecGate(database, inc)
+	next.gen = inc.Generation + 1
+	second := ag.Run(context.Background(), inc, nil, next)
+	if second.Finding == nil || second.Finding.Outcome.Kind != agent.DiagnosisManual {
+		t.Fatalf("generation 2 = %s %+v, want manual", second.State, second.Finding)
+	}
+	const hint = "already applied on this incident in an earlier run"
+	replies := toolReplies(second.Conversation)
+	if len(replies) != 4 || !strings.Contains(replies[1], hint) || !strings.Contains(replies[2], hint) {
+		t.Errorf("replies = %v, want the E6 errors to name the earlier run's search", replies)
+	}
+	if !strings.Contains(second.Finding.Outcome.Reason, "the diagnosis contradicted itself") ||
+		!strings.Contains(second.Finding.Outcome.Reason, hint) {
+		t.Errorf("reason = %q, want the cap reason naming the earlier run's search", second.Finding.Outcome.Reason)
+	}
+}
+
 func TestRulingA1_CapResetsOnNewGeneration(t *testing.T) {
 	t.Parallel()
 	_, srv := newCallServer(t)

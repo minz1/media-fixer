@@ -89,7 +89,7 @@ func classifyRows() []classifyRow {
 			return !in.r.RequiresApproval && in.search && len(in.applied) == 0
 		}, func(in classifyIn) (DiagnosisOutcome, error) {
 			if in.last == nil {
-				return DiagnosisOutcome{}, errSearchNotApplied
+				return DiagnosisOutcome{}, fmt.Errorf("%w: %s", errSearchNotApplied, searchEarlierRunHint)
 			}
 			return DiagnosisOutcome{}, fmt.Errorf("%w: %s", errSearchNotApplied, lastOutcome(*in.last))
 		}},
@@ -230,8 +230,10 @@ func (e *diagnosisRejectedError) Error() string { return e.err.Error() }
 func (e *diagnosisRejectedError) Unwrap() error { return e.err }
 
 const (
-	maxDiagnosisErrors  = 3
-	reasonContradiction = "the diagnosis contradicted itself"
+	maxDiagnosisErrors   = 3
+	reasonContradiction  = "the diagnosis contradicted itself"
+	searchEarlierRunHint = "a search already applied on this incident in an earlier run does not count; " +
+		"escalate or choose a different action instead of claiming it"
 )
 
 func parseDiagnosis(argsJSON string, calls []CallRecord) (DiagnosticResult, error) {
@@ -258,13 +260,17 @@ func capDiagnosis(gate Gate, rejected *diagnosisRejectedError) (DiagnosticResult
 	if n < maxDiagnosisErrors {
 		return DiagnosticResult{}, false
 	}
+	reason := reasonContradiction
+	if errors.Is(rejected, errSearchNotApplied) {
+		reason += ": " + rejected.Error()
+	}
 	capped := DiagnosticResult{
 		Confidence:       "low",
 		PrimaryAction:    EscalateManualInvestigation,
-		PrimaryReason:    reasonContradiction,
+		PrimaryReason:    reason,
 		EscalateAction:   EscalateManualInvestigation,
 		RequiresApproval: true,
-		Outcome:          DiagnosisOutcome{Kind: DiagnosisManual, Reason: reasonContradiction},
+		Outcome:          DiagnosisOutcome{Kind: DiagnosisManual, Reason: reason},
 	}
 	if rejected.parsed {
 		capped.RootCause, capped.Confidence = rejected.result.RootCause, rejected.result.Confidence
