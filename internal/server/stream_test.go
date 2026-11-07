@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -258,7 +259,8 @@ func eventDuringFirstRender(t *testing.T, path string) {
 		close(w.proceed)
 		t.Fatal("first render never wrote")
 	}
-	if err = jrnl.StatusChanged(context.Background(), inc.ID, string(db.StatusInvestigating)); err != nil {
+	ev := &db.Event{IncidentID: inc.ID, Kind: string(journal.KindStatusChanged), Payload: json.RawMessage(`{}`)}
+	if err = jrnl.Append(context.Background(), ev); err != nil {
 		t.Fatal(err)
 	}
 	close(w.proceed)

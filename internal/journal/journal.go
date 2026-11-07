@@ -59,8 +59,8 @@ const (
 	KindConversationImported Kind = "conversation_imported"
 
 	// KindStatusChanged marks a status (or autonomous-lock) transition —
-	// purely a live-update signal for incidentEvents (see StatusChanged's
-	// doc comment); no reader treats its payload as authoritative.
+	// purely a live-update signal for incidentEvents; no reader treats its
+	// payload as authoritative.
 	KindStatusChanged Kind = "status_changed"
 
 	KindAutonomousPauseChanged Kind = "autonomous_pause_changed"
@@ -405,28 +405,6 @@ func (j *Journal) Conversation(ctx context.Context, incidentID string) ([]openai
 		return nil, db.ErrNotFound
 	}
 	return out, nil
-}
-
-// --- status_changed ---
-
-type statusChangedPayload struct {
-	Status string `json:"status"`
-}
-
-// StatusChanged appends a status_changed event to notify live subscribers
-// that the incident's status (or, loosely, its autonomous-lock flag — see
-// Service.Unlock) moved. The transition itself is already durably written by
-// the caller's own db.ApplyIncident call; this only makes that visible on an open SSE
-// connection instead of requiring a manual reload. Status is carried for
-// completeness in the export/transcript — incidentEvents always re-reads
-// current state from the DB rather than trusting this payload for anything
-// that matters.
-func (j *Journal) StatusChanged(ctx context.Context, incidentID, status string) error {
-	payload, err := json.Marshal(statusChangedPayload{Status: status})
-	if err != nil {
-		return err
-	}
-	return j.Append(ctx, &db.Event{IncidentID: incidentID, Kind: string(KindStatusChanged), Payload: payload})
 }
 
 // --- diagnosis_completed / run_finished ---
