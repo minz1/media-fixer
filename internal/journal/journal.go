@@ -17,7 +17,6 @@ package journal
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"sync"
 	"time"
@@ -90,45 +89,11 @@ func (j *Journal) Append(ctx context.Context, e *db.Event) error {
 	if e.At.IsZero() {
 		e.At = time.Now()
 	}
-	var seq int64
-	err := j.db.RunTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		var txErr error
-		seq, txErr = db.AppendEvent(ctx, tx, e)
-		if txErr != nil {
-			return txErr
-		}
-		return applyProjection(ctx, tx, e)
-	})
-	if err != nil {
+	if err := j.db.AppendEvents(ctx, e); err != nil {
 		return err
 	}
-	e.Seq = seq
 	j.notify(e)
 	return nil
-}
-
-// applyProjection writes the read-optimized side effect (if any) a kind of
-// event backs, inside the same transaction as its insert.
-func applyProjection(ctx context.Context, tx *sql.Tx, e *db.Event) error {
-	if e.Kind != string(KindActionApplied) {
-		return nil
-	}
-	var p actionAppliedPayload
-	if err := json.Unmarshal(e.Payload, &p); err != nil {
-		return err
-	}
-	at := e.At
-	return db.InsertActionLog(ctx, tx, &db.ActionLog{
-		ID:          p.ID,
-		IncidentID:  e.IncidentID,
-		Action:      p.Action,
-		Params:      p.Params,
-		TriggeredBy: p.TriggeredBy,
-		Status:      db.ActionStatus(p.Status),
-		AppliedAt:   &at,
-		Result:      p.Result,
-		Error:       p.Error,
-	})
 }
 
 // Events returns every event for incidentID, in order — the transcript page
@@ -308,7 +273,11 @@ func (j *Journal) LogAction(ctx context.Context, a *db.ActionLog, disruptive boo
 	if err != nil {
 		return err
 	}
-	return j.Append(ctx, &db.Event{IncidentID: a.IncidentID, At: at, Kind: string(KindActionApplied), Payload: payload})
+	row := *a
+	row.AppliedAt = &at
+	return j.Append(ctx, &db.Event{
+		IncidentID: a.IncidentID, At: at, Kind: string(KindActionApplied), Payload: payload, ActionLog: &row,
+	})
 }
 
 // Disruption is the most recent service-wide disruptive action found in the
@@ -470,12 +439,19 @@ func (j *Journal) DiagnosisCompleted(ctx context.Context, incidentID string, res
 type runFinishedPayload struct {
 	Rounds int    `json:"rounds"`
 	Error  string `json:"error,omitempty"`
+	Exit   string `json:"exit,omitempty"`
 }
 
 // RunFinished marks a run's exit, successful or not, and how many rounds it
 // took.
 func (j *Journal) RunFinished(ctx context.Context, incidentID string, rounds int, runErr error) error {
-	p := runFinishedPayload{Rounds: rounds}
+	return j.RunExit(ctx, incidentID, nil, rounds, "", runErr)
+}
+
+func (j *Journal) RunExit(
+	ctx context.Context, incidentID string, finding any, rounds int, exit string, runErr error,
+) error {
+	p := runFinishedPayload{Rounds: rounds, Exit: exit}
 	if runErr != nil {
 		p.Error = runErr.Error()
 	}
@@ -483,5 +459,14 @@ func (j *Journal) RunFinished(ctx context.Context, incidentID string, rounds int
 	if err != nil {
 		return err
 	}
-	return j.Append(ctx, &db.Event{IncidentID: incidentID, Kind: string(KindRunFinished), Payload: payload})
+	raw, err := json.Marshal(finding)
+	if err != nil {
+		return err
+	}
+	e := &db.Event{IncidentID: incidentID, At: time.Now(), Kind: string(KindRunFinished), Payload: payload}
+	if recErr := j.db.RecordRunExit(ctx, incidentID, raw, e); recErr != nil {
+		return recErr
+	}
+	j.notify(e)
+	return nil
 }

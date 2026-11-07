@@ -1057,10 +1057,27 @@ func (d *DB) TransitionStatus(
 func (d *DB) SetIncidentFinding(ctx context.Context, id string, finding, actions any) error {
 	fb, _ := json.Marshal(finding)
 	ab, _ := json.Marshal(actions)
-	_, err := d.write.ExecContext(ctx,
+	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		return writeFinding(ctx, tx, id, fb, ab)
+	})
+}
+
+func writeFinding(ctx context.Context, tx *sql.Tx, id string, finding, actions []byte) error {
+	_, err := tx.ExecContext(ctx,
 		`UPDATE incidents SET finding = ?, recommended_actions = ?, updated_at = ? WHERE id = ?`,
-		string(fb), string(ab), time.Now(), id)
+		string(finding), string(actions), time.Now(), id)
 	return err
+}
+
+func (d *DB) RecordRunExit(ctx context.Context, incidentID string, finding json.RawMessage, e *Event) error {
+	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		if len(finding) > 0 && string(finding) != "null" {
+			if err := writeFinding(ctx, tx, incidentID, finding, finding); err != nil {
+				return err
+			}
+		}
+		return appendEvent(ctx, tx, e)
+	})
 }
 
 // IncrementActionCount atomically increments the action counter and returns the new value.
@@ -1229,20 +1246,19 @@ type ActionLog struct {
 // in this codebase's usage, unlike the applied_at pair the
 // schema was originally built for. Production code now writes actions_log
 // exclusively via internal/journal (an action_applied event's projection,
-// written atomically with the event via InsertActionLog below) — this
+// written atomically with the event via insertActionLog below) — this
 // remains for direct/test use as a plain standalone write.
 func (d *DB) LogAction(ctx context.Context, a *ActionLog) error {
-	return d.RunTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		return InsertActionLog(ctx, tx, a)
+	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		return insertActionLog(ctx, tx, a)
 	})
 }
 
-// InsertActionLog inserts one actions_log row within tx, generating an ID and
-// applied_at if absent. A free function (not a *DB method) so
-// internal/journal can call it from inside its own RunTx closure, writing an
-// action_applied event and its actions_log projection atomically — both
-// succeed or both roll back.
-func InsertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
+// insertActionLog inserts one actions_log row within tx, generating an ID and
+// applied_at if absent. AppendEvents calls it for an event that carries an
+// ActionLog, writing an action_applied event and its actions_log projection
+// atomically — both succeed or both roll back.
+func insertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
@@ -1600,14 +1616,26 @@ type Event struct {
 	Kind       string          `json:"kind"`
 	Payload    json.RawMessage `json:"payload"`
 	Source     string          `json:"source"`
+	ActionLog  *ActionLog      `json:"-"`
 }
 
-// AppendEvent inserts one event row within tx (see (*DB).RunTx) and returns
-// its assigned seq. A free function, not a *DB method, so a caller composing
-// an event insert with a projection write (both must land in the same
-// transaction) isn't tempted to reach for a second, unrelated *DB write pool
-// mid-transaction.
-func AppendEvent(ctx context.Context, tx *sql.Tx, e *Event) (int64, error) {
+func (d *DB) AppendEvents(ctx context.Context, events ...*Event) error {
+	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		for _, e := range events {
+			if err := appendEvent(ctx, tx, e); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// appendEvent inserts one event row within tx and sets its assigned seq, plus
+// the actions_log row the event carries, if any. A free function, not a *DB
+// method, so a caller composing an event insert with a projection write (both
+// must land in the same transaction) isn't tempted to reach for a second,
+// unrelated *DB write pool mid-transaction.
+func appendEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
 	if e.Source == "" {
 		e.Source = "live"
 	}
@@ -1618,9 +1646,17 @@ func AppendEvent(ctx context.Context, tx *sql.Tx, e *Event) (int64, error) {
 		`INSERT INTO incident_events (incident_id, at, kind, payload, source) VALUES (?, ?, ?, ?, ?)`,
 		e.IncidentID, e.At, e.Kind, string(e.Payload), e.Source)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	return res.LastInsertId()
+	seq, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	e.Seq = seq
+	if e.ActionLog == nil {
+		return nil
+	}
+	return insertActionLog(ctx, tx, e.ActionLog)
 }
 
 // EventsSince returns every event for incidentID with seq > afterSeq, in seq
@@ -1669,15 +1705,6 @@ func scanEvents(rows *sql.Rows) ([]*Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
-}
-
-// RunTx runs fn inside a write transaction against d's write pool. Exported
-// for internal/journal, which composes an event insert with its projection
-// write (e.g. the actions_log row an action_applied event backs) atomically —
-// both succeed or both roll back, so the log and its derived read-optimized
-// tables can never drift apart.
-func (d *DB) RunTx(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) error {
-	return runTx(ctx, d.write, fn)
 }
 
 // --- helpers ---
