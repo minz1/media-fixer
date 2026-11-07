@@ -1487,7 +1487,7 @@ func (d *Dispatcher) executeApprovedReplacePlan(ctx context.Context, planJSON []
 	}
 	result, err := arrClient.ExecuteReplace(ctx, &plan)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	// reason and readable_file are logged together on purpose: the enum is
 	// trusted rather than enforced for the non-readability cases, so the only

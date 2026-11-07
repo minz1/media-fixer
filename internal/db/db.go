@@ -1257,9 +1257,9 @@ func InsertActionLog(ctx context.Context, tx *sql.Tx, a *ActionLog) error {
 	}
 	pb, _ := json.Marshal(a.Params)
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status, applied_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status, a.AppliedAt)
+		INSERT INTO actions_log (id, incident_id, action, params, triggered_by, status, applied_at, result, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.IncidentID, a.Action, string(pb), a.TriggeredBy, a.Status, a.AppliedAt, a.Result, a.Error)
 	return err
 }
 

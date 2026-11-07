@@ -202,6 +202,9 @@ func (s *Service) logEscalation(
 		errMsg = runErr.Error()
 	}
 	resultJSON, _ := json.Marshal(execResult)
+	if string(resultJSON) == "null" {
+		resultJSON = nil
+	}
 	if logErr := s.journal.LogAction(ctx, &db.ActionLog{
 		IncidentID:  incidentID,
 		Action:      result.EscalateAction,
