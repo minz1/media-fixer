@@ -10,9 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 )
 
@@ -163,17 +161,7 @@ func TestIncidentPage_KeepSearchingDays(t *testing.T) {
 	if err := incident.SaveTimers(ctx, database, tm); err != nil {
 		t.Fatal(err)
 	}
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "Rick and Morty"}
-	if err := database.CreateIncident(ctx, inc); err != nil {
-		t.Fatal(err)
-	}
-	po := &db.PendingOutcome{MediaType: "tv", Title: "Rick and Morty", Season: 9, Episode: 9, StartedAt: time.Now()}
-	if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-		t.Fatal(err)
-	}
+	inc := seedNoRelease(t, database, "Rick and Morty")
 	mustContain(t, mustExecuteIncidentTemplate(t, srv, inc.ID), "re-checks periodically for up to 3 days")
 }
 

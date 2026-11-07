@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,34 +54,34 @@ type buttonSpec struct {
 	style card.Style
 	verb  string
 	extra []string
+	kind  lifecycle.ActionKind
 }
 
 func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident) (card.Update, error) {
-	up := card.Update{Status: statusLine(inc.Status)}
-	specs, sections, err := s.escalationSpecs(ctx, inc)
+	snap, err := s.db.GetIncidentSnapshot(ctx, inc.ID)
 	if err != nil {
 		return card.Update{}, err
 	}
-	up.Sections = sections
-	specs = append(specs, buttonSpec{"Rerun", card.Secondary, verbRerun, nil})
-	if inc.Status != db.StatusResolved {
-		specs = append(specs, buttonSpec{"Resolve", card.Primary, verbResolve, nil})
-	}
-	if inc.Status == db.StatusManualTestNeeded {
-		_, err = s.db.GetPendingOutcome(ctx, inc.ID)
-		switch {
-		case err == nil:
-			specs = append(specs, buttonSpec{"Keep searching", card.Primary, verbKeep, nil})
-		case !errors.Is(err, db.ErrNotFound):
+	snap.In.Limits = s.limits(s.timers(ctx))
+	up := card.Update{Status: statusLine(inc.Status) + statusNotes(snap)}
+	var plan cardPlan
+	if action := escalatable(inc); action != "" && snap.PlanFresh(time.Now()) {
+		if plan, _, err = s.freshPlan(ctx, inc, action); err != nil {
 			return card.Update{}, err
 		}
+		up.Sections = plan.sections
 	}
-	if inc.AutonomousLocked {
-		specs = append(specs, buttonSpec{"Unlock", card.Secondary, verbUnlock, nil})
+	if line := s.PartialLine(ctx, snap); line != "" {
+		up.Sections = append(up.Sections, card.Field{Name: "Result", Value: line})
 	}
-
-	for _, sp := range specs {
-		args := append([]string{inc.ID, string(inc.Status)}, sp.extra...)
+	acts := lifecycle.Actions(snap, time.Now())
+	v := Version{N: snap.Version, Set: true}
+	for _, sp := range cardSpecs(plan) {
+		if !slices.ContainsFunc(acts, func(a lifecycle.Action) bool { return a.Kind == sp.kind }) ||
+			(sp.kind == lifecycle.ActApprove && !plan.fits) {
+			continue
+		}
+		args := append([]string{inc.ID, v.Token()}, sp.extra...)
 		if id, ok := card.Encode(card.Action{Kind: kindIncident, Verb: sp.verb, Args: args}); ok {
 			up.Buttons = append(up.Buttons, card.Button{Label: sp.label, Style: sp.style, ID: id})
 		}
@@ -88,20 +89,51 @@ func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident) (card.Update
 	return up, nil
 }
 
-func (s *Service) escalationSpecs(ctx context.Context, inc *db.Incident) ([]buttonSpec, []card.Field, error) {
-	action := escalatable(inc)
-	if action == "" {
-		return nil, nil, nil
+func cardSpecs(plan cardPlan) []buttonSpec {
+	return []buttonSpec{
+		{"Preview plan", card.Primary, verbPreview, nil, lifecycle.ActPreview},
+		{"Approve", card.Danger, verbApprove, []string{plan.fp}, lifecycle.ActApprove},
+		{"Refresh preview", card.Secondary, verbRefresh, nil, lifecycle.ActRefresh},
+		{"Rerun", card.Secondary, verbRerun, nil, lifecycle.ActRerun},
+		{"Resolve", card.Primary, verbResolve, nil, lifecycle.ActResolve},
+		{"Keep searching", card.Primary, verbKeep, nil, lifecycle.ActKeepSearching},
+		{"Unlock", card.Secondary, verbUnlock, nil, lifecycle.ActUnlock},
 	}
-	plan, fresh, err := s.freshPlan(ctx, inc, action)
-	if err != nil || !fresh {
-		return []buttonSpec{{"Preview plan", card.Primary, verbPreview, nil}}, nil, err
+}
+
+func BudgetSpent(s lifecycle.Snapshot) bool {
+	return s.Locked && s.ActionCount >= agent.MaxAutonomousActions
+}
+
+func statusNotes(s lifecycle.Snapshot) string {
+	var out string
+	if s.Parked {
+		out += " · paused"
 	}
-	var specs []buttonSpec
-	if plan.fits {
-		specs = append(specs, buttonSpec{"Approve", card.Danger, verbApprove, []string{plan.fp}})
+	if BudgetSpent(s) {
+		out += " · budget spent"
 	}
-	return append(specs, buttonSpec{"Refresh preview", card.Secondary, verbRefresh, nil}), plan.sections, nil
+	return out
+}
+
+func (s *Service) PartialLine(ctx context.Context, snap lifecycle.Snapshot) string {
+	if snap.Reason != lifecycle.ReasonPlanPartial {
+		return ""
+	}
+	actions, err := s.db.ListActions(ctx, snap.ID)
+	if err != nil {
+		return ""
+	}
+	for _, a := range slices.Backward(actions) {
+		if a.TriggeredBy == "owner" && a.Status == db.ActionFailed {
+			var result any
+			if a.Result != "" {
+				result = json.RawMessage(a.Result)
+			}
+			return partialOf(a.Action, result).Line
+		}
+	}
+	return ""
 }
 
 func statusLine(st db.IncidentStatus) string {
@@ -211,16 +243,10 @@ func (s *Service) CardHandler() card.Handler {
 			return card.Result{}, fmt.Errorf("%w: %s %v", card.ErrUnknownID, a.Verb, a.Args)
 		}
 		id := a.Args[0]
-		inc, err := s.db.GetIncident(ctx, id)
-		if err != nil {
+		if _, err := s.db.GetIncident(ctx, id); err != nil {
 			return refusal(err)
 		}
-		if string(inc.Status) != a.Args[1] {
-			return card.Result{
-				Line: refusedLine + "this incident is now " + strings.ReplaceAll(string(inc.Status), "_", " "),
-			}, nil
-		}
-		res, err := s.cardAction(ctx, id, a)
+		res, err := s.cardAction(ctx, id, ParseVersion(a.Args[1]), a)
 		if err != nil {
 			return refusal(err)
 		}
@@ -228,11 +254,10 @@ func (s *Service) CardHandler() card.Handler {
 	}
 }
 
-func (s *Service) cardAction(ctx context.Context, id string, a card.Action) (card.Result, error) {
+func (s *Service) cardAction(ctx context.Context, id string, v Version, a card.Action) (card.Result, error) {
 	done := func(line string) (card.Result, error) {
 		return card.Result{Line: fmt.Sprintf("%s · <t:%d:t>", line, time.Now().Unix())}, nil
 	}
-	v := s.CurrentVersion(ctx, id)
 	switch a.Verb {
 	case verbResolve:
 		if err := s.Resolve(ctx, id, v); err != nil {
@@ -263,15 +288,15 @@ func (s *Service) cardAction(ctx context.Context, id string, a card.Action) (car
 		if len(a.Args) < fpArgs {
 			return card.Result{}, fmt.Errorf("%w: %s %v", card.ErrUnknownID, a.Verb, a.Args)
 		}
-		return s.cardApprove(ctx, id, a)
+		return s.cardApprove(ctx, id, v, a)
 	}
 	return card.Result{}, fmt.Errorf("%w: verb %s", card.ErrUnknownID, a.Verb)
 }
 
-func (s *Service) cardApprove(ctx context.Context, id string, a card.Action) (card.Result, error) {
+func (s *Service) cardApprove(ctx context.Context, id string, v Version, a card.Action) (card.Result, error) {
 	fp := a.Args[fpArgs-1]
 	if a.Verb == verbConfirm {
-		if err := s.ApproveEscalation(ctx, id, fp, s.CurrentVersion(ctx, id)); err != nil {
+		if err := s.ApproveEscalation(ctx, id, fp, v); err != nil {
 			return card.Result{}, err
 		}
 		return card.Result{Line: fmt.Sprintf("🚀 Approved · <t:%d:t>", time.Now().Unix())}, nil

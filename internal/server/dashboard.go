@@ -39,6 +39,8 @@ const (
 	msgSaved       = "Saved."
 	msgWholeNumber = "must be a whole number"
 	doneRestarting = "restarting"
+	doneStale      = "stale"
+	staleNotice    = "Refused: this changed, look again."
 )
 
 const (
@@ -74,7 +76,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		"season":         seasonLabel,
 		"ms":             lookupDuration,
 		"confidenceTone": confidenceTone,
-		"restarting":     func(s string) bool { return s == card.RestartingNotice },
+		"restarting":     func(s string) bool { return s == card.RestartingNotice || s == staleNotice },
 		"restartingText": func() string { return card.RestartingNotice },
 	}).ParseFS(templateFS, "templates/dashboard.html")
 	if err != nil {
@@ -148,8 +150,13 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 	paused := s.isPaused(ctx)
 
 	timers, _ := incident.LoadTimers(ctx, s.db)
+	snap, err := s.db.GetIncidentSnapshot(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]any{
+		"Owner":             s.ownerView(ctx, snap),
 		"KeepSearchingSpan": "up to " + incident.KeepSearchingSpan(timers.KeepSearchingDays),
 		"Incident":          inc,
 		"Actions":           actions,
@@ -185,6 +192,8 @@ func incidentDoneNotice(key string) string {
 		return "Escalation approved; running it now."
 	case doneRestarting:
 		return card.RestartingNotice
+	case doneStale:
+		return staleNotice
 	}
 	return ""
 }
@@ -203,6 +212,8 @@ func (s *Server) finishIncidentAction(w http.ResponseWriter, r *http.Request, id
 	switch {
 	case errors.Is(err, card.ErrRestarting):
 		s.redirectIncident(w, r, id, doneRestarting)
+	case errors.Is(err, lifecycle.ErrChanged):
+		s.redirectIncident(w, r, id, doneStale)
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
@@ -252,7 +263,7 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.svc.Resolve(context.WithoutCancel(r.Context()), id, s.formVersion(r, id))
+	err := s.svc.Resolve(context.WithoutCancel(r.Context()), id, formVersion(r))
 	if errors.Is(err, incident.ErrAlreadyResolved) {
 		err = nil
 	}
@@ -264,7 +275,7 @@ func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.finishIncidentAction(w, r, id, "rerun", s.svc.Rerun(context.WithoutCancel(r.Context()), id, s.formVersion(r, id)))
+	s.finishIncidentAction(w, r, id, "rerun", s.svc.Rerun(context.WithoutCancel(r.Context()), id, formVersion(r)))
 }
 
 func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
@@ -310,7 +321,7 @@ func (s *Server) actionKeepSearching(w http.ResponseWriter, r *http.Request) {
 		r,
 		id,
 		"keep",
-		s.svc.KeepSearching(context.WithoutCancel(r.Context()), id, s.formVersion(r, id)),
+		s.svc.KeepSearching(context.WithoutCancel(r.Context()), id, formVersion(r)),
 	)
 }
 
@@ -319,7 +330,7 @@ func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.finishIncidentAction(w, r, id, "unlock", s.svc.Unlock(r.Context(), id, s.formVersion(r, id)))
+	s.finishIncidentAction(w, r, id, "unlock", s.svc.Unlock(r.Context(), id, formVersion(r)))
 }
 
 // escalationPreview renders a read-only plan preview for the incident's
@@ -334,8 +345,8 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data := map[string]any{"BaseURL": s.baseURL, "IncidentID": id}
-	plan, fp, err := s.svc.PreviewEscalation(r.Context(), id, s.formVersion(r, id))
+	plan, fp, err := s.svc.PreviewEscalation(r.Context(), id, formVersion(r))
+	data := map[string]any{"BaseURL": s.baseURL, "IncidentID": id, "Version": s.svc.CurrentVersion(r.Context(), id).N}
 	switch {
 	case errors.Is(err, card.ErrRestarting):
 		data["Error"] = card.RestartingNotice
@@ -368,7 +379,7 @@ func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp"), s.formVersion(r, id))
+	err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp"), formVersion(r))
 	s.finishIncidentAction(w, r, id, "approve", err)
 }
 
@@ -479,9 +490,6 @@ func utcStamp(v any) *stamp {
 	}
 }
 
-func (s *Server) formVersion(r *http.Request, id string) incident.Version {
-	if v := incident.ParseVersion(r.FormValue("v")); v.Set {
-		return v
-	}
-	return s.svc.CurrentVersion(context.WithoutCancel(r.Context()), id)
+func formVersion(r *http.Request) incident.Version {
+	return incident.ParseVersion(r.FormValue("v"))
 }

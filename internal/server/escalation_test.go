@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,8 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -201,7 +204,8 @@ func TestEscalationPreview_Success(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	resp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +236,8 @@ func TestEscalationPreview_NoFinding(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	resp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,14 +267,15 @@ func TestApproveEscalation_Success(t *testing.T) {
 	defer ts.Close()
 
 	// Approval executes the stored preview, so take one first.
-	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	previewResp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	previewResp.Body.Close()
 
 	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
-		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}, "v": {curV(t, database, inc.ID)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,14 +313,15 @@ func TestApproveEscalation_RunFails(t *testing.T) {
 
 	// Approval now requires a stored preview, so take one first — this test
 	// is about the run failing, not about the missing-plan guard.
-	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	previewResp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	previewResp.Body.Close()
 
 	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
-		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}, "v": {curV(t, database, inc.ID)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +391,8 @@ func TestApproveEscalation_RunsThePreviewedPlan(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	previewResp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +402,7 @@ func TestApproveEscalation_RunsThePreviewedPlan(t *testing.T) {
 	ag.planResult = map[string]any{"MediaType": "tv", "Title": "SomethingElse"}
 
 	resp, err := ts.Client().PostForm(ts.URL+"/media/incidents/"+inc.ID+"/approve-escalation",
-		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}, "v": {curV(t, database, inc.ID)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,14 +428,14 @@ func TestApproveEscalation_SurvivesCancelledRequest(t *testing.T) {
 
 	preview := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(preview, httptest.NewRequest(
-		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview", nil,
+		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview?v="+curV(t, database, inc.ID), nil,
 	))
 	if preview.Code != http.StatusOK {
 		t.Fatalf("preview status = %d", preview.Code)
 	}
 
 	rec := serveCancelledForm(t, srv, "/media/incidents/"+inc.ID+"/approve-escalation",
-		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}})
+		url.Values{"plan_fp": {storedPlanFP(t, database, inc.ID)}, "v": {curV(t, database, inc.ID)}})
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())
@@ -453,7 +461,7 @@ func TestEscalationPreview_RendersApproveWithPlanFP(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(
-		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview", nil,
+		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview?v="+curV(t, database, inc.ID), nil,
 	))
 	body := rec.Body.String()
 	for _, want := range []string{
@@ -490,7 +498,8 @@ func TestApproveEscalation_MissingPlanFPRefused(t *testing.T) {
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	previewResp, err := ts.Client().Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview")
+	previewResp, err := ts.Client().
+		Get(ts.URL + "/media/incidents/" + inc.ID + "/escalation-preview?v=" + curV(t, database, inc.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,11 +545,32 @@ func TestEscalationPreview_StuckReadNotProbed(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(
-		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview", nil,
+		http.MethodGet, "/media/incidents/"+inc.ID+"/escalation-preview?v="+curV(t, database, inc.ID), nil,
 	))
 	body := rec.Body.String()
 	if !strings.Contains(body, "Not probed: reading a stuck file would hang") ||
 		strings.Contains(body, "no media-agent configured") {
 		t.Errorf("stuck_read preview readability line wrong:\n%s", body)
 	}
+}
+
+func curV(t *testing.T, database *db.DB, id string) string {
+	t.Helper()
+	s, err := database.GetIncidentSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "v" + strconv.FormatInt(s.Version, 10)
+}
+
+func seedNoRelease(t *testing.T, database *db.DB, title string) *db.Incident {
+	t.Helper()
+	s := lifecycletest.Seed(t, database, lifecycletest.Spec{
+		Title: title, State: lifecycle.ManualTestNeeded, Reason: lifecycle.ReasonNoRelease,
+	})
+	inc, err := database.GetIncident(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inc
 }

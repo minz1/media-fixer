@@ -317,7 +317,7 @@ func TestButtons_DangerOnlyDestructive(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(raw)
-	for _, word := range []string{"Pause agent", "Mark resolved", "Forget"} {
+	for _, word := range []string{"Pause agent", "Forget"} {
 		i := strings.Index(src, word)
 		if i < 0 {
 			t.Fatalf("%q not found", word)

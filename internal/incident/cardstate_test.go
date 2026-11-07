@@ -170,12 +170,19 @@ func TestRenderer_ButtonRules(t *testing.T) {
 			}
 		}, []string{"rerun", "resolve", "unlock"}},
 		{"keep searching with a pending outcome", db.StatusManualTestNeeded, agent.EscalateManualInvestigation,
-			func(t *testing.T, d *db.DB, _, id string) {
+			func(t *testing.T, d *db.DB, path, id string) {
 				t.Helper()
-				po := &db.PendingOutcome{MediaType: "tv", Title: "The Boys", Season: 1, Episode: 2}
+				po := &db.PendingOutcome{
+					MediaType: "tv",
+					Title:     "The Boys",
+					Season:    1,
+					Episode:   2,
+					LastStage: "searching",
+				}
 				if err := d.SetPendingOutcome(context.Background(), id, po, time.Now()); err != nil {
 					t.Fatal(err)
 				}
+				rawExec(t, path, `UPDATE incidents SET reason = 'no_release' WHERE id = ?`, id)
 			}, []string{"rerun", "resolve", "keep"}},
 		{"keep searching needs manual_test_needed", db.StatusVerifying, "",
 			func(t *testing.T, d *db.DB, _, id string) {
@@ -328,31 +335,18 @@ func clickInc(
 	t *testing.T,
 	svc *incident.Service,
 	verb, id string,
-	status db.IncidentStatus,
+	_ db.IncidentStatus,
 	extra ...string,
 ) card.Result {
 	t.Helper()
+	token := svc.CurrentVersion(context.Background(), id).Token()
 	res, err := svc.CardHandler()(context.Background(), card.Action{
-		Kind: "inc", Verb: verb, Args: append([]string{id, string(status)}, extra...),
+		Kind: "inc", Verb: verb, Args: append([]string{id, token}, extra...),
 	})
 	if err != nil {
 		t.Fatalf("%s: %v", verb, err)
 	}
 	return res
-}
-
-func TestHandler_StatusSeenMismatchRefused(t *testing.T) {
-	t.Parallel()
-	svc, d, _ := newCardService(t, &cardNotifier{}, nil)
-	inc := cardIncident(t, d, db.StatusResolved, "")
-
-	res := clickInc(t, svc, "rerun", inc.ID, db.StatusManualTestNeeded)
-	if res.Line != "Refused: this incident is now resolved" {
-		t.Errorf("line = %q", res.Line)
-	}
-	if got, _ := d.GetIncident(context.Background(), inc.ID); got.Status != db.StatusResolved {
-		t.Errorf("status = %s, want resolved (no action)", got.Status)
-	}
 }
 
 func TestHandler_ApproveReturnsConfirm(t *testing.T) {
@@ -631,5 +625,17 @@ func TestRenderer_PlanSectionStuckReadNotProbed(t *testing.T) {
 
 	if got := renderInc(t, svc, inc.ID).Sections[0].Value; got != "Not probed: reading a stuck file would hang" {
 		t.Errorf("readability = %q, want the not-probed line", got)
+	}
+}
+
+func rawExec(t *testing.T, path, q string, args ...any) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", path+"?_time_format=sqlite&_timezone=UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err = raw.ExecContext(context.Background(), q, args...); err != nil {
+		t.Fatal(err)
 	}
 }

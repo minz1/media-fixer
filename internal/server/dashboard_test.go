@@ -146,18 +146,7 @@ func TestIncidentTemplate_ExecutesWithoutError(t *testing.T) {
 	t.Run("pending outcome with keep-searching", func(t *testing.T) {
 		t.Parallel()
 		srv, database := newDashboardTestServer(t)
-		ctx := context.Background()
-		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "Rick and Morty"}
-		if err := database.CreateIncident(ctx, inc); err != nil {
-			t.Fatal(err)
-		}
-		po := &db.PendingOutcome{MediaType: "tv", Title: "Rick and Morty", Season: 9, Episode: 9, StartedAt: time.Now()}
-		if err := database.SetPendingOutcome(ctx, inc.ID, po, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		if err := database.UpdateIncidentStatus(ctx, inc.ID, db.StatusManualTestNeeded); err != nil {
-			t.Fatal(err)
-		}
+		inc := seedNoRelease(t, database, "Rick and Morty")
 		body := mustExecuteIncidentTemplate(t, srv, inc.ID)
 		if !strings.Contains(body, "Keep searching") {
 			t.Errorf("expected the keep-searching card to render, got:\n%s", body)
@@ -472,7 +461,8 @@ func TestActionKeepSearching_SurvivesCancelledRequest(t *testing.T) {
 		Title: "New Show", State: lifecycle.ManualTestNeeded, Reason: lifecycle.ReasonNoRelease,
 	})
 
-	rec := serveCancelled(t, srv, "/media/incidents/"+inc.ID+"/keep-searching")
+	rec := serveCancelledForm(t, srv, "/media/incidents/"+inc.ID+"/keep-searching",
+		url.Values{"v": {curV(t, database, inc.ID)}})
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("got status %d, want 303; body: %s", rec.Code, rec.Body.String())

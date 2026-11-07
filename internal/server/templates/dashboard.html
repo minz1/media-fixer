@@ -386,7 +386,12 @@
         {{.Incident.ReportedBy}}
       </p>
     </div>
-    {{template "badge" (dict "Tone" (statusMeta .Incident.Status).Tone "Word" (statusMeta .Incident.Status).Label)}}
+    <div class="flex items-center gap-1.5">
+      {{template "badge" (dict "Tone" (statusMeta .Incident.Status).Tone "Word" (statusMeta .Incident.Status).Label)}}
+      {{with .Owner.Meta.Info}}{{template "info" .}}{{end}}
+      {{if .Owner.Parked}}{{template "badge" (dict "Tone" "gray" "Word" "paused")}}{{template "info" "Runs when autonomous actions resume"}}{{end}}
+      {{if .Owner.BudgetSpent}}{{template "badge" (dict "Tone" "orange" "Word" "budget spent")}}{{end}}
+    </div>
   </div>
 
   {{if .Incident.Details}}
@@ -462,43 +467,23 @@
   </div>
   {{end}}
 
-  <!-- Every status is manually transitionable. -->
   <div class="mt-4 flex flex-wrap gap-3">
+    {{range .Owner.Buttons}}
     <button
-      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/rerun"
+      hx-post="{{$.BaseURL}}/incidents/{{$.Incident.ID}}/{{.Path}}"
+      hx-vals='{"v":"v{{$.Owner.Version}}"}'
       hx-swap="outerHTML"
       hx-target="body"
       hx-disable="this"
       class="btn btn-secondary"
     >
-      Re-run diagnosis
-    </button>
-    {{if ne .Incident.Status "resolved"}}
-    <button
-      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/resolve"
-      hx-swap="outerHTML"
-      hx-target="body"
-      hx-disable="this"
-      class="btn btn-secondary"
-    >
-      Mark resolved
-    </button>
-    {{end}} {{if .Incident.AutonomousLocked}}
-    <button
-      hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/unlock"
-      hx-swap="outerHTML"
-      hx-target="body"
-      hx-disable="this"
-      class="btn btn-secondary"
-    >
-      🔓 Unlock
+      {{.Label}}
     </button>
     {{end}}
   </div>
+  {{with .Owner.Partial}}<p class="mt-2 text-sm text-gray-600">{{.}}</p>{{end}}
 
-  {{if eq .Incident.Status "manual_test_needed"}} {{if .Finding}} {{if or (eq
-  .Finding.EscalateAction "remove_and_search") (eq .Finding.EscalateAction
-  "delete_torrent_readd")}}
+  {{if and .Owner.Preview .Finding}}
   <div class="mt-4 border-t border-gray-200 pt-4">
     <h3 class="text-sm font-semibold text-gray-700 mb-2">
       Recommended escalation: {{if eq .Finding.EscalateAction
@@ -508,6 +493,7 @@
     <div class="flex flex-wrap gap-3">
       <button
         hx-get="{{.BaseURL}}/incidents/{{.Incident.ID}}/escalation-preview"
+        hx-vals='{"v":"v{{.Owner.Version}}"}'
         hx-target="#escalation-preview"
         hx-swap="innerHTML"
         hx-disable="this"
@@ -519,9 +505,9 @@
     </div>
     <div id="escalation-preview" class="mt-3"></div>
   </div>
-  {{end}} {{end}} {{end}}
+  {{end}}
 
-  {{if eq .Incident.Status "manual_test_needed"}} {{if .PendingOutcome}}
+  {{if and .Owner.Keep .PendingOutcome}}
   <div class="mt-4 border-t border-gray-200 pt-4">
     <h3 class="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
       <span>Searched for {{.PendingOutcome.Title}}{{if ge .PendingOutcome.Season 0}} season
@@ -531,6 +517,7 @@
     </h3>
     <button
       hx-post="{{.BaseURL}}/incidents/{{.Incident.ID}}/keep-searching"
+      hx-vals='{"v":"v{{.Owner.Version}}"}'
       hx-swap="outerHTML"
       hx-target="body"
       hx-disable="this"
@@ -539,7 +526,7 @@
       Keep searching
     </button>
   </div>
-  {{end}} {{end}}
+  {{end}}
 </div>
 {{end}}
 
@@ -683,6 +670,7 @@
     class="mt-3"
   >
     <input type="hidden" name="plan_fp" value="{{.PlanFP}}" />
+    <input type="hidden" name="v" value="v{{.Version}}" />
     <button type="submit" class="btn btn-danger">
       Approve &amp; Run
     </button>
