@@ -9,6 +9,8 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/operation"
+	"github.com/minz1/mediafixer/internal/opexec"
 )
 
 // ActionAlreadyTriedForTest exposes Service.actionAlreadyTried for service_test.go.
@@ -212,3 +214,7 @@ func (s *Service) RunAgentAtForTest(ctx context.Context, inc *db.Incident, gen i
 }
 
 func (s *Service) GateForTest(id string, gen int64) agent.Gate { return s.gateFor(id, gen) }
+
+func (s *Service) SetOpStoreForTest(st opexec.Store) { s.exec.Store = st }
+
+func (s *Service) LostCauseForTest(id string) (operation.Cause, bool) { return s.runs.lostCauseOf(id) }

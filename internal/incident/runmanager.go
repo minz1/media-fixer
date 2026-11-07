@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 // runManager guarantees at most one active agent pipeline per incident, and — via
@@ -19,6 +21,7 @@ type runManager struct {
 	current  map[string]int64
 	reserved map[string]int
 	plans    map[string]int
+	lost     map[string]operation.Cause
 	checks   map[string]armedCheck
 	inflight map[string]*inflightCheck
 
@@ -67,6 +70,7 @@ func newRunManager(base context.Context) *runManager {
 		current:    make(map[string]int64),
 		reserved:   make(map[string]int),
 		plans:      make(map[string]int),
+		lost:       make(map[string]operation.Cause),
 		checks:     make(map[string]armedCheck),
 		inflight:   make(map[string]*inflightCheck),
 		base:       base,
@@ -288,4 +292,17 @@ func (m *runManager) planStarted(id string) func() {
 			}
 		})
 	}
+}
+
+func (m *runManager) markLost(id string, cause operation.Cause) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lost[id] = cause
+}
+
+func (m *runManager) lostCauseOf(id string) (operation.Cause, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cause, ok := m.lost[id]
+	return cause, ok
 }

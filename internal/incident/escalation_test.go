@@ -113,6 +113,7 @@ func newEscalationFixtureNotifier(
 	t.Cleanup(cancel)
 	jrnl := journal.New(database)
 	svc := incident.NewService(base, database, jrnl, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	svc.SetOpPorts(execPorts(ag))
 	t.Cleanup(func() { stopService(t, svc) })
 	return &escalationFixture{svc: svc, db: database, jrnl: jrnl, dbPath: f.Name()}
 }
@@ -439,7 +440,7 @@ func TestResolve_AlreadyResolvedRefuses(t *testing.T) {
 }
 
 func (a *escalationAgent) OperationFor(
-	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+	subject operation.Subject, _ *agent.DiagnosticResult, planJSON []byte,
 ) (operation.Spec, error) {
-	return operation.Spec{}, nil
+	return searchSpec(subject, planJSON), nil
 }

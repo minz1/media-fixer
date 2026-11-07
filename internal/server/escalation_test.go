@@ -26,6 +26,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/operation"
+	"github.com/minz1/mediafixer/internal/opexec"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -70,11 +71,8 @@ func (a *stubEscalationAgent) PlanEscalation(_ context.Context, _ *agent.Diagnos
 }
 
 func (a *stubEscalationAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, planJSON []byte,
+	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
 ) (any, error) {
-	a.mu.Lock()
-	a.gotPlanJSON = planJSON
-	a.mu.Unlock()
 	return a.runResult, a.runErr
 }
 
@@ -115,6 +113,9 @@ func newEscalationTestServer(t *testing.T, ag incident.AgentRunner) (*server.Ser
 	// would never see each other's appends.
 	jrnl := journal.New(database)
 	svc := incident.NewService(context.Background(), database, jrnl, ag, nil, nil, notif, discard)
+	if stub, ok := ag.(*stubEscalationAgent); ok {
+		svc.SetOpPorts(opexec.Ports{Arr: func(string) opexec.Arr { return stubArr{ag: stub} }})
+	}
 	t.Cleanup(func() { stopService(t, svc) })
 	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
@@ -644,7 +645,28 @@ func assertPreviewSurvivesStreamFrame(t *testing.T, plan any, mustShow string) {
 }
 
 func (a *stubEscalationAgent) OperationFor(
-	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+	subject operation.Subject, _ *agent.DiagnosticResult, planJSON []byte,
 ) (operation.Spec, error) {
-	return operation.Spec{}, nil
+	a.mu.Lock()
+	a.gotPlanJSON = planJSON
+	a.mu.Unlock()
+	return operation.Spec{
+		Subject: subject, Kind: operation.KindReplace, Title: "t", Source: planJSON,
+		Steps: []operation.Step{{
+			Kind: operation.StepSearch, App: "sonarr", MediaID: 1, Command: "SeasonSearch", Season: 1,
+		}},
+	}, nil
+}
+
+type stubArr struct {
+	opexec.Arr
+
+	ag *stubEscalationAgent
+}
+
+func (a stubArr) Search(ctx context.Context, _ string, _, _ int, _ []int) error {
+	if _, err := a.ag.ExecuteApprovedPlan(ctx, nil, nil); err != nil {
+		return &client.HTTPStatusError{Status: http.StatusBadRequest, Body: err.Error()}
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package incident_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/opexec"
 )
 
 type approvedFixture struct {
@@ -27,7 +29,10 @@ type approvedFixture struct {
 }
 
 type fakeArr struct {
-	failDelete map[int]bool
+	failDelete  map[int]bool
+	deleteState int
+	failSearch  bool
+	onDelete    func(id int)
 }
 
 func (f *fakeArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -35,12 +40,19 @@ func (f *fakeArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/"):
 		var id int
 		_, _ = fmt.Sscanf(strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/"), "%d", &id)
+		if f.onDelete != nil {
+			f.onDelete(id)
+		}
 		if f.failDelete[id] {
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(cmp.Or(f.deleteState, http.StatusInternalServerError))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+		if f.failSearch {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -90,6 +102,7 @@ func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrC
 	}
 	ag := agent.New(nil, "stub", disp, database, jrnl, log)
 	svc := incident.NewService(base, database, jrnl, ag, nil, nil, &captureNotifier{}, log)
+	svc.SetOpPorts(portsFor(disp))
 	t.Cleanup(func() { stopService(t, svc) })
 	return &approvedFixture{svc: svc, db: database, disp: disp}
 }
@@ -274,4 +287,17 @@ func TestS9_8_ReplaceKeepsItsPartialResult(t *testing.T) {
 	if len(res.DeletedFiles) != 1 || res.DeletedFiles[0].ID != 10 || res.SearchTriggered != "" {
 		t.Errorf("result = %+v, want file 10 deleted and no search", res)
 	}
+}
+
+func portsFor(disp *agent.Dispatcher) opexec.Ports {
+	p := opexec.Ports{Arr: func(app string) opexec.Arr {
+		if app == "sonarr" && disp.Sonarr != nil {
+			return disp.Sonarr
+		}
+		return nil
+	}}
+	if disp.Decypharr != nil {
+		p.Decypharr = disp.Decypharr
+	}
+	return p
 }

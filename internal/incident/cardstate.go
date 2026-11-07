@@ -301,7 +301,7 @@ func (s *Service) cardApprove(ctx context.Context, id string, v Version, a card.
 		}
 		return card.Result{Line: fmt.Sprintf("🚀 Approved · <t:%d:t>", time.Now().Unix())}, nil
 	}
-	result, err := s.approvable(ctx, id, fp)
+	result, _, err := s.approvable(ctx, id, fp)
 	if err != nil {
 		return card.Result{}, err
 	}

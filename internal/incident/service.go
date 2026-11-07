@@ -19,6 +19,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/opexec"
 )
 
 const SystematicIncidentThreshold = 5
@@ -28,6 +29,7 @@ type Service struct {
 	db          *db.DB
 	journal     *journal.Journal
 	agent       AgentRunner
+	exec        *opexec.Executor
 	control     *agent.ControlReviewer
 	summarizer  *agent.Summarizer
 	notif       Notifier
@@ -77,6 +79,7 @@ func NewService(
 		db:         database,
 		journal:    jrnl,
 		agent:      ag,
+		exec:       &opexec.Executor{Store: database},
 		control:    control,
 		summarizer: summarizer,
 		notif:      notif,
@@ -664,4 +667,8 @@ func (s *Service) buildReinvestigateSeed(
 	}
 	s.log.InfoContext(ctx, "reinvestigate with summary seed", "incident", id, "summary_len", len(summary))
 	return s.agent.BuildSummarySeed(ctx, inc, summary)
+}
+
+func (s *Service) SetOpPorts(p opexec.Ports) {
+	s.exec.Ports = p
 }

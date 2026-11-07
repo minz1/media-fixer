@@ -22,6 +22,7 @@ import (
 	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/opexec"
 	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/stuckread"
@@ -247,6 +248,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 	} else {
 		log.WarnContext(ctx, "seerr not configured — seerr reporters get no issue updates")
 	}
+	a.svc.SetOpPorts(opPorts(bundle.clients))
 	a.sr = newStuckRead(bundle.clients, a.svc, database, log)
 	a.bot.SetService(a.svc)
 
@@ -313,4 +315,19 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 		return httpErr
 	}
 	return nil
+}
+
+func opPorts(clients *clientset.Set) opexec.Ports {
+	return opexec.Ports{
+		Arr: func(app string) opexec.Arr {
+			switch {
+			case app == "sonarr" && clients.Sonarr != nil:
+				return clients.Sonarr
+			case app == "radarr" && clients.Radarr != nil:
+				return clients.Radarr
+			}
+			return nil
+		},
+		Decypharr: clients.Decypharr,
+	}
 }

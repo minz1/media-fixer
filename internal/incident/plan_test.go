@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
-	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
@@ -19,9 +18,8 @@ import (
 type planAgent struct {
 	*escalationAgent
 
-	result any
-	fx     *escalationFixture
-	seen   atomic.Value
+	fx   *escalationFixture
+	seen atomic.Value
 }
 
 func (a *planAgent) ExecuteApprovedPlan(ctx context.Context, r *agent.DiagnosticResult, plan []byte) (any, error) {
@@ -29,7 +27,7 @@ func (a *planAgent) ExecuteApprovedPlan(ctx context.Context, r *agent.Diagnostic
 		a.seen.Store(a.fx.svc.PlanLiveForTest(a.fx.lastID))
 	}
 	_, err := a.escalationAgent.ExecuteApprovedPlan(ctx, r, plan)
-	return a.result, err
+	return nil, err
 }
 
 func (fx *escalationFixture) withAction(t *testing.T, action string) *db.Incident {
@@ -56,9 +54,9 @@ func (fx *escalationFixture) approveNow(id, fp string) error {
 	return fx.svc.ApproveEscalation(context.Background(), id, fp, fx.svc.CurrentVersion(context.Background(), id))
 }
 
-func failedPlan(t *testing.T, action string, result any) lifecycle.Snapshot {
+func failedPlan(t *testing.T, action string) lifecycle.Snapshot {
 	t.Helper()
-	ag := &planAgent{escalationAgent: newEscalationAgent(), result: result}
+	ag := &planAgent{escalationAgent: newEscalationAgent()}
 	ag.execErr = errors.New("step 2 failed")
 	fx := newEscalationFixture(t, ag)
 	inc := fx.withAction(t, action)
@@ -151,48 +149,12 @@ func TestI6_10_ButtonsDuringPlanExecution(t *testing.T) {
 
 func TestApprove_PlanFailedNothingAppliedLandsInPlanFailed(t *testing.T) {
 	t.Parallel()
-	s := failedPlan(t, agent.EscalateRemoveAndSearch, &client.ReplaceResult{})
+	s := failedPlan(t, agent.EscalateRemoveAndSearch)
 	if s.Status != lifecycle.ManualTestNeeded || s.Reason != lifecycle.ReasonPlanFailed || s.Plan != nil {
 		t.Fatalf("after a failed plan with nothing applied: %s/%s plan=%v", s.Status, s.Reason, s.Plan != nil)
 	}
 	if !lifecycle.Offers(s, time.Now(), lifecycle.ActPreview) {
 		t.Fatal("plan_failed does not offer Preview again")
-	}
-}
-
-func TestApprove_PartialReplaceLandsInPlanPartial(t *testing.T) {
-	t.Parallel()
-	s := failedPlan(t, agent.EscalateRemoveAndSearch, &client.ReplaceResult{
-		DeletedFiles: []client.ReplaceFile{{}, {}},
-	})
-	if s.Reason != lifecycle.ReasonPlanPartial || lifecycle.Offers(s, time.Now(), lifecycle.ActPreview) {
-		t.Fatalf(
-			"after a partial replace: %s, preview offered %v",
-			s.Reason,
-			lifecycle.Offers(s, time.Now(), lifecycle.ActPreview),
-		)
-	}
-}
-
-func TestApprove_FailedReaddAfterDeleteLandsInPlanPartial(t *testing.T) {
-	t.Parallel()
-	s := failedPlan(t, agent.EscalateDeleteTorrentReadd, &client.ReaddResult{Deleted: true})
-	if s.Reason != lifecycle.ReasonPlanPartial {
-		t.Fatalf("a re-add that failed after the delete: %s", s.Reason)
-	}
-	kept := failedPlan(t, agent.EscalateDeleteTorrentReadd, &client.ReaddResult{})
-	if kept.Reason != lifecycle.ReasonPlanFailed {
-		t.Fatalf("a re-add that failed before the delete: %s", kept.Reason)
-	}
-}
-
-func TestApprove_UndecodableResultCountsAsApplied(t *testing.T) {
-	t.Parallel()
-	for _, result := range []any{"not a result", nil} {
-		s := failedPlan(t, agent.EscalateRemoveAndSearch, result)
-		if s.Reason != lifecycle.ReasonPlanPartial {
-			t.Fatalf("result %v: %s, want plan_partial", result, s.Reason)
-		}
 	}
 }
 
@@ -220,7 +182,7 @@ func TestApprove_ClaimAndStateOneWrite(t *testing.T) {
 
 func TestApprove_PlanLiveSetBeforeApply(t *testing.T) {
 	t.Parallel()
-	ag := &planAgent{escalationAgent: newEscalationAgent(), result: &client.ReplaceResult{}}
+	ag := &planAgent{escalationAgent: newEscalationAgent()}
 	ag.execGate = make(chan struct{})
 	fx := newEscalationFixture(t, ag)
 	ag.fx = fx

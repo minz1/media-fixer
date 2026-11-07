@@ -1,6 +1,7 @@
 package incident
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,15 +13,21 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/operation"
+	"github.com/minz1/mediafixer/internal/opexec"
 )
 
 const nullResult = "null"
+
+const opSettleBound = 5 * time.Second
 
 var (
 	errNotAwaitingDecision = lifecycle.ErrNotAwaitingDecision
 	errNoPlan              = lifecycle.ErrNoPlan
 	errPlanExpired         = lifecycle.ErrPlanExpired
 	errPlanChanged         = lifecycle.ErrPlanChanged
+	errOpUnsettled         = errors.New("the approved plan could not be recorded: database error")
+	errOpStopped           = errors.New("the approved plan stopped before it finished")
 )
 
 // PreviewEscalation resolves an incident's recommended escalation action into
@@ -67,10 +74,11 @@ func (s *Service) PreviewEscalation(ctx context.Context, id string, v Version) (
 // verification loop non-destructive fixes use rather than marking it fixed
 // immediately — a re-search takes time to actually resolve the incident.
 func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string, v Version) error {
-	if _, err := s.approvable(ctx, id, planFp); err != nil {
+	result, planJSON, err := s.approvable(ctx, id, planFp)
+	if err != nil {
 		return err
 	}
-	if err := s.runs.acquireGlobal(ctx); err != nil {
+	if err = s.runs.acquireGlobal(ctx); err != nil {
 		return err
 	}
 	defer s.runs.releaseGlobal()
@@ -81,30 +89,83 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string, v Ve
 	defer leave()
 	planDone := s.runs.planStarted(id)
 	defer planDone()
+	spec, buildErr := s.agent.OperationFor(
+		operation.Subject{Kind: operation.SubjectIncident, ID: id}, result, planJSON)
 	ev := lifecycle.Event{Kind: lifecycle.OwnerApprove, Version: v.N, HasVersion: v.Set, PlanFP: planFp}
+	if buildErr != nil {
+		ev.BuildErr = buildErr.Error()
+	} else {
+		ev.Spec = &spec
+	}
 	a, err := s.apply(ctx, id, ev, nil)
 	if err != nil {
 		return err
 	}
-	inc, err := s.db.GetIncident(ctx, id)
-	if err != nil {
-		return err
+	if buildErr != nil {
+		return buildErr
 	}
-	result, err := escalationResult(inc)
-	if err != nil {
-		return err
+	if a.Snap.Op == nil {
+		return fmt.Errorf("incident %s: approval created no operation", id)
 	}
+	return s.runApprovedOp(ctx, id, result, a)
+}
+
+func (s *Service) runApprovedOp(ctx context.Context, id string, result *agent.DiagnosticResult, a db.Applied) error {
 	execCtx := context.WithoutCancel(ctx)
-	execResult, runErr := s.agent.ExecuteApprovedPlan(execCtx, result, a.Snap.Plan.JSON)
-	s.logEscalation(execCtx, inc.ID, result, execResult, runErr)
-	done := lifecycle.Event{Kind: lifecycle.PlanExecuted, Gen: a.Snap.Generation}
-	if runErr != nil {
-		done.Err, done.Partial = runErr.Error(), partialOf(result.EscalateAction, execResult)
+	op := s.exec.Run(execCtx, *a.Snap.Op)
+	if op.Status == operation.Running {
+		op = s.interruptOp(execCtx, op)
 	}
-	if _, err = s.apply(execCtx, id, done, nil); err != nil {
-		s.logCheckErr(execCtx, id, err)
+	s.logEscalation(execCtx, id, result, op)
+	settled := s.settlePlan(execCtx, id, a)
+	if !settled || op.Status == operation.Running {
+		s.runs.markLost(id, operation.CauseStore)
 	}
-	return runErr
+	return opError(op)
+}
+
+func (s *Service) interruptOp(ctx context.Context, op operation.Op) operation.Op {
+	wctx, cancel := context.WithTimeout(ctx, opSettleBound)
+	defer cancel()
+	stopped, err := s.exec.Store.ApplyOperation(wctx, op.ID, func(cur operation.Op) (operation.Op, error) {
+		return operation.Next(cur, operation.Event{
+			Kind: operation.Interrupted, At: time.Now(), Cause: operation.CauseStore,
+		})
+	})
+	if err != nil {
+		s.log.ErrorContext(ctx, "interrupt operation after a store failure", "op", op.ID, "error", err)
+		return op
+	}
+	return stopped
+}
+
+func (s *Service) settlePlan(ctx context.Context, id string, a db.Applied) bool {
+	wctx, cancel := context.WithTimeout(ctx, opSettleBound)
+	defer cancel()
+	done := lifecycle.Event{Kind: lifecycle.PlanExecuted, Gen: a.Snap.Generation, OpID: a.Snap.Op.ID}
+	_, err := s.apply(wctx, id, done, nil)
+	if err == nil || errors.Is(err, lifecycle.ErrStale) {
+		return true
+	}
+	s.logCheckErr(ctx, id, err)
+	return false
+}
+
+func opError(op operation.Op) error {
+	switch op.Status {
+	case operation.Done:
+		return nil
+	case operation.Running:
+		return errOpUnsettled
+	case operation.None, operation.FailedAtStep:
+	}
+	if op.Index >= 0 && op.Index < len(op.Results) {
+		r := op.Results[op.Index]
+		if text := cmp.Or(r.Err, r.Note); text != "" {
+			return errors.New(text)
+		}
+	}
+	return errOpStopped
 }
 
 // approvable returns the plan the owner was actually shown. Re-resolving it at
@@ -113,36 +174,36 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string, v Ve
 // no second confirmation.
 func (s *Service) approvable(
 	ctx context.Context, id, planFp string,
-) (*agent.DiagnosticResult, error) {
+) (*agent.DiagnosticResult, []byte, error) {
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if inc.Status != db.StatusManualTestNeeded {
-		return nil, errNotAwaitingDecision
+		return nil, nil, errNotAwaitingDecision
 	}
 	result, err := escalationResult(inc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	planJSON, previewedAt, err := s.db.GetEscalationPlan(ctx, id)
 	if errors.Is(err, db.ErrNoEscalationPlan) {
-		return nil, errNoPlan
+		return nil, nil, errNoPlan
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if age := time.Since(previewedAt); age > s.minutes(planTTLMinutes) {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"this plan was previewed %s ago and %w",
 			age.Round(time.Minute),
 			errPlanExpired,
 		)
 	}
 	if card.Fingerprint(planJSON) != planFp {
-		return nil, errPlanChanged
+		return nil, nil, errPlanChanged
 	}
-	return result, nil
+	return result, planJSON, nil
 }
 
 func partialOf(action string, execResult any) lifecycle.Partial {
@@ -182,20 +243,16 @@ func partialOf(action string, execResult any) lifecycle.Partial {
 // automated escalation) is item-scoped, not service-wide, so it's outside
 // what Agent.disruptionNote warns concurrent runs about.
 func (s *Service) logEscalation(
-	ctx context.Context, incidentID string, result *agent.DiagnosticResult, execResult any, runErr error,
+	ctx context.Context, incidentID string, result *agent.DiagnosticResult, op operation.Op,
 ) {
 	if s.journal == nil {
 		return
 	}
 	status := db.ActionApplied
 	errMsg := ""
-	if runErr != nil {
+	if runErr := opError(op); runErr != nil {
 		status = db.ActionFailed
 		errMsg = runErr.Error()
-	}
-	resultJSON, _ := json.Marshal(execResult)
-	if string(resultJSON) == nullResult {
-		resultJSON = nil
 	}
 	if logErr := s.journal.LogAction(ctx, &db.ActionLog{
 		IncidentID:  incidentID,
@@ -203,11 +260,43 @@ func (s *Service) logEscalation(
 		Params:      result.EscalateParams,
 		TriggeredBy: "owner",
 		Status:      status,
-		Result:      string(resultJSON),
+		Result:      opResultJSON(result.EscalateAction, op),
 		Error:       errMsg,
 	}, false); logErr != nil {
 		s.log.ErrorContext(ctx, "log escalation action", "incident", incidentID, "error", logErr)
 	}
+}
+
+type replaceLog struct {
+	client.ReplaceResult
+
+	Reason       string `json:"reason"`
+	ReadableFile string `json:"readable_file"`
+}
+
+func opResultJSON(action string, op operation.Op) string {
+	var out any
+	switch action {
+	case agent.EscalateRemoveAndSearch:
+		entry := replaceLog{ReplaceResult: opexec.ReplaceResultFrom(op)}
+		var plan client.ReplacePlan
+		if json.Unmarshal(op.Source, &plan) == nil {
+			entry.Reason = plan.Reason
+			if plan.Readability != nil {
+				entry.ReadableFile = plan.Readability.ReadableFile
+			}
+		}
+		out = entry
+	case agent.EscalateDeleteTorrentReadd:
+		out = opexec.ReaddResultFrom(op)
+	default:
+		return ""
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // escalationResult reconstructs the agent.DiagnosticResult from an incident's
