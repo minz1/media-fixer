@@ -202,3 +202,20 @@ func TestReconciler_DryRunPlanOnEmptyDB(t *testing.T) {
 		return env.logged("reconciler: startup runs=0 checks=0 plans_lost=0 parked=0")
 	})
 }
+
+func TestReconciler_SkipsCorruptRow(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	bad := env.verifying(t, "Corrupt row", "cant_play")
+	good := env.verifying(t, "Good row", "cant_play")
+	env.exec(t, `UPDATE incidents SET finding = '{bad' WHERE id = ?`, bad.ID)
+	if c := env.svc.ReconcileForTest(t.Context()); c.Checks != 1 {
+		t.Fatalf("reconcile armed %d checks, want 1 for the good row", c.Checks)
+	}
+	eventually(t, "the good row's check", func() bool {
+		return env.snap(t, good.ID).Verify.ChecksLeft < good.Verify.ChecksLeft
+	})
+	if !env.logged("reconciler: skip incident") || !env.logged(bad.ID) {
+		t.Fatalf("corrupt row not logged:\n%s", env.logs.String())
+	}
+}

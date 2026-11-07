@@ -408,11 +408,11 @@ func TestListDriven_ReturnsDrivenRowsWithActivity(t *testing.T) {
 	if _, err := d.ApplyIncident(ctx, resolved.ID, next(lifecycle.Event{Kind: lifecycle.OwnerResolve})); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := d.ListDriven(ctx)
+	rows, skipped, err := d.ListDriven(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Snap.ID != open.ID || rows[0].LastActivity.IsZero() {
+	if len(rows) != 1 || len(skipped) != 0 || rows[0].Snap.ID != open.ID || rows[0].LastActivity.IsZero() {
 		t.Fatalf("driven rows %+v", rows)
 	}
 }

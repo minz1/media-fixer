@@ -60,12 +60,15 @@ func (s *Service) reconcile(ctx context.Context) lifecycle.Counts {
 		return lifecycle.Counts{}
 	}
 	defer leave()
-	rows, err := s.db.ListDriven(ctx)
+	rows, skipped, err := s.db.ListDriven(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.log.ErrorContext(ctx, "reconciler: list driven incidents", "error", err)
 		}
 		return lifecycle.Counts{}
+	}
+	for _, sk := range skipped {
+		s.log.ErrorContext(ctx, "reconciler: skip incident", "incident", sk.ID, "error", sk.Err)
 	}
 	t := s.timers(ctx)
 	live := s.runs.liveness()

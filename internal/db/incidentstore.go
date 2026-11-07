@@ -433,22 +433,31 @@ const drivenQuery = `SELECT ` + snapshotColumns + `,
 	   OR (status = 'manual_test_needed' AND escalation_plan IS NOT NULL)
 	ORDER BY created_at`
 
-func (d *DB) ListDriven(ctx context.Context) ([]lifecycle.Observed, error) {
+type SkippedRow struct {
+	ID  string
+	Err error
+}
+
+func (d *DB) ListDriven(ctx context.Context) ([]lifecycle.Observed, []SkippedRow, error) {
 	rows, err := d.read.QueryContext(ctx, drivenQuery)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	var out []lifecycle.Observed
+	var (
+		out     []lifecycle.Observed
+		skipped []SkippedRow
+	)
 	for rows.Next() {
 		var last sql.NullString
 		o, serr := scanSnapshotWith(rows, &last)
 		if serr != nil {
-			return nil, serr
+			skipped = append(skipped, SkippedRow{ID: o.ID, Err: serr})
+			continue
 		}
 		out = append(out, lifecycle.Observed{Snap: o, LastActivity: parseActivity(last.String)})
 	}
-	return out, rows.Err()
+	return out, skipped, rows.Err()
 }
 
 func (d *DB) ClaimReporterNote(ctx context.Context, id string, now time.Time, minGap time.Duration) (bool, error) {

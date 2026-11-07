@@ -119,7 +119,7 @@ func TestHandle_ReservesBeforeApply(t *testing.T) {
 				return
 			default:
 			}
-			rows, err := env.db.ListDriven(context.Background())
+			rows, _, err := env.db.ListDriven(context.Background())
 			if err != nil {
 				continue
 			}
