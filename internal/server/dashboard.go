@@ -122,6 +122,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		"season":         seasonLabel,
 		"ms":             lookupDuration,
 		"confidenceTone": confidenceTone,
+		"actionTone":     actionTone,
 		"restarting":     func(s string) bool { return s == card.RestartingNotice || strings.HasPrefix(s, refusedPrefix) },
 		"restartingText": func() string { return card.RestartingNotice },
 	}).ParseFS(templateFS, "templates/dashboard.html")
@@ -507,6 +508,16 @@ func checkTone(s livecheck.Status) string {
 	default:
 		return toneGray
 	}
+}
+
+func actionTone(s db.ActionStatus) string {
+	switch s {
+	case db.ActionFailed:
+		return toneRed
+	case db.ActionApplied, db.ActionRefused:
+		return toneGray
+	}
+	return toneGray
 }
 
 func confidenceTone(confidence string) string {

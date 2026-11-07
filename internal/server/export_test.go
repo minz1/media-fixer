@@ -50,6 +50,7 @@ func StatusWord(s db.IncidentStatus) string { return statusMeta(s).Label }
 func IncidentLive(s db.IncidentStatus) bool { return incidentLive(s) }
 func CheckTone(s livecheck.Status) string   { return checkTone(s) }
 func ConfidenceTone(c string) string        { return confidenceTone(c) }
+func ActionTone(s db.ActionStatus) string   { return actionTone(s) }
 func SweepTone(s string) string             { return sweepTone(s) }
 
 func RelTime(now, t time.Time) string { return relTime(now, t) }

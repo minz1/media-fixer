@@ -539,7 +539,7 @@
       <div class="flex justify-between">
         <span class="font-medium text-gray-800">{{.Action}}</span>
         <span class="text-xs text-gray-500"
-          >{{.TriggeredBy}} {{template "badge" (dict "Tone" "gray" "Word" .Status)}}</span
+          >{{.TriggeredBy}} {{template "badge" (dict "Tone" (actionTone .Status) "Word" .Status)}}</span
         >
       </div>
       {{if .Result}}
