@@ -154,13 +154,7 @@ func (j *Journal) Subscribe(incidentID string) (<-chan *db.Event, func()) {
 	unsubscribe := func() {
 		j.mu.Lock()
 		defer j.mu.Unlock()
-		subs := j.subs[incidentID]
-		for i, c := range subs {
-			if c == ch {
-				j.subs[incidentID] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
+		j.subs[incidentID] = without(j.subs[incidentID], ch)
 		if len(j.subs[incidentID]) == 0 {
 			delete(j.subs, incidentID)
 		}
@@ -183,12 +177,7 @@ func (j *Journal) SubscribeAll() (<-chan *db.Event, func()) {
 	unsubscribe := func() {
 		j.mu.Lock()
 		defer j.mu.Unlock()
-		for i, c := range j.allSubs {
-			if c == ch {
-				j.allSubs = append(j.allSubs[:i], j.allSubs[i+1:]...)
-				break
-			}
-		}
+		j.allSubs = without(j.allSubs, ch)
 		close(ch)
 	}
 	return ch, unsubscribe
@@ -203,21 +192,28 @@ const subscriberBufferSize = 32
 
 func (j *Journal) notify(e *db.Event) {
 	j.mu.Lock()
-	subs := j.subs[e.IncidentID]
-	allSubs := j.allSubs
-	j.mu.Unlock()
+	defer j.mu.Unlock()
+	send(j.subs[e.IncidentID], e)
+	send(j.allSubs, e)
+}
+
+func send(subs []chan *db.Event, e *db.Event) {
 	for _, ch := range subs {
 		select {
 		case ch <- e:
 		default:
 		}
 	}
-	for _, ch := range allSubs {
-		select {
-		case ch <- e:
-		default:
+}
+
+func without(subs []chan *db.Event, ch chan *db.Event) []chan *db.Event {
+	out := make([]chan *db.Event, 0, len(subs))
+	for _, c := range subs {
+		if c != ch {
+			out = append(out, c)
 		}
 	}
+	return out
 }
 
 // --- incident_created / reporter_added ---
