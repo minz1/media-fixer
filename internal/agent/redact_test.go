@@ -83,6 +83,26 @@ func TestRulingA2_StoredErrorTextRedacted(t *testing.T) {
 	assertRedacted(t, "llm_round", eventPayloads(t, database, inc.ID, "llm_round"))
 }
 
+func TestReviewP3_CapReasonRedacted(t *testing.T) {
+	t.Parallel()
+	url := newSecretServer(t, http.MethodPost, "/api/v3/command")
+	claim := `{"root_cause":"rc","confidence":"medium","primary_action":"arr_search_missing",` +
+		`"requires_approval":false}`
+	ag, database, inc := newRig(t, url, []string{
+		toolCallResponse("arr_search_missing", `{"media_type":"movie","title":"Arrival"}`),
+		toolCallResponse("complete_diagnosis", claim),
+		toolCallResponse("complete_diagnosis", claim),
+		toolCallResponse("complete_diagnosis", claim),
+	}, rigOpts{})
+	exit := runGated(context.Background(), t, ag, database, inc, newRecGate(database, inc))
+	if exit.Finding == nil || exit.Finding.Outcome.Kind != agent.DiagnosisManual {
+		t.Fatalf("exit %s %+v, want the capped manual finding", exit.State, exit.Finding)
+	}
+	assertRedacted(t, "cap reason", []string{exit.Finding.Outcome.Reason, exit.Finding.PrimaryReason})
+	assertRedacted(t, "repeat replies", toolReplies(exit.Conversation)[1:3])
+	assertRedacted(t, "diagnosis_completed", eventPayloads(t, database, inc.ID, "diagnosis_completed"))
+}
+
 func TestRulingA2_RefusalTextRedacted(t *testing.T) {
 	t.Parallel()
 	_, srv := newCallServer(t)

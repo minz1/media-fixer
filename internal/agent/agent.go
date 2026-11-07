@@ -792,7 +792,7 @@ func (v *invocation) step(kind callKind, in stepInfo) {
 				Tool:    v.fn,
 				Params:  in.params,
 				Status:  callMeta(next.State).Outcome,
-				Err:     in.errText,
+				Err:     client.RedactCredentials(in.errText),
 				Counted: next.Counted,
 			})
 		}
