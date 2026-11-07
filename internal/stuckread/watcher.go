@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
@@ -203,7 +204,11 @@ func (w *Watcher) rerunFixed(ctx context.Context, inc *db.Incident) {
 	if open >= incident.SystematicIncidentThreshold {
 		return
 	}
-	if err = w.svc.Rerun(ctx, inc.ID); err != nil {
+	if err = w.svc.Rerun(ctx, inc.ID); errors.Is(err, card.ErrRestarting) {
+		w.log.InfoContext(ctx, "rerun stuck-read incident refused, shutting down", "incident", inc.ID, "error", err)
+		return
+	}
+	if err != nil {
 		w.log.WarnContext(ctx, "rerun stuck-read incident", "incident", inc.ID, "error", err)
 		return
 	}

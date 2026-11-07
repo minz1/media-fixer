@@ -766,6 +766,11 @@ func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
 func (s *Service) Resolve(ctx context.Context, id string) error {
+	leave, err := s.ownerSection("resolve", id)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err
@@ -915,7 +920,12 @@ func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
 // Unlock clears an incident's autonomous lock so the agent may act on it again.
 // This is a manual owner override (e.g. for a systemic-failure "blocked" incident).
 func (s *Service) Unlock(ctx context.Context, id string) error {
-	if err := s.db.SetAutonomousLocked(ctx, id, false); err != nil {
+	leave, err := s.ownerSection("unlock", id)
+	if err != nil {
+		return err
+	}
+	defer leave()
+	if err = s.db.SetAutonomousLocked(ctx, id, false); err != nil {
 		return err
 	}
 	// Not a status transition, but the incident card's lock banner/button
@@ -994,6 +1004,11 @@ const (
 )
 
 func (s *Service) rerun(ctx context.Context, id string, origin rerunOrigin, staleMinutes int) error {
+	leave, err := s.ownerSection("rerun", id)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return err
@@ -1095,12 +1110,15 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 			continue
 		}
 		for _, inc := range incidents {
+			if ctx.Err() != nil {
+				return
+			}
 			if status == db.StatusVerifying && inc.What != agent.WhatStuckRead {
 				continue
 			}
 			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
 			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil && ctx.Err() == nil {
-				s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
+				s.logRerunErr(ctx, "zombie rerun failed", inc.ID, rerunErr)
 			}
 		}
 	}
@@ -1145,7 +1163,7 @@ func (s *Service) SweepStaleRuns(ctx context.Context) {
 		}
 		s.log.WarnContext(ctx, "recovering stale (hung) run", "incident", inc.ID, "title", inc.Title)
 		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, minutes); rerunErr != nil {
-			s.log.ErrorContext(ctx, "stale run rerun failed", "incident", inc.ID, "error", rerunErr)
+			s.logRerunErr(ctx, "stale run rerun failed", inc.ID, rerunErr)
 		}
 	}
 	s.sweepStaleReopened(ctx, staleBefore, staleMinutes)
@@ -1180,7 +1198,7 @@ func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time,
 		}
 		s.log.WarnContext(ctx, "recovering stale reopened incident", "incident", inc.ID, "title", inc.Title)
 		if rerunErr := s.rerun(ctx, inc.ID, rerunStale, staleMinutes); rerunErr != nil {
-			s.log.ErrorContext(ctx, "stale reopened rerun failed", "incident", inc.ID, "error", rerunErr)
+			s.logRerunErr(ctx, "stale reopened rerun failed", inc.ID, rerunErr)
 		}
 	}
 }
@@ -1230,11 +1248,16 @@ func (s *Service) endLockEpisode(ctx context.Context) {
 
 // SetAutonomousPaused toggles the global pause switch.
 func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
+	leave, err := s.ownerSection("pause", "")
+	if err != nil {
+		return err
+	}
+	defer leave()
 	v := "false"
 	if paused {
 		v = "true"
 	}
-	if err := s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
+	if err = s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
 		return err
 	}
 	if s.journal != nil {

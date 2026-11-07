@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 )
 
@@ -16,8 +17,8 @@ var errSearchFailed = errors.New("removed; search failed")
 func (s *Scheduler) Act(
 	ctx context.Context, app App, downloadID string, action Action, targetsFp string,
 ) (string, error) {
-	if !s.mu.TryLock() {
-		return "", refuse("a run is active, try again in a moment")
+	if err := s.lockAction(); err != nil {
+		return "", err
 	}
 	defer s.mu.Unlock()
 	c := s.r.client(app)
@@ -78,6 +79,9 @@ func (s *Scheduler) Act(
 func (s *Scheduler) ImportMapped(
 	ctx context.Context, seriesID int, downloadID, targetsFp string, rows []MappedFile,
 ) (string, error) {
+	if s.base.Err() != nil {
+		return "", card.ErrRestarting
+	}
 	if len(rows) == 0 {
 		return "", refuse("Tick at least one file.")
 	}
@@ -279,4 +283,14 @@ func (s *Scheduler) forget(app App, downloadID string) {
 		}
 	}
 	s.last.Apps = apps
+}
+
+func (s *Scheduler) lockAction() error {
+	if s.base.Err() != nil {
+		return card.ErrRestarting
+	}
+	if !s.mu.TryLock() {
+		return refuse("a run is active, try again in a moment")
+	}
+	return nil
 }

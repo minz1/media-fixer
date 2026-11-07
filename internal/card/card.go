@@ -13,11 +13,14 @@ const (
 	MaxText       = 4000
 	MaxPlain      = 2000
 	RowSize       = 5
+
+	RestartingNotice = "media-fixer is restarting; try again in a minute."
 )
 
 var (
-	ErrUnknownID = errors.New("unknown button id")
-	ErrUntracked = errors.New("card sent as plain text, not tracked")
+	ErrUnknownID  = errors.New("unknown button id")
+	ErrUntracked  = errors.New("card sent as plain text, not tracked")
+	ErrRestarting = errors.New("media-fixer is restarting")
 )
 
 type Tone int

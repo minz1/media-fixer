@@ -6,6 +6,9 @@ import (
 	"maps"
 	"slices"
 	"sync"
+
+	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 var ErrShutdownTimeout = errors.New("incident service shutdown timed out")
@@ -79,4 +82,24 @@ func (w *workers) wait(ctx context.Context) []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return slices.Sorted(maps.Values(w.live))
+}
+
+func (s *Service) ownerSection(verb, id string) (func(), error) {
+	name := verb
+	if id != "" {
+		name += ":" + (&db.Incident{ID: id}).ShortID()
+	}
+	leave, ok := s.work.enter(name)
+	if !ok {
+		return nil, card.ErrRestarting
+	}
+	return leave, nil
+}
+
+func (s *Service) logRerunErr(ctx context.Context, msg, id string, err error) {
+	if errors.Is(err, card.ErrRestarting) {
+		s.log.InfoContext(ctx, "rerun refused, shutting down", "incident", id, "error", err)
+		return
+	}
+	s.log.ErrorContext(ctx, msg, "incident", id, "error", err)
 }

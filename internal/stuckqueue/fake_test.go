@@ -35,6 +35,7 @@ type fakeArr struct {
 	commands    []map[string]any
 	commandsErr int
 	episodes    []map[string]any
+	reqs        int
 }
 
 func newFakeArr(t *testing.T) *fakeArr {
@@ -73,6 +74,7 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reqs++
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/queue":

@@ -36,6 +36,11 @@ var (
 // a concrete, read-only plan (e.g. exactly which files would be deleted) for
 // the dashboard's Preview button. It makes no changes.
 func (s *Service) PreviewEscalation(ctx context.Context, id string) (any, string, error) {
+	leave, err := s.ownerSection("preview", id)
+	if err != nil {
+		return nil, "", err
+	}
+	defer leave()
 	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		return nil, "", err
@@ -87,6 +92,11 @@ func (s *Service) ApproveEscalation(ctx context.Context, id, planFp string) erro
 	// single global slot permanently and every later diagnosis blocked on
 	// acquireGlobal forever.
 	defer s.runs.releaseGlobal()
+	leave, err := s.ownerSection("approve", id)
+	if err != nil {
+		return err
+	}
+	defer leave()
 
 	inc, result, planJSON, err := s.approvable(ctx, id, planFp)
 	if err != nil {

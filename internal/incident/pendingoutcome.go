@@ -284,6 +284,11 @@ func resetKeepSearchingTrack(po *db.PendingOutcome, now time.Time) {
 // cadence, see KeepSearchingCheckHours) instead of the incident
 // sitting idle in manual_test_needed until an owner manually reruns it.
 func (s *Service) KeepSearching(ctx context.Context, id string) error {
+	leave, err := s.ownerSection("keep", id)
+	if err != nil {
+		return err
+	}
+	defer leave()
 	po, err := s.db.GetPendingOutcome(ctx, id)
 	if err != nil {
 		return fmt.Errorf("keep searching: %w", err)
