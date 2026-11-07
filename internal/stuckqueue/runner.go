@@ -241,12 +241,13 @@ func (r *Runner) notify(ctx context.Context, items []Item, capHit bool) {
 	if r.Notify == nil {
 		return
 	}
-	if err := r.Notify(ctx, stuckCard(items, capHit)); err != nil && !errors.Is(err, card.ErrUntracked) {
+	c, shown := stuckCard(items, capHit)
+	if err := r.Notify(ctx, c); err != nil && !errors.Is(err, card.ErrUntracked) {
 		r.logger().WarnContext(ctx, "stuck-queue: owner DM failed; will retry next run", "err", err)
 		return
 	}
 	now := r.Now()
-	for _, it := range items {
+	for _, it := range items[:shown] {
 		if err := r.DB.MarkStuckNotified(ctx, string(it.App), it.DownloadID, now); err != nil {
 			r.logger().WarnContext(ctx, "stuck-queue: mark notified", "download", it.DownloadID, "err", err)
 		}

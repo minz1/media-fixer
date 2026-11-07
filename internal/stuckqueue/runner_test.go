@@ -499,3 +499,35 @@ func TestRun_DMText(t *testing.T) {
 		t.Fatalf("dm =\n%s\nwant\n%s", dms[0], want)
 	}
 }
+
+func TestQ1_8_OverflowItemsWaitForNextCard(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	var recs []map[string]any
+	for i := range 60 {
+		recs = append(recs, rawRec(i+1, fmt.Sprintf("D%d", i), strings.Repeat("Long title ", 4)+strconv.Itoa(i), i+1,
+			false, sample))
+	}
+	e.sonarr.set(recs...)
+	e.agedRun(liveSettings())
+	for range 10 {
+		e.runner.Run(context.Background(), liveSettings())
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.cards) < 2 || len(e.cards[0].Items) >= 60 {
+		t.Fatalf("cards = %d, first card items = %d; want the overflow on later cards", len(e.cards),
+			len(e.cards[0].Items))
+	}
+	seen := map[string]int{}
+	for _, c := range e.cards {
+		for _, it := range c.Items {
+			seen[it.Subject]++
+		}
+	}
+	for i := range 60 {
+		if n := seen[card.StuckSubject("s", fmt.Sprintf("D%d", i))]; n != 1 {
+			t.Errorf("D%d shown on %d cards, want 1", i, n)
+		}
+	}
+}

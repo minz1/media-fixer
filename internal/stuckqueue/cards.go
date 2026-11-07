@@ -8,12 +8,12 @@ import (
 
 const maintenancePath = "/maintenance"
 
-func stuckCard(items []Item, capHit bool) card.Card {
+func stuckCard(items []Item, capHit bool) (card.Card, int) {
 	capLine := fmt.Sprintf("Stopped after clearing %d this run.", maxAutoClears)
 	c := card.Card{Tone: card.Warn, Path: maintenancePath}
 	if len(items) == 0 {
 		c.Title = "Stuck-queue sweep: " + capLine
-		return c
+		return c, 0
 	}
 	c.Title = dmHeader
 	tail := ""
@@ -29,12 +29,12 @@ func stuckCard(items []Item, capHit bool) card.Card {
 		c.Footer = fmt.Sprintf("…and %d more", len(items)-i) + tail
 		if len(c.Plain()) > card.MaxPlain || c.Components() > card.MaxBuilt {
 			c.Items = c.Items[:i]
-			return c
+			return c, i
 		}
 	}
 	c.Footer = capLine
 	if !capHit {
 		c.Footer = ""
 	}
-	return c
+	return c, len(items)
 }
