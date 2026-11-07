@@ -146,3 +146,67 @@ const (
 )
 
 func DisruptiveForTest(s ToolSpec) bool { return s.disruptive() }
+
+type (
+	CallState   = callState
+	CallKind    = callKind
+	CallEffect  = callEffect
+	CallSnap    = callSnap
+	CallOutcome = callOutcome
+)
+
+const (
+	CallProposed       = callProposed
+	CallScreened       = callScreened
+	CallActed          = callActed
+	CallBlockedApplied = callBlockedApplied
+	CallBlockedUnknown = callBlockedUnknown
+	CallBlockedRepeat  = callBlockedRepeat
+	CallNotRun         = callNotRun
+	CallRefused        = callRefused
+	CallApplied        = callApplied
+	CallFailed         = callFailed
+	CallInterrupted    = callInterrupted
+
+	OutcomeApplied     = outcomeApplied
+	OutcomeFailed      = outcomeFailed
+	OutcomeRefused     = outcomeRefused
+	OutcomeInterrupted = outcomeInterrupted
+	OutcomeInvalid     = outcomeInvalid
+
+	EvLiveDenied         = evLiveDenied
+	EvAppliedBefore      = evAppliedBefore
+	EvUnknownBefore      = evUnknownBefore
+	EvSeenInRun          = evSeenInRun
+	EvCleared            = evCleared
+	EvRefusal            = evRefusal
+	EvPreconditionFailed = evPreconditionFailed
+	EvGateDenied         = evGateDenied
+	EvGateFailed         = evGateFailed
+	EvGateAllowed        = evGateAllowed
+	EvSucceeded          = evSucceeded
+	EvNotReady           = evNotReady
+	EvErrored            = evErrored
+	EvCut                = evCut
+
+	EffReply    = effReply
+	EffLog      = effLog
+	EffRemember = effRemember
+	EffVerdict  = effVerdict
+)
+
+func CallStates() []CallState { return callStates() }
+
+func CallKinds() []CallKind { return callKinds() }
+
+func CallOutcomes() []CallOutcome { return callOutcomes() }
+
+func CallMeta(s CallState) callStateMeta { return callMeta(s) }
+
+func NextCall(cur CallSnap, k CallKind) (CallSnap, []CallEffect, error) { return nextCall(cur, k) }
+
+func CheckCall(s CallSnap) error { return checkCall(s) }
+
+func CallMatches(s CallSnap, k CallKind) int { return callMatches(s, k) }
+
+type ToolImpactForTest = toolImpact
