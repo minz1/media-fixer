@@ -240,3 +240,5 @@ func (a *Agent) RefuseForTest(ctx context.Context, inc *db.Incident, tool, reaso
 	v.beforeAct(nil, refuse(reason))
 	return v.reply
 }
+
+func ManualFindingForTest(s RunState, err error) *DiagnosticResult { return manualFinding(s, err) }

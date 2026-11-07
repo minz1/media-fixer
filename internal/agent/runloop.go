@@ -155,5 +155,6 @@ func manualFinding(s RunState, err error) *DiagnosticResult {
 		PrimaryReason:    reason,
 		EscalateAction:   EscalateManualInvestigation,
 		RequiresApproval: true,
+		Outcome:          DiagnosisOutcome{Kind: DiagnosisManual, Reason: RunMeta(s).Reason},
 	}
 }

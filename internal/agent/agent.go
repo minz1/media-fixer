@@ -350,6 +350,8 @@ type DiagnosticResult struct {
 	// VerifyResolved compares it against a fresh capture to confirm something
 	// actually changed, not just that the item currently looks healthy.
 	PreFix *FixSignature `json:"pre_fix,omitempty"`
+
+	Outcome DiagnosisOutcome `json:"outcome,omitzero"`
 }
 
 // FixSignature is a snapshot of a title's observable state: Jellyfin's
@@ -579,7 +581,10 @@ func (a *Agent) processToolCalls(
 		fn := call.Function.Name
 
 		if fn == toolCompleteDiagnosis {
-			return a.conclude(ctx, inc, preFix, call, messages)
+			if ev, result := a.conclude(ctx, inc, preFix, call, gate, messages); ev.kind != "" {
+				return ev, result
+			}
+			continue
 		}
 		if kind, stop := gateStop(gate.Live(ctx)); stop {
 			return runEvent{kind: kind}, nil
@@ -612,11 +617,17 @@ func (a *Agent) handleCompleteDiagnosis(
 	inc *db.Incident,
 	preFix *FixSignature,
 	argsJSON string,
+	calls []CallRecord,
 ) (*DiagnosticResult, error) {
 	var result DiagnosticResult
 	if err := json.Unmarshal([]byte(argsJSON), &result); err != nil {
-		return nil, fmt.Errorf("parse complete_diagnosis: %w", err)
+		return nil, &diagnosisRejectedError{err: fmt.Errorf("parse complete_diagnosis: %w", err)}
 	}
+	outcome, classifyErr := Classify(&result, calls)
+	if classifyErr != nil {
+		return nil, &diagnosisRejectedError{err: classifyErr, parsed: &result}
+	}
+	result.Outcome = outcome
 	// The model has no route to set this — complete_diagnosis's tool schema has
 	// no pre_fix parameter — but assign it unconditionally regardless, so a
 	// same-named key it happened to send is never trusted over the real capture.
@@ -641,24 +652,33 @@ func (a *Agent) handleCompleteDiagnosis(
 	// case Discord-reported incidents ever hit. Guarding on itemID here meant
 	// a missing-media report with no deferred verification was returned as a
 	// clean success with nothing checked at all.
-	if !result.RequiresApproval && result.VerifyAfterSeconds == 0 && inc.What != WhatStuckRead {
+	if result.Outcome.Kind == DiagnosisFixNow && inc.What != WhatStuckRead {
 		if !a.VerifyResolved(ctx, itemID, inc.Title, preFix) {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
 			result.EscalateAction = EscalateManualInvestigation
 			result.PrimaryReason = "autonomous fix applied but playback verification failed; " + result.PrimaryReason
+			result.Outcome = DiagnosisOutcome{Kind: DiagnosisManual, Reason: result.PrimaryReason}
 		}
 	}
 
-	if a.journal != nil {
-		jctx, cancel := detached(ctx)
-		defer cancel()
-		if err := a.journal.DiagnosisCompleted(jctx, inc.ID, result); err != nil {
-			a.log.WarnContext(ctx, "record diagnosis_completed", "incident", inc.ID, "error", err)
-		}
+	if err := CheckDiagnosis(&result); err != nil {
+		a.log.ErrorContext(ctx, "diagnosis failed its invariants", "incident", inc.ID, "error", err)
+		return nil, err
 	}
-
+	a.journalDiagnosis(ctx, inc.ID, &result)
 	return &result, nil
+}
+
+func (a *Agent) journalDiagnosis(ctx context.Context, incidentID string, result *DiagnosticResult) {
+	if a.journal == nil {
+		return
+	}
+	jctx, cancel := detached(ctx)
+	defer cancel()
+	if err := a.journal.DiagnosisCompleted(jctx, incidentID, result); err != nil {
+		a.log.WarnContext(ctx, "record diagnosis_completed", "incident", incidentID, "error", err)
+	}
 }
 
 func (a *Agent) executeRead(ctx context.Context, inc *db.Incident, fn, argsJSON string) string {

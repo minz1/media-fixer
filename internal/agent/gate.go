@@ -63,17 +63,28 @@ func claimEvent(err error) runEvent {
 }
 
 func (a *Agent) conclude(
-	ctx context.Context, inc *db.Incident, preFix *FixSignature, call openai.ToolCall,
+	ctx context.Context, inc *db.Incident, preFix *FixSignature, call openai.ToolCall, gate Gate,
 	messages *[]openai.ChatCompletionMessage,
 ) (runEvent, *DiagnosticResult) {
-	result, err := a.handleCompleteDiagnosis(ctx, inc, preFix, call.Function.Arguments)
-	if err != nil {
+	if gate.Live(ctx) == GateSuperseded {
+		return runEvent{kind: evStale}, nil
+	}
+	result, err := a.handleCompleteDiagnosis(ctx, inc, preFix, call.Function.Arguments, gate.Calls())
+	var rejected *diagnosisRejectedError
+	if err != nil && !errors.As(err, &rejected) {
 		return runEvent{kind: evBatchFailed, err: err}, nil
+	}
+	reply := jsonResult(map[string]any{keyStatus: "recorded"})
+	if rejected != nil {
+		reply = errorReply(rejected.Error())
 	}
 	*messages = append(*messages, openai.ChatCompletionMessage{
 		Role:       openai.ChatMessageRoleTool,
-		Content:    jsonResult(map[string]any{keyStatus: "recorded"}),
+		Content:    reply,
 		ToolCallID: call.ID,
 	})
+	if rejected != nil {
+		return runEvent{}, nil
+	}
 	return runEvent{kind: evConcluded}, result
 }
