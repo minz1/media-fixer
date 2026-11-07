@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,4 +171,112 @@ func newDashboardTestServerOnAddr(t *testing.T, addr string) *server.Server {
 		t.Fatal(err)
 	}
 	return srv
+}
+
+type gatedSSEWriter struct {
+	header     http.Header
+	once       sync.Once
+	firstWrite chan struct{}
+	proceed    chan struct{}
+	flushes    chan struct{}
+}
+
+func newGatedSSEWriter() *gatedSSEWriter {
+	return &gatedSSEWriter{
+		header:     http.Header{},
+		firstWrite: make(chan struct{}),
+		proceed:    make(chan struct{}),
+		flushes:    make(chan struct{}, 64),
+	}
+}
+
+func (g *gatedSSEWriter) Header() http.Header { return g.header }
+
+func (g *gatedSSEWriter) WriteHeader(int) {}
+
+func (g *gatedSSEWriter) Write(p []byte) (int, error) {
+	g.once.Do(func() {
+		close(g.firstWrite)
+		<-g.proceed
+	})
+	return len(p), nil
+}
+
+func (g *gatedSSEWriter) Flush() { g.flushes <- struct{}{} }
+
+func (g *gatedSSEWriter) waitFlushes(n int) bool {
+	timeout := time.After(2 * time.Second)
+	for range n {
+		select {
+		case <-g.flushes:
+		case <-timeout:
+			return false
+		}
+	}
+	return true
+}
+
+func eventDuringFirstRender(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "test-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	database, err := db.Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	discard := slog.New(slog.DiscardHandler)
+	jrnl := journal.New(database)
+	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, &stubNotifier{}, discard)
+	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inc := &db.Incident{
+		Status: db.StatusOpen, Source: "discord", ReportedBy: "tester", What: "cant_play", Title: "Race",
+	}
+	if err = database.CreateIncident(context.Background(), inc); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newGatedSSEWriter()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, strings.ReplaceAll(path, "{id}", inc.ID), nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.Handler().ServeHTTP(w, req)
+	}()
+
+	select {
+	case <-w.firstWrite:
+	case <-time.After(2 * time.Second):
+		close(w.proceed)
+		t.Fatal("first render never wrote")
+	}
+	if err = jrnl.StatusChanged(context.Background(), inc.ID, string(db.StatusInvestigating)); err != nil {
+		t.Fatal(err)
+	}
+	close(w.proceed)
+
+	if !w.waitFlushes(3) {
+		t.Errorf("an event published during the first render never reached the stream")
+	}
+	cancel()
+	<-done
+}
+
+func TestD4_5_IncidentStreamKeepsEventDuringFirstRender(t *testing.T) {
+	t.Parallel()
+	eventDuringFirstRender(t, "/media/incidents/{id}/events")
+}
+
+func TestD4_13_IndexStreamKeepsEventDuringFirstRender(t *testing.T) {
+	t.Parallel()
+	eventDuringFirstRender(t, "/media/events")
 }

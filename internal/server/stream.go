@@ -102,6 +102,9 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	ch, unsubscribe := s.journal.SubscribeAll()
+	defer unsubscribe()
+
 	render := func() {
 		incidents, err := s.db.ListIncidents(ctx, "", dashboardPageSize, 0)
 		if err != nil {
@@ -120,9 +123,6 @@ func (s *Server) dashboardEvents(w http.ResponseWriter, r *http.Request) {
 		}, "\n"))
 	}
 	render()
-
-	ch, unsubscribe := s.journal.SubscribeAll()
-	defer unsubscribe()
 
 	ticker := time.NewTicker(sseKeepAliveInterval)
 	defer ticker.Stop()
@@ -172,6 +172,9 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	ch, unsubscribe := s.journal.Subscribe(id)
+	defer unsubscribe()
+
 	render := func() bool {
 		data, err := s.buildIncidentPageData(ctx, id, full)
 		if err != nil {
@@ -189,9 +192,6 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 		writeSSENamedEvent(w, flush, "settled", "")
 		return
 	}
-
-	ch, unsubscribe := s.journal.Subscribe(id)
-	defer unsubscribe()
 
 	ticker := time.NewTicker(sseKeepAliveInterval)
 	defer ticker.Stop()
