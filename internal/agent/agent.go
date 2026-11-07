@@ -617,17 +617,17 @@ func (a *Agent) handleCompleteDiagnosis(
 	inc *db.Incident,
 	preFix *FixSignature,
 	argsJSON string,
-	calls []CallRecord,
+	gate Gate,
 ) (*DiagnosticResult, error) {
-	var result DiagnosticResult
-	if err := json.Unmarshal([]byte(argsJSON), &result); err != nil {
-		return nil, &diagnosisRejectedError{err: fmt.Errorf("parse complete_diagnosis: %w", err)}
+	result, err := parseDiagnosis(argsJSON, gate.Calls())
+	if rejected, ok := errors.AsType[*diagnosisRejectedError](err); ok {
+		capped, ended := capDiagnosis(gate, rejected)
+		if !ended {
+			return nil, err
+		}
+		a.log.WarnContext(ctx, "diagnosis error cap reached, ending for manual investigation", "incident", inc.ID)
+		result = capped
 	}
-	outcome, classifyErr := Classify(&result, calls)
-	if classifyErr != nil {
-		return nil, &diagnosisRejectedError{err: classifyErr, parsed: &result}
-	}
-	result.Outcome = outcome
 	// The model has no route to set this — complete_diagnosis's tool schema has
 	// no pre_fix parameter — but assign it unconditionally regardless, so a
 	// same-named key it happened to send is never trusted over the real capture.
@@ -662,7 +662,7 @@ func (a *Agent) handleCompleteDiagnosis(
 		}
 	}
 
-	if err := CheckDiagnosis(&result); err != nil {
+	if err = CheckDiagnosis(&result); err != nil {
 		a.log.ErrorContext(ctx, "diagnosis failed its invariants", "incident", inc.ID, "error", err)
 		return nil, err
 	}

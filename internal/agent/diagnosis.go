@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -220,9 +221,53 @@ func SearchCalls(targets ...SearchTarget) []CallRecord {
 
 type diagnosisRejectedError struct {
 	err    error
-	parsed *DiagnosticResult
+	parsed bool
+	result DiagnosticResult
 }
 
 func (e *diagnosisRejectedError) Error() string { return e.err.Error() }
 
 func (e *diagnosisRejectedError) Unwrap() error { return e.err }
+
+const (
+	maxDiagnosisErrors  = 3
+	reasonContradiction = "the diagnosis contradicted itself"
+)
+
+func parseDiagnosis(argsJSON string, calls []CallRecord) (DiagnosticResult, error) {
+	var result DiagnosticResult
+	if err := json.Unmarshal([]byte(argsJSON), &result); err != nil {
+		return DiagnosticResult{}, &diagnosisRejectedError{err: fmt.Errorf("parse complete_diagnosis: %w", err)}
+	}
+	outcome, err := Classify(&result, calls)
+	if err != nil {
+		return DiagnosticResult{}, &diagnosisRejectedError{err: err, parsed: true, result: result}
+	}
+	result.Outcome = outcome
+	return result, nil
+}
+
+func capDiagnosis(gate Gate, rejected *diagnosisRejectedError) (DiagnosticResult, bool) {
+	gate.Record(CallRecord{Tool: toolCompleteDiagnosis, Status: outcomeInvalid, Err: rejected.Error()})
+	n := 0
+	for _, rec := range gate.Calls() {
+		if rec.Tool == toolCompleteDiagnosis && rec.Status == outcomeInvalid {
+			n++
+		}
+	}
+	if n < maxDiagnosisErrors {
+		return DiagnosticResult{}, false
+	}
+	capped := DiagnosticResult{
+		Confidence:       "low",
+		PrimaryAction:    EscalateManualInvestigation,
+		PrimaryReason:    reasonContradiction,
+		EscalateAction:   EscalateManualInvestigation,
+		RequiresApproval: true,
+		Outcome:          DiagnosisOutcome{Kind: DiagnosisManual, Reason: reasonContradiction},
+	}
+	if rejected.parsed {
+		capped.RootCause, capped.Confidence = rejected.result.RootCause, rejected.result.Confidence
+	}
+	return capped, true
+}

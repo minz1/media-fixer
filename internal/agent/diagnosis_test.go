@@ -9,6 +9,8 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -466,4 +468,94 @@ func FuzzClassify(f *testing.F) {
 			t.Fatalf("Classify(%+v) = %+v, CheckDiagnosis: %v", r, o, checkErr)
 		}
 	})
+}
+
+const contradiction = `{"root_cause":"rc","confidence":"medium","primary_action":"x","requires_approval":true,` +
+	`"verify_after_seconds":60}`
+
+func assertCapped(t *testing.T, exit agent.RunExit) {
+	t.Helper()
+	if exit.State != agent.RunConcluded || exit.Finding == nil {
+		t.Fatalf("exit %s: %v, want concluded", exit.State, exit.Err)
+	}
+	f := exit.Finding
+	want := agent.DiagnosisOutcome{Kind: agent.DiagnosisManual, Reason: "the diagnosis contradicted itself"}
+	if !reflect.DeepEqual(f.Outcome, want) {
+		t.Errorf("outcome = %+v, want %+v", f.Outcome, want)
+	}
+	if !f.RequiresApproval || f.EscalateAction != agent.EscalateManualInvestigation || f.EscalateParams != nil {
+		t.Errorf("flags = RA %v EA %q params %v, want manual with no params", f.RequiresApproval, f.EscalateAction,
+			f.EscalateParams)
+	}
+	if f.PrimaryReason != want.Reason || f.RootCause != "rc" || f.Confidence != "medium" {
+		t.Errorf("finding = %+v, want the reason set and root cause and confidence kept", f)
+	}
+	if err := agent.CheckDiagnosis(f); err != nil {
+		t.Errorf("CheckDiagnosis: %v", err)
+	}
+}
+
+func TestRulingA1_ThirdDiagnosisErrorEndsManual(t *testing.T) {
+	t.Parallel()
+	_, srv := newCallServer(t)
+	ag, database, inc := newRig(t, srv.URL, []string{
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+	}, rigOpts{})
+	exit := runGated(context.Background(), t, ag, database, inc, newRecGate(database, inc))
+	assertCapped(t, exit)
+	replies := toolReplies(exit.Conversation)
+	if len(replies) != 3 {
+		t.Fatalf("replies = %v, want three, the run ending on the third", replies)
+	}
+	for i, r := range replies[:2] {
+		if !strings.Contains(r, "approval and deferred verification are exclusive") {
+			t.Errorf("reply %d = %q, want the tool error", i, r)
+		}
+	}
+}
+
+func TestRulingA1_CapSpansRetryAttempts(t *testing.T) {
+	t.Parallel()
+	_, srv := newCallServer(t)
+	ag, database, inc := newRig(t, srv.URL, []string{
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+		toolCallResponse("complete_diagnosis", `{"root_cause":`),
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+	}, rigOpts{})
+	g := newRecGate(database, inc)
+	first := runGated(context.Background(), t, ag, database, inc, g)
+	if first.State != agent.RunConcluded || first.Finding.Outcome.Reason == "the diagnosis contradicted itself" {
+		t.Fatalf("attempt 1 = %s %+v, want its own conclusion", first.State, first.Finding)
+	}
+	assertCapped(t, runGated(context.Background(), t, ag, database, inc, g))
+}
+
+func TestRulingA1_CapResetsOnNewGeneration(t *testing.T) {
+	t.Parallel()
+	_, srv := newCallServer(t)
+	ag, database, inc := newRig(t, srv.URL, []string{
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+		toolCallResponse("complete_diagnosis", contradiction),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+	}, rigOpts{})
+	first := runGated(context.Background(), t, ag, database, inc, newRecGate(database, inc))
+	if first.State != agent.RunConcluded {
+		t.Fatalf("generation 1 exit %s: %v", first.State, first.Err)
+	}
+	lifecycletest.Force(t, database, inc.ID, func(s *lifecycle.Snapshot) {
+		s.Generation, s.Status = inc.Generation+1, lifecycle.Open
+	})
+	next := newRecGate(database, inc)
+	next.gen = inc.Generation + 1
+	second := ag.Run(context.Background(), inc, nil, next)
+	if second.Finding == nil || second.Finding.Outcome.Reason == "the diagnosis contradicted itself" {
+		t.Fatalf("generation 2 = %s %+v, want a fresh cap", second.State, second.Finding)
+	}
 }
