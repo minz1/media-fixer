@@ -185,3 +185,9 @@ func (s *Service) CheckNowForTest(ctx context.Context, id string) {
 func (s *Service) DownloadCheckForTest(ctx context.Context, id string, gen int64) {
 	s.downloadCheck(ctx, id, gen)
 }
+
+func (s *Service) ReservedOrRunningForTest(id string) bool {
+	l := s.runs.liveness()
+	_, running := l.runs[id]
+	return l.reserved[id] || running
+}

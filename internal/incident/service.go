@@ -13,6 +13,8 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/google/uuid"
+
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
@@ -200,99 +202,31 @@ type Report struct {
 // Handle processes a new report: deduplicates, creates/updates the incident,
 // and starts the agent in the background if this is a new incident.
 func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
-	existing, err := s.db.FindOpenByTitle(ctx, r.Title)
-	switch {
-	case err == nil:
-		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", existing.ID, "reporter", r.ReportedBy)
-		s.addReporter(ctx, existing, r)
-		return existing, nil
-	case !errors.Is(err, db.ErrNotFound):
-		return nil, fmt.Errorf("find open incident: %w", err)
+	nr := &db.NewIncident{
+		ID:                uuid.New().String(),
+		Source:            r.Source,
+		ReportedBy:        r.ReportedBy,
+		ReporterDiscordID: r.ReporterDiscordID,
+		SeerrIssueID:      r.SeerrIssueID,
+		What:              r.What,
+		Title:             r.Title,
+		JellyfinItemID:    r.JellyfinItemID,
+		Details:           r.Details,
 	}
-
-	openCount, err := s.db.CountOpenIncidents(ctx)
+	release := s.runs.reserve(nr.ID)
+	defer release()
+	t := s.timers(ctx)
+	a, err := s.db.CreateFromReport(ctx, nr, s.decide(lifecycle.Event{Kind: lifecycle.Reported}, s.limits(t), nil))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("record report: %w", err)
 	}
-
-	inc := &db.Incident{
-		Status:         db.StatusOpen,
-		Source:         r.Source,
-		ReportedBy:     r.ReportedBy,
-		What:           r.What,
-		Title:          r.Title,
-		JellyfinItemID: r.JellyfinItemID,
-		Details:        r.Details,
-	}
-	if err = s.db.CreateIncident(ctx, inc); err != nil {
-		return nil, fmt.Errorf("create incident: %w", err)
-	}
-	s.recordIncidentCreated(ctx, inc)
-	s.addReporter(ctx, inc, r)
-
-	if openCount < SystematicIncidentThreshold {
+	if a.Merged {
+		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", a.Snap.ID, "reporter", r.ReportedBy)
+	} else if a.Snap.Status != lifecycle.Blocked {
 		s.lockAlertAt.Store(0)
-		s.launch(inc, nil)
-		return inc, nil
 	}
-
-	_ = s.db.SetAutonomousLocked(ctx, inc.ID, true)
-	_ = s.db.UpdateIncidentStatus(ctx, inc.ID, db.StatusBlocked)
-	s.recordStatusChanged(ctx, inc.ID, string(db.StatusBlocked))
-	gap := s.timers(ctx).LockAlertGapMinutes
-	now := time.Now().UnixNano()
-	prev := s.lockAlertAt.Load()
-	recent := prev != 0 && time.Duration(now-prev) < s.minutes(gap)
-	if recent || !s.lockAlertAt.CompareAndSwap(prev, now) {
-		s.log.WarnContext(ctx, "systemic lock: incident blocked, owner already alerted",
-			"incident", inc.ID, "title", r.Title, "open", openCount)
-		return inc, nil
-	}
-	c := ownerCard(inc, card.Alert, fmt.Sprintf(
-		"⚠️ %d open incidents — possible systemic failure. Autonomous actions locked. New incident: **%s** (#%s). "+
-			"Later incidents in this lock are blocked without a DM for the next %s; see the dashboard.",
-		openCount+1,
-		r.Title,
-		inc.ShortID(),
-		gapText(gap),
-	), "")
-	c.Subject, c.Verbs = card.IncidentSubject(inc.ID), []string{verbUnlock, verbResolve}
-	if notifyErr := s.notif.NotifyOwner(ctx, c); notifyErr != nil && !errors.Is(notifyErr, card.ErrUntracked) {
-		s.lockAlertAt.CompareAndSwap(now, 0)
-		s.log.ErrorContext(ctx, "notify owner", "error", notifyErr)
-	}
-	return inc, nil
-}
-
-// addReporter records a reporter against an incident, logging rather than
-// discarding a failure. A dropped reporter row is invisible and permanent:
-// ListDiscordReporterIDs then returns an empty set, so when the incident
-// resolves nobody is notified — and on the dedup path the second reporter is
-// silently lost entirely.
-func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) {
-	ctx = context.WithoutCancel(ctx)
-	if err := s.db.AddReporter(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID); err != nil {
-		s.log.ErrorContext(ctx, "add reporter",
-			"incident", inc.ID, "reporter", r.ReportedBy, "error", err)
-	}
-	s.recordReporterAdded(ctx, inc.ID, r.ReportedBy, r.Source, r.ReporterDiscordID)
-	if r.SeerrIssueID == "" {
-		return
-	}
-	inserted, err := s.db.AddSeerrIssue(ctx, inc.ID, r.SeerrIssueID)
-	if err != nil {
-		s.log.ErrorContext(ctx, "add seerr issue",
-			"incident", inc.ID, "issue", r.SeerrIssueID, "error", err)
-		return
-	}
-	if !inserted || s.seerr == nil {
-		return
-	}
-	msg := fmt.Sprintf("👀 Thanks, we're looking into **%s**.", inc.Title)
-	s.callSeerrIssue(ctx, inc, "comment on", r.SeerrIssueID, func(id string) error {
-		return s.seerr.Comment(ctx, id, msg)
-	})
-	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
+	s.afterCommit(ctx, a, t, r.SeerrIssueID)
+	return s.db.GetIncident(ctx, a.Snap.ID)
 }
 
 // runDiagnosis executes one agent.Run call under the process-wide diagnostic
@@ -854,28 +788,6 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 	// dedicated kind for one boolean.
 	s.recordStatusChanged(ctx, id, "")
 	return nil
-}
-
-// recordIncidentCreated and recordReporterAdded are best-effort: a journal
-// write failure must never fail the report-handling request that triggered
-// it, and s.journal is nil in test wiring that doesn't care about the
-// durable transcript/export.
-func (s *Service) recordIncidentCreated(ctx context.Context, inc *db.Incident) {
-	if s.journal == nil {
-		return
-	}
-	if err := s.journal.IncidentCreated(ctx, inc); err != nil {
-		s.log.WarnContext(ctx, "record incident_created", "incident", inc.ID, "error", err)
-	}
-}
-
-func (s *Service) recordReporterAdded(ctx context.Context, incidentID, reporter, source, discordUserID string) {
-	if s.journal == nil {
-		return
-	}
-	if err := s.journal.ReporterAdded(ctx, incidentID, reporter, source, discordUserID); err != nil {
-		s.log.WarnContext(ctx, "record reporter_added", "incident", incidentID, "error", err)
-	}
 }
 
 // recordStatusChanged appends a status_changed event so an incident page's

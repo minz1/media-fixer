@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	effectTimeout    = 30 * time.Second
 	planTTLMinutes   = 60
 	extensionsMax    = 3
 	stuckReadMinutes = stuckReadVerifyFloorMinutes
@@ -89,8 +88,7 @@ func (s *Service) runEffects(ctx context.Context, a db.Applied, t Timers, seerrI
 	if len(a.Effects) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), effectTimeout)
-	defer cancel()
+	ctx = context.WithoutCancel(ctx)
 	r := &effectRun{s: s, a: a, t: t, seerrIssue: seerrIssue}
 	inc, err := s.db.GetIncident(ctx, a.Snap.ID)
 	if err != nil {

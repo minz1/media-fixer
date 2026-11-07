@@ -121,6 +121,7 @@ type Applied struct {
 }
 
 type NewIncident struct {
+	ID                string
 	Source            string
 	ReportedBy        string
 	ReporterDiscordID string
@@ -370,7 +371,11 @@ func insertReport(ctx context.Context, tx *sql.Tx, r *NewIncident, decide Decide
 	if err != nil {
 		return Applied{}, err
 	}
-	cur := lifecycle.Snapshot{ID: uuid.New().String(), What: r.What, ItemID: r.JellyfinItemID, In: in}
+	id := r.ID
+	if id == "" {
+		id = uuid.New().String()
+	}
+	cur := lifecycle.Snapshot{ID: id, What: r.What, ItemID: r.JellyfinItemID, In: in}
 	dec, err := decide(cur)
 	if err != nil {
 		return Applied{}, err
