@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ const (
 	doneRestarting = "restarting"
 	doneStale      = "stale"
 	doneRefused    = "refused-"
+	doneNote       = "note-"
 	refusedPrefix  = "Refused: "
 	staleNotice    = refusedPrefix + "this changed, look again."
 )
@@ -64,6 +66,8 @@ func refusalNotices() []refusalNoticeRow {
 		{"no-plan", lifecycle.ErrNoPlan, ""},
 		{"plan-expired", lifecycle.ErrPlanExpired, "this plan " + lifecycle.ErrPlanExpired.Error()},
 		{"plan-changed", lifecycle.ErrPlanChanged, ""},
+		{"not-resumable", lifecycle.ErrNotResumable, ""},
+		{"op-running", lifecycle.ErrOpRunning, ""},
 	}
 }
 
@@ -72,6 +76,9 @@ func refusalDone(err error) string {
 		if errors.Is(err, n.err) {
 			return doneRefused + n.key
 		}
+	}
+	if note := incident.RefusalNote(err); note != "" {
+		return doneNote + url.QueryEscape(note)
 	}
 	return doneStale
 }
@@ -197,7 +204,7 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 	paused := s.isPaused(ctx)
 
 	timers, _ := incident.LoadTimers(ctx, s.db)
-	snap, err := s.db.GetIncidentSnapshot(ctx, id)
+	snap, err := s.db.GetIncidentSnapshotWithOp(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +246,8 @@ func incidentDoneNotice(key string) string {
 		return "Unlocked."
 	case "approve":
 		return "Escalation approved; running it now."
+	case "resume":
+		return "Resumed; running the remaining steps."
 	case doneRestarting:
 		return card.RestartingNotice
 	case doneStale:
@@ -246,6 +255,9 @@ func incidentDoneNotice(key string) string {
 	}
 	if k, ok := strings.CutPrefix(key, doneRefused); ok {
 		return refusalNotice(k)
+	}
+	if note, ok := strings.CutPrefix(key, doneNote); ok {
+		return refusedPrefix + note + "."
 	}
 	return ""
 }
@@ -330,6 +342,21 @@ func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.finishIncidentAction(w, r, id, "rerun", s.svc.Rerun(context.WithoutCancel(r.Context()), id, formVersion(r)))
+}
+
+func (s *Server) actionResumeOperation(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUIDParam(w, r)
+	if !ok {
+		return
+	}
+	opID, idErr := strconv.ParseInt(r.FormValue("op"), 10, 64)
+	opVersion, verErr := strconv.ParseInt(r.FormValue("opv"), 10, 64)
+	if idErr != nil || verErr != nil {
+		s.redirectIncident(w, r, id, doneStale)
+		return
+	}
+	err := s.svc.ResumeOperation(context.WithoutCancel(r.Context()), id, formVersion(r), opID, opVersion)
+	s.finishIncidentAction(w, r, id, "resume", err)
 }
 
 func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {

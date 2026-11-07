@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -318,4 +320,101 @@ func escalationResult(inc *db.Incident) (*agent.DiagnosticResult, error) {
 		return nil, fmt.Errorf("incident %s has no escalation action recommended", inc.ID)
 	}
 	return &result, nil
+}
+
+type opRefusalError struct{ note string }
+
+func (e *opRefusalError) Error() string { return e.note }
+
+func RefusalNote(err error) string {
+	if r, ok := errors.AsType[*opRefusalError](err); ok {
+		return r.note
+	}
+	return ""
+}
+
+func refuseOp(err error) error {
+	rej, ok := errors.AsType[*operation.RejectError](err)
+	switch {
+	case !ok:
+		return err
+	case rej.Code == operation.CodeConflict && rej.Note != "":
+		return &opRefusalError{note: rej.Note}
+	case rej.Code == operation.CodeChanged || rej.Code == operation.CodeProbesStale:
+		return lifecycle.ErrChanged
+	case rej.Code == operation.CodeNotResumable:
+		return lifecycle.ErrNotResumable
+	}
+	return err
+}
+
+func (s *Service) resumeTarget(ctx context.Context, id string, opID, opVersion int64) (lifecycle.Snapshot, error) {
+	snap, err := s.db.GetIncidentSnapshotWithOp(ctx, id)
+	if err != nil {
+		return snap, err
+	}
+	planned := snap.Reason == lifecycle.ReasonPlanPartial || snap.Reason == lifecycle.ReasonPlanInterrupted
+	switch {
+	case snap.Status != lifecycle.ManualTestNeeded || !planned || snap.Op == nil || !operation.Resumable(*snap.Op):
+		return snap, lifecycle.ErrNotResumable
+	case snap.Op.ID != opID || snap.Op.Version != opVersion:
+		return snap, lifecycle.ErrChanged
+	}
+	return snap, nil
+}
+
+func (s *Service) ResumeOperation(ctx context.Context, id string, v Version, opID, opVersion int64) error {
+	if _, err := s.resumeTarget(ctx, id, opID, opVersion); err != nil {
+		return err
+	}
+	if err := s.runs.acquireGlobal(ctx); err != nil {
+		return err
+	}
+	defer s.runs.releaseGlobal()
+	leave, err := s.ownerSection("resume", id)
+	if err != nil {
+		return err
+	}
+	defer leave()
+	planDone := s.runs.planStarted(id)
+	defer planDone()
+	snap, err := s.resumeTarget(ctx, id, opID, opVersion)
+	if err != nil {
+		return err
+	}
+	inc, err := s.db.GetIncident(ctx, id)
+	if err != nil {
+		return err
+	}
+	result, err := escalationResult(inc)
+	if err != nil {
+		return err
+	}
+	probes, err := s.exec.Probe(ctx, *snap.Op)
+	if err != nil {
+		return fmt.Errorf("couldn't check the live state: %w; try again", err)
+	}
+	ev := lifecycle.Event{
+		Kind: lifecycle.OwnerResumeOp, Version: v.N, HasVersion: v.Set, OpID: opID, OpVersion: opVersion,
+		Probes: probes, PlanFP: card.Fingerprint(snap.Op.Source),
+	}
+	a, err := s.apply(ctx, id, ev, nil)
+	if err != nil {
+		return refuseOp(err)
+	}
+	if !slices.ContainsFunc(a.Effects, func(e lifecycle.Effect) bool { return e.Kind == lifecycle.ExecutePlan }) {
+		return nil
+	}
+	if a.Snap.Op == nil {
+		return fmt.Errorf("incident %s: resume produced no operation", id)
+	}
+	return s.runApprovedOp(ctx, id, fromStep(result, a.Snap.Op.Index+1), a)
+}
+
+func fromStep(result *agent.DiagnosticResult, step int) *agent.DiagnosticResult {
+	out := *result
+	out.EscalateParams = make(map[string]any, len(result.EscalateParams)+1)
+	maps.Copy(out.EscalateParams, result.EscalateParams)
+	out.EscalateParams["from_step"] = step
+	return &out
 }

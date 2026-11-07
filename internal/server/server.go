@@ -127,6 +127,7 @@ func New(
 
 		r.Post("/incidents/{id}/resolve", s.actionResolve)
 		r.Post("/incidents/{id}/rerun", s.actionRerun)
+		r.Post("/incidents/{id}/resume", s.actionResumeOperation)
 		r.Post("/incidents/{id}/keep-searching", s.actionKeepSearching)
 		r.Post("/incidents/{id}/unlock", s.actionUnlock)
 		r.Get("/incidents/{id}/escalation-preview", s.escalationPreview)

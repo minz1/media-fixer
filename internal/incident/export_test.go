@@ -218,3 +218,14 @@ func (s *Service) GateForTest(id string, gen int64) agent.Gate { return s.gateFo
 func (s *Service) SetOpStoreForTest(st opexec.Store) { s.exec.Store = st }
 
 func (s *Service) LostCauseForTest(id string) (operation.Cause, bool) { return s.runs.lostCauseOf(id) }
+
+func (s *Service) HoldGlobalForTest(ctx context.Context) (func(), error) {
+	if err := s.runs.acquireGlobal(ctx); err != nil {
+		return nil, err
+	}
+	return s.runs.releaseGlobal, nil
+}
+
+func ResumeArgsForTest(id string, v Version, opID, opVersion int64) []string {
+	return resumeArgs(id, v, opID, opVersion)
+}

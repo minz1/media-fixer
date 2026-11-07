@@ -5,11 +5,15 @@ import (
 
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 type actionView struct {
 	Label string
 	Path  string
+	Op    int64
+	OpV   int64
+	Next  string
 }
 
 type ownerView struct {
@@ -23,7 +27,7 @@ type ownerView struct {
 	Partial     string
 }
 
-func actionViewOf(k lifecycle.ActionKind) (actionView, bool) {
+func actionViewOf(snap lifecycle.Snapshot, k lifecycle.ActionKind) (actionView, bool) {
 	switch k {
 	case lifecycle.ActRerun:
 		return actionView{Label: "Re-run diagnosis", Path: "rerun"}, true
@@ -31,8 +35,17 @@ func actionViewOf(k lifecycle.ActionKind) (actionView, bool) {
 		return actionView{Label: "Mark resolved", Path: "resolve"}, true
 	case lifecycle.ActUnlock:
 		return actionView{Label: "🔓 Unlock", Path: "unlock"}, true
-	case lifecycle.ActKeepSearching, lifecycle.ActPreview, lifecycle.ActApprove, lifecycle.ActRefresh,
-		lifecycle.ActResume:
+	case lifecycle.ActResume:
+		if snap.Op != nil {
+			return actionView{
+				Label: "Resume",
+				Path:  "resume",
+				Op:    snap.Op.ID,
+				OpV:   snap.Op.Version,
+				Next:  operation.NextLine(*snap.Op),
+			}, true
+		}
+	case lifecycle.ActKeepSearching, lifecycle.ActPreview, lifecycle.ActApprove, lifecycle.ActRefresh:
 	}
 	return actionView{}, false
 }
@@ -50,7 +63,7 @@ func (s *Server) ownerView(ctx context.Context, snap lifecycle.Snapshot, actions
 			v.Preview = true
 		case lifecycle.ActRerun, lifecycle.ActResolve, lifecycle.ActUnlock, lifecycle.ActResume:
 		}
-		if av, ok := actionViewOf(a.Kind); ok {
+		if av, ok := actionViewOf(snap, a.Kind); ok {
 			v.Buttons = append(v.Buttons, av)
 		}
 	}

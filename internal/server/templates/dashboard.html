@@ -471,7 +471,7 @@
     {{range .Owner.Buttons}}
     <button
       hx-post="{{$.BaseURL}}/incidents/{{$.Incident.ID}}/{{.Path}}"
-      hx-vals='{"v":"v{{$.Owner.Version}}"}'
+      hx-vals='{"v":"v{{$.Owner.Version}}"{{if .Op}},"op":"{{.Op}}","opv":"{{.OpV}}"{{end}}}'
       hx-swap="outerHTML"
       hx-target="body"
       hx-disable="this"
@@ -479,6 +479,7 @@
     >
       {{.Label}}
     </button>
+    {{with .Next}}<span class="self-center text-sm text-gray-600">{{.}}</span>{{end}}
     {{end}}
   </div>
   {{with .Owner.Partial}}<p class="mt-2 text-sm text-gray-600">{{.}}</p>{{end}}

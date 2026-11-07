@@ -13,7 +13,7 @@ import (
 	"github.com/minz1/mediafixer/internal/operation"
 )
 
-func (d *DB) loadIncidentOp(ctx context.Context, tx *sql.Tx, cur *lifecycle.Snapshot) error {
+func (d *DB) loadIncidentOp(ctx context.Context, tx querier, cur *lifecycle.Snapshot) error {
 	subject := operation.Subject{Kind: operation.SubjectIncident, ID: cur.ID}
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM operations
 		WHERE subject_kind = ? AND subject_id = ? AND status = 'running')`,
@@ -43,7 +43,7 @@ func (d *DB) loadIncidentOp(ctx context.Context, tx *sql.Tx, cur *lifecycle.Snap
 	return nil
 }
 
-func latestOpID(ctx context.Context, tx *sql.Tx, incidentID string) (int64, error) {
+func latestOpID(ctx context.Context, tx querier, incidentID string) (int64, error) {
 	var payload string
 	err := tx.QueryRowContext(ctx, `SELECT payload FROM incident_events
 		WHERE incident_id = ? AND kind = ? ORDER BY seq DESC LIMIT 1`, incidentID, kindStatusChanged).Scan(&payload)
@@ -106,4 +106,12 @@ func storeIncidentOp(ctx context.Context, tx *sql.Tx, dec Decision) (operation.O
 			stored.ID, stored.Subject)
 	}
 	return writeOperation(ctx, tx, stored, *dec.OpWrite)
+}
+
+func (d *DB) GetIncidentSnapshotWithOp(ctx context.Context, id string) (lifecycle.Snapshot, error) {
+	s, err := loadSnapshot(ctx, d.read, id)
+	if err != nil {
+		return s, err
+	}
+	return s, d.loadIncidentOp(ctx, d.read, &s)
 }

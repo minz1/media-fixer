@@ -64,12 +64,13 @@ func IsRefusal(err error) bool {
 		lifecycle.ErrChanged, lifecycle.ErrPlanRunning, lifecycle.ErrAlreadyResolved, lifecycle.ErrNotLocked,
 		lifecycle.ErrResolved, lifecycle.ErrNoKeepSearching, lifecycle.ErrPlanHalfRun, lifecycle.ErrNotEscalatable,
 		lifecycle.ErrNotAwaitingDecision, lifecycle.ErrNoPlan, lifecycle.ErrPlanExpired, lifecycle.ErrPlanChanged,
+		lifecycle.ErrNotResumable, lifecycle.ErrOpRunning,
 	} {
 		if errors.Is(err, target) {
 			return true
 		}
 	}
-	return false
+	return RefusalNote(err) != ""
 }
 
 func (s *Service) CurrentVersion(ctx context.Context, id string) Version {

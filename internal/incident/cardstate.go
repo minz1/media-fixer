@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,17 +16,20 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const (
 	kindIncident = "inc"
 	verbConfirm  = "confirm"
 	verbCancel   = "cancel"
+	verbResume   = "resume"
 	planMaxLines = 15
 	planTooLong  = "Plan too long for Discord; review it on the dashboard"
 	refusedLine  = "Refused: "
 	minIncArgs   = 2
 	fpArgs       = 3
+	opArgs       = 3
 )
 
 type cardPlan struct {
@@ -58,7 +62,7 @@ type buttonSpec struct {
 }
 
 func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident) (card.Update, error) {
-	snap, err := s.db.GetIncidentSnapshot(ctx, inc.ID)
+	snap, err := s.db.GetIncidentSnapshotWithOp(ctx, inc.ID)
 	if err != nil {
 		return card.Update{}, err
 	}
@@ -76,7 +80,8 @@ func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident) (card.Update
 	}
 	acts := lifecycle.Actions(snap, time.Now())
 	v := Version{N: snap.Version, Set: true}
-	for _, sp := range cardSpecs(plan) {
+	up.Sections = append(up.Sections, nextSection(snap, acts)...)
+	for _, sp := range cardSpecs(plan, snap.Op) {
 		if !slices.ContainsFunc(acts, func(a lifecycle.Action) bool { return a.Kind == sp.kind }) ||
 			(sp.kind == lifecycle.ActApprove && !plan.fits) {
 			continue
@@ -89,10 +94,15 @@ func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident) (card.Update
 	return up, nil
 }
 
-func cardSpecs(plan cardPlan) []buttonSpec {
+func cardSpecs(plan cardPlan, op *operation.Op) []buttonSpec {
+	var resume []string
+	if op != nil {
+		resume = []string{opToken(op.ID, op.Version)}
+	}
 	return []buttonSpec{
 		{"Preview plan", card.Primary, verbPreview, nil, lifecycle.ActPreview},
 		{"Approve", card.Danger, verbApprove, []string{plan.fp}, lifecycle.ActApprove},
+		{"Resume", card.Secondary, verbResume, resume, lifecycle.ActResume},
 		{"Refresh preview", card.Secondary, verbRefresh, nil, lifecycle.ActRefresh},
 		{"Rerun", card.Secondary, verbRerun, nil, lifecycle.ActRerun},
 		{"Resolve", card.Primary, verbResolve, nil, lifecycle.ActResolve},
@@ -279,6 +289,8 @@ func (s *Service) cardAction(ctx context.Context, id string, v Version, a card.A
 			return card.Result{}, err
 		}
 		return done("🔓 Unlocked")
+	case verbResume:
+		return s.cardResume(ctx, id, v, a)
 	case verbPreview, verbRefresh:
 		if _, _, err := s.PreviewEscalation(ctx, id, v); err != nil {
 			return card.Result{}, err
@@ -332,4 +344,49 @@ func refusal(err error) (card.Result, error) {
 		}
 	}
 	return card.Result{}, err
+}
+
+func opToken(opID, opVersion int64) string { return fmt.Sprintf("o%d.%d", opID, opVersion) }
+
+func resumeArgs(id string, v Version, opID, opVersion int64) []string {
+	return []string{id, v.Token(), opToken(opID, opVersion)}
+}
+
+func parseOpToken(s string) (int64, int64, bool) {
+	rest, ok := strings.CutPrefix(s, "o")
+	if !ok {
+		return 0, 0, false
+	}
+	idPart, verPart, ok := strings.Cut(rest, ".")
+	if !ok {
+		return 0, 0, false
+	}
+	opID, err := strconv.ParseInt(idPart, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	opVersion, err := strconv.ParseInt(verPart, 10, 64)
+	return opID, opVersion, err == nil
+}
+
+func nextSection(snap lifecycle.Snapshot, acts []lifecycle.Action) []card.Field {
+	if snap.Op == nil ||
+		!slices.ContainsFunc(acts, func(a lifecycle.Action) bool { return a.Kind == lifecycle.ActResume }) {
+		return nil
+	}
+	return []card.Field{{Name: "Next", Value: operation.NextLine(*snap.Op)}}
+}
+
+func (s *Service) cardResume(ctx context.Context, id string, v Version, a card.Action) (card.Result, error) {
+	if len(a.Args) < opArgs {
+		return card.Result{}, fmt.Errorf("%w: %s %v", card.ErrUnknownID, a.Verb, a.Args)
+	}
+	opID, opVersion, ok := parseOpToken(a.Args[opArgs-1])
+	if !ok {
+		return card.Result{}, fmt.Errorf("%w: %s %v", card.ErrUnknownID, a.Verb, a.Args)
+	}
+	if err := s.ResumeOperation(ctx, id, v, opID, opVersion); err != nil {
+		return card.Result{}, err
+	}
+	return card.Result{Line: fmt.Sprintf("▶️ Resumed · <t:%d:t>", time.Now().Unix())}, nil
 }
