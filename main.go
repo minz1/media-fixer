@@ -29,9 +29,21 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		os.Exit(1)
+	if code := exitCode(run()); code != 0 {
+		os.Exit(code)
 	}
+}
+
+const exitDownRefused = 2
+
+func exitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, db.ErrDownRefused):
+		return exitDownRefused
+	}
+	return 1
 }
 
 type agentBundle struct {
@@ -175,6 +187,7 @@ type app struct {
 
 func run() error {
 	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
+	migrateDown := flag.Int("migrate-down", 0, "roll back this schema migration, print the counts and exit")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -185,7 +198,18 @@ func run() error {
 		return err
 	}
 
+	if *migrateDown != 0 {
+		if err = db.MigrateDown(context.Background(), cfg.DB.Path, *migrateDown, os.Stdout); err != nil {
+			log.Error("migrate down", "error", err)
+		}
+		return err
+	}
+
 	database, err := db.Open(cfg.DB.Path)
+	if errors.Is(err, db.ErrLocked) {
+		log.Error(err.Error())
+		return err
+	}
 	if err != nil {
 		log.Error("open database", "error", err)
 		return err

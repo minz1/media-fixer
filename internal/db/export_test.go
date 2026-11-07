@@ -73,3 +73,59 @@ func (d *DB) PingReadForTest(ctx context.Context) error {
 	var one int
 	return d.read.QueryRowContext(ctx, `SELECT 1`).Scan(&one)
 }
+
+func MigrateUpToForTest(path string, maxVersion int) error {
+	ctx := context.Background()
+	write, err := sql.Open("sqlite", dsn(path))
+	if err != nil {
+		return err
+	}
+	defer write.Close()
+	write.SetMaxOpenConns(1)
+	if _, err = write.ExecContext(ctx, createSchemaVersionTable); err != nil {
+		return err
+	}
+	for _, m := range migrations() {
+		if m.version > maxVersion {
+			break
+		}
+		if err = applyMigration(ctx, write, m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func LockExclusiveForTest(path string) (func(), error) {
+	f, err := takeLock(path, true)
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
+}
+
+func (d *DB) ForeignKeysPerConnForTest(ctx context.Context) ([]int, error) {
+	var conns []*sql.Conn
+	defer func() {
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	}()
+	pools := []*sql.DB{d.write, d.read, d.read, d.read, d.read}
+	var out []int
+	for _, p := range pools {
+		c, err := p.Conn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		conns = append(conns, c)
+		var on int
+		if err = c.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&on); err != nil {
+			return nil, err
+		}
+		out = append(out, on)
+	}
+	return out, nil
+}
+
+const IncidentsLifecycleDDLForTest = incidentsLifecycleDDL

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -143,6 +144,7 @@ type DB struct {
 	write  *sql.DB
 	read   *sql.DB
 	yearRE *regexp.Regexp
+	lock   *os.File
 }
 
 // dsn builds the SQLite connection string for path. _pragma values use
@@ -175,6 +177,20 @@ func dsn(path string) string {
 // Open creates or opens the SQLite database at path, applying the schema and
 // running any migrations that haven't been applied yet.
 func Open(path string) (*DB, error) {
+	lock, err := takeLock(path, false)
+	if err != nil {
+		return nil, err
+	}
+	d, err := openLocked(path)
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	d.lock = lock
+	return d, nil
+}
+
+func openLocked(path string) (*DB, error) {
 	ctx := context.Background()
 	d := dsn(path)
 
@@ -208,6 +224,9 @@ func Open(path string) (*DB, error) {
 func (d *DB) Close() error {
 	writeErr := d.write.Close()
 	readErr := d.read.Close()
+	if d.lock != nil {
+		_ = d.lock.Close()
+	}
 	if writeErr != nil {
 		return writeErr
 	}
@@ -382,6 +401,7 @@ type migration struct {
 	// migrations where schema_version is trusted outright.
 	already func(ctx context.Context, conn *sql.DB) (bool, error)
 	exec    func(ctx context.Context, tx *sql.Tx) error
+	rebuild bool
 }
 
 // migrations returns the full ordered list: the six legacy, pre-schema_version
@@ -390,7 +410,7 @@ type migration struct {
 // under a reasonable single-function length — they're one logical list.
 func migrations() []migration {
 	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations(),
-		sweepTargetsMigrations(), babysitMigrations())
+		sweepTargetsMigrations(), babysitMigrations(), lifecycleMigrations())
 }
 
 func legacyMigrations() []migration {
@@ -689,6 +709,9 @@ func loadAppliedVersions(ctx context.Context, write *sql.DB) (map[int]bool, erro
 // the effect already present) and records it in schema_version, all inside a
 // single transaction.
 func applyMigration(ctx context.Context, write *sql.DB, m migration) error {
+	if m.rebuild {
+		return applyRebuild(ctx, write, m)
+	}
 	skipExec := false
 	if m.already != nil {
 		ok, err := m.already(ctx, write)
@@ -830,6 +853,10 @@ type Incident struct {
 	RecommendedActions any            `json:"recommended_actions,omitempty"`
 	ActionCount        int            `json:"action_count"`
 	AutonomousLocked   bool           `json:"autonomous_locked"`
+	Version            int64          `json:"version"`
+	Generation         int64          `json:"generation"`
+	Parked             bool           `json:"parked"`
+	Reason             string         `json:"reason,omitempty"`
 }
 
 // CreateIncident inserts a new incident, setting ID and timestamps.
@@ -856,7 +883,7 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
-		       action_count, autonomous_locked
+		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
 		FROM incidents WHERE id = ?`, id)
 	return scanIncident(row)
 }
@@ -925,7 +952,7 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked
+	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
 	      FROM incidents`
 	args := []any{}
 	if statusFilter != "" {
@@ -980,7 +1007,7 @@ const (
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
-		       action_count, autonomous_locked
+		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
 		FROM incidents
 		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)' ESCAPE '\')
 		  AND status IN (SELECT value FROM json_each(?))
@@ -1381,7 +1408,7 @@ func (d *DB) FindStaleInvestigating(ctx context.Context, staleBefore time.Time) 
 	q := `SELECT i.id, i.created_at, i.updated_at, i.status, i.source, i.reported_by, i.what, i.title,
 	             COALESCE(i.jellyfin_item_id,''), COALESCE(i.details,''),
 	             COALESCE(i.finding,''), COALESCE(i.recommended_actions,''),
-	             i.action_count, i.autonomous_locked
+	             i.action_count, i.autonomous_locked, i.version, i.generation, i.parked, COALESCE(i.reason, '')
 	      FROM incidents i
 	      LEFT JOIN (
 	        SELECT incident_id, MAX(at) AS last_activity FROM incident_events GROUP BY incident_id
@@ -1408,7 +1435,7 @@ func (d *DB) FindStaleReopened(ctx context.Context, staleBefore time.Time) ([]*I
 	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked
+	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
 	      FROM incidents
 	      WHERE status = ? AND updated_at < ?`
 	rows, err := d.read.QueryContext(ctx, q, StatusReopened, staleBefore)
@@ -1444,6 +1471,7 @@ type PendingOutcome struct {
 
 	StartedAt       time.Time `json:"started_at"`
 	LastStage       string    `json:"last_stage,omitempty"`
+	QueueStatus     string    `json:"queue_status,omitempty"`
 	LastProgressAt  time.Time `json:"last_progress_at"`
 	LastProgressPct float64   `json:"last_progress_pct"`
 
@@ -1513,7 +1541,7 @@ func (d *DB) FindDuePendingOutcomes(ctx context.Context, before time.Time) ([]*I
 	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked
+	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
 	      FROM incidents
 	      WHERE status = ? AND pending_outcome IS NOT NULL AND pending_outcome_next_check <= ?`
 	rows, err := d.read.QueryContext(ctx, q, StatusVerifying, before)
@@ -1732,18 +1760,19 @@ type scanner interface {
 func scanIncident(s scanner) (*Incident, error) {
 	inc := &Incident{}
 	var findingStr, actionsStr string
-	var locked int
+	var locked, parked int
 	err := s.Scan(
 		&inc.ID, &inc.CreatedAt, &inc.UpdatedAt, &inc.Status,
 		&inc.Source, &inc.ReportedBy, &inc.What, &inc.Title,
 		&inc.JellyfinItemID, &inc.Details,
 		&findingStr, &actionsStr,
-		&inc.ActionCount, &locked,
+		&inc.ActionCount, &locked, &inc.Version, &inc.Generation, &parked, &inc.Reason,
 	)
 	if err != nil {
 		return nil, err
 	}
 	inc.AutonomousLocked = locked == 1
+	inc.Parked = parked == 1
 	if findingStr != "" && findingStr != nullJSON {
 		_ = json.Unmarshal([]byte(findingStr), &inc.Finding)
 	}

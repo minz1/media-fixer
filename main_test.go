@@ -13,6 +13,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -154,5 +155,22 @@ func TestShutdown_OnlyBoundHitLogsAboveInfo(t *testing.T) {
 				t.Errorf("lines above INFO = %q, want only the bound-hit line", loud)
 			}
 		})
+	}
+}
+
+func TestMigrateDownFlag_ExitCodes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{nil, 0},
+		{fmt.Errorf("wrap: %w", db.ErrDownRefused), 2},
+		{errors.New("boom"), 1},
+	}
+	for _, c := range cases {
+		if got := exitCode(c.err); got != c.want {
+			t.Errorf("exitCode(%v) = %d, want %d", c.err, got, c.want)
+		}
 	}
 }
