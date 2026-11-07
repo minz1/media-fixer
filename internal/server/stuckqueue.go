@@ -171,6 +171,7 @@ func (s *Server) stuckCardData(
 	}
 	card["LastRun"] = res.FinishedAt
 	card["DryRun"] = res.DryRun
+	card["Paused"] = res.Paused
 	card["CapHit"] = res.CapHit
 	apps := make([]stuckAppView, 0, len(res.Apps))
 	for _, ar := range res.Apps {

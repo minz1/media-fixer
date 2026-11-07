@@ -51,6 +51,7 @@ type AppResult struct {
 type Result struct {
 	Apps        []AppResult
 	DryRun      bool
+	Paused      bool
 	MinAgeHours int
 	CapHit      bool
 	FinishedAt  time.Time
@@ -92,8 +93,9 @@ func (r *Runner) client(app App) *client.ArrClient {
 }
 
 func (r *Runner) Run(ctx context.Context, set Settings) Result {
-	x := &sweepRun{r: r, set: set, hold: set.DryRun || r.paused(ctx)}
-	res := Result{DryRun: set.DryRun, MinAgeHours: set.MinAgeHours}
+	paused := !set.DryRun && r.paused(ctx)
+	x := &sweepRun{r: r, set: set, hold: set.DryRun || paused}
+	res := Result{DryRun: set.DryRun, Paused: paused, MinAgeHours: set.MinAgeHours}
 	for _, a := range []App{AppSonarr, AppRadarr} {
 		res.Apps = append(res.Apps, x.app(ctx, a))
 	}

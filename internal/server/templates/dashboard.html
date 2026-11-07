@@ -895,7 +895,7 @@
   {{if .Running}}hx-get="{{.BaseURL}}/maintenance/stuck-queue/results" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
   <div class="flex items-center gap-4 text-sm text-gray-700">
     {{if .Running}}<span>{{template "badge" (dict "Tone" "blue" "Word" "Running…")}} {{if .StartedAt.IsZero}}starting…{{else}}started {{template "ts" .StartedAt}}{{end}} · checking the Sonarr and Radarr queues</span>{{end}}
-    {{with .LastRun}}<span class="kv"><span>Last run <span class="v">{{template "ts" .}}</span></span>{{if $.DryRun}}<span>dry run</span>{{end}}{{if $.CapHit}}<span>stopped at the clear limit</span>{{end}}</span>
+    {{with .LastRun}}<span class="kv"><span>Last run <span class="v">{{template "ts" .}}</span></span>{{if $.DryRun}}<span>dry run</span>{{end}}{{if $.Paused}}<span>paused</span>{{end}}{{if $.CapHit}}<span>stopped at the clear limit</span>{{end}}</span>
     {{else}}<span class="kv">No run yet.</span>{{end}}
     <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/run" hx-target="#stuck-queue" hx-swap="outerHTML"
       hx-disable="find button" hx-indicator="this, #progress">

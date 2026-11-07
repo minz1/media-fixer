@@ -531,3 +531,21 @@ func TestQ1_8_OverflowItemsWaitForNextCard(t *testing.T) {
 		}
 	}
 }
+
+func TestQ3_10_PausedRunSaysPaused(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	if err := e.db.SetSetting(context.Background(), "autonomous_paused", "true"); err != nil {
+		t.Fatal(err)
+	}
+	e.sonarr.set(rawRec(1, "D1", "Flash", 19, true, notUpgrade))
+	res := e.agedRun(liveSettings())
+	if !res.Paused || res.DryRun || app(res, stuckqueue.AppSonarr).WouldClear != 1 {
+		t.Fatalf("result = %+v; want a paused hold", res)
+	}
+	dry := liveSettings()
+	dry.DryRun = true
+	if res = e.runner.Run(context.Background(), dry); res.Paused || !res.DryRun {
+		t.Fatalf("dry-run result = %+v; want dry run, not paused", res)
+	}
+}

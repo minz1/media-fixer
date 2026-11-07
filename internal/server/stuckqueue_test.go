@@ -303,3 +303,22 @@ func TestStuckAction_UnknownAction(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 }
+
+func TestQ6d_4_PausedRunLabelled(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	res := stuckqueue.Result{
+		FinishedAt: time.Date(2026, 10, 29, 22, 0, 0, 0, time.UTC), Paused: true, MinAgeHours: 6,
+		Apps: []stuckqueue.AppResult{{App: stuckqueue.AppSonarr, Configured: true, WouldClear: 2}},
+	}
+	var buf bytes.Buffer
+	data := env.srv.StuckCardDataForTest(res, stuckqueue.DefaultSettings(), "")
+	if err := env.srv.ExecuteTemplateForTest(&buf, "stuck_card", data); err != nil {
+		t.Fatal(err)
+	}
+	body := buf.String()
+	mustContain(t, body, "<span>paused</span>", "<b>2</b><span>would clear</span>")
+	if strings.Contains(body, "<span>dry run</span>") {
+		t.Fatal("paused run labelled dry run")
+	}
+}
