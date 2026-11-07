@@ -695,7 +695,7 @@ func countingMediaAgent(t *testing.T) (*client.MediaAgentClient, *atomic.Int64) 
 	return client.NewMediaAgent(srv.URL, ""), &hits
 }
 
-func TestDDReadabilityRefusesStuckRead(t *testing.T) {
+func TestScope_StuckReadWhatFromScope(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		what     string
@@ -708,9 +708,9 @@ func TestDDReadabilityRefusesStuckRead(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			ma, hits := countingMediaAgent(t)
-			disp := &agent.Dispatcher{MediaAgent: ma, IncidentWhat: tc.what}
-			_, err := disp.Call(
-				context.Background(),
+			disp := &agent.Dispatcher{MediaAgent: ma}
+			_, err := disp.CallScoped(
+				context.Background(), agent.Scope{What: tc.what},
 				"dd_readability_test",
 				map[string]any{"file_path": "/mnt/decypharr/x.mkv"},
 			)
@@ -737,9 +737,9 @@ func TestListDirectoryRefusesStuckRead(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			ma, hits := countingMediaAgent(t)
-			disp := &agent.Dispatcher{MediaAgent: ma, IncidentWhat: tc.what}
-			_, err := disp.Call(
-				context.Background(),
+			disp := &agent.Dispatcher{MediaAgent: ma}
+			_, err := disp.CallScoped(
+				context.Background(), agent.Scope{What: tc.what},
 				"list_directory",
 				map[string]any{"path": "/mnt/decypharr/__all__/T"},
 			)
@@ -755,8 +755,13 @@ func TestListDirectoryRefusesStuckRead(t *testing.T) {
 
 func TestDDRefusalDoesNotSuggestListDirectory(t *testing.T) {
 	t.Parallel()
-	disp := &agent.Dispatcher{IncidentWhat: agent.WhatStuckRead}
-	_, err := disp.Call(context.Background(), "dd_readability_test", map[string]any{"file_path": "/x"})
+	disp := &agent.Dispatcher{}
+	_, err := disp.CallScoped(
+		context.Background(),
+		agent.Scope{What: agent.WhatStuckRead},
+		"dd_readability_test",
+		map[string]any{"file_path": "/x"},
+	)
 	if err == nil || strings.Contains(err.Error(), "list_directory") {
 		t.Errorf("dd refusal = %v, want an error that does not point at list_directory", err)
 	}

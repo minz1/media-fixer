@@ -101,8 +101,6 @@ func newLoggedRunTestAgent(
 	cfg.BaseURL = llmSrv.URL
 	disp := &agent.Dispatcher{
 		Decypharr: client.NewDecypharr(decypharr.URL, "tok"),
-		DB:        database,
-		Journal:   jrnl,
 	}
 	for _, opt := range opts {
 		opt(disp)

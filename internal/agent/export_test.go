@@ -210,3 +210,7 @@ func CheckCall(s CallSnap) error { return checkCall(s) }
 func CallMatches(s CallSnap, k CallKind) int { return callMatches(s, k) }
 
 type ToolImpactForTest = toolImpact
+
+func (d *Dispatcher) CallScoped(ctx context.Context, s Scope, name string, args map[string]any) (any, error) {
+	return d.call(ctx, &toolCall{scope: s}, name, args)
+}

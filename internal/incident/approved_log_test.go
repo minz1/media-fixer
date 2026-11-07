@@ -82,7 +82,7 @@ func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrC
 	jrnl := journal.New(database)
 	log := slog.New(slog.DiscardHandler)
 
-	disp := &agent.Dispatcher{DB: database, Journal: jrnl, Decypharr: decypharr}
+	disp := &agent.Dispatcher{Decypharr: decypharr}
 	if arr != nil {
 		srv := httptest.NewServer(arr)
 		t.Cleanup(srv.Close)
@@ -158,7 +158,6 @@ func TestA2_3_ApprovedPlanLogsOnTheApprovedIncident(t *testing.T) {
 	fx := newApprovedFixture(t, &fakeArr{}, nil)
 	x := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
 	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
-	fx.disp.IncidentID, fx.disp.IncidentWhat = x.ID, x.What
 
 	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
 		t.Fatal(err)
@@ -200,7 +199,6 @@ func TestA2_5_OwnerExecutionLogsOneRow(t *testing.T) {
 	t.Parallel()
 	fx := newApprovedFixture(t, &fakeArr{}, nil)
 	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
-	fx.disp.IncidentID, fx.disp.IncidentWhat = y.ID, y.What
 
 	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
 		t.Fatal(err)
@@ -222,7 +220,6 @@ func TestA9_3_FailedApprovedReaddIsLoggedFailed(t *testing.T) {
 	t.Parallel()
 	fx := newApprovedFixture(t, nil, failingReaddDecypharr(t))
 	y := fx.awaiting(t, agent.EscalateDeleteTorrentReadd, map[string]any{"name": "The.Boys.S01"})
-	fx.disp.IncidentID, fx.disp.IncidentWhat = y.ID, y.What
 
 	err := fx.approve(t, y.ID, client.ReaddPlan{
 		Name: "The.Boys.S01", InfoHash: "abc", Category: "sonarr", Magnet: "magnet:?xt=urn:btih:abc",

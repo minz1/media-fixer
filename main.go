@@ -60,7 +60,7 @@ func buildAgentComponents(
 	if err != nil {
 		return nil, err
 	}
-	disp := clients.Dispatcher(database, jrnl)
+	disp := clients.Dispatcher()
 
 	llmCfg := openai.DefaultConfig(cfg.LLM.APIKey)
 	if cfg.LLM.BaseURL != "" {
@@ -255,11 +255,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 		log.ErrorContext(ctx, "init server", "error", err)
 		return nil, err
 	}
-	// A separate dispatcher with no DB/Journal, so live-check runs triggered
-	// from the dashboard (which have no real incident to attach action-log
-	// rows to) never write actions_log entries — same as the media-fixer-check
-	// CLI.
-	a.srv.SetChecker(bundle.clients.Dispatcher(nil, nil))
+	a.srv.SetChecker(bundle.clients.Dispatcher())
 	a.srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 
 	if _, err = database.InterruptRunningSweeps(ctx); err != nil {

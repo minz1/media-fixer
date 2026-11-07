@@ -169,7 +169,7 @@ type toolSpec struct {
 	Def        *openai.FunctionDefinition
 	Risk       toolRisk
 	Impact     toolImpact
-	Handler    func(*Dispatcher, context.Context, map[string]any) (any, error)
+	Handler    func(*Dispatcher, context.Context, *toolCall, map[string]any) (any, error)
 	UserPhrase string
 }
 
@@ -819,69 +819,59 @@ type Dispatcher struct {
 	Radarr     *client.ArrClient
 	Loki       *client.LokiClient
 	MediaAgent *client.MediaAgentClient
-	DB         *db.DB
-	// Journal records applied actions (and, for disruptive ones, the most
-	// recent-disruption signal Agent.disruptionNote reads) to the event log —
-	// see logAction. Nil in the same contexts DB is nil (the live-check CLI
-	// has no incident to attach anything to).
-	Journal      *journal.Journal
-	IncidentID   string
-	IncidentWhat string
-	// IncidentTime anchors loki_query's default window (around_incident=true)
-	// on when the incident was reported rather than time.Now(), so
-	// re-diagnosing an incident that's hours or days old still greps logs
-	// from when the failure actually happened.
-	IncidentTime time.Time
 }
 
-// Dispatch executes a tool call and returns a JSON string result for the LLM.
-func (d *Dispatcher) Dispatch(ctx context.Context, name string, argsJSON string) string {
-	var args map[string]any
-	_ = json.Unmarshal([]byte(argsJSON), &args)
+type Scope struct {
+	IncidentID string
+	What       string
+	ReportedAt time.Time
+}
 
-	result, err := d.Call(ctx, name, args)
-	if err != nil {
-		return jsonResult(map[string]any{keyError: err.Error()})
-	}
-	return jsonResult(result)
+type toolCall struct {
+	scope   Scope
+	journal *journal.Journal
 }
 
 // Call executes a tool by name with already-decoded arguments and returns the
-// typed result. Unlike Dispatch, errors are returned rather than folded into
+// typed result. Errors are returned rather than folded into
 // the JSON payload — this is what live-check tooling uses to tell "tool
 // errored" apart from "tool returned an error-shaped result".
 func (d *Dispatcher) Call(ctx context.Context, name string, args map[string]any) (any, error) {
+	return d.call(ctx, &toolCall{}, name, args)
+}
+
+func (d *Dispatcher) call(ctx context.Context, c *toolCall, name string, args map[string]any) (any, error) {
 	spec, ok := specByName(name)
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
-	return spec.Handler(d, ctx, args)
+	return spec.Handler(d, ctx, c, args)
 }
 
 // completeDiagnosis is handled by the agent loop directly; the dispatcher just
 // hands the arguments back unchanged so it can share the same Call path.
-func (d *Dispatcher) completeDiagnosis(_ context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) completeDiagnosis(_ context.Context, _ *toolCall, args map[string]any) (any, error) {
 	return args, nil
 }
 
 // --- read handlers ---
 
-func (d *Dispatcher) readJellyfinSearch(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readJellyfinSearch(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	title, _ := args[paramTitle].(string)
 	return d.Jellyfin.SearchItem(ctx, title)
 }
 
-func (d *Dispatcher) readJellyfinPlayback(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readJellyfinPlayback(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	itemID, _ := args[paramItemID].(string)
 	return d.Jellyfin.PlaybackInfo(ctx, itemID)
 }
 
-func (d *Dispatcher) readJellyfinListEpisodes(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readJellyfinListEpisodes(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	itemID, _ := args[paramItemID].(string)
 	return d.Jellyfin.ListEpisodes(ctx, itemID)
 }
 
-func (d *Dispatcher) readJellyfinScanStatus(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) readJellyfinScanStatus(ctx context.Context, _ *toolCall, _ map[string]any) (any, error) {
 	return d.Jellyfin.ScanStatus(ctx)
 }
 
@@ -894,9 +884,9 @@ var (
 			"and a stat of the stuck file would wedge too; use get_torrent_state and get_repair_status instead")
 )
 
-func (d *Dispatcher) readDDReadability(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readDDReadability(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	filePath, _ := args["file_path"].(string)
-	if d.IncidentWhat == WhatStuckRead {
+	if c.scope.What == WhatStuckRead {
 		return nil, errStuckReadNoProbe
 	}
 	if d.MediaAgent == nil {
@@ -905,20 +895,20 @@ func (d *Dispatcher) readDDReadability(ctx context.Context, args map[string]any)
 	return d.MediaAgent.DDReadabilityTest(ctx, filePath)
 }
 
-func (d *Dispatcher) readTorrentState(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readTorrentState(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	search, _ := args["search"].(string)
 	return d.Decypharr.ListTorrents(ctx, search, "")
 }
 
-func (d *Dispatcher) readRepairStatus(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) readRepairStatus(ctx context.Context, _ *toolCall, _ map[string]any) (any, error) {
 	return d.Decypharr.RepairStatus(ctx)
 }
 
-func (d *Dispatcher) readRepairHealth(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) readRepairHealth(ctx context.Context, _ *toolCall, _ map[string]any) (any, error) {
 	return d.Decypharr.RepairHealth(ctx)
 }
 
-func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readLokiQuery(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	units, _ := args["units"].(string)
 	units = FixLokiUnitSelector(units)
 	if filter, ok := args["filter"].(string); ok && filter != "" {
@@ -944,8 +934,8 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, args map[string]any) (an
 		aroundIncident = v
 	}
 	anchor := time.Now()
-	if aroundIncident && !d.IncidentTime.IsZero() {
-		anchor = d.IncidentTime
+	if aroundIncident && !c.scope.ReportedAt.IsZero() {
+		anchor = c.scope.ReportedAt
 	}
 
 	const windowHalves = 2
@@ -967,9 +957,9 @@ func escapeLogQLString(s string) string {
 	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
-func (d *Dispatcher) readListDirectory(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readListDirectory(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	path, _ := args["path"].(string)
-	if d.IncidentWhat == WhatStuckRead {
+	if c.scope.What == WhatStuckRead {
 		return nil, errStuckReadNoList
 	}
 	if d.MediaAgent == nil {
@@ -978,7 +968,7 @@ func (d *Dispatcher) readListDirectory(ctx context.Context, args map[string]any)
 	return d.MediaAgent.ListDirectory(ctx, path)
 }
 
-func (d *Dispatcher) readDiskInfo(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) readDiskInfo(ctx context.Context, _ *toolCall, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
 	}
@@ -1105,7 +1095,7 @@ func (d *Dispatcher) resolveTVStatus(
 	return res, nil
 }
 
-func (d *Dispatcher) readArrMediaStatus(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readArrMediaStatus(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	mediaType, _ := args[paramMediaType].(string)
 	title, _ := args[paramTitle].(string)
 	return d.resolveMediaStatus(
@@ -1117,7 +1107,7 @@ func (d *Dispatcher) readArrMediaStatus(ctx context.Context, args map[string]any
 	)
 }
 
-func (d *Dispatcher) readArrGrabHistory(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readArrGrabHistory(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	mediaType, _ := args[paramMediaType].(string)
 	title, _ := args[paramTitle].(string)
 	season := intArgOrSentinel(args, paramSeason)
@@ -1142,35 +1132,35 @@ func (d *Dispatcher) readArrGrabHistory(ctx context.Context, args map[string]any
 
 // --- write (autonomous action) handlers ---
 
-func (d *Dispatcher) dispatchRefreshLinks(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) dispatchRefreshLinks(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	runID, err := d.Decypharr.RefreshLinks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	d.logAction(ctx, toolRefreshLinks, nil)
+	c.logAction(ctx, toolRefreshLinks, nil)
 	return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 }
 
-func (d *Dispatcher) dispatchRepairSweep(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) dispatchRepairSweep(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	runID, err := d.Decypharr.RunRepairSweep(ctx)
 	if err != nil {
 		return nil, err
 	}
-	d.logAction(ctx, toolRepairSweep, nil)
+	c.logAction(ctx, toolRepairSweep, nil)
 	return map[string]string{keyRunID: runID, keyStatus: statusStarted}, nil
 }
 
-func (d *Dispatcher) dispatchCacheCleanup(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) dispatchCacheCleanup(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	if err := d.Decypharr.MountCacheCleanup(ctx); err != nil {
 		return nil, err
 	}
-	d.logAction(ctx, toolCacheCleanup, nil)
+	c.logAction(ctx, toolCacheCleanup, nil)
 	return map[string]string{keyStatus: statusStarted}, nil
 }
 
 // dispatchLibraryScan triggers a Jellyfin library scan, but first checks whether
 // one is already running so the agent never re-triggers an in-progress scan.
-func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	status, err := d.Jellyfin.ScanStatus(ctx)
 	if err == nil && status.Running {
 		return map[string]any{
@@ -1182,7 +1172,7 @@ func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, _ map[string]any) 
 	if scanErr := d.Jellyfin.LibraryScan(ctx); scanErr != nil {
 		return nil, scanErr
 	}
-	d.logAction(ctx, toolJellyfinLibraryScan, nil)
+	c.logAction(ctx, toolJellyfinLibraryScan, nil)
 	return map[string]string{keyStatus: statusStarted}, nil
 }
 
@@ -1216,7 +1206,7 @@ func waitUntilReady(ctx context.Context, timeout, interval time.Duration, probe 
 	return lastErr
 }
 
-func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
 	}
@@ -1230,7 +1220,7 @@ func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, _ map[string]
 	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, probe); err != nil {
 		return nil, fmt.Errorf("decypharr restarted but did not become ready: %w", err)
 	}
-	d.logAction(ctx, toolRestartDecypharr, nil)
+	c.logAction(ctx, toolRestartDecypharr, nil)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
@@ -1256,7 +1246,7 @@ func (d *Dispatcher) jellyfinServing(ctx context.Context) error {
 	return err
 }
 
-func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, _ map[string]any) (any, error) {
+func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	if d.MediaAgent == nil {
 		return nil, errMediaAgentNotConfigured
 	}
@@ -1266,12 +1256,12 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, _ map[string]a
 	if err := waitUntilReady(ctx, restartReadyTimeout, restartReadyInterval, d.jellyfinServing); err != nil {
 		return nil, fmt.Errorf("jellyfin restarted but did not become ready: %w", err)
 	}
-	d.logAction(ctx, toolRestartJellyfin, nil)
+	c.logAction(ctx, toolRestartJellyfin, nil)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
 // dispatchDecypharrRecheck rechecks a single named decypharr entry.
-func (d *Dispatcher) dispatchDecypharrRecheck(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) dispatchDecypharrRecheck(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	name, _ := args[paramName].(string)
 	if name == "" {
 		return map[string]string{keyError: "name is required"}, nil
@@ -1283,11 +1273,11 @@ func (d *Dispatcher) dispatchDecypharrRecheck(ctx context.Context, args map[stri
 	if err := d.Decypharr.RecheckEntry(ctx, name, fix); err != nil {
 		return nil, err
 	}
-	d.logAction(ctx, toolDecypharrRecheck, map[string]any{paramName: name, "fix": fix})
+	c.logAction(ctx, toolDecypharrRecheck, map[string]any{paramName: name, "fix": fix})
 	return map[string]string{keyStatus: "rechecked"}, nil
 }
 
-func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	title, _ := args[paramTitle].(string)
 	series, err := d.Sonarr.SearchSeries(ctx, title)
 	if errors.Is(err, client.ErrNotFound) {
@@ -1299,11 +1289,11 @@ func (d *Dispatcher) dispatchSonarrRescan(ctx context.Context, args map[string]a
 	if rescanErr := d.Sonarr.RescanSeries(ctx, series.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
-	d.logAction(ctx, toolSonarrRescan, map[string]any{paramSeriesID: series.ID, paramTitle: title})
+	c.logAction(ctx, toolSonarrRescan, map[string]any{paramSeriesID: series.ID, paramTitle: title})
 	return map[string]any{paramSeriesID: series.ID, keyStatus: "rescan_queued"}, nil
 }
 
-func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	title, _ := args[paramTitle].(string)
 	movie, err := d.Radarr.SearchMovie(ctx, title)
 	if errors.Is(err, client.ErrNotFound) {
@@ -1315,16 +1305,16 @@ func (d *Dispatcher) dispatchRadarrRescan(ctx context.Context, args map[string]a
 	if rescanErr := d.Radarr.RescanMovie(ctx, movie.ID); rescanErr != nil {
 		return nil, rescanErr
 	}
-	d.logAction(ctx, toolRadarrRescan, map[string]any{paramMovieID: movie.ID, paramTitle: title})
+	c.logAction(ctx, toolRadarrRescan, map[string]any{paramMovieID: movie.ID, paramTitle: title})
 	return map[string]any{paramMovieID: movie.ID, keyStatus: "rescan_queued"}, nil
 }
 
-func (d *Dispatcher) dispatchClearJellyfinCache(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) dispatchClearJellyfinCache(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	itemID, _ := args[paramItemID].(string)
 	if err := d.Jellyfin.DeleteCache(ctx, itemID); err != nil {
 		return nil, err
 	}
-	d.logAction(ctx, toolClearJellyfinCache, map[string]any{paramItemID: itemID})
+	c.logAction(ctx, toolClearJellyfinCache, map[string]any{paramItemID: itemID})
 	return map[string]string{keyStatus: "cache_cleared"}, nil
 }
 
@@ -1346,7 +1336,7 @@ var ErrArrTargetHasFile = errors.New(
 // unless HasFile is false, so this tool can never become a backdoor around
 // owner-approved remove_and_search — with nothing on disk there is nothing
 // to delete or blocklist, so triggering a search is always non-destructive.
-func (d *Dispatcher) dispatchArrSearchMissing(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) dispatchArrSearchMissing(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	mediaType, _ := args[paramMediaType].(string)
 	title, _ := args[paramTitle].(string)
 	season := intArgOrSentinel(args, paramSeason)
@@ -1364,7 +1354,7 @@ func (d *Dispatcher) dispatchArrSearchMissing(ctx context.Context, args map[stri
 	if searchErr != nil {
 		return nil, searchErr
 	}
-	d.logAction(ctx, toolArrSearchMissing, map[string]any{
+	c.logAction(ctx, toolArrSearchMissing, map[string]any{
 		paramMediaType: mediaType, paramTitle: title, paramSeason: season, paramEpisode: episode,
 	})
 	return map[string]any{keyStatus: statusStarted, paramScope: scope}, nil
@@ -1413,8 +1403,8 @@ func (d *Dispatcher) findSonarrEpisodeID(ctx context.Context, seriesID, season, 
 // readArrRemoveAndSearchPlan builds a read-only preview of a Sonarr/Radarr
 // remove-and-re-search — never deletes anything. This is the tool's Handler,
 // so it is what a live-check (and the dashboard's Preview button) both call.
-func (d *Dispatcher) readArrRemoveAndSearchPlan(ctx context.Context, args map[string]any) (any, error) {
-	return d.planRemoveAndSearch(ctx, args, d.IncidentWhat != WhatStuckRead)
+func (d *Dispatcher) readArrRemoveAndSearchPlan(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
+	return d.planRemoveAndSearch(ctx, args, c.scope.What != WhatStuckRead)
 }
 
 func (d *Dispatcher) planRemoveAndSearch(ctx context.Context, args map[string]any, probe bool) (any, error) {
@@ -1480,7 +1470,7 @@ func (d *Dispatcher) probeReplaceReadability(ctx context.Context, plan *client.R
 // readDecypharrReaddPlan builds a read-only preview of a delete-and-re-add,
 // including whether the torrent even has a magnet to be restored from. Never
 // deletes anything.
-func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, args map[string]any) (any, error) {
+func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
 	if d.Decypharr == nil {
 		return nil, errors.New("decypharr not configured")
 	}
@@ -1706,12 +1696,12 @@ func isDisruptiveTool(name string) bool {
 // find them — a concurrently-starting run's prompt is warned about them via
 // Agent.disruptionNote, a best-effort visibility aid, not a lock; globalSlot
 // is what actually prevents the interference.
-func (d *Dispatcher) logAction(ctx context.Context, action string, params map[string]any) {
-	if d.Journal == nil {
+func (c *toolCall) logAction(ctx context.Context, action string, params map[string]any) {
+	if c.journal == nil {
 		return
 	}
-	_ = d.Journal.LogAction(ctx, &db.ActionLog{
-		IncidentID:  d.IncidentID,
+	_ = c.journal.LogAction(ctx, &db.ActionLog{
+		IncidentID:  c.scope.IncidentID,
 		Action:      action,
 		Params:      params,
 		TriggeredBy: triggeredByAgent,

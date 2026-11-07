@@ -554,24 +554,29 @@ func lokiCapturingServer(t *testing.T) (*client.LokiClient, *url.Values) {
 	return loki, &got
 }
 
-// TestLokiQuery_FilterAndIncidentWindow is the regression test for "loki
+// TestScope_LokiAnchorsOnReportedAt is the regression test for "loki
 // evidence is ambient noise": a filter must be embedded as a LogQL line
 // filter, and by default the window must be centered on the incident's
-// report time (Dispatcher.IncidentTime), not on [time.Now] — the bug that
+// report time (Scope.ReportedAt), not on [time.Now] — the bug that
 // made re-diagnosing a two-day-old incident grep a window with no
 // relationship to when it actually failed.
-func TestLokiQuery_FilterAndIncidentWindow(t *testing.T) {
+func TestScope_LokiAnchorsOnReportedAt(t *testing.T) {
 	t.Parallel()
 	loki, got := lokiCapturingServer(t)
 
 	incidentTime := time.Date(2026, 8, 26, 3, 11, 0, 0, time.UTC)
-	disp := &agent.Dispatcher{Loki: loki, IncidentTime: incidentTime}
+	disp := &agent.Dispatcher{Loki: loki}
 
-	if _, err := disp.Call(context.Background(), "loki_query", map[string]any{
-		"units":        `{unit=~"jellyfin.service|decypharr.service"}`,
-		"minutes_back": float64(30),
-		"filter":       "Backrooms",
-	}); err != nil {
+	if _, err := disp.CallScoped(
+		context.Background(),
+		agent.Scope{ReportedAt: incidentTime},
+		"loki_query",
+		map[string]any{
+			"units":        `{unit=~"jellyfin.service|decypharr.service"}`,
+			"minutes_back": float64(30),
+			"filter":       "Backrooms",
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -595,14 +600,19 @@ func TestLokiQuery_AroundIncidentFalse_UsesNow(t *testing.T) {
 	t.Parallel()
 	loki, got := lokiCapturingServer(t)
 
-	disp := &agent.Dispatcher{Loki: loki, IncidentTime: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
+	disp := &agent.Dispatcher{Loki: loki}
 
 	before := time.Now()
-	if _, err := disp.Call(context.Background(), "loki_query", map[string]any{
-		"units":           `{unit=~"jellyfin.service"}`,
-		"minutes_back":    float64(30),
-		"around_incident": false,
-	}); err != nil {
+	if _, err := disp.CallScoped(
+		context.Background(),
+		agent.Scope{ReportedAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)},
+		"loki_query",
+		map[string]any{
+			"units":           `{unit=~"jellyfin.service"}`,
+			"minutes_back":    float64(30),
+			"around_incident": false,
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	after := time.Now()

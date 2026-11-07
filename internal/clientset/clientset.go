@@ -11,8 +11,6 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/config"
-	"github.com/minz1/mediafixer/internal/db"
-	"github.com/minz1/mediafixer/internal/journal"
 )
 
 // Set holds every service client the agent's tools dispatch to. MediaAgent
@@ -73,10 +71,8 @@ func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
 	}, nil
 }
 
-// Dispatcher builds an [agent.Dispatcher] wired to this Set. database and
-// jrnl may both be nil (e.g. the live-check CLI has no incident to attach
-// action-log rows to); [agent.Dispatcher] tolerates a nil DB/Journal.
-func (s *Set) Dispatcher(database *db.DB, jrnl *journal.Journal) *agent.Dispatcher {
+// Dispatcher builds an [agent.Dispatcher] wired to this Set.
+func (s *Set) Dispatcher() *agent.Dispatcher {
 	return &agent.Dispatcher{
 		Decypharr:  s.Decypharr,
 		Jellyfin:   s.Jellyfin,
@@ -84,7 +80,5 @@ func (s *Set) Dispatcher(database *db.DB, jrnl *journal.Journal) *agent.Dispatch
 		Radarr:     s.Radarr,
 		Loki:       s.Loki,
 		MediaAgent: s.MediaAgent,
-		DB:         database,
-		Journal:    jrnl,
 	}
 }

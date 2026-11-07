@@ -464,10 +464,6 @@ func (l *runLoop) claim(ctx context.Context, seed []openai.ChatCompletionMessage
 	a, inc := l.a, l.inc
 	a.log.InfoContext(ctx, "starting diagnostic", "incident", inc.ID, "title", inc.Title)
 
-	a.disp.IncidentID = inc.ID
-	a.disp.IncidentWhat = inc.What
-	a.disp.IncidentTime = inc.CreatedAt
-
 	if claimErr := l.gate.Claim(ctx); claimErr != nil {
 		if errors.Is(claimErr, ErrIncidentNotInvestigatable) {
 			a.log.WarnContext(ctx, "run could not claim incident; status changed before start", "incident", inc.ID)
@@ -620,7 +616,7 @@ func (a *Agent) processToolCalls(
 			}
 		}
 
-		resultJSON := a.executeCall(ctx, fn, call.Function.Arguments, seenCalls)
+		resultJSON := a.executeCall(ctx, inc, fn, call.Function.Arguments, seenCalls)
 		*messages = append(*messages, openai.ChatCompletionMessage{
 			Role:       openai.ChatMessageRoleTool,
 			Content:    resultJSON,
@@ -687,7 +683,12 @@ func (a *Agent) handleCompleteDiagnosis(
 }
 
 // executeCall dispatches a single tool call with dedup protection for action tools.
-func (a *Agent) executeCall(ctx context.Context, fn, argsJSON string, seenCalls map[string]int) string {
+func (a *Agent) executeCall(
+	ctx context.Context,
+	inc *db.Incident,
+	fn, argsJSON string,
+	seenCalls map[string]int,
+) string {
 	callKey := fn + ":" + argsJSON
 	seenCalls[callKey]++
 
@@ -704,7 +705,17 @@ func (a *Agent) executeCall(ctx context.Context, fn, argsJSON string, seenCalls 
 		})
 	}
 
-	resultJSON := a.disp.Dispatch(ctx, fn, argsJSON)
+	c := &toolCall{
+		scope:   Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
+		journal: a.journal,
+	}
+	var args map[string]any
+	_ = json.Unmarshal([]byte(argsJSON), &args)
+	result, err := a.disp.call(ctx, c, fn, args)
+	resultJSON := jsonResult(result)
+	if err != nil {
+		resultJSON = jsonResult(map[string]any{keyError: err.Error()})
+	}
 	a.log.DebugContext(ctx, "tool call", "tool", fn, "result", resultJSON)
 	return resultJSON
 }
@@ -883,7 +894,7 @@ func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult, wh
 	case EscalateRemoveAndSearch:
 		return a.disp.planRemoveAndSearch(ctx, result.EscalateParams, what != WhatStuckRead)
 	case EscalateDeleteTorrentReadd:
-		return a.disp.readDecypharrReaddPlan(ctx, result.EscalateParams)
+		return a.disp.readDecypharrReaddPlan(ctx, &toolCall{}, result.EscalateParams)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
