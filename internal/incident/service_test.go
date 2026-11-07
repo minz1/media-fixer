@@ -449,15 +449,19 @@ func TestStatusTransitions_NotifyLiveSubscribers(t *testing.T) {
 // ch within notifyWaitTimeout.
 func waitForStatusChanged(t *testing.T, ch <-chan *db.Event, after string) {
 	t.Helper()
-	select {
-	case e := <-ch:
-		if e.Kind != string(journal.KindStatusChanged) {
-			t.Errorf("after %s: got event kind %q, want %q", after, e.Kind, journal.KindStatusChanged)
+	for {
+		select {
+		case e := <-ch:
+			if e.Kind == string(journal.KindOwnerRerun) {
+				continue
+			}
+			if e.Kind != string(journal.KindStatusChanged) {
+				t.Errorf("after %s: got event kind %q, want %q", after, e.Kind, journal.KindStatusChanged)
+			}
+			return
+		case <-time.After(notifyWaitTimeout):
+			t.Fatalf("after %s: timed out waiting for a status_changed event: the live page would never update", after)
 		}
-	case <-time.After(notifyWaitTimeout):
-		t.Fatalf(
-			"after %s: timed out waiting for a status_changed event — the live page would never have updated", after,
-		)
 	}
 }
 

@@ -361,3 +361,88 @@ func TestSubscribeAll_ReceivesEventsFromAnyIncident(t *testing.T) {
 		t.Fatalf("expected events from both incidents, got %+v", seen)
 	}
 }
+
+func TestActionAttempts_ReadsAttemptsAppliedAndOwnerRerun(t *testing.T) {
+	t.Parallel()
+	j, d := openTestJournal(t)
+	ctx := context.Background()
+	inc := mustCreateIncident(t, d, "T")
+
+	first, err := journal.ActionAttemptedEvent(inc.ID, 3, "restart_jellyfin", map[string]any{"item_id": "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := journal.ActionAttemptedEvent(inc.ID, 4, "clear_jellyfin_cache", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rerun, err := journal.OwnerRerunEvent(inc.ID, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = j.Append(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err = j.LogActionGen(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "restart_jellyfin", Params: map[string]any{"item_id": "a"},
+		TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err = j.Append(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err = j.Append(ctx, rerun); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := j.ActionAttempts(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Attempts) != 2 || got.Attempts[0].Generation != 3 || got.Attempts[0].Tool != "restart_jellyfin" ||
+		got.Attempts[0].Params["item_id"] != "a" || got.Attempts[1].Generation != 4 ||
+		got.Attempts[1].Tool != "clear_jellyfin_cache" {
+		t.Fatalf("attempts %+v", got.Attempts)
+	}
+	if len(got.Applied) != 1 || got.Applied[0].Generation != 3 || got.Applied[0].Action != "restart_jellyfin" ||
+		got.Applied[0].Params["item_id"] != "a" {
+		t.Fatalf("applied %+v", got.Applied)
+	}
+	if got.OwnerRerun != 5 {
+		t.Fatalf("owner rerun generation %d, want 5", got.OwnerRerun)
+	}
+}
+
+func TestUnknownKinds_IgnoredByConversation(t *testing.T) {
+	t.Parallel()
+	j, d := openTestJournal(t)
+	ctx := context.Background()
+	inc := mustCreateIncident(t, d, "T")
+	seed := []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "details"}}
+	if err := j.RunStarted(ctx, inc.ID, seed); err != nil {
+		t.Fatal(err)
+	}
+	attempted, err := journal.ActionAttemptedEvent(inc.ID, 1, "restart_jellyfin", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rerun, err := journal.OwnerRerunEvent(inc.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = j.Append(ctx, attempted); err != nil {
+		t.Fatal(err)
+	}
+	if err = j.Append(ctx, rerun); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := j.Conversation(ctx, inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "details" {
+		t.Fatalf("conversation %+v, want only the seed", got)
+	}
+}

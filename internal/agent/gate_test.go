@@ -47,7 +47,7 @@ func (g *recGate) Claim(ctx context.Context) error {
 	return err
 }
 
-func (g *recGate) Act(ctx context.Context, tool string) (agent.Verdict, error) {
+func (g *recGate) Act(ctx context.Context, tool string, _ map[string]any) (agent.Verdict, error) {
 	g.mu.Lock()
 	g.acts = append(g.acts, tool)
 	g.mu.Unlock()
@@ -62,6 +62,8 @@ func (g *recGate) Act(ctx context.Context, tool string) (agent.Verdict, error) {
 	}
 	return "", err
 }
+
+func (g *recGate) Gen() int64 { return g.gen }
 
 func (g *recGate) Live(context.Context) agent.Verdict {
 	switch {
@@ -235,5 +237,41 @@ func TestRun_ExitCarriesRunFinishedEvent(t *testing.T) {
 	var p finishedPayload
 	if err := json.Unmarshal(e.Payload, &p); err != nil || p.Exit != "concluded" || p.Rounds != 2 {
 		t.Fatalf("payload %s %v", e.Payload, err)
+	}
+}
+
+func TestRecordCall_PayloadCarriesGeneration(t *testing.T) {
+	t.Parallel()
+	ag, database := newRunTestAgent(t, &scriptedLLM{responses: []string{
+		toolCallResponse("refresh_decypharr_links", `{}`),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+	}})
+	inc := seedRunIncident(t, database)
+	g := newRecGate(database, inc)
+	if exit := runGated(context.Background(), t, ag, database, inc, g); exit.State != agent.RunConcluded {
+		t.Fatalf("exit %s: %v", exit.State, exit.Err)
+	}
+	events, err := database.EventsSince(context.Background(), inc.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for _, e := range events {
+		if e.Kind != "action_applied" {
+			continue
+		}
+		seen++
+		var p struct {
+			Generation int64 `json:"generation"`
+		}
+		if err = json.Unmarshal(e.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Generation == 0 || p.Generation != g.gen {
+			t.Errorf("action_applied generation %d, want the gate's %d: %s", p.Generation, g.gen, e.Payload)
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("%d action_applied events, want 1", seen)
 	}
 }

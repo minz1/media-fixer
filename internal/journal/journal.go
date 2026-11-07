@@ -64,6 +64,9 @@ const (
 	KindStatusChanged Kind = "status_changed"
 
 	KindAutonomousPauseChanged Kind = "autonomous_pause_changed"
+
+	KindActionAttempted Kind = "action_attempted"
+	KindOwnerRerun      Kind = "owner_rerun"
 )
 
 // Journal owns the event log: appending (with atomic projection writes) and
@@ -251,6 +254,7 @@ type actionAppliedPayload struct {
 	Status      string `json:"status"`
 	Result      string `json:"result,omitempty"`
 	Error       string `json:"error,omitempty"`
+	Generation  int64  `json:"generation,omitempty"`
 	// Disruptive marks a service-wide action (restart, scan, cleanup, sweep)
 	// rather than an item-scoped one. LastDisruption
 	// scans for the most recent event with this set, replacing the old
@@ -267,6 +271,10 @@ type actionAppliedPayload struct {
 // to generate its own — the event and its projection must share one ID so an
 // export or a future cross-reference can tie them together).
 func (j *Journal) LogAction(ctx context.Context, a *db.ActionLog, disruptive bool) error {
+	return j.LogActionGen(ctx, a, disruptive, 0)
+}
+
+func (j *Journal) LogActionGen(ctx context.Context, a *db.ActionLog, disruptive bool, generation int64) error {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
@@ -277,6 +285,7 @@ func (j *Journal) LogAction(ctx context.Context, a *db.ActionLog, disruptive boo
 	payload, err := json.Marshal(actionAppliedPayload{
 		ID: a.ID, Action: a.Action, Params: a.Params, TriggeredBy: a.TriggeredBy,
 		Status: string(a.Status), Result: a.Result, Error: a.Error, Disruptive: disruptive,
+		Generation: generation,
 	})
 	if err != nil {
 		return err

@@ -64,7 +64,7 @@ func (c *toolCall) act(ctx context.Context, params map[string]any) (context.Cont
 		c.verdict = GateAllowed
 		return c.sideEffect(ctx), nil
 	}
-	c.verdict, c.gateErr = c.gate.Act(ctx, c.tool)
+	c.verdict, c.gateErr = c.gate.Act(ctx, c.tool, params)
 	if c.gateErr != nil {
 		return ctx, c.gateErr
 	}

@@ -210,3 +210,5 @@ func StatusLineForTest(st db.IncidentStatus) string { return statusLine(st) }
 func (s *Service) RunAgentAtForTest(ctx context.Context, inc *db.Incident, gen int64) {
 	s.runAgent(ctx, inc, nil, s.timers(ctx), s.gateFor(inc.ID, gen))
 }
+
+func (s *Service) GateForTest(id string, gen int64) agent.Gate { return s.gateFor(id, gen) }

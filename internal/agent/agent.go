@@ -768,7 +768,7 @@ func (v *invocation) step(kind callKind, in stepInfo) {
 			v.ev = verdictEvent(in.verdict)
 		case effLog:
 			v.a.recordCall(v.ctx, v.c.scope.IncidentID, v.fn, in.params,
-				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive)
+				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive, v.c.gate.Gen())
 		case effRemember:
 			v.c.gate.Record(CallRecord{
 				Tool:    v.fn,
@@ -870,21 +870,21 @@ func identitySubset(args map[string]any) map[string]any {
 
 func (a *Agent) recordCall(
 	ctx context.Context, incidentID, tool string, params map[string]any, status db.ActionStatus,
-	errText string, disruptive bool,
+	errText string, disruptive bool, generation int64,
 ) {
 	if a.journal == nil {
 		return
 	}
 	jctx, cancel := detached(ctx)
 	defer cancel()
-	err := a.journal.LogAction(jctx, &db.ActionLog{
+	err := a.journal.LogActionGen(jctx, &db.ActionLog{
 		IncidentID:  incidentID,
 		Action:      tool,
 		Params:      params,
 		TriggeredBy: triggeredByAgent,
 		Status:      status,
 		Error:       client.RedactCredentials(errText),
-	}, disruptive)
+	}, disruptive, generation)
 	if err != nil {
 		a.log.ErrorContext(ctx, "action record lost", "tool", tool, "outcome", status, "error", err)
 	}

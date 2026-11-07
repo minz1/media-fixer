@@ -21,7 +21,8 @@ const (
 
 type Gate interface {
 	Claim(ctx context.Context) error
-	Act(ctx context.Context, tool string) (Verdict, error)
+	Act(ctx context.Context, tool string, params map[string]any) (Verdict, error)
+	Gen() int64
 	Live(ctx context.Context) Verdict
 	Calls() []CallRecord
 	Record(CallRecord)

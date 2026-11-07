@@ -350,7 +350,7 @@ func TestShutdownCancelledRun_QuietThenSystemRerun(t *testing.T) {
 	t.Parallel()
 	ag := newGateAgent(func(ctx context.Context, gate agent.Gate) agent.RunExit {
 		for range 2 {
-			if v, err := gate.Act(ctx, "clear_jellyfin_cache"); err != nil || v != agent.GateAllowed {
+			if v, err := gate.Act(ctx, "clear_jellyfin_cache", nil); err != nil || v != agent.GateAllowed {
 				return agent.RunExit{State: agent.RunBatchFailed, Err: err}
 			}
 		}

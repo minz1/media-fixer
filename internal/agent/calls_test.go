@@ -151,10 +151,12 @@ type seqGate struct {
 
 func (g seqGate) Claim(context.Context) error { return nil }
 
-func (g seqGate) Act(context.Context, string) (agent.Verdict, error) {
+func (g seqGate) Act(context.Context, string, map[string]any) (agent.Verdict, error) {
 	g.srv.note(actMarker)
 	return agent.GateAllowed, nil
 }
+
+func (g seqGate) Gen() int64 { return 0 }
 
 func (g seqGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
 
@@ -170,10 +172,12 @@ type fixedGate struct {
 
 func (g *fixedGate) Claim(context.Context) error { return nil }
 
-func (g *fixedGate) Act(context.Context, string) (agent.Verdict, error) {
+func (g *fixedGate) Act(context.Context, string, map[string]any) (agent.Verdict, error) {
 	g.acts.Add(1)
 	return g.verdict, g.err
 }
+
+func (g *fixedGate) Gen() int64 { return 0 }
 
 func (g *fixedGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
 

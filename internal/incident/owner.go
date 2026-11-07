@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 var ErrAlreadyResolved = lifecycle.ErrAlreadyResolved
@@ -33,7 +35,11 @@ func (s *Service) owner(ctx context.Context, verb, id string, kind lifecycle.Eve
 		return err
 	}
 	defer leave()
-	_, err = s.apply(ctx, id, lifecycle.Event{Kind: kind, Version: v.N, HasVersion: v.Set}, nil)
+	var extra eventsFor
+	if kind == lifecycle.OwnerRerun {
+		extra = s.ownerRerunEvents(ctx, id)
+	}
+	_, err = s.apply(ctx, id, lifecycle.Event{Kind: kind, Version: v.N, HasVersion: v.Set}, extra)
 	return err
 }
 
@@ -87,4 +93,15 @@ func (s *Service) SystemRerun(ctx context.Context, id string, gen int64) error {
 	defer leave()
 	_, err = s.apply(ctx, id, lifecycle.Event{Kind: lifecycle.SystemRerun, Gen: gen}, nil)
 	return err
+}
+
+func (s *Service) ownerRerunEvents(ctx context.Context, id string) eventsFor {
+	return func(_ lifecycle.Snapshot, d lifecycle.Decision) []*db.Event {
+		marker, err := journal.OwnerRerunEvent(id, d.Next.Generation)
+		if err != nil {
+			s.log.ErrorContext(ctx, "build owner rerun event", "incident", id, "error", err)
+			return nil
+		}
+		return []*db.Event{marker}
+	}
 }

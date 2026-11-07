@@ -12,6 +12,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 const attemptWriteTimeout = 5 * time.Second
@@ -38,8 +39,20 @@ func (g *runGate) Claim(ctx context.Context) error {
 	return err
 }
 
-func (g *runGate) Act(ctx context.Context, tool string) (agent.Verdict, error) {
-	a, err := g.s.apply(ctx, g.id, lifecycle.Event{Kind: lifecycle.ActionAttempted, Gen: g.gen, Tool: tool}, nil)
+func (g *runGate) Act(ctx context.Context, tool string, params map[string]any) (agent.Verdict, error) {
+	ev := lifecycle.Event{Kind: lifecycle.ActionAttempted, Gen: g.gen, Tool: tool}
+	extra := func(_ lifecycle.Snapshot, d lifecycle.Decision) []*db.Event {
+		if d.Next.Locked {
+			return nil
+		}
+		attempt, err := journal.ActionAttemptedEvent(g.id, g.gen, tool, params)
+		if err != nil {
+			g.s.log.ErrorContext(ctx, "build action attempt event", "incident", g.id, "tool", tool, "error", err)
+			return nil
+		}
+		return []*db.Event{attempt}
+	}
+	a, err := g.s.apply(ctx, g.id, ev, extra)
 	switch {
 	case err == nil && a.Snap.Locked:
 		return agent.GateTripped, nil
@@ -54,6 +67,8 @@ func (g *runGate) Act(ctx context.Context, tool string) (agent.Verdict, error) {
 	}
 	return "", err
 }
+
+func (g *runGate) Gen() int64 { return g.gen }
 
 func (g *runGate) Live(context.Context) agent.Verdict {
 	switch {
