@@ -36,6 +36,10 @@ type fakeArr struct {
 	commandsErr int
 	episodes    []map[string]any
 	reqs        int
+	deleteCode  int
+	deleteLands bool
+	history     []map[string]any
+	movies      []int
 }
 
 func newFakeArr(t *testing.T) *fakeArr {
@@ -94,9 +98,13 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
 		_ = json.NewEncoder(w).Encode(f.episodes)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/queue/"):
-		f.record(r)
-		id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v3/queue/"))
-		f.dropDownloadOf(id)
+		f.serveDelete(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/history/"):
+		_ = json.NewEncoder(w).Encode(f.history)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/series/"):
+		_, _ = io.WriteString(w, `{"id":1}`)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+		f.serveMovies(w)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
 		body := f.record(r)
 		if name, _ := body["name"].(string); f.failCommand[name] {
@@ -108,6 +116,25 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (f *fakeArr) serveDelete(w http.ResponseWriter, r *http.Request) {
+	f.record(r)
+	if f.deleteCode == 0 || f.deleteLands {
+		id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v3/queue/"))
+		f.dropDownloadOf(id)
+	}
+	if f.deleteCode != 0 {
+		w.WriteHeader(f.deleteCode)
+	}
+}
+
+func (f *fakeArr) serveMovies(w http.ResponseWriter) {
+	out := make([]map[string]any, 0, len(f.movies))
+	for _, id := range f.movies {
+		out = append(out, map[string]any{"id": id})
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (f *fakeArr) serveQueue(w http.ResponseWriter, r *http.Request) {
@@ -211,4 +238,22 @@ func rawEpisode(id, season, number int, hasFile bool) map[string]any {
 		"id": float64(id), "seriesId": float64(1), "seasonNumber": float64(season),
 		"episodeNumber": float64(number), "hasFile": hasFile,
 	}
+}
+
+func (f *fakeArr) failDelete(code int, lands bool) {
+	f.mu.Lock()
+	f.deleteCode, f.deleteLands = code, lands
+	f.mu.Unlock()
+}
+
+func (f *fakeArr) setHistory(recs ...map[string]any) {
+	f.mu.Lock()
+	f.history = recs
+	f.mu.Unlock()
+}
+
+func (f *fakeArr) requests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reqs
 }

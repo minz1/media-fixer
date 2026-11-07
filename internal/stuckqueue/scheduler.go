@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/operation"
+	"github.com/minz1/mediafixer/internal/opexec"
 )
 
 var (
@@ -31,10 +33,12 @@ type Scheduler struct {
 	running   bool
 	warned    string
 	outcomes  map[string]outcome
+	store     opexec.Store
+	failedOps map[string]operation.Op
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
-	return &Scheduler{r: r, d: d, base: base}
+	return &Scheduler{r: r, d: d, base: base, store: d}
 }
 
 func (s *Scheduler) Wait() { s.wg.Wait() }

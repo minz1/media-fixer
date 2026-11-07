@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const (
@@ -16,20 +18,17 @@ const (
 	cardPrefix   = cardKind + ":"
 	cardArgs     = 3
 	subjectParts = 3
+	verbResume   = "resume"
 	refusedLine  = "Refused: "
 	goneLine     = "left the queue"
 )
 
 type outcome struct {
-	action       Action
-	at           time.Time
-	searchFailed bool
+	action Action
+	at     time.Time
 }
 
 func (o outcome) line() string {
-	if o.searchFailed {
-		return fmt.Sprintf("⚠️ Removed; search failed · <t:%d:t>", o.at.Unix())
-	}
 	return fmt.Sprintf("✅ %s · <t:%d:t>", actionDone(o.action), o.at.Unix())
 }
 
@@ -107,6 +106,9 @@ func (s *Scheduler) CardRenderer() card.Renderer {
 		}
 		s.smu.Lock()
 		defer s.smu.Unlock()
+		if op, failed := s.failedOps[OpSubject(app, parts[2]).ID]; failed {
+			return failedUpdate(app, op), true, nil
+		}
 		if o, acted := s.outcomes[subject]; acted {
 			return card.Update{Status: o.line()}, true, nil
 		}
@@ -145,7 +147,14 @@ func (s *Scheduler) CardHandler() card.Handler {
 		if !ok {
 			return card.Result{}, fmt.Errorf("%w: app %q", card.ErrUnknownID, a.Args[0])
 		}
-		notice, err := s.Act(ctx, app, a.Args[1], Action(a.Verb), a.Args[2])
+		var notice string
+		var err error
+		if a.Verb == verbResume {
+			notice, err = s.resumeFrom(ctx, app, a.Args[1], a.Args[2])
+		} else {
+			notice, err = s.Act(ctx, app, a.Args[1], Action(a.Verb), a.Args[2])
+		}
+
 		if errors.Is(err, ErrRefused) {
 			return card.Result{Line: refusedLine + strings.TrimPrefix(err.Error(), ErrRefused.Error()+": ")}, nil
 		}
@@ -156,13 +165,13 @@ func (s *Scheduler) CardHandler() card.Handler {
 	}
 }
 
-func (s *Scheduler) recordOutcome(d Download, a Action, searchFailed bool) {
+func (s *Scheduler) recordOutcome(subject string, a Action) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	if s.outcomes == nil {
 		s.outcomes = map[string]outcome{}
 	}
-	s.outcomes[subjectOf(d)] = outcome{action: a, at: s.r.Now(), searchFailed: searchFailed}
+	s.outcomes[subject] = outcome{action: a, at: s.r.Now()}
 }
 
 func (s *Scheduler) clearStuckOutcomes(res Result) {
@@ -177,4 +186,37 @@ func (s *Scheduler) refresh(subject string) {
 	if s.Refresh != nil {
 		s.Refresh(subject)
 	}
+}
+
+func failedUpdate(app App, op operation.Op) card.Update {
+	up := card.Update{Status: "⚠️ " + operation.Line(op) + causeSuffix(op.Cause)}
+	id, ok := card.Encode(card.Action{
+		Kind: cardKind, Verb: verbResume,
+		Args: []string{appCode(app), op.Steps[0].DownloadID, fmt.Sprintf("o%d.%d", op.ID, op.Version)},
+	})
+	if ok {
+		up.Buttons = []card.Button{{Label: "Resume", Style: card.Secondary, ID: id}}
+	}
+	return up
+}
+
+func causeSuffix(c operation.Cause) string {
+	switch c {
+	case operation.CauseStore:
+		return " (database error)"
+	case operation.CauseRestart:
+		return " (restart)"
+	case operation.CauseNone, operation.CauseError:
+	}
+	return ""
+}
+
+func (s *Scheduler) resumeFrom(ctx context.Context, app App, downloadID, ref string) (string, error) {
+	idPart, verPart, ok := strings.Cut(strings.TrimPrefix(ref, "o"), ".")
+	opID, idErr := strconv.ParseInt(idPart, 10, 64)
+	opVersion, verErr := strconv.ParseInt(verPart, 10, 64)
+	if !strings.HasPrefix(ref, "o") || !ok || idErr != nil || verErr != nil {
+		return "", fmt.Errorf("%w: operation %q", card.ErrUnknownID, ref)
+	}
+	return s.Resume(ctx, app, downloadID, opID, opVersion)
 }

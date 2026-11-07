@@ -63,17 +63,22 @@ func (s *Scheduler) Act(
 		}
 		return "", refuse("%s is not offered for this download", action)
 	}
-	notice, err := s.apply(ctx, c, d, action, cands)
-	searchFailed := errors.Is(err, errSearchFailed)
-	if err != nil && !searchFailed {
+	notice, res, err := s.apply(ctx, c, d, action, cands)
+	if err != nil && !res.Resumable {
 		return "", err
 	}
-	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
-		"app", app, "download", d.DownloadID, "title", d.Title, "action", action, "search_failed", searchFailed)
-	s.recordOutcome(d, action, searchFailed)
-	s.forget(app, d.DownloadID)
-	s.refresh(subjectOf(d))
+	s.finish(ctx, d, action, res)
 	return notice, err
+}
+
+func (s *Scheduler) finish(ctx context.Context, d Download, action Action, res RegrabResult) {
+	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
+		"app", d.App, "download", d.DownloadID, "title", d.Title, "action", action, "unfinished", res.Resumable)
+	if !res.Resumable {
+		s.recordOutcome(subjectOf(d), action)
+	}
+	s.forget(d.App, d.DownloadID)
+	s.refresh(subjectOf(d))
 }
 
 func (s *Scheduler) ImportMapped(
@@ -131,7 +136,7 @@ func (s *Scheduler) ImportMapped(
 	s.r.logger().InfoContext(ctx, "stuck-queue: manual import",
 		"series", seriesID, "download", d.DownloadID, "files", labels.lines)
 	if len(files) == len(cands) {
-		s.recordOutcome(d, ActionImport, false)
+		s.recordOutcome(subjectOf(d), ActionImport)
 		s.forget(AppSonarr, d.DownloadID)
 	}
 	s.refresh(subjectOf(d))
@@ -235,40 +240,23 @@ func (s *Scheduler) waitOver(ctx context.Context, app App, downloadID string) er
 
 func (s *Scheduler) apply(
 	ctx context.Context, c *client.ArrClient, d Download, action Action, cands []client.ImportCandidate,
-) (string, error) {
+) (string, RegrabResult, error) {
+	var none RegrabResult
 	switch action {
 	case ActionImport:
 		if _, err := c.ManualImport(ctx, cands); err != nil {
-			return "", err
+			return "", none, err
 		}
-		return "Import started for " + d.Targets() + ".", nil
+		return "Import started for " + d.Targets() + ".", none, nil
 	case ActionRegrab:
-		if err := c.RemoveQueueItem(ctx, d.Records[0].ID, false, true, true); err != nil {
-			return "", err
-		}
-		if err := search(ctx, c, d); err != nil {
-			return "", fmt.Errorf("%w: %w", errSearchFailed, err)
-		}
-		return "Re-grab started for " + d.Targets() + ".", nil
+		return s.regrab(ctx, c, d)
 	case ActionRemove:
 		if err := c.RemoveQueueItem(ctx, d.Records[0].ID, false, false, true); err != nil {
-			return "", err
+			return "", none, err
 		}
-		return "Removed.", nil
+		return "Removed.", none, nil
 	}
-	return "", refuse("unknown action %q", action)
-}
-
-func search(ctx context.Context, c *client.ArrClient, d Download) error {
-	if d.App == AppRadarr {
-		return c.SearchMovieNow(ctx, d.Records[0].MovieID)
-	}
-	ids := make([]int, 0, len(d.Records))
-	for _, r := range d.Records {
-		ids = append(ids, r.EpisodeID)
-	}
-	_, err := c.SearchEpisodes(ctx, ids)
-	return err
+	return "", none, refuse("unknown action %q", action)
 }
 
 func (s *Scheduler) forget(app App, downloadID string) {
@@ -293,4 +281,15 @@ func (s *Scheduler) lockAction() error {
 		return refuse("a run is active, try again in a moment")
 	}
 	return nil
+}
+
+func (s *Scheduler) regrab(ctx context.Context, c *client.ArrClient, d Download) (string, RegrabResult, error) {
+	res, err := s.runRegrab(ctx, c, d)
+	if res.Op.ID != 0 {
+		s.trackOp(res.Op)
+	}
+	if err != nil {
+		return "", res, err
+	}
+	return "Re-grab started for " + d.Targets() + ".", res, nil
 }

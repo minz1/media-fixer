@@ -122,6 +122,9 @@ func startStuckQueue(
 		return nil
 	}
 	sch := stuckqueue.NewScheduler(ctx, r, database)
+	if err := sch.LoadOperations(ctx); err != nil {
+		log.ErrorContext(ctx, "load stuck-queue operations", "error", err)
+	}
 	sch.Refresh = bot.Refresh
 	handlers["sq"], renderers["sq"] = sch.CardHandler(), sch.CardRenderer()
 	srv.SetStuckQueue(sch)

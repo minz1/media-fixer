@@ -344,7 +344,7 @@ func TestQ2_8_Q5b_4_RegrabSearchFailsRecordsRemoved(t *testing.T) {
 		t.Fatalf("last still lists the removed download: %+v", res)
 	}
 	up, ok := render(t, s, subject)
-	if !ok || !strings.Contains(up.Status, "Removed; search failed") || len(up.Buttons) != 0 {
-		t.Fatalf("update = %+v, %v; want the half-done outcome and no buttons", up, ok)
+	if !ok || !strings.Contains(up.Status, "Removed; the search may have been sent") || len(up.Buttons) != 1 {
+		t.Fatalf("update = %+v, %v; want the op line and Resume", up, ok)
 	}
 }

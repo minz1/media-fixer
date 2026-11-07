@@ -1,6 +1,9 @@
 package stuckqueue
 
-import "github.com/minz1/mediafixer/internal/card"
+import (
+	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/opexec"
+)
 
 func StuckCardForTest(items []Item, capHit bool) card.Card {
 	c, _ := stuckCard(items, capHit)
@@ -12,3 +15,5 @@ func SetLastForTest(s *Scheduler, res Result, running bool) {
 	defer s.smu.Unlock()
 	s.last, s.hasLast, s.running = res, true, running
 }
+
+func SetOpStoreForTest(s *Scheduler, store opexec.Store) { s.store = store }
