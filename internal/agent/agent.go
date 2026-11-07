@@ -288,7 +288,7 @@ Max 3 autonomous actions before you must complete_diagnosis regardless.`
 
 const (
 	maxRounds            = 30
-	maxAutonomousActions = 3
+	MaxAutonomousActions = 3
 )
 
 const (
@@ -657,7 +657,7 @@ func (a *Agent) processToolCalls(
 				*autonomousActions++
 			}
 
-			if *autonomousActions > maxAutonomousActions {
+			if *autonomousActions > MaxAutonomousActions {
 				// Lock autonomous action, but deliberately do NOT write
 				// manual_test_needed here. Service.escalateToOwner owns that
 				// transition, and its TransitionStatus allow-list does not

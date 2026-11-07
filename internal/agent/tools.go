@@ -143,7 +143,7 @@ type toolRisk int
 const (
 	// riskRead tools have no side effects: free to call, never counts as an action.
 	riskRead toolRisk = iota
-	// riskWrite tools are autonomous actions: they count against maxAutonomousActions.
+	// riskWrite tools are autonomous actions: they count against MaxAutonomousActions.
 	riskWrite
 	// riskApproval tools require owner approval and are never offered to the LLM
 	// as a callable tool — they exist in the registry so an approval workflow

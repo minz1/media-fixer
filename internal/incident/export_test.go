@@ -7,6 +7,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 // ActionAlreadyTriedForTest exposes Service.actionAlreadyTried for service_test.go.
@@ -122,4 +123,39 @@ func (s *Service) SupersedeForTest(id string) context.Context {
 
 func (s *Service) LockAlertArmedForTest() bool {
 	return s.lockAlertAt.Load() == 0
+}
+
+type RunManagerForTest struct{ m *runManager }
+
+func NewRunManagerForTest(base context.Context) *RunManagerForTest {
+	return &RunManagerForTest{m: newRunManager(base)}
+}
+
+func (r *RunManagerForTest) SupersedeGen(id string, gen int64) (context.Context, bool) {
+	ctx, _, ok := r.m.supersedeGen(id, gen)
+	return ctx, ok
+}
+
+func (r *RunManagerForTest) Reserve(id string) func() { return r.m.reserve(id) }
+
+func (r *RunManagerForTest) CancelBelow(id string, gen int64) { r.m.cancelBelow(id, gen) }
+
+func (r *RunManagerForTest) ArmCheck(id string, gen int64, at time.Time, fire func()) bool {
+	return r.m.armCheck(id, gen, at, fire)
+}
+
+func (r *RunManagerForTest) Liveness() lifecycle.Liveness {
+	l := r.m.liveness()
+	return lifecycle.Liveness{Runs: l.runs, Reserved: l.reserved, Plans: l.plans, Armed: l.armed}
+}
+
+func (s *Service) ApplyForTest(ctx context.Context, id string, ev lifecycle.Event) (db.Applied, error) {
+	return s.apply(ctx, id, ev, nil)
+}
+
+func (s *Service) ScheduleCheckForTest(inc *db.Incident, gen int64, at time.Time) {
+	s.scheduleCheck(
+		inc,
+		lifecycle.Effect{Kind: lifecycle.ScheduleCheck, Gen: gen, At: at, Check: lifecycle.CheckVerify},
+	)
 }

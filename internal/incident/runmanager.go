@@ -3,6 +3,7 @@ package incident
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // runManager guarantees at most one active agent pipeline per incident, and — via
@@ -12,9 +13,13 @@ import (
 // so a reopen or reinvestigate never overlaps a prior run's still-sleeping
 // verification loop — the root cause of the duplicate "fixed" notification.
 type runManager struct {
-	mu     sync.Mutex
-	active map[string]*runToken
-	base   context.Context
+	mu       sync.Mutex
+	active   map[string]*runToken
+	base     context.Context
+	current  map[string]int64
+	reserved map[string]int
+	plans    map[string]int
+	checks   map[string]armedCheck
 
 	// globalSlot serializes the disruptive part of concurrent incident work: the
 	// LLM tool-calling diagnostic loop (Agent.Run) and owner-approved escalation
@@ -43,11 +48,21 @@ type runManager struct {
 type runToken struct {
 	cancel     context.CancelFunc
 	staleFloor int
+	gen        int64
+}
+
+type armedCheck struct {
+	gen   int64
+	timer *time.Timer
 }
 
 func newRunManager(base context.Context) *runManager {
 	m := &runManager{
 		active:     make(map[string]*runToken),
+		current:    make(map[string]int64),
+		reserved:   make(map[string]int),
+		plans:      make(map[string]int),
+		checks:     make(map[string]armedCheck),
 		base:       base,
 		globalSlot: make(chan struct{}, 1),
 	}
@@ -120,4 +135,121 @@ func (m *runManager) staleFloor(id string) int {
 		return tok.staleFloor
 	}
 	return 0
+}
+
+func (m *runManager) supersedeGen(id string, gen int64) (context.Context, *runToken, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gen < m.current[id] {
+		return nil, nil, false
+	}
+	m.current[id] = gen
+	if prev, ok := m.active[id]; ok {
+		if prev.gen >= gen {
+			return nil, nil, false
+		}
+		prev.cancel()
+	}
+	ctx, cancel := context.WithCancel(m.base)
+	tok := &runToken{cancel: cancel, gen: gen}
+	m.active[id] = tok
+	return ctx, tok, true
+}
+
+func (m *runManager) observe(id string, gen int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gen > m.current[id] {
+		m.current[id] = gen
+	}
+}
+
+func (m *runManager) cancelBelow(id string, gen int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gen > m.current[id] {
+		m.current[id] = gen
+	}
+	if prev, ok := m.active[id]; ok && prev.gen < gen {
+		delete(m.active, id)
+		prev.cancel()
+	}
+	if c, ok := m.checks[id]; ok && c.gen < gen {
+		c.timer.Stop()
+		delete(m.checks, id)
+	}
+}
+
+func (m *runManager) reserve(id string) func() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reserved[id]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			if m.reserved[id]--; m.reserved[id] <= 0 {
+				delete(m.reserved, id)
+			}
+		})
+	}
+}
+
+func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func()) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gen < m.current[id] {
+		return false
+	}
+	m.current[id] = gen
+	if c, ok := m.checks[id]; ok {
+		if c.gen >= gen {
+			return false
+		}
+		c.timer.Stop()
+	}
+	m.checks[id] = armedCheck{gen: gen, timer: time.AfterFunc(max(time.Until(at), 0), func() {
+		m.disarm(id, gen)
+		fire()
+	})}
+	return true
+}
+
+func (m *runManager) disarm(id string, gen int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.checks[id]; ok && c.gen == gen {
+		delete(m.checks, id)
+	}
+}
+
+type liveness struct {
+	runs     map[string]int64
+	reserved map[string]bool
+	plans    map[string]bool
+	armed    map[string]int64
+	floors   map[string]int
+}
+
+func (m *runManager) liveness() liveness {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l := liveness{
+		runs: map[string]int64{}, reserved: map[string]bool{}, plans: map[string]bool{},
+		armed: map[string]int64{}, floors: map[string]int{},
+	}
+	for id, tok := range m.active {
+		l.runs[id], l.floors[id] = tok.gen, tok.staleFloor
+	}
+	for id := range m.reserved {
+		l.reserved[id] = true
+	}
+	for id := range m.plans {
+		l.plans[id] = true
+	}
+	for id, c := range m.checks {
+		l.armed[id] = c.gen
+	}
+	return l
 }
