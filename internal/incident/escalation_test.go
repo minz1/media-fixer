@@ -19,6 +19,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const (
@@ -435,4 +436,10 @@ func TestResolve_AlreadyResolvedRefuses(t *testing.T) {
 		t.Errorf("second Resolve notified again: msgs %d→%d, seerr resolved %d→%d, comments %d→%d",
 			msgs, len(notif.msgs), resolved, len(seerr.resolved), comments, len(seerr.comments["7"]))
 	}
+}
+
+func (a *escalationAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
 }

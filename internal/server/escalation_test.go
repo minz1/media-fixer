@@ -25,6 +25,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -640,4 +641,10 @@ func assertPreviewSurvivesStreamFrame(t *testing.T, plan any, mustShow string) {
 		t.Fatalf("approve from the streamed form: status %d, ran %v", resp.StatusCode, ag.approvedPlanJSON() != nil)
 	}
 	waitForStatus(t, database, inc.ID, db.StatusVerifying)
+}
+
+func (a *stubEscalationAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 type captureNotifier struct {
@@ -1548,4 +1549,34 @@ func TestEscalateToOwner_Cards(t *testing.T) {
 	if rep := notif.users[0]; rep.Subject != "" || rep.Path != "" || len(rep.Verbs) != 0 || len(rep.Buttons) != 0 {
 		t.Errorf("reporter card carries owner parts: %+v", rep)
 	}
+}
+
+func (a *blockingAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
+}
+
+func (a *sequencedAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
+}
+
+func (a *alwaysFixedAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
+}
+
+func (a *concurrencyTrackingAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
+}
+
+func (a *lowConfidenceOnceAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
 }

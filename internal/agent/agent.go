@@ -16,6 +16,7 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/journal"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const WhatStuckRead = "stuck_read"
@@ -1166,6 +1167,19 @@ func (a *Agent) ExecuteApprovedPlan(ctx context.Context, result *DiagnosticResul
 		return a.disp.executeApprovedReaddPlan(ctx, planJSON)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
+	}
+}
+
+func (a *Agent) OperationFor(
+	subject operation.Subject, result *DiagnosticResult, planJSON []byte,
+) (operation.Spec, error) {
+	switch result.EscalateAction {
+	case EscalateRemoveAndSearch:
+		return a.disp.replaceOperation(subject, planJSON)
+	case EscalateDeleteTorrentReadd:
+		return a.disp.readdOperation(subject, planJSON)
+	default:
+		return operation.Spec{}, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/operation"
+	"github.com/minz1/mediafixer/internal/opexec"
 )
 
 const (
@@ -1546,6 +1548,35 @@ func (d *Dispatcher) executeApprovedReaddPlan(ctx context.Context, planJSON []by
 		return nil, fmt.Errorf("decode approved readd plan: %w", err)
 	}
 	return d.Decypharr.ExecuteTorrentReadd(ctx, &plan)
+}
+
+func (d *Dispatcher) readdOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
+	if d.Decypharr == nil {
+		return operation.Spec{}, errors.New("decypharr not configured")
+	}
+	var plan client.ReaddPlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return operation.Spec{}, fmt.Errorf("decode approved readd plan: %w", err)
+	}
+	return opexec.ReaddSpec(subject, &plan, planJSON)
+}
+
+func (d *Dispatcher) replaceOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
+	var plan client.ReplacePlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return operation.Spec{}, fmt.Errorf("decode approved escalation plan: %w", err)
+	}
+	if err := checkReplacePremise(&plan); err != nil {
+		return operation.Spec{}, err
+	}
+	arrClient := d.Sonarr
+	if plan.MediaType == client.ReplaceMediaMovie {
+		arrClient = d.Radarr
+	}
+	if arrClient == nil {
+		return operation.Spec{}, fmt.Errorf("no client configured for media_type %q", plan.MediaType)
+	}
+	return opexec.ReplaceSpec(subject, &plan, planJSON)
 }
 
 // checkReplacePremise refuses a plan whose stated reason is contradicted by

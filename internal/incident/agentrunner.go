@@ -7,6 +7,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 // AgentRunner is the subset of *agent.Agent the incident service depends on.
@@ -33,6 +34,7 @@ type AgentRunner interface {
 	// ExecuteApprovedPlan executes exactly the plan PreviewEscalation stored,
 	// so an owner's approval applies to the files they were shown.
 	ExecuteApprovedPlan(ctx context.Context, result *agent.DiagnosticResult, planJSON []byte) (any, error)
+	OperationFor(subject operation.Subject, result *agent.DiagnosticResult, planJSON []byte) (operation.Spec, error)
 	// CheckPendingOutcome polls live state for one pending arr_search_missing
 	// outcome — see Service.downloadCheck, the sweeper that drives it.
 	CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)

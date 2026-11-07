@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 // scriptedPendingOutcomeAgent is a fake AgentRunner whose CheckPendingOutcome
@@ -851,4 +852,10 @@ func TestKeepSearching_CheckErrorAfterDownloadSeenKeepsCap(t *testing.T) {
 	if got := incidentStatus(t, f.database, f.inc.ID); got == statusAwaiting {
 		t.Errorf("status = %q, want escalated: a seen download keeps the plain cap", got)
 	}
+}
+
+func (a *scriptedPendingOutcomeAgent) OperationFor(
+	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
+) (operation.Spec, error) {
+	return operation.Spec{}, nil
 }
