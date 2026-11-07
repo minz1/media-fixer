@@ -265,3 +265,63 @@ func containsCount(msgs []string, sub string) int {
 	}
 	return n
 }
+
+func openIncidents(t *testing.T, d *db.DB, titles ...string) []*db.Incident {
+	t.Helper()
+	var out []*db.Incident
+	for _, title := range titles {
+		inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: title}
+		if err := d.CreateIncident(context.Background(), inc); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, inc)
+	}
+	return out
+}
+
+func TestA10_10_RecoveryLeavesOpenIncidentsWhilePaused(t *testing.T) {
+	t.Parallel()
+	database := openTimersDB(t)
+	openIncidents(t, database, "A", "B")
+	ag := newDrainingAgent(database)
+	logs := &syncBuffer{}
+	svc := incident.NewService(
+		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.NewTextHandler(logs, nil)))
+	if err := svc.SetAutonomousPaused(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	svc.RecoverZombies(context.Background())
+	stopService(t, svc)
+	out := logs.String()
+	if n := strings.Count(out, "starting open incident left without a run"); n != 0 {
+		t.Errorf("recovery started %d open incidents while paused", n)
+	}
+	if n := strings.Count(out, "level=WARN"); n != 0 {
+		t.Errorf("recovery while paused logged %d WARN lines:\n%s", n, out)
+	}
+	if n := strings.Count(out, "level=INFO msg=\"open incident recovery skipped"); n != 1 {
+		t.Errorf("recovery while paused logged %d skip lines, want 1:\n%s", n, out)
+	}
+}
+
+func TestA10_10_RecoveryLeavesLockedOpenIncident(t *testing.T) {
+	t.Parallel()
+	database := openTimersDB(t)
+	incs := openIncidents(t, database, "Locked", "Free")
+	if err := database.SetAutonomousLocked(context.Background(), incs[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	ag := newDrainingAgent(database)
+	logs := &syncBuffer{}
+	svc := incident.NewService(
+		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.NewTextHandler(logs, nil)))
+	svc.RecoverZombies(context.Background())
+	if id := waitStarted(t, ag.started); id != incs[1].ID {
+		t.Errorf("recovery ran %s, want the unlocked %s", id, incs[1].ID)
+	}
+	stopService(t, svc)
+	out := logs.String()
+	if strings.Contains(out, "incident="+incs[0].ID) {
+		t.Errorf("recovery touched the locked incident:\n%s", out)
+	}
+}

@@ -1135,11 +1135,25 @@ func (s *Service) recoverOpen(ctx context.Context) {
 		}
 		return
 	}
+	if len(incidents) == 0 {
+		return
+	}
+	paused, err := s.db.IsAutonomousPaused(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.ErrorContext(ctx, "open incident recovery: pause check", "error", err)
+		}
+		return
+	}
+	if paused {
+		s.log.InfoContext(ctx, "open incident recovery skipped, autonomous actions paused", "incidents", len(incidents))
+		return
+	}
 	for _, inc := range incidents {
 		if ctx.Err() != nil {
 			return
 		}
-		if s.runs.running(inc.ID) {
+		if inc.AutonomousLocked || s.runs.running(inc.ID) {
 			continue
 		}
 		s.log.InfoContext(ctx, "starting open incident left without a run", "incident", inc.ID)
