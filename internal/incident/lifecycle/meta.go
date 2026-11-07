@@ -84,6 +84,7 @@ func metas() map[State]StateMeta {
 		Blocked: {
 			Label: "blocked", Line: "⛔ Blocked", Tone: ToneRed, Settled: true, Driver: DriverNone,
 		},
+		None: {Driver: DriverNone},
 		Resolved: {
 			Label: "resolved", Line: "✅ Resolved", Tone: ToneGray, Settled: true, Terminal: true, Driver: DriverNone,
 		},
