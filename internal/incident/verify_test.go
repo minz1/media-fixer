@@ -214,3 +214,29 @@ func TestReconciler_RunningCheckCountsAsArmed(t *testing.T) {
 		t.Fatalf("VerifyResolved calls %d, want 1", n)
 	}
 }
+
+type cancelingObserver struct {
+	*observingAgent
+
+	cancel context.CancelFunc
+}
+
+func (a *cancelingObserver) VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool {
+	a.cancel()
+	return a.observingAgent.VerifyResolved(ctx, itemID, title, pre)
+}
+
+func TestChecks_CanceledApplyLogsInfo(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	ag := &cancelingObserver{observingAgent: newObservingAgent(), cancel: cancel}
+	env := newLifecycleEnv(t, ag)
+	s := env.verifying(t, "Canceled check", "cant_play")
+	env.svc.CheckNowForTest(ctx, s.ID)
+	if ag.verifies.Load() != 1 {
+		t.Fatalf("VerifyResolved calls %d, want 1", ag.verifies.Load())
+	}
+	if env.logged("level=ERROR") || !env.logged("check result dropped, the check was stopped") {
+		t.Fatalf("canceled check logs:\n%s", env.logs.String())
+	}
+}

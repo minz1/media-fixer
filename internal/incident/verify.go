@@ -116,6 +116,10 @@ func (s *Service) logCheckErr(ctx context.Context, id string, err error) {
 		s.log.InfoContext(ctx, "check stale, incident moved on", "incident", id)
 		return
 	}
+	if ctx.Err() != nil {
+		s.log.InfoContext(ctx, "check result dropped, the check was stopped", "incident", id, "error", err)
+		return
+	}
 	s.log.ErrorContext(ctx, "apply check result", "incident", id, "error", err)
 }
 
