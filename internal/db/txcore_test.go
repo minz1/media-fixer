@@ -130,3 +130,18 @@ func TestRecordRunExit_NilFindingLeavesFindingUntouched(t *testing.T) {
 		t.Fatalf("finding = %q, want kept", root)
 	}
 }
+
+func TestAppendEvents_RollbackLeavesSeqUnset(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	id := newClaimIncident(t, d)
+
+	first := &db.Event{IncidentID: id, Kind: "status_changed", Payload: json.RawMessage(`{}`)}
+	second := &db.Event{IncidentID: "no-such-incident", Kind: "status_changed", Payload: json.RawMessage(`{}`)}
+	if err := d.AppendEvents(context.Background(), first, second); err == nil {
+		t.Fatal("append with an unknown incident succeeded")
+	}
+	if first.Seq != 0 || second.Seq != 0 {
+		t.Errorf("seqs after rollback = %d, %d, want 0, 0", first.Seq, second.Seq)
+	}
+}

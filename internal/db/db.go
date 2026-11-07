@@ -1070,14 +1070,22 @@ func writeFinding(ctx context.Context, tx *sql.Tx, id string, finding, actions [
 }
 
 func (d *DB) RecordRunExit(ctx context.Context, incidentID string, finding json.RawMessage, e *Event) error {
-	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+	var seq int64
+	err := runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
 		if len(finding) > 0 && string(finding) != "null" {
 			if err := writeFinding(ctx, tx, incidentID, finding, finding); err != nil {
 				return err
 			}
 		}
-		return appendEvent(ctx, tx, e)
+		var err error
+		seq, err = appendEvent(ctx, tx, e)
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	e.Seq = seq
+	return nil
 }
 
 // IncrementActionCount atomically increments the action counter and returns the new value.
@@ -1618,21 +1626,31 @@ type Event struct {
 }
 
 func (d *DB) AppendEvents(ctx context.Context, events ...*Event) error {
-	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
-		for _, e := range events {
-			if err := appendEvent(ctx, tx, e); err != nil {
+	seqs := make([]int64, len(events))
+	err := runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		for i, e := range events {
+			seq, err := appendEvent(ctx, tx, e)
+			if err != nil {
 				return err
 			}
+			seqs[i] = seq
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	for i, e := range events {
+		e.Seq = seqs[i]
+	}
+	return nil
 }
 
 // appendEvent inserts one event row within tx. A free function, not a *DB
 // method, so a caller composing an event insert with a projection write (both
 // must land in the same transaction) isn't tempted to reach for a second,
 // unrelated *DB write pool mid-transaction.
-func appendEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
+func appendEvent(ctx context.Context, tx *sql.Tx, e *Event) (int64, error) {
 	if e.Source == "" {
 		e.Source = "live"
 	}
@@ -1643,17 +1661,18 @@ func appendEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
 		`INSERT INTO incident_events (incident_id, at, kind, payload, source) VALUES (?, ?, ?, ?, ?)`,
 		e.IncidentID, e.At, e.Kind, string(e.Payload), e.Source)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	seq, err := res.LastInsertId()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	e.Seq = seq
-	if e.ActionLog == nil {
-		return nil
+	if e.ActionLog != nil {
+		if err = insertActionLog(ctx, tx, e.ActionLog); err != nil {
+			return 0, err
+		}
 	}
-	return insertActionLog(ctx, tx, e.ActionLog)
+	return seq, nil
 }
 
 // EventsSince returns every event for incidentID with seq > afterSeq, in seq
