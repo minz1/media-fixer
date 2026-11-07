@@ -8,6 +8,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 func (s *Service) Start() {
@@ -96,10 +97,23 @@ func (s *Service) drive(ctx context.Context, in lifecycle.Intent) {
 		s.scheduleCheck(in.ID, *in.Arm)
 		return
 	}
-	if in.Event.Kind == lifecycle.PlanLost && s.runs.liveness().plans[in.ID] {
-		return
+	ev := *in.Event
+	if ev.Kind == lifecycle.PlanLost {
+		if s.beforePlanLost != nil {
+			s.beforePlanLost(in.ID)
+		}
+		if s.runs.liveness().plans[in.ID] {
+			return
+		}
+		ev.Cause = operation.CauseRestart
+		if cause, ok := s.runs.lostCauseOf(in.ID); ok {
+			ev.Cause = cause
+		}
 	}
-	_, err := s.apply(ctx, in.ID, *in.Event, nil)
+	_, err := s.apply(ctx, in.ID, ev, nil)
+	if ev.Kind == lifecycle.PlanLost && (err == nil || errors.Is(err, lifecycle.ErrStale)) {
+		s.runs.clearLost(in.ID)
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, lifecycle.ErrStale), errors.Is(err, lifecycle.ErrParked), errors.Is(err, lifecycle.ErrNoop),

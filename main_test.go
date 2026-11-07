@@ -56,11 +56,15 @@ func (r *recorder) plan(waits, subs []step) shutdownPlan {
 func TestStartup_OrderMaintenanceCardsBot(t *testing.T) {
 	t.Parallel()
 	var r recorder
-	startup(startSteps{
+	err := startup(startSteps{
+		interrupt:   func() error { r.note("interrupt"); return nil },
 		maintenance: r.fn("maintenance"), cards: r.fn("cards"), bot: r.fn("bot"), intake: r.fn("intake"),
 		service: r.fn("service"), recovery: r.fn("recovery"),
 	})
-	want := []string{"maintenance", "cards", "bot", "intake", "service", "recovery"}
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"interrupt", "maintenance", "cards", "bot", "intake", "service", "recovery"}
 	if !slices.Equal(r.order, want) {
 		t.Errorf("startup order = %v, want %v", r.order, want)
 	}

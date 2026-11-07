@@ -281,6 +281,7 @@ func (m *runManager) currentGen(id string) int64 {
 func (m *runManager) planStarted(id string) func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	delete(m.lost, id)
 	m.plans[id]++
 	var once sync.Once
 	return func() {
@@ -305,4 +306,10 @@ func (m *runManager) lostCauseOf(id string) (operation.Cause, bool) {
 	defer m.mu.Unlock()
 	cause, ok := m.lost[id]
 	return cause, ok
+}
+
+func (m *runManager) clearLost(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.lost, id)
 }

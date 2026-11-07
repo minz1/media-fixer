@@ -18,6 +18,7 @@ type step struct {
 }
 
 type startSteps struct {
+	interrupt   func() error
 	maintenance func()
 	cards       func()
 	bot         func()
@@ -26,13 +27,17 @@ type startSteps struct {
 	recovery    func()
 }
 
-func startup(st startSteps) {
+func startup(st startSteps) error {
+	if err := st.interrupt(); err != nil {
+		return err
+	}
 	st.maintenance()
 	st.cards()
 	st.bot()
 	st.intake()
 	st.service()
 	st.recovery()
+	return nil
 }
 
 type shutdownPlan struct {

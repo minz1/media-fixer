@@ -229,3 +229,9 @@ func (s *Service) HoldGlobalForTest(ctx context.Context) (func(), error) {
 func ResumeArgsForTest(id string, v Version, opID, opVersion int64) []string {
 	return resumeArgs(id, v, opID, opVersion)
 }
+
+func (s *Service) MarkLostForTest(id string, cause operation.Cause) { s.runs.markLost(id, cause) }
+
+func (s *Service) ClearLostForTest(id string) { s.runs.clearLost(id) }
+
+func (s *Service) SetBeforePlanLostForTest(f func(id string)) { s.beforePlanLost = f }

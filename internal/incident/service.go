@@ -46,6 +46,8 @@ type Service struct {
 	paused      atomic.Bool
 	wake        chan struct{}
 
+	beforePlanLost func(id string)
+
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
 }

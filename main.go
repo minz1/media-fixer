@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -274,7 +275,8 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 	var unsub func()
 	signalled := make(chan time.Time, 1)
 	context.AfterFunc(ctx, func() { signalled <- time.Now() })
-	startup(startSteps{
+	startErr := startup(startSteps{
+		interrupt: func() error { return interruptOperations(ctx, a.database, a.log) },
 		maintenance: func() {
 			maintenance = startMaintenance(
 				ctx, a.cfg, a.bundle, a.database, a.bot, a.srv, a.log, handlers, renderers, a.sr)
@@ -285,6 +287,11 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 		service:  a.svc.Start,
 		recovery: a.svc.StartRecovery,
 	})
+	if startErr != nil {
+		stop()
+		_ = a.database.Close()
+		return startErr
+	}
 
 	a.log.InfoContext(ctx, "media-fixer started")
 	httpErr := a.srv.Start(ctx)
@@ -330,4 +337,23 @@ func opPorts(clients *clientset.Set) opexec.Ports {
 		},
 		Decypharr: clients.Decypharr,
 	}
+}
+
+func interruptOperations(ctx context.Context, database *db.DB, log *slog.Logger) error {
+	ops, err := database.InterruptRunningOperations(ctx, time.Now())
+	if err != nil {
+		log.ErrorContext(ctx, "interrupt running operations", "error", err)
+		return err
+	}
+	msg := fmt.Sprintf("operations: interrupted %d at startup", len(ops))
+	if len(ops) == 0 {
+		log.InfoContext(ctx, msg)
+		return nil
+	}
+	log.WarnContext(ctx, msg)
+	for _, op := range ops {
+		log.WarnContext(ctx, fmt.Sprintf("operations: interrupted op=%d subject=%s:%s step=%d",
+			op.ID, op.Subject.Kind, op.Subject.ID, op.Index))
+	}
+	return nil
 }
