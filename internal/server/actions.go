@@ -31,7 +31,8 @@ func actionViewOf(k lifecycle.ActionKind) (actionView, bool) {
 		return actionView{Label: "Mark resolved", Path: "resolve"}, true
 	case lifecycle.ActUnlock:
 		return actionView{Label: "🔓 Unlock", Path: "unlock"}, true
-	case lifecycle.ActKeepSearching, lifecycle.ActPreview, lifecycle.ActApprove, lifecycle.ActRefresh:
+	case lifecycle.ActKeepSearching, lifecycle.ActPreview, lifecycle.ActApprove, lifecycle.ActRefresh,
+		lifecycle.ActResume:
 	}
 	return actionView{}, false
 }
@@ -47,7 +48,7 @@ func (s *Server) ownerView(ctx context.Context, snap lifecycle.Snapshot, actions
 			v.Keep = true
 		case lifecycle.ActPreview, lifecycle.ActApprove, lifecycle.ActRefresh:
 			v.Preview = true
-		case lifecycle.ActRerun, lifecycle.ActResolve, lifecycle.ActUnlock:
+		case lifecycle.ActRerun, lifecycle.ActResolve, lifecycle.ActUnlock, lifecycle.ActResume:
 		}
 		if av, ok := actionViewOf(a.Kind); ok {
 			v.Buttons = append(v.Buttons, av)
