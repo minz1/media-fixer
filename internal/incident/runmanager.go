@@ -218,6 +218,9 @@ func (m *runManager) claimCheck(id string, gen int64) func() {
 	if c, ok := m.checks[id]; ok && c.gen == gen {
 		delete(m.checks, id)
 	}
+	if cur, ok := m.inflight[id]; ok && cur.gen > gen {
+		return func() {}
+	}
 	mark := &inflightCheck{gen: gen}
 	m.inflight[id] = mark
 	var once sync.Once
