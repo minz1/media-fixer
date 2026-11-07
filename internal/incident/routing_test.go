@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -405,5 +408,36 @@ func TestRunFinished_UsesLaunchGeneration(t *testing.T) {
 	}
 	if !env.logged("run outcome not applied, incident already moved on") {
 		t.Fatalf("stale outcome not logged:\n%s", env.logs.String())
+	}
+}
+
+func TestGate_RecordsAcrossAttempts(t *testing.T) {
+	t.Parallel()
+	var attempts atomic.Int32
+	var mu sync.Mutex
+	var before [][]string
+	ag := newGateAgent(func(_ context.Context, gate agent.Gate) agent.RunExit {
+		n := attempts.Add(1)
+		var tools []string
+		for _, rec := range gate.Calls() {
+			tools = append(tools, rec.Tool)
+		}
+		mu.Lock()
+		before = append(before, tools)
+		mu.Unlock()
+		gate.Record(agent.CallRecord{Tool: fmt.Sprintf("tool_%d", n), Counted: true})
+		if n == 1 {
+			return agent.RunExit{State: agent.RunConcluded, Finding: lowConfidence()}
+		}
+		return agent.RunExit{State: agent.RunConcluded, Finding: confident()}
+	})
+	control := controlServer(t, nil, `{"verdict":"suggest_alternative","alternative_action":"x","reason":"y"}`)
+	env := newRoutingEnv(t, ag, control, nil)
+	env.report(t, "Records across attempts")
+	eventually(t, "two attempts", func() bool { return attempts.Load() >= 2 })
+	mu.Lock()
+	defer mu.Unlock()
+	if len(before) < 2 || len(before[0]) != 0 || !slices.Equal(before[1], []string{"tool_1"}) {
+		t.Fatalf("records seen at each attempt start = %v, want [] then [tool_1]", before)
 	}
 }

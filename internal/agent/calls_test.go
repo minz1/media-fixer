@@ -146,6 +146,10 @@ func (g seqGate) Act(context.Context, string) (agent.Verdict, error) {
 
 func (g seqGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
 
+func (g seqGate) Calls() []agent.CallRecord { return nil }
+
+func (g seqGate) Record(agent.CallRecord) {}
+
 type fixedGate struct {
 	verdict agent.Verdict
 	err     error
@@ -160,6 +164,10 @@ func (g *fixedGate) Act(context.Context, string) (agent.Verdict, error) {
 }
 
 func (g *fixedGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
+
+func (g *fixedGate) Calls() []agent.CallRecord { return nil }
+
+func (g *fixedGate) Record(agent.CallRecord) {}
 
 func isReadOnlyPOST(method, path string) bool {
 	return method == http.MethodPost && strings.HasPrefix(path, "/Items/") && strings.HasSuffix(path, "/PlaybackInfo")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -459,7 +460,7 @@ func (a *Agent) Run(
 	seed []openai.ChatCompletionMessage,
 	gate Gate,
 ) RunExit {
-	l := &runLoop{a: a, inc: inc, snap: runSnapshot{State: RunClaiming}, seen: make(map[string]int), gate: gate}
+	l := &runLoop{a: a, inc: inc, snap: runSnapshot{State: RunClaiming}, gate: gate}
 	return l.run(ctx, seed)
 }
 
@@ -567,7 +568,6 @@ func (a *Agent) processToolCalls(
 	inc *db.Incident,
 	preFix *FixSignature,
 	calls []openai.ToolCall,
-	seenCalls map[string]int,
 	gate Gate,
 	messages *[]openai.ChatCompletionMessage,
 ) (runEvent, *DiagnosticResult) {
@@ -585,7 +585,7 @@ func (a *Agent) processToolCalls(
 		}
 
 		if isAutonomousAction(fn) {
-			if ev := a.invoke(ctx, inc, call, seenCalls, gate, messages); ev.kind != "" {
+			if ev := a.invoke(ctx, inc, call, gate, messages); ev.kind != "" {
 				return ev, nil
 			}
 			continue
@@ -677,7 +677,6 @@ func (a *Agent) invoke(
 	ctx context.Context,
 	inc *db.Incident,
 	call openai.ToolCall,
-	seen map[string]int,
 	gate Gate,
 	messages *[]openai.ChatCompletionMessage,
 ) runEvent {
@@ -687,8 +686,6 @@ func (a *Agent) invoke(
 		a:    a,
 		ctx:  ctx,
 		fn:   fn,
-		seen: seen,
-		key:  fn + ":" + call.Function.Arguments,
 		snap: callSnap{State: callProposed, Impact: spec.Impact},
 		c: &toolCall{
 			scope:         Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
@@ -716,8 +713,6 @@ type invocation struct {
 	a     *Agent
 	ctx   context.Context
 	fn    string
-	seen  map[string]int
-	key   string
 	snap  callSnap
 	c     *toolCall
 	reply string
@@ -773,7 +768,13 @@ func (v *invocation) step(kind callKind, in stepInfo) {
 			v.a.recordCall(v.ctx, v.c.scope.IncidentID, v.fn, in.params,
 				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive)
 		case effRemember:
-			v.seen[v.key]++
+			v.c.gate.Record(CallRecord{
+				Tool:    v.fn,
+				Params:  in.params,
+				Status:  callMeta(next.State).Outcome,
+				Err:     in.errText,
+				Counted: next.Counted,
+			})
 		}
 	}
 }
@@ -793,11 +794,9 @@ func (v *invocation) drive(argsJSON string, args map[string]any) {
 				"escalate_action and call complete_diagnosis.", v.fn))})
 		return
 	}
-	if v.seen[v.key] > 0 {
+	if rec, ok := v.earlierCall(args); ok {
 		v.a.log.WarnContext(v.ctx, "duplicate action blocked", "tool", v.fn)
-		v.step(evSeenInRun, stepInfo{reply: errorReply(fmt.Sprintf(
-			"you already called %s — it has been applied, do not repeat it. "+
-				"Call complete_diagnosis with your current findings.", v.fn))})
+		v.step(evSeenInRun, stepInfo{reply: errorReply(repeatMessage(v.fn, rec))})
 		return
 	}
 	v.step(evCleared, stepInfo{})
@@ -1445,4 +1444,30 @@ func (a *Agent) BuildSummarySeed(ctx context.Context, inc *db.Incident, summary 
 			a.disruptionNote(ctx, inc.ID),
 		)},
 	}
+}
+
+func (v *invocation) earlierCall(args map[string]any) (CallRecord, bool) {
+	calls := v.c.gate.Calls()
+	for _, rec := range slices.Backward(calls) {
+		if rec.Tool == v.fn && identityParamsMatch(args, rec.Params) {
+			return rec, true
+		}
+	}
+	return CallRecord{}, false
+}
+
+func repeatMessage(tool string, rec CallRecord) string {
+	var earlier string
+	switch rec.Status {
+	case outcomeApplied:
+		earlier = "already applied in this run"
+	case outcomeFailed:
+		earlier = "already tried in this run and it failed: " + rec.Err
+	case outcomeRefused:
+		earlier = "already refused in this run: " + rec.Err
+	case outcomeInterrupted, outcomeInvalid:
+		earlier = "already tried in this run; its outcome is unknown (interrupted)"
+	}
+	return fmt.Sprintf("%s (with these parameters) was %s. Do not repeat it. Choose a different action, "+
+		"or call complete_diagnosis with your current findings.", tool, earlier)
 }

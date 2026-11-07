@@ -27,6 +27,7 @@ type recGate struct {
 	stale  atomic.Bool
 	mu     sync.Mutex
 	acts   []string
+	calls  []agent.CallRecord
 }
 
 func newRecGate(d *db.DB, inc *db.Incident) *recGate {
@@ -70,6 +71,18 @@ func (g *recGate) Live(context.Context) agent.Verdict {
 		return agent.GateSuperseded
 	}
 	return agent.GateAllowed
+}
+
+func (g *recGate) Calls() []agent.CallRecord {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]agent.CallRecord(nil), g.calls...)
+}
+
+func (g *recGate) Record(rec agent.CallRecord) {
+	g.mu.Lock()
+	g.calls = append(g.calls, rec)
+	g.mu.Unlock()
 }
 
 func (g *recGate) acted() []string {

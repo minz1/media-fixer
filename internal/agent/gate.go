@@ -23,6 +23,16 @@ type Gate interface {
 	Claim(ctx context.Context) error
 	Act(ctx context.Context, tool string) (Verdict, error)
 	Live(ctx context.Context) Verdict
+	Calls() []CallRecord
+	Record(CallRecord)
+}
+
+type CallRecord struct {
+	Tool    string
+	Params  map[string]any
+	Status  callOutcome
+	Err     string
+	Counted bool
 }
 
 const (

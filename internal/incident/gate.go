@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -18,6 +20,9 @@ type runGate struct {
 	s   *Service
 	id  string
 	gen int64
+
+	mu    sync.Mutex
+	calls []agent.CallRecord
 }
 
 func (s *Service) gateFor(id string, gen int64) *runGate { return &runGate{s: s, id: id, gen: gen} }
@@ -58,6 +63,18 @@ func (g *runGate) Live(context.Context) agent.Verdict {
 		return agent.GateSuperseded
 	}
 	return agent.GateAllowed
+}
+
+func (g *runGate) Calls() []agent.CallRecord {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.calls)
+}
+
+func (g *runGate) Record(rec agent.CallRecord) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls = append(g.calls, rec)
 }
 
 func findingOf(exit agent.RunExit) *lifecycle.Finding {

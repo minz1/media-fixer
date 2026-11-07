@@ -22,7 +22,6 @@ type runLoop struct {
 	messages  []openai.ChatCompletionMessage
 	assistant openai.ChatCompletionMessage
 	toolStart int
-	seen      map[string]int
 	gate      Gate
 	journal   *db.Event
 	result    *DiagnosticResult
@@ -75,7 +74,7 @@ func (l *runLoop) reply(ctx context.Context) {
 
 func (l *runLoop) batch(ctx context.Context) {
 	ev, result := l.a.processToolCalls(
-		ctx, l.inc, l.preFix, l.assistant.ToolCalls, l.seen, l.gate, &l.messages,
+		ctx, l.inc, l.preFix, l.assistant.ToolCalls, l.gate, &l.messages,
 	)
 	l.result = result
 	l.fire(ctx, ev)
