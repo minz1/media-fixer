@@ -34,7 +34,7 @@ func transitions() []row {
 		{States(), Reported, rejectWith(ErrNotNew)},
 		{[]State{None}, RunClaimed, rejectWith(ErrStale)},
 		{[]State{None}, ActionAttempted, rejectWith(ErrStale)},
-		{[]State{None}, AttemptFinished, journalOnly},
+		{[]State{None}, AttemptFinished, rejectWith(ErrStale)},
 		{[]State{None}, RunFinished, rejectWith(ErrStale)},
 		{[]State{None}, VerifyObserved, rejectWith(ErrStale)},
 		{[]State{None}, DownloadObserved, rejectWith(ErrStale)},
@@ -116,7 +116,7 @@ func transitions() []row {
 
 func Next(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 	if workerEvent(ev.Kind) && ev.Gen != cur.Generation {
-		if ev.Kind == AttemptFinished {
+		if ev.Kind == AttemptFinished && cur.Status != None {
 			return Decision{Next: cur, JournalOnly: true}, nil
 		}
 		return Decision{Next: cur}, ErrStale
