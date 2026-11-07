@@ -417,3 +417,22 @@ func runOnce(
 	exit := ag.Run(ctx, inc, nil)
 	return exit.Finding, exit.Conversation, exit.Err
 }
+
+func TestA3_8_ConcludedExitKeepsItsFinding(t *testing.T) {
+	t.Parallel()
+	ag, database := newRunTestAgent(t, &scriptedLLM{responses: completeAt(1)})
+	inc := seedRunIncident(t, database)
+	seedOldFinding(t, database, inc.ID)
+
+	if _, _, err := runOnce(context.Background(), ag, inc); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	tr := traceRuns(t, database, inc.ID)
+	checkJ1J2(t, tr)
+	if tr.last.Exit != "concluded" {
+		t.Fatalf("exit = %q, want concluded", tr.last.Exit)
+	}
+	if f := storedFinding(t, database, inc.ID); f.RootCause != "x" || f.PrimaryAction != "decypharr_recheck" {
+		t.Errorf("stored finding after run_finished = %+v, want the concluded diagnosis", f)
+	}
+}
