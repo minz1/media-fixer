@@ -250,24 +250,25 @@ type diagnosisOutcome struct {
 func (s *Service) evaluateDiagnosis(
 	ctx context.Context,
 	inc *db.Incident,
+	gen int64,
 	result *agent.DiagnosticResult,
 	conversation []openai.ChatCompletionMessage,
 	attempt, maxAttempts int,
 ) diagnosisOutcome {
 	riskReason := s.reviewRiskReason(ctx, inc.ID, result)
 	if !result.RequiresApproval && riskReason == "" {
-		s.handleAgentResolved(ctx, inc, result)
+		s.handleAgentResolved(ctx, inc, gen, result)
 		return diagnosisOutcome{done: true}
 	}
 
 	if s.control == nil {
 		if result.RequiresApproval {
-			s.surfaceToOwner(ctx, inc, result, "")
+			s.surfaceToOwner(ctx, inc, gen, result, "")
 		} else {
 			// No reviewer configured to double-check a repeat/low-confidence
 			// proposal the model didn't itself flag — proceed rather than block
 			// on a review that can never happen.
-			s.handleAgentResolved(ctx, inc, result)
+			s.handleAgentResolved(ctx, inc, gen, result)
 		}
 		return diagnosisOutcome{done: true}
 	}
@@ -287,9 +288,9 @@ func (s *Service) evaluateDiagnosis(
 		// something unparseable.
 		s.log.ErrorContext(ctx, "control review error", "incident", inc.ID, "error", verdictErr)
 		if result.RequiresApproval {
-			s.surfaceToOwner(ctx, inc, result, " (control review failed)")
+			s.surfaceToOwner(ctx, inc, gen, result, " (control review failed)")
 		} else {
-			s.surfaceToOwner(ctx, inc, result, fmt.Sprintf(
+			s.surfaceToOwner(ctx, inc, gen, result, fmt.Sprintf(
 				" (control review failed — flagged because %s)", riskReason))
 		}
 		return diagnosisOutcome{done: true}
@@ -298,17 +299,17 @@ func (s *Service) evaluateDiagnosis(
 	switch verdict.Verdict {
 	case agent.VerdictApprove:
 		if result.RequiresApproval {
-			s.surfaceToOwner(ctx, inc, result, "")
+			s.surfaceToOwner(ctx, inc, gen, result, "")
 		} else {
 			// The reviewer approved a fix the model didn't itself flag for
 			// approval (this review was triggered by our own repeat/low-
 			// confidence heuristic) — let it proceed autonomously as proposed.
-			s.handleAgentResolved(ctx, inc, result)
+			s.handleAgentResolved(ctx, inc, gen, result)
 		}
 		return diagnosisOutcome{done: true}
 
 	case agent.VerdictEscalateToOwner:
-		s.escalate(ctx, inc, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
+		s.escalate(ctx, inc, gen, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
 			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).",
 			inc.Title,
 			inc.ShortID(),
@@ -317,7 +318,7 @@ func (s *Service) evaluateDiagnosis(
 
 	case agent.VerdictSuggestAlternative:
 		if attempt == maxAttempts-1 {
-			s.escalate(ctx, inc, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
+			s.escalate(ctx, inc, gen, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
 				"⚠️ **%s** (#%s): agent still needs approval after %d retries.",
 				inc.Title, inc.ShortID(), attempt+1,
 			), "",

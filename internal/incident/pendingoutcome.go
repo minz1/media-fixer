@@ -10,13 +10,15 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
-func (s *Service) startPendingOutcomeTracking(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+func (s *Service) startPendingOutcomeTracking(
+	ctx context.Context, inc *db.Incident, gen int64, result *agent.DiagnosticResult,
+) {
 	target := s.lastArrSearchMissingParams(ctx, inc.ID)
 	if target == nil {
-		s.runVerification(ctx, inc, result)
+		s.runVerification(ctx, inc, gen, result)
 		return
 	}
-	ev := lifecycle.Event{Kind: lifecycle.RunFinished, Gen: inc.Generation, Outcome: lifecycle.Outcome{
+	ev := lifecycle.Event{Kind: lifecycle.RunFinished, Gen: gen, Outcome: lifecycle.Outcome{
 		Kind: lifecycle.OutcomeAwaitDownload,
 		Target: &lifecycle.Download{
 			MediaType: target.MediaType, Title: target.Title, Season: target.Season, Episode: target.Episode,

@@ -19,6 +19,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -364,5 +365,43 @@ func TestShutdownCancelledRun_QuietThenSystemRerun(t *testing.T) {
 	waitGateStart(t, ag)
 	if got := env.snap(t, id); got.ActionCount != 2 || len(env.notif.ownerCards()) != 0 {
 		t.Fatalf("restart rerun: count %d, %d owner cards", got.ActionCount, len(env.notif.ownerCards()))
+	}
+}
+
+type bumpingAgent struct {
+	*observingAgent
+
+	t  *testing.T
+	db *db.DB
+}
+
+func (a *bumpingAgent) Run(
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
+) agent.RunExit {
+	exit := gatedExit(ctx, gate, &agent.DiagnosticResult{
+		RootCause: "test", Confidence: "high", PrimaryAction: "run-a", PrimaryReason: "test",
+	}, nil, nil)
+	lifecycletest.Force(a.t, a.db, inc.ID, func(n *lifecycle.Snapshot) { n.Generation++ })
+	return exit
+}
+
+func TestRunFinished_UsesLaunchGeneration(t *testing.T) {
+	t.Parallel()
+	ag := &bumpingAgent{observingAgent: newObservingAgent(), t: t}
+	env := newLifecycleEnv(t, ag)
+	ag.db = env.db
+	s := lifecycletest.Seed(t, env.db, lifecycletest.Spec{Title: "Bumped run", State: lifecycle.Open})
+	inc, err := env.db.GetIncident(t.Context(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inc.Generation = s.Generation + 1
+	env.svc.RunAgentAtForTest(t.Context(), inc, s.Generation)
+	got := env.snap(t, s.ID)
+	if got.Status != lifecycle.Investigating || got.Generation != s.Generation+1 {
+		t.Fatalf("a run launched at gen %d finished on gen %d: %s", s.Generation, got.Generation, got.Status)
+	}
+	if !env.logged("run outcome not applied, incident already moved on") {
+		t.Fatalf("stale outcome not logged:\n%s", env.logs.String())
 	}
 }

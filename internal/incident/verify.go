@@ -26,7 +26,7 @@ func (s *Service) observer() Observer {
 	return s.agent
 }
 
-func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
+func (s *Service) runVerification(ctx context.Context, inc *db.Incident, gen int64, result *agent.DiagnosticResult) {
 	itemID := inc.JellyfinItemID
 	if itemID == "" {
 		itemID = result.VerifyItemID
@@ -40,7 +40,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 	if result.PreFix != nil {
 		spec.PreFix, _ = json.Marshal(result.PreFix)
 	}
-	ev := lifecycle.Event{Kind: lifecycle.RunFinished, Gen: inc.Generation, Outcome: lifecycle.Outcome{
+	ev := lifecycle.Event{Kind: lifecycle.RunFinished, Gen: gen, Outcome: lifecycle.Outcome{
 		Kind: lifecycle.OutcomeVerify, Spec: spec, After: time.Duration(result.VerifyAfterSeconds) * time.Second,
 	}}
 	s.applyOutcome(ctx, inc.ID, ev)

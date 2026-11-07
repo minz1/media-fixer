@@ -44,7 +44,7 @@ func (s *Service) EscalateToOwnerForTest(ctx context.Context, inc *db.Incident, 
 		_, _ = s.apply(ctx, inc.ID, lifecycle.Event{Kind: lifecycle.RunClaimed, Gen: snap.Generation}, nil)
 		inc.Generation = snap.Generation
 	}
-	s.escalate(ctx, inc, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, msg, ""))
+	s.escalate(ctx, inc, inc.Generation, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, msg, ""))
 }
 
 // ProgressPhrasesForTest exposes progressPhrases for progress_test.go.
@@ -98,7 +98,7 @@ func ErrPlanExpiredForTest() error { return errPlanExpired }
 func (s *Service) RunningForTest(id string) bool { return s.runs.running(id) }
 
 func (s *Service) RouteExitForTest(ctx context.Context, inc *db.Incident, exit agent.RunExit) bool {
-	return s.routeExit(ctx, inc, exit, 0, 1).done
+	return s.routeExit(ctx, inc, inc.Generation, exit, 0, 1).done
 }
 
 func (s *Service) RunAgentForTest(ctx context.Context, inc *db.Incident) {
@@ -204,3 +204,7 @@ func (s *Service) ReserveForTest(id string) func() { return s.runs.reserve(id) }
 func (s *Service) PlanStartedForTest(id string) func() { return s.runs.planStarted(id) }
 
 func StatusLineForTest(st db.IncidentStatus) string { return statusLine(st) }
+
+func (s *Service) RunAgentAtForTest(ctx context.Context, inc *db.Incident, gen int64) {
+	s.runAgent(ctx, inc, nil, s.timers(ctx), s.gateFor(inc.ID, gen))
+}
