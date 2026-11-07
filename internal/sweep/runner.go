@@ -567,16 +567,16 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 	if err := x.guard(ctx); err != nil {
 		return err
 	}
-	x.c.Searched += len(ids)
-	item.Result = resultSearched
-	if err := x.addItem(ctx, &item); err != nil {
-		return err
-	}
 	for season := range seasonCounts(eps) {
 		if err := x.attempt(ctx, b.series, season); err != nil {
 			return err
 		}
 	}
+	item.Result = resultSearched
+	if err := x.addItem(ctx, &item); err != nil {
+		return err
+	}
+	x.c.Searched += len(ids)
 	cmdID, err := x.Sonarr.SearchEpisodes(ctx, ids)
 	if err != nil {
 		if ctx.Err() != nil {

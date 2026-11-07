@@ -894,3 +894,25 @@ func TestRun_ProgressStartedIsRunStart(t *testing.T) {
 		t.Errorf("Progress.Started = %v (run %d), want %v", seen.Started, seen.RunID, run.StartedAt)
 	}
 }
+
+func TestS3_11_FailedTargetUpsertCountsNoSearch(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.rawExec(t, `CREATE TRIGGER target_fail BEFORE INSERT ON sweep_targets
+		BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	s := settings()
+	s.MaxSearches, s.MaxLookups = 20, 0
+	run := h.run(t, false, s)
+	if n := len(h.fake.commands()); n != 0 {
+		t.Fatalf("commands = %d, want none after the target upsert failed", n)
+	}
+	if run.Counts.Searched != 0 || slices.Contains(itemResults(run), "searched") {
+		t.Errorf("searched %d, results %v; want nothing counted or stored as searched",
+			run.Counts.Searched, itemResults(run))
+	}
+	used, _, err := h.db.LiveSearchesSince(context.Background(), t0().Add(-24*time.Hour))
+	if err != nil || used != 0 {
+		t.Errorf("LiveSearchesSince = %d, %v; want 0", used, err)
+	}
+}
