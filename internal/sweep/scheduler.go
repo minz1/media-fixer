@@ -37,8 +37,9 @@ type Scheduler struct {
 	cmu    sync.Mutex
 	cancel context.CancelCauseFunc
 
-	wmu    sync.Mutex
-	warned string
+	wmu       sync.Mutex
+	warned    string
+	badDigest string
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {

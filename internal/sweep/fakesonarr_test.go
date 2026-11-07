@@ -2,6 +2,7 @@ package sweep_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -457,6 +458,7 @@ type harness struct {
 	fake   *fakeSonarr
 	clock  *fakeClock
 	db     *db.DB
+	path   string
 	runner *sweep.Runner
 	dms    *[]string
 
@@ -476,12 +478,13 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clock := &fakeClock{t: t0()}
 	fake := newFakeSonarr(t, clock)
-	d, err := db.Open(filepath.Join(t.TempDir(), "sweep.db"))
+	path := filepath.Join(t.TempDir(), "sweep.db")
+	d, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	h := &harness{fake: fake, clock: clock, db: d, dms: &[]string{}}
+	h := &harness{fake: fake, clock: clock, db: d, path: path, dms: &[]string{}}
 	h.runner = &sweep.Runner{
 		Sonarr: fake.client(),
 		DB:     d,
@@ -524,6 +527,20 @@ func (h *harness) run(t *testing.T, dry bool, s sweep.Settings) db.SweepRun {
 	}
 	t.Fatalf("run %d not stored", id)
 	return db.SweepRun{}
+}
+
+func (h *harness) rawExec(t *testing.T, stmts ...string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	for _, q := range stmts {
+		if _, err = raw.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func (h *harness) setPaused(t *testing.T, paused bool) {

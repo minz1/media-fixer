@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -233,5 +234,61 @@ func TestScheduler_DigestErrorDoesNotBlockRun(t *testing.T) {
 	h.tick(sch, at(2, 9, 0))
 	if n := len(h.digests()); n != 1 {
 		t.Fatalf("digests after recovery = %d, want the changed list sent", n)
+	}
+}
+
+func TestS7_7_DigestNotResentWhileStoreFails(t *testing.T) {
+	t.Parallel()
+	for name, when := range map[string]string{
+		"after send":  `NEW.value LIKE '%s:1:1%'`,
+		"every write": `1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h, sch := digestSetup(t, settings())
+			h.seedStuck(t, "s:1:1", 1)
+			h.rawExec(t, `CREATE TRIGGER digest_fail BEFORE INSERT ON settings
+				WHEN NEW.key = 'maintenance.pack_sweep_digest' AND `+when+`
+				BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+			for m := range 10 {
+				h.tick(sch, at(0, 9, m))
+			}
+			if n := len(h.digests()); n > 1 {
+				t.Fatalf("digests on day 0 while the store fails = %d, want at most 1", n)
+			}
+		})
+	}
+}
+
+func TestS7_8_CorruptDigestRowIsReset(t *testing.T) {
+	t.Parallel()
+	h, sch := digestSetup(t, settings())
+	logs := &lockedBuffer{}
+	h.runner.Log = slog.New(slog.NewTextHandler(logs, nil))
+	h.seedStuck(t, "s:1:1", 1)
+	if err := h.db.SetSetting(context.Background(), "maintenance.pack_sweep_digest", "{not json"); err != nil {
+		t.Fatal(err)
+	}
+	for m := range 5 {
+		h.tick(sch, at(0, 9, m))
+	}
+	if n := logs.count("WARN"); n != 1 {
+		t.Fatalf("WARNs = %d, want the corrupt row logged once", n)
+	}
+	logs.mu.Lock()
+	text := logs.buf.String()
+	logs.mu.Unlock()
+	if !strings.Contains(text, `raw="{not json"`) {
+		t.Errorf("log = %q, want the raw value", text)
+	}
+	want := settings()
+	enabled := day0().Add(-48 * time.Hour)
+	want.IntervalHours, want.EnabledAt = 168, &enabled
+	if got, err := sweep.LoadSettings(context.Background(), h.db); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("sweep settings after the reset = %+v, %v; want them unchanged", got, err)
+	}
+	h.tick(sch, at(1, 9, 0))
+	if n := len(h.digests()); n != 1 {
+		t.Fatalf("digests the day after a corrupt row = %d, want 1", n)
 	}
 }

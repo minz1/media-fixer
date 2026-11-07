@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	digestKey   = "maintenance.pack_sweep_digest"
-	digestLines = 10
+	digestKey    = "maintenance.pack_sweep_digest"
+	digestLines  = 10
+	digestRawLog = 200
 )
 
 type digestState struct {
@@ -67,19 +68,9 @@ func (s *Scheduler) digest(set Settings, now time.Time) error {
 	if now.Hour() < set.DigestHourUTC || s.r.Notify == nil {
 		return nil
 	}
-	var prev digestState
-	raw, err := s.d.GetSetting(s.base, digestKey)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
+	prev, err := s.loadDigest(now)
+	if err != nil || prev.SentAt.UTC().Truncate(day).Equal(now.Truncate(day)) {
 		return err
-	default:
-		if err = json.Unmarshal([]byte(raw), &prev); err != nil {
-			return fmt.Errorf("stored digest state is unreadable: %w", err)
-		}
-	}
-	if prev.SentAt.UTC().Truncate(day).Equal(now.Truncate(day)) {
-		return nil
 	}
 	rows, err := s.d.ListSweepTargets(s.base)
 	if err != nil {
@@ -91,19 +82,45 @@ func (s *Scheduler) digest(set Settings, now time.Time) error {
 		keys[i] = t.Target
 	}
 	slices.Sort(keys)
-	next := digestState{SentAt: now, Stuck: keys}
-	var sendErr error
-	if !slices.Equal(keys, prev.Stuck) {
-		sendErr = s.r.Notify(s.base, digestCard(stuck))
+	if err = s.saveDigest(digestState{SentAt: now, Stuck: prev.Stuck}); err != nil || slices.Equal(keys, prev.Stuck) {
+		return err
 	}
-	if sendErr != nil && !errors.Is(sendErr, card.ErrUntracked) {
-		next.Stuck = prev.Stuck
-	} else {
-		sendErr = nil
+	if err = s.r.Notify(s.base, digestCard(stuck)); err != nil && !errors.Is(err, card.ErrUntracked) {
+		return err
 	}
-	b, err := json.Marshal(next)
+	return s.saveDigest(digestState{SentAt: now, Stuck: keys})
+}
+
+func (s *Scheduler) loadDigest(now time.Time) (digestState, error) {
+	var st digestState
+	raw, err := s.d.GetSetting(s.base, digestKey)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return st, nil
+	case err != nil:
+		return st, err
+	}
+	uerr := json.Unmarshal([]byte(raw), &st)
+	if uerr == nil {
+		return st, nil
+	}
+	s.wmu.Lock()
+	logged := s.badDigest == raw
+	s.badDigest = raw
+	s.wmu.Unlock()
+	if !logged {
+		s.r.logger().WarnContext(s.base, "pack sweep scheduler",
+			"err", fmt.Errorf("stored digest state is unreadable, resetting: %w", uerr),
+			"raw", raw[:min(len(raw), digestRawLog)])
+	}
+	reset := digestState{SentAt: now}
+	return reset, s.saveDigest(reset)
+}
+
+func (s *Scheduler) saveDigest(st digestState) error {
+	b, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	return errors.Join(sendErr, s.d.SetSetting(s.base, digestKey, string(b)))
+	return s.d.SetSetting(s.base, digestKey, string(b))
 }
