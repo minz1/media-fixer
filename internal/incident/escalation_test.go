@@ -111,6 +111,7 @@ func newEscalationFixtureNotifier(
 	t.Cleanup(cancel)
 	jrnl := journal.New(database)
 	svc := incident.NewService(base, database, jrnl, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	return &escalationFixture{svc: svc, db: database, jrnl: jrnl, dbPath: f.Name()}
 }
 

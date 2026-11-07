@@ -68,6 +68,7 @@ func newTestService(t *testing.T) (*incident.Service, *db.DB, *captureNotifier) 
 	// agent is nil — tests must not trigger the agent goroutine, so all
 	// incidents are created with a nil agent and the goroutine exits early.
 	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	return svc, database, notif
 }
 
@@ -421,6 +422,7 @@ func TestStatusTransitions_NotifyLiveSubscribers(t *testing.T) {
 	notif := &captureNotifier{}
 	discard := slog.New(slog.DiscardHandler)
 	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, notif, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 
 	inc, err := svc.Handle(ctx, &incident.Report{
@@ -518,15 +520,6 @@ func (a *blockingAgent) CheckPendingOutcome(
 	return &agent.PendingOutcomeObservation{}, nil
 }
 
-// TestShutdown_CancelsInFlightRun is the regression test for runManager's
-// redesign away from storing a base [context.Context] field (the containedctx
-// lint): cancellation on process shutdown used to come directly from
-// [context.WithCancel](m.base); it now comes from a relay goroutine watching a
-// channel that closes once instead. This proves that indirection still
-// delivers the original guarantee end to end — cancelling the context
-// NewService was constructed with actually reaches a live Agent.Run call,
-// through the real Service, not by calling runManager's unexported methods
-// directly.
 func TestShutdown_CancelsInFlightRun(t *testing.T) {
 	t.Parallel()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
@@ -545,6 +538,7 @@ func TestShutdown_CancelsInFlightRun(t *testing.T) {
 	fakeAgent := newBlockingAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(base, database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 
 	if _, handleErr := svc.Handle(context.Background(), &incident.Report{
 		Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "Halt and Catch Fire",
@@ -717,6 +711,7 @@ func TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 
 	inc, err := svc.Handle(ctx, &incident.Report{
@@ -877,6 +872,7 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 
 	inc, err := svc.Handle(ctx, &incident.Report{
@@ -1008,6 +1004,7 @@ func TestConcurrentIncidents_DiagnosticRunsAreSerialized(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 
 	const numIncidents = 3
@@ -1283,6 +1280,7 @@ func TestRunAgent_LowConfidence_TriggersControlReview_ApproveProceedsAutonomousl
 	svc := incident.NewService(
 		context.Background(), database, nil, fakeAgent, control, nil, notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 
 	if _, err = svc.Handle(ctx, &incident.Report{
@@ -1334,6 +1332,7 @@ func TestNotifyReporters_FailedDMFallsBackToOwner(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 
 	inc, err := svc.Handle(ctx, &incident.Report{
@@ -1407,6 +1406,7 @@ func TestSweepStaleRuns_RerunsHungIncident(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 
 	svc.SweepStaleRuns(ctx)
 
@@ -1542,6 +1542,7 @@ func TestRerun_HeldNoteDoesNotLetTheOldRunFinish(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, fakeAgent, nil, nil, notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	ctx := context.Background()
 	inc, err := svc.Handle(ctx, &incident.Report{
 		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",

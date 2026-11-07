@@ -11,19 +11,10 @@ import (
 // for an incident cancels any run already in flight for it (cancel-on-supersede),
 // so a reopen or reinvestigate never overlaps a prior run's still-sleeping
 // verification loop — the root cause of the duplicate "fixed" notification.
-//
-// Every per-run context is cancelled when shutdown closes. That's relayed by one
-// goroutine per run rather than derived directly from a stored base
-// [context.Context]: holding a long-lived context in a struct field is exactly
-// the pattern that invites stale/wrong-context bugs (a context meant for one
-// call silently reused far outside its original scope) — a channel that's
-// closed exactly once is a plainer, harder-to-misuse "the process is shutting
-// down" signal, and newRunManager only ever reads from the context passed to
-// it, never stores it.
 type runManager struct {
-	mu       sync.Mutex
-	active   map[string]*runToken
-	shutdown chan struct{}
+	mu     sync.Mutex
+	active map[string]*runToken
+	base   context.Context
 
 	// globalSlot serializes the disruptive part of concurrent incident work: the
 	// LLM tool-calling diagnostic loop (Agent.Run) and owner-approved escalation
@@ -54,28 +45,13 @@ type runToken struct {
 	staleFloor int
 }
 
-// newRunManager builds a runManager whose runs are all cancelled once base is
-// done (e.g. the process-lifetime context from signal.NotifyContext). base is
-// read from exactly once, by a single goroutine that relays its Done() into the
-// shutdown channel every per-run context selects on — see runManager's doc
-// comment for why that indirection exists instead of storing base itself.
 func newRunManager(base context.Context) *runManager {
 	m := &runManager{
 		active:     make(map[string]*runToken),
-		shutdown:   make(chan struct{}),
+		base:       base,
 		globalSlot: make(chan struct{}, 1),
 	}
 	m.globalSlot <- struct{}{}
-	// A context with no Done() channel (context.Background/TODO) never
-	// cancels, and receiving from its nil channel parks this goroutine
-	// forever while pinning the whole runManager. Production passes a
-	// signal.NotifyContext, but every test passes Background.
-	if done := base.Done(); done != nil {
-		go func() {
-			<-done
-			close(m.shutdown)
-		}()
-	}
 	return m
 }
 
@@ -89,23 +65,7 @@ func (m *runManager) supersede(id string) (context.Context, *runToken, bool) {
 	if replaced {
 		prev.cancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel synchronously if shutdown has already been signalled. Relying on
-	// the relay goroutine alone made cancellation eventual, so a report
-	// arriving in that window got a live context and could start a fresh
-	// diagnostic loop — tool calls and all — during shutdown.
-	select {
-	case <-m.shutdown:
-		cancel()
-	default:
-		go func() {
-			select {
-			case <-m.shutdown:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-	}
+	ctx, cancel := context.WithCancel(m.base)
 	tok := &runToken{cancel: cancel}
 	m.active[id] = tok
 	return ctx, tok, replaced

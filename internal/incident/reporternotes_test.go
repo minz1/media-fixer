@@ -171,6 +171,7 @@ func newEscalationService(t *testing.T, status db.IncidentStatus) (*incident.Ser
 	}
 	notif := newSyncNotifier()
 	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	return svc, inc, notif
 }
 

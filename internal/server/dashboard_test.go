@@ -41,6 +41,7 @@ func newDashboardTestServer(t *testing.T) (*server.Server, *db.DB) {
 	// comment in escalation_test.go's newEscalationTestServer.
 	jrnl := journal.New(database)
 	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, &stubNotifier{}, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)

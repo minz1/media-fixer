@@ -38,6 +38,7 @@ type Service struct {
 	stuckRead   StuckReadChecker
 	log         *slog.Logger
 	runs        *runManager
+	work        *workers
 	seedTimeout time.Duration
 	unit        atomic.Int64
 	timersWarn  atomic.Bool
@@ -72,7 +73,8 @@ func NewService(
 	notif Notifier,
 	log *slog.Logger,
 ) *Service {
-	s := &Service{
+	work := newWorkers(base)
+	return &Service{
 		db:         database,
 		journal:    jrnl,
 		agent:      ag,
@@ -80,10 +82,27 @@ func NewService(
 		summarizer: summarizer,
 		notif:      notif,
 		log:        log,
-		runs:       newRunManager(base),
+		runs:       newRunManager(work.base),
+		work:       work,
 	}
-	go s.backgroundSweepLoop(base)
-	return s
+}
+
+func (s *Service) Start() {
+	if s.work.goNamed("sweep", s.backgroundSweepLoop) {
+		s.log.Info("incident sweep loop started")
+	}
+}
+
+func (s *Service) StartRecovery() {
+	s.work.goNamed("recovery", s.RecoverZombies)
+}
+
+func (s *Service) Shutdown(ctx context.Context) error {
+	s.work.stop()
+	if names := s.work.wait(ctx); len(names) > 0 {
+		return fmt.Errorf("%w: %s", ErrShutdownTimeout, strings.Join(names, ", "))
+	}
+	return nil
 }
 
 func (s *Service) minutes(n int) time.Duration {
@@ -138,7 +157,7 @@ func (s *Service) startRun(
 	inc *db.Incident,
 	buildSeed func(context.Context) []openai.ChatCompletionMessage,
 ) {
-	go func() {
+	started := s.work.goNamed("run:"+inc.ShortID(), func(context.Context) {
 		defer s.runs.end(inc.ID, tok)
 		t := s.timers(ctx)
 		s.runs.setStaleFloor(tok, t.RetryFirstMinutes+t.RetrySecondMinutes+staleMargin)
@@ -150,7 +169,11 @@ func (s *Service) startRun(
 		seed := buildSeed(seedCtx)
 		cancel()
 		s.runAgent(ctx, inc, seed, t)
-	}()
+	})
+	if !started {
+		s.runs.end(inc.ID, tok)
+		s.log.InfoContext(ctx, "run not started, shutting down", "incident", inc.ID)
+	}
 }
 
 // Report is the normalised form of an incoming issue report from any source.
@@ -1064,6 +1087,9 @@ func (s *Service) buildReinvestigateSeed(
 func (s *Service) RecoverZombies(ctx context.Context) {
 	for _, status := range []db.IncidentStatus{db.StatusInvestigating, db.StatusReopened, db.StatusVerifying} {
 		incidents, err := s.db.FindByStatus(ctx, status)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			s.log.ErrorContext(ctx, "zombie recovery query", "status", status, "error", err)
 			continue
@@ -1073,10 +1099,31 @@ func (s *Service) RecoverZombies(ctx context.Context) {
 				continue
 			}
 			s.log.WarnContext(ctx, "recovering zombie incident", "incident", inc.ID, "status", status)
-			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil {
+			if rerunErr := s.rerun(ctx, inc.ID, rerunRestart, 0); rerunErr != nil && ctx.Err() == nil {
 				s.log.ErrorContext(ctx, "zombie rerun failed", "incident", inc.ID, "error", rerunErr)
 			}
 		}
+	}
+	s.recoverOpen(ctx)
+}
+
+func (s *Service) recoverOpen(ctx context.Context) {
+	incidents, err := s.db.FindByStatus(ctx, db.StatusOpen)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.ErrorContext(ctx, "open incident recovery query", "error", err)
+		}
+		return
+	}
+	for _, inc := range incidents {
+		if ctx.Err() != nil {
+			return
+		}
+		if s.runs.running(inc.ID) {
+			continue
+		}
+		s.log.InfoContext(ctx, "starting open incident left without a run", "incident", inc.ID)
+		s.launch(inc, nil)
 	}
 }
 
@@ -1141,7 +1188,7 @@ func (s *Service) sweepStaleReopened(ctx context.Context, staleBefore time.Time,
 // backgroundSweepLoop periodically calls SweepStaleRuns and
 // AdvancePendingOutcomes until base is done — one ticker for both, since
 // neither needs a different cadence than the other and a second ticker would
-// just be more moving parts for no benefit. Started once from NewService,
+// just be more moving parts for no benefit. Started once from Start,
 // tied to the same process-lifetime context that owns every other piece of
 // Service's background lifecycle (runManager).
 func (s *Service) backgroundSweepLoop(base context.Context) {

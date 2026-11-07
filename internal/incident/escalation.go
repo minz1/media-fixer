@@ -177,10 +177,14 @@ func (s *Service) clearEscalationPlan(ctx context.Context, id string) {
 // later reopen/reinvestigate cancels it cleanly instead of racing it.
 func (s *Service) launchVerification(inc *db.Incident, result *agent.DiagnosticResult) {
 	ctx, tok, _ := s.runs.supersede(inc.ID)
-	go func() {
+	started := s.work.goNamed("verify:"+inc.ShortID(), func(context.Context) {
 		defer s.runs.end(inc.ID, tok)
 		s.runVerification(ctx, inc, result)
-	}()
+	})
+	if !started {
+		s.runs.end(inc.ID, tok)
+		s.log.InfoContext(ctx, "verification not started, shutting down", "incident", inc.ID)
+	}
 }
 
 // logEscalation records an owner-approved escalation to the event log,

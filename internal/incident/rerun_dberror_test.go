@@ -52,6 +52,7 @@ func newRunningIncident(
 	ag := newBlockingAgent()
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	svc := incident.NewService(t.Context(), database, nil, ag, nil, nil, notif, logger)
+	t.Cleanup(func() { stopService(t, svc) })
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Slow"}
 	if err = database.CreateIncident(context.Background(), inc); err != nil {

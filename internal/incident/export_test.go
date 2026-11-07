@@ -98,3 +98,24 @@ func (s *Service) RouteExitForTest(ctx context.Context, inc *db.Incident, exit a
 func (s *Service) RunAgentForTest(ctx context.Context, inc *db.Incident) {
 	s.runAgent(ctx, inc, nil, s.timers(ctx))
 }
+
+type WorkersForTest struct{ w *workers }
+
+func NewWorkersForTest(parent context.Context) *WorkersForTest {
+	return &WorkersForTest{w: newWorkers(parent)}
+}
+
+func (w *WorkersForTest) GoNamed(name string, fn func(context.Context)) bool {
+	return w.w.goNamed(name, fn)
+}
+
+func (w *WorkersForTest) Enter(name string) (func(), bool) { return w.w.enter(name) }
+
+func (w *WorkersForTest) Stop() { w.w.stop() }
+
+func (w *WorkersForTest) Wait(ctx context.Context) []string { return w.w.wait(ctx) }
+
+func (s *Service) SupersedeForTest(id string) context.Context {
+	ctx, _, _ := s.runs.supersede(id)
+	return ctx
+}

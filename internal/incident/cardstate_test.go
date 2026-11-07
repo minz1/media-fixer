@@ -69,6 +69,7 @@ func newCardService(t *testing.T, notif incident.Notifier, logs *bytes.Buffer) (
 		logger = slog.New(slog.NewTextHandler(logs, nil))
 	}
 	svc := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif, logger)
+	t.Cleanup(func() { stopService(t, svc) })
 	return svc, database, f.Name()
 }
 
@@ -513,6 +514,7 @@ func TestOwnerCards_HaveSubject(t *testing.T) {
 		notif := &cardNotifier{}
 		ag := newAlwaysFixedAgent()
 		svc := incident.NewService(ctx, database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+		t.Cleanup(func() { stopService(t, svc) })
 		svc.SweepStaleRuns(ctx)
 		waitForRun(t, ag)
 		assertSubject(t, notif.ownerCards(), card.IncidentSubject(inc.ID))

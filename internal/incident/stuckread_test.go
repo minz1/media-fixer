@@ -101,6 +101,7 @@ func newStuckReadService(
 	svc := incident.NewService(
 		t.Context(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(unit)
 	return svc, database
 }

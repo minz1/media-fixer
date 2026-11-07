@@ -166,6 +166,7 @@ func newDashboardTestServerOnAddr(t *testing.T, addr string) *server.Server {
 	discard := slog.New(slog.DiscardHandler)
 	jrnl := journal.New(database)
 	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, &stubNotifier{}, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	srv, err := server.New(addr, "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +232,7 @@ func eventDuringFirstRender(t *testing.T, path string) {
 	discard := slog.New(slog.DiscardHandler)
 	jrnl := journal.New(database)
 	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, &stubNotifier{}, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)

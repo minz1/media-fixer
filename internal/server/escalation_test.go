@@ -111,6 +111,7 @@ func newEscalationTestServer(t *testing.T, ag incident.AgentRunner) (*server.Ser
 	// would never see each other's appends.
 	jrnl := journal.New(database)
 	svc := incident.NewService(context.Background(), database, jrnl, ag, nil, nil, notif, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)

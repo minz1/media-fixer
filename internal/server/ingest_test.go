@@ -48,6 +48,7 @@ func newTestServer(t *testing.T) (*server.Server, *db.DB) {
 	notif := &stubNotifier{}
 	jrnl := journal.New(database)
 	svc := incident.NewService(context.Background(), database, jrnl, nil, nil, nil, notif, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	srv, err := server.New(":0", "/media", database, jrnl, svc, discard)
 	if err != nil {
 		t.Fatal(err)

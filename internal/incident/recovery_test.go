@@ -72,6 +72,7 @@ func TestRecoverZombies_RerunsReopenedIncident(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 
 	svc.RecoverZombies(context.Background())
 
@@ -84,6 +85,7 @@ func TestSweepStaleRuns_RerunsStaleReopenedIncident(t *testing.T) {
 	ag := newAlwaysFixedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 
 	svc.SweepStaleRuns(context.Background())
 
@@ -104,6 +106,7 @@ func TestSweepStaleReopened_CardPrintsSavedMinutes(t *testing.T) {
 	ag := newAlwaysFixedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 
 	svc.SweepStaleRuns(context.Background())
 
@@ -123,6 +126,7 @@ func TestSweepStaleRuns_LeavesFreshReopenedIncident(t *testing.T) {
 	ag := newAlwaysFixedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 
 	svc.SweepStaleRuns(context.Background())
 
@@ -147,6 +151,7 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWhilePaused(t *testing.T) {
 	notif := newSyncNotifier()
 	discard := slog.New(slog.DiscardHandler)
 	svc := incident.NewService(ctx, database, nil, newAlwaysFixedAgent(), nil, nil, notif, discard)
+	t.Cleanup(func() { stopService(t, svc) })
 	if err := svc.SetAutonomousPaused(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +173,7 @@ func TestSweepStaleRuns_LogsAFailedPauseCheck(t *testing.T) {
 	svc := incident.NewService(
 		context.Background(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.NewTextHandler(logs, nil)),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -240,6 +246,7 @@ func TestRerun_HungSummarizerDoesNotHoldTheRunBeforeDiagnosis(t *testing.T) {
 	summarizer := agent.NewSummarizer(openai.NewClientWithConfig(cfg), "m")
 	svc := incident.NewService(t.Context(), database, jrnl, ag, nil, summarizer, newSyncNotifier(),
 		slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetSeedTimeoutForTest(quietWindow)
 
 	if err := svc.Rerun(ctx, inc.ID); err != nil {

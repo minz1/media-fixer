@@ -100,6 +100,7 @@ func newHarness(t *testing.T) *harness {
 	h.svc = incident.NewService(
 		t.Context(), database, nil, blockingAgent{}, nil, nil, h.notif, slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, h.svc) })
 	h.w = h.newWatcher()
 	return h
 }

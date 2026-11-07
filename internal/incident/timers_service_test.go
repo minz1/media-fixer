@@ -71,6 +71,7 @@ func TestRetryDelay_FromSavedTimers(t *testing.T) {
 	svc := incident.NewService(
 		t.Context(), database, nil, ag, control, nil, newSyncNotifier(), slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(timersUnit)
 
 	if _, err := svc.Handle(t.Context(), &incident.Report{
@@ -129,6 +130,7 @@ func TestVerification_ChecksFromSavedTimers(t *testing.T) {
 	svc := incident.NewService(
 		t.Context(), database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler),
 	)
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(time.Millisecond)
 
 	inc, err := svc.Handle(t.Context(), &incident.Report{
@@ -217,6 +219,7 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 	summarizer := agent.NewSummarizer(openai.NewClientWithConfig(cfg), "m")
 	svc := incident.NewService(t.Context(), database, jrnl, newBlockingAgent(), nil, summarizer, newSyncNotifier(),
 		slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(time.Millisecond)
 
 	if err := svc.Rerun(t.Context(), inc.ID); err != nil {
@@ -269,6 +272,7 @@ func TestBackgroundLoop_ResetsToSavedInterval(t *testing.T) {
 	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	svc := incident.NewService(cancelled, database, nil, ag, nil, nil, newSyncNotifier(), slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(20 * time.Millisecond)
 	inc := newPendingTracker(t, database)
 
@@ -348,6 +352,7 @@ func TestSweepStaleRuns_CardPrintsSavedMinutes(t *testing.T) {
 	ag := newAlwaysFixedAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(t.Context(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 
 	svc.SweepStaleRuns(t.Context())
 
@@ -568,6 +573,7 @@ func newRetryingService(
 	ag := newLowConfidenceOnceAgent()
 	notif := newSyncNotifier()
 	svc := incident.NewService(base, database, nil, ag, control, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(time.Second)
 	return svc, ag, notif
 }
@@ -667,6 +673,7 @@ func TestTimers_CorruptRowWarnsOncePerBadSpell(t *testing.T) {
 	logs := &syncBuffer{}
 	svc := incident.NewService(context.Background(), database, nil, newAlwaysFixedAgent(), nil, nil, newSyncNotifier(),
 		slog.New(slog.NewTextHandler(logs, nil)))
+	t.Cleanup(func() { stopService(t, svc) })
 	corrupt := func() {
 		if err := database.SetSetting(t.Context(), incident.TimersKey, "{"); err != nil {
 			t.Fatal(err)

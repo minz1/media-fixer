@@ -89,6 +89,7 @@ func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrC
 	}
 	ag := agent.New(nil, "stub", disp, database, jrnl, log)
 	svc := incident.NewService(base, database, jrnl, ag, nil, nil, &captureNotifier{}, log)
+	t.Cleanup(func() { stopService(t, svc) })
 	return &approvedFixture{svc: svc, db: database, disp: disp}
 }
 

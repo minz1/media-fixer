@@ -154,6 +154,20 @@ func startMaintenance(
 	}
 }
 
+const shutdownBudget = 60 * time.Second
+
+func startService(svc *incident.Service, log *slog.Logger) func() {
+	svc.Start()
+	svc.StartRecovery()
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+		defer cancel()
+		if err := svc.Shutdown(ctx); err != nil {
+			log.ErrorContext(ctx, "shutdown bound hit", "error", err)
+		}
+	}
+}
+
 func startCards(
 	ctx context.Context, bot *discord.Bot, database *db.DB, jrnl *journal.Journal,
 	handlers map[string]card.Handler, renderers map[string]card.Renderer,
@@ -230,7 +244,7 @@ func run() error {
 	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
 	bot.Start(ctx)
 
-	go svc.RecoverZombies(context.WithoutCancel(ctx))
+	defer startService(svc, log)()
 
 	log.Info("media-fixer started")
 	if err = srv.Start(ctx); err != nil {
