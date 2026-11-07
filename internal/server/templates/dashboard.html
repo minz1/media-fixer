@@ -202,11 +202,11 @@
     (function () {
       var notice = function () { return document.getElementById("notice"); };
       var key = function (ctx) { return ctx && ctx.request ? ctx.request.method + " " + ctx.request.action : ""; };
-      var show = function (text, ctx) {
+      var show = function (text, ctx, tone) {
         var n = notice();
         if (!n) return;
         var p = document.createElement("p");
-        p.className = "notice notice-err";
+        p.className = "notice " + (tone || "notice-err");
         p.textContent = text;
         p.dataset.src = key(ctx);
         n.replaceChildren(p);
@@ -219,13 +219,13 @@
         var ctx = e.detail.ctx;
         if (!ctx.response) return;
         if (ctx.response.status < 400) {
-          var n = notice(), p = n && n.querySelector("p.notice-err");
+          var n = notice(), p = n && n.querySelector("p[data-src]");
           if (p && p.dataset.src === key(ctx)) n.replaceChildren();
           return;
         }
         e.preventDefault();
         var text = new DOMParser().parseFromString(ctx.text || "", "text/html").body.textContent.trim();
-        show(text || "Request failed (" + ctx.response.status + ")", ctx);
+        show(text || "Request failed (" + ctx.response.status + ")", ctx, text === {{restartingText}} ? "tone-yellow" : "");
       });
       document.addEventListener("htmx:error", function (e) {
         show("Request failed: could not reach Media Fixer.", e.detail && e.detail.ctx);

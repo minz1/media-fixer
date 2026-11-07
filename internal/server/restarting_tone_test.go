@@ -87,3 +87,13 @@ func TestServer_RestartingNoticeIsYellowOnMonitorImport(t *testing.T) {
 	})
 	wantRestartingTone(t, "monitor import", rec.Body.String())
 }
+
+func TestServer_RefusedRequestScriptShowsRestartingInYellow(t *testing.T) {
+	t.Parallel()
+	srv, _ := newDashboardTestServer(t)
+	body := getBody(srv, "/media/")
+	want := `text === "` + card.RestartingNotice + `" ? "tone-yellow" : ""`
+	if !strings.Contains(body, want) {
+		t.Errorf("dashboard script does not tone the restarting text yellow; want %q", want)
+	}
+}
