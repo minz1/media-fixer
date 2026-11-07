@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/livecheck"
 )
@@ -19,6 +21,7 @@ func (s *Server) selftestIndex(w http.ResponseWriter, r *http.Request) {
 		tplKeyBaseURL: s.baseURL,
 		"Configured":  s.checker != nil,
 		"Report":      report,
+		"Running":     s.checkRunning.Load(),
 		tplKeyPaused:  s.isPaused(r.Context()),
 	})
 }
@@ -47,14 +50,12 @@ func (s *Server) selftestRun(w http.ResponseWriter, r *http.Request) {
 		s.selftestRunError(w, http.StatusConflict, "a check run is already in progress")
 		return
 	}
-	defer s.checkRunning.Store(false)
-
 	opts := livecheck.Options{AllowWrite: r.FormValue("write") == "on"}
-	report := livecheck.New(s.checker, opts).Run(r.Context())
-
-	s.reportMu.Lock()
-	s.lastReport = report
-	s.reportMu.Unlock()
+	report, ok := s.runSelftest(r.Context(), opts)
+	if !ok {
+		s.selftestRunError(w, http.StatusGatewayTimeout, "check run timed out")
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.tmpl.t.ExecuteTemplate(w, "selftest_table", report)
@@ -65,4 +66,27 @@ func (s *Server) selftestRunError(w http.ResponseWriter, status int, msg string)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = s.tmpl.t.ExecuteTemplate(w, "selftest_error", msg)
+}
+
+const selftestRunTimeout = 10 * time.Minute
+
+func (s *Server) selftestBound() time.Duration {
+	if s.selftestTimeout > 0 {
+		return s.selftestTimeout
+	}
+	return selftestRunTimeout
+}
+
+func (s *Server) runSelftest(parent context.Context, opts livecheck.Options) (*livecheck.Report, bool) {
+	defer s.checkRunning.Store(false)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), s.selftestBound())
+	defer cancel()
+	report := livecheck.New(s.checker, opts).Run(ctx)
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	s.reportMu.Lock()
+	s.lastReport = report
+	s.reportMu.Unlock()
+	return report, true
 }

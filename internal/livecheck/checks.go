@@ -243,6 +243,9 @@ func arrMediaStatusArgs(fx *Fixtures) (map[string]any, string, bool) {
 }
 
 func checkArrMediaStatus(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if r, ok := unconfiguredArr(disp); ok {
+		return r
+	}
 	args, reason, ok := arrMediaStatusArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -252,6 +255,9 @@ func checkArrMediaStatus(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 }
 
 func checkArrGrabHistory(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if r, ok := unconfiguredArr(disp); ok {
+		return r
+	}
 	args, reason, ok := arrMediaStatusArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -293,6 +299,9 @@ func checkDecypharrRecheck(ctx context.Context, disp *agent.Dispatcher, fx *Fixt
 }
 
 func checkSonarrRescan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if !disp.Sonarr.Configured() {
+		return Result{Status: StatusUnconfigured, Detail: "sonarr not configured"}
+	}
 	if fx.SeriesTitle == "" {
 		return degraded("no fixture: no series title discovered")
 	}
@@ -301,6 +310,9 @@ func checkSonarrRescan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures
 }
 
 func checkRadarrRescan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if !disp.Radarr.Configured() {
+		return Result{Status: StatusUnconfigured, Detail: "radarr not configured"}
+	}
 	if fx.MovieTitle == "" {
 		return degraded("no fixture: no movie title discovered")
 	}
@@ -325,6 +337,9 @@ func checkClearJellyfinCache(ctx context.Context, disp *agent.Dispatcher, fx *Fi
 // make this genuinely trigger a search, which is an acceptable (and correct)
 // outcome too — either way the tool worked as designed.
 func checkArrSearchMissing(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if r, ok := unconfiguredArr(disp); ok {
+		return r
+	}
 	args, reason, ok := arrMediaStatusArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -365,6 +380,9 @@ func checkJellyfinLibraryScan(ctx context.Context, disp *agent.Dispatcher, _ *Fi
 // --- approval (dry-run) checks ---
 
 func checkArrRemoveAndSearch(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if r, ok := unconfiguredArr(disp); ok {
+		return r
+	}
 	args, reason, ok := arrRemoveAndSearchArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -465,8 +483,8 @@ func skipIfRepairRunning(ctx context.Context, disp *agent.Dispatcher) (bool, Res
 		select {
 		case <-ctx.Done():
 			return true, Result{
-				Status: StatusSkipped,
-				Detail: "cancelled while waiting for a decypharr repair to finish",
+				Status: StatusFail,
+				Error:  "cancelled while waiting for a decypharr repair to finish",
 			}
 		case <-time.After(repairIdlePoll):
 		}
@@ -525,6 +543,13 @@ func decypharrRepairRunning(raw json.RawMessage) (bool, bool) {
 func degraded(detail string) Result { return Result{Status: StatusDegraded, Detail: detail} }
 func unconfiguredMediaAgent() Result {
 	return Result{Status: StatusUnconfigured, Detail: "media_agent not configured"}
+}
+
+func unconfiguredArr(disp *agent.Dispatcher) (Result, bool) {
+	if disp.Sonarr.Configured() || disp.Radarr.Configured() {
+		return Result{}, false
+	}
+	return Result{Status: StatusUnconfigured, Detail: "sonarr and radarr not configured"}, true
 }
 
 // classify is the default error→Status mapping: any error is a failure.

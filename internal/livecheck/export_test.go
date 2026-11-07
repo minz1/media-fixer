@@ -46,3 +46,7 @@ func DiscoverSamplePathForTest(ctx context.Context, disp *agent.Dispatcher, fx *
 func DiscoverTorrentAndSampleForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	discoverTorrentAndSample(ctx, disp, fx)
 }
+
+func DiscoverArrTitlesForTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
+	discoverArrTitles(ctx, disp, fx)
+}

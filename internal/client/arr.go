@@ -28,6 +28,8 @@ func NewArr(base, apiKey string) *ArrClient {
 	}
 }
 
+func (c *ArrClient) Configured() bool { return c != nil && c.base != "" }
+
 type Series struct {
 	ID         int       `json:"id"`
 	Title      string    `json:"title"`

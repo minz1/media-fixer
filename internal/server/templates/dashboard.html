@@ -722,7 +722,8 @@
         </form>
 
         <div id="selftest-results">
-          {{if .Report}} {{template "selftest_table" .Report}} {{else}}
+          {{if .Running}}<p class="mb-2">{{template "badge" (dict "Tone" "blue" "Word" "Running…")}}</p>{{end}}
+          {{if .Report}} {{template "selftest_table" .Report}} {{else if not .Running}}
           {{template "empty" "No checks run yet."}}
           {{end}}
         </div>

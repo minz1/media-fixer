@@ -62,7 +62,7 @@ func discoverFixtures(ctx context.Context, disp *agent.Dispatcher, override Fixt
 
 func discoverArrTitles(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
 	if fx.SeriesTitle == "" {
-		if disp.Sonarr == nil {
+		if !disp.Sonarr.Configured() {
 			fx.missing("sonarr not configured")
 		} else if series, err := disp.Sonarr.ListSeries(ctx); err != nil {
 			fx.missing("sonarr series discovery: " + err.Error())
@@ -74,7 +74,7 @@ func discoverArrTitles(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures
 	}
 
 	if fx.MovieTitle == "" {
-		if disp.Radarr == nil {
+		if !disp.Radarr.Configured() {
 			fx.missing("radarr not configured")
 		} else if movies, err := disp.Radarr.ListMovies(ctx); err != nil {
 			fx.missing("radarr movie discovery: " + err.Error())

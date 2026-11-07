@@ -63,3 +63,5 @@ func CondensedTurnsForTest(msgs []openai.ChatCompletionMessage, full bool) ([]tr
 func LiveTurnsForTest(msgs []openai.ChatCompletionMessage) []transcriptTurn {
 	return buildTranscriptTurns(msgs, true)
 }
+
+func (s *Server) SetSelftestTimeoutForTest(d time.Duration) { s.selftestTimeout = d }

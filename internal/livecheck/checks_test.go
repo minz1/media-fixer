@@ -124,7 +124,7 @@ func TestCheckRepairSweep_WaitsForActiveRunToFinish(t *testing.T) {
 	}
 }
 
-func TestCheckRepairSweep_CancelledWhileWaiting(t *testing.T) {
+func TestD10_7_CancelledRepairWaitIsNotSkipped(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -145,8 +145,9 @@ func TestCheckRepairSweep_CancelledWhileWaiting(t *testing.T) {
 	run := findCheck(t, "decypharr_repair_sweep")
 	result := run(ctx, disp, &livecheck.Fixtures{}, livecheck.Options{AllowWrite: true})
 
-	if result.Status != livecheck.StatusSkipped || runCalls.Load() != 0 {
-		t.Errorf("status = %s, runs = %d, detail = %s", result.Status, runCalls.Load(), result.Detail)
+	if result.Status != livecheck.StatusFail || !strings.Contains(result.Error, "cancelled") || runCalls.Load() != 0 {
+		t.Errorf("status = %s, runs = %d, detail = %s, err = %s",
+			result.Status, runCalls.Load(), result.Detail, result.Error)
 	}
 }
 
@@ -313,5 +314,27 @@ func TestDiscoverSamplePath_SingleFileMatchesNameOrOriginalFilename(t *testing.T
 				t.Errorf("SamplePath = %q, TorrentIsFile = %v, want %q and true", fx.SamplePath, fx.TorrentIsFile, want)
 			}
 		})
+	}
+}
+
+func TestD11_3_UnconfiguredArrShowsAsUnconfigured(t *testing.T) {
+	t.Parallel()
+	disp := &agent.Dispatcher{Sonarr: client.NewArr("", "key"), Radarr: client.NewArr("", "key")}
+
+	var fx livecheck.Fixtures
+	livecheck.DiscoverArrTitlesForTest(context.Background(), disp, &fx)
+	if !slices.Contains(fx.Notes, "sonarr not configured") || !slices.Contains(fx.Notes, "radarr not configured") {
+		t.Errorf("fixture notes = %q", fx.Notes)
+	}
+
+	tools := []string{
+		"arr_media_status", "arr_grab_history", "sonarr_rescan", "radarr_rescan",
+		"arr_search_missing", "arr_remove_and_search",
+	}
+	for _, tool := range tools {
+		result := findCheck(t, tool)(context.Background(), disp, &fx, livecheck.Options{AllowWrite: true})
+		if result.Status != livecheck.StatusUnconfigured {
+			t.Errorf("%s: status = %s, detail = %s, err = %s", tool, result.Status, result.Detail, result.Error)
+		}
 	}
 }

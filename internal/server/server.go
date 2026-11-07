@@ -56,7 +56,8 @@ type Server struct {
 	// 409 that looks like a livecheck bug rather than a self-inflicted
 	// double-fire. Confirmed live via decypharr's persisted run history
 	// showing two runs 5s apart from the same source.
-	checkRunning atomic.Bool
+	checkRunning    atomic.Bool
+	selftestTimeout time.Duration
 
 	// shutdown is closed once Start begins shutting down, telling the
 	// long-lived SSE handlers to return so Shutdown can drain. Closed exactly

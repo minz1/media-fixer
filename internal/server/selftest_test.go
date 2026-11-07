@@ -1,15 +1,18 @@
 package server_test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/server"
 )
 
 // TestSelftestIndex_Unconfigured verifies the page renders gracefully (not a
@@ -234,4 +237,148 @@ func TestSelftestRun_ShowsReaddFixture(t *testing.T) {
 	if !strings.Contains(string(body), `readd="Unique.Movie"`) {
 		t.Errorf("status %d: expected readd fixture in report, got: %s", resp.StatusCode, body)
 	}
+}
+
+type blockedSelftest struct {
+	srv     *server.Server
+	ts      *httptest.Server
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockedSelftest(t *testing.T, waitForCtx bool) *blockedSelftest {
+	t.Helper()
+	b := &blockedSelftest{started: make(chan struct{}), release: make(chan struct{})}
+	var once sync.Once
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/series", func(w http.ResponseWriter, r *http.Request) {
+		first := false
+		once.Do(func() { first = true; close(b.started) })
+		if first {
+			if waitForCtx {
+				select {
+				case <-r.Context().Done():
+				case <-b.release:
+				case <-time.After(3 * time.Second):
+				}
+			} else {
+				<-b.release
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"id":1,"title":"Korra"}]`))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.Write([]byte("[]"))
+			return
+		}
+		w.Write([]byte("{}"))
+	})
+	stub := httptest.NewServer(mux)
+	t.Cleanup(stub.Close)
+	loki, err := client.NewLoki(stub.URL, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.srv, _ = newTestServer(t)
+	b.srv.SetChecker(&agent.Dispatcher{
+		Decypharr: client.NewDecypharr(stub.URL, ""),
+		Jellyfin:  client.NewJellyfin(stub.URL, ""),
+		Sonarr:    client.NewArr(stub.URL, ""),
+		Radarr:    client.NewArr(stub.URL, ""),
+		Loki:      loki,
+	})
+	b.ts = httptest.NewServer(b.srv.Handler())
+	t.Cleanup(b.ts.Close)
+	return b
+}
+
+func (b *blockedSelftest) page(t *testing.T) string {
+	t.Helper()
+	resp, err := b.ts.Client().Get(b.ts.URL + "/media/selftest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body)
+}
+
+func TestD6_6_SelftestRunSurvivesClosedTab(t *testing.T) {
+	t.Parallel()
+	b := newBlockedSelftest(t, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/media/selftest/run", nil)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	<-b.started
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+	close(b.release)
+	<-done
+
+	body := b.page(t)
+	if !strings.Contains(body, `sonarr="Korra"`) || strings.Contains(body, "context canceled") {
+		t.Errorf("closing the tab cut the stored run short: %s", resultsSection(body))
+	}
+}
+
+func TestD6_6_TimedOutRunIsNotStored(t *testing.T) {
+	t.Parallel()
+	b := newBlockedSelftest(t, true)
+	b.srv.SetSelftestTimeoutForTest(100 * time.Millisecond)
+
+	resp, err := b.ts.Client().Post(b.ts.URL+"/media/selftest/run", "application/x-www-form-urlencoded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	runBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(runBody), `class="notice notice-err"`) {
+		t.Errorf("timed-out run rendered as a report: %s", runBody)
+	}
+	if body := b.page(t); !strings.Contains(body, "No checks run yet.") {
+		t.Errorf("timed-out run was stored as the last report: %s", resultsSection(body))
+	}
+}
+
+func TestD6_1_IndexShowsRunInProgress(t *testing.T) {
+	t.Parallel()
+	b := newBlockedSelftest(t, false)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, err := b.ts.Client().Post(b.ts.URL+"/media/selftest/run", "application/x-www-form-urlencoded", nil)
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+	<-b.started
+	running := b.page(t)
+	close(b.release)
+	<-done
+
+	if !strings.Contains(running, "Running…") {
+		t.Errorf("page does not show the run in progress: %s", resultsSection(running))
+	}
+	if idle := b.page(t); strings.Contains(idle, "Running…") {
+		t.Errorf("page still shows a run in progress after it finished")
+	}
+}
+
+func resultsSection(body string) string {
+	_, after, _ := strings.Cut(body, `id="selftest-results"`)
+	if len(after) > 600 {
+		after = after[:600]
+	}
+	return after
 }
