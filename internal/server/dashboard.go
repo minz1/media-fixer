@@ -221,11 +221,15 @@ func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.tmpl.t.Execute(w, map[string]any{
+	data := map[string]any{
 		"Incidents":   incidents,
 		tplKeyPaused:  s.isPaused(r.Context()),
 		tplKeyBaseURL: s.baseURL,
-	})
+	}
+	if r.URL.Query().Get("done") == doneRestarting {
+		data["Done"] = card.RestartingNotice
+	}
+	_ = s.tmpl.t.Execute(w, data)
 }
 
 func (s *Server) dashboardIncident(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +283,11 @@ func (s *Server) setPaused(w http.ResponseWriter, r *http.Request, paused bool, 
 		return
 	}
 	if r.Header.Get("Hx-Request") == "" {
-		http.Redirect(w, r, s.baseURL+"/", http.StatusSeeOther)
+		target := s.baseURL + "/"
+		if errors.Is(err, card.ErrRestarting) {
+			target += "?done=" + doneRestarting
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

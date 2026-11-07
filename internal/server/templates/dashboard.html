@@ -331,7 +331,7 @@
 
 {{define "ts"}}{{with utc .}}<time datetime="{{.ISO}}" title="{{.Exact}}">{{.Rel}}</time>{{else}}never{{end}}{{end}}
 
-{{template "page_top" (dict "Title" "Media Fixer" "BaseURL" .BaseURL "Active" "issues" "Paused" .Paused)}}
+{{template "page_top" (dict "Title" "Media Fixer" "BaseURL" .BaseURL "Active" "issues" "Paused" .Paused "Done" .Done)}}
       <!-- Connects but never itself swaps (hx-swap="none"); incoming
            <hx-partial> elements target #incidents-list by id instead. -->
       <div hx-sse:connect="{{.BaseURL}}/events" hx-swap="none"></div>

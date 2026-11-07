@@ -130,3 +130,21 @@ func TestSeerrWebhook_StoreFailureWhileClosingReturns503(t *testing.T) {
 		t.Fatalf("status = %d, want 503 so Seerr retries", resp.StatusCode)
 	}
 }
+
+func TestServer_PauseFormWhileClosingRedirectsToNotice(t *testing.T) {
+	t.Parallel()
+	srv, _, svc := newServiceServer(t)
+	stopService(t, svc)
+	for _, verb := range []string{"pause", "resume"} {
+		rec := ownerPost(srv, "/media/"+verb)
+		loc := rec.Header().Get("Location")
+		if rec.Code != http.StatusSeeOther || loc != "/media/?done=restarting" {
+			t.Errorf("%s form while restarting = %d %q, want a redirect to the restarting notice", verb, rec.Code, loc)
+		}
+	}
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/media/?done=restarting", nil))
+	if !strings.Contains(page.Body.String(), card.RestartingNotice) {
+		t.Error("dashboard does not show the restarting notice")
+	}
+}
