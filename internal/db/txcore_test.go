@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 func findingRoot(t *testing.T, d *db.DB, id string) string {
@@ -75,58 +76,71 @@ func TestAppendEvents_RollsBackAll(t *testing.T) {
 	}
 }
 
-func TestRecordRunExit_FindingAndEventCommitTogether(t *testing.T) {
+func attemptFinished(finding json.RawMessage, e *db.Event) db.Decide {
+	return func(cur lifecycle.Snapshot) (db.Decision, error) {
+		ev := lifecycle.Event{Kind: lifecycle.AttemptFinished, Gen: cur.Generation}
+		if len(finding) > 0 {
+			ev.Finding = &lifecycle.Finding{JSON: finding}
+		}
+		dec, err := next(ev)(cur)
+		dec.Events = []*db.Event{e}
+		return dec, err
+	}
+}
+
+func TestAttemptFinished_FindingAndRunFinishedCommitTogether(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
-	id := newClaimIncident(t, d)
-	if err := d.SetIncidentFinding(ctx, id, map[string]any{"root_cause": "old"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
+	s := claimed(t, d, "Commit together")
 	bad := &db.Event{IncidentID: "no-such-incident", Kind: "run_finished", Payload: json.RawMessage(`{}`)}
-	if err := d.RecordRunExit(ctx, id, json.RawMessage(`{"root_cause":"new"}`), bad); err == nil {
-		t.Fatal("run exit with an unknown event incident succeeded")
+	if _, err := d.ApplyIncident(ctx, s.ID, attemptFinished(json.RawMessage(`{"root_cause":"new"}`), bad)); err == nil {
+		t.Fatal("an attempt with an unknown event incident succeeded")
 	}
-	if root := findingRoot(t, d, id); root != "old" {
-		t.Fatalf("finding after a failed exit = %q, want old", root)
+	if root := findingRoot(t, d, s.ID); root != "" {
+		t.Fatalf("finding after a failed attempt = %q, want none", root)
 	}
-
-	good := &db.Event{IncidentID: id, Kind: "run_finished", Payload: json.RawMessage(`{}`)}
-	if err := d.RecordRunExit(ctx, id, json.RawMessage(`{"root_cause":"new"}`), good); err != nil {
+	good := &db.Event{IncidentID: s.ID, Kind: "run_finished", Payload: json.RawMessage(`{}`)}
+	if _, err := d.ApplyIncident(
+		ctx,
+		s.ID,
+		attemptFinished(json.RawMessage(`{"root_cause":"new"}`), good),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if root := findingRoot(t, d, id); root != "new" {
-		t.Fatalf("finding after the exit = %q, want new", root)
+	if root := findingRoot(t, d, s.ID); root != "new" {
+		t.Fatalf("finding after the attempt = %q, want new", root)
 	}
-	got, err := d.GetIncident(ctx, id)
+	got, err := d.GetIncident(ctx, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ra, _ := got.RecommendedActions.(map[string]any); ra["root_cause"] != "new" {
 		t.Errorf("recommended_actions = %v, want the finding", got.RecommendedActions)
 	}
-	if kinds := eventKinds(t, d, id); len(kinds) != 1 || kinds[0] != "run_finished" || good.Seq == 0 {
-		t.Fatalf("events = %v (seq %d), want one run_finished", kinds, good.Seq)
+	if good.Seq == 0 {
+		t.Fatal("run_finished has no seq")
 	}
 }
 
-func TestRecordRunExit_NilFindingLeavesFindingUntouched(t *testing.T) {
+func TestAttemptFinished_NoFindingLeavesFindingUntouched(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
-	id := newClaimIncident(t, d)
-	if err := d.SetIncidentFinding(ctx, id, map[string]any{"root_cause": "kept"}, nil); err != nil {
+	s := claimed(t, d, "Keeps finding")
+	keep := &db.Event{IncidentID: s.ID, Kind: "run_finished", Payload: json.RawMessage(`{}`)}
+	if _, err := d.ApplyIncident(
+		ctx,
+		s.ID,
+		attemptFinished(json.RawMessage(`{"root_cause":"kept"}`), keep),
+	); err != nil {
 		t.Fatal(err)
 	}
-
-	for _, finding := range []json.RawMessage{nil, json.RawMessage(`null`)} {
-		e := &db.Event{IncidentID: id, Kind: "run_finished", Payload: json.RawMessage(`{}`)}
-		if err := d.RecordRunExit(ctx, id, finding, e); err != nil {
-			t.Fatal(err)
-		}
+	e := &db.Event{IncidentID: s.ID, Kind: "run_finished", Payload: json.RawMessage(`{}`)}
+	if _, err := d.ApplyIncident(ctx, s.ID, attemptFinished(nil, e)); err != nil {
+		t.Fatal(err)
 	}
-	if root := findingRoot(t, d, id); root != "kept" {
+	if root := findingRoot(t, d, s.ID); root != "kept" {
 		t.Fatalf("finding = %q, want kept", root)
 	}
 }

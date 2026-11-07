@@ -38,9 +38,13 @@ func (s *Service) NotifyReportersForTest(ctx context.Context, inc *db.Incident, 
 	s.notifyReporters(ctx, inc, reporterCard(card.Info, msg))
 }
 
-// EscalateToOwnerForTest exposes Service.escalateToOwner for reporternotes_test.go.
+// EscalateToOwnerForTest exposes Service.escalate for reporternotes_test.go.
 func (s *Service) EscalateToOwnerForTest(ctx context.Context, inc *db.Incident, msg string) {
-	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, msg, ""))
+	if snap, err := s.db.GetIncidentSnapshot(ctx, inc.ID); err == nil {
+		_, _ = s.apply(ctx, inc.ID, lifecycle.Event{Kind: lifecycle.RunClaimed, Gen: snap.Generation}, nil)
+		inc.Generation = snap.Generation
+	}
+	s.escalate(ctx, inc, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, msg, ""))
 }
 
 // ProgressPhrasesForTest exposes progressPhrases for progress_test.go.

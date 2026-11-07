@@ -3,7 +3,6 @@ package journal_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -76,64 +75,6 @@ func TestLogAction_KeepsAppliedAt(t *testing.T) {
 	}
 	if actions[0].Status != db.ActionFailed {
 		t.Errorf("status = %q, want failed", actions[0].Status)
-	}
-}
-
-func TestRunExit_CarriesExitAndRounds(t *testing.T) {
-	t.Parallel()
-	j, d := openTestJournal(t)
-	ctx := context.Background()
-	inc := mustCreateIncident(t, d, "T")
-	ch, unsubscribe := j.Subscribe(inc.ID)
-	defer unsubscribe()
-
-	finding := map[string]any{"root_cause": "manual"}
-	if err := j.RunExit(ctx, inc.ID, finding, 4, "budget_tripped", errors.New("limit")); err != nil {
-		t.Fatal(err)
-	}
-	e := lastEvent(t, j, inc.ID)
-	var p exitPayload
-	if err := json.Unmarshal(e.Payload, &p); err != nil {
-		t.Fatal(err)
-	}
-	if e.Kind != string(journal.KindRunFinished) || p.Rounds != 4 || p.Exit != "budget_tripped" || p.Error != "limit" {
-		t.Fatalf("event %s %+v, want run_finished rounds=4 exit=budget_tripped error=limit", e.Kind, p)
-	}
-	got, err := d.GetIncident(ctx, inc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m, _ := got.Finding.(map[string]any); m["root_cause"] != "manual" {
-		t.Errorf("finding = %v, want the manual finding", got.Finding)
-	}
-	select {
-	case n := <-ch:
-		if n.Kind != string(journal.KindRunFinished) {
-			t.Errorf("notified kind %q", n.Kind)
-		}
-	case <-time.After(subscribeWaitTimeout):
-		t.Fatal("no notify after the run exit")
-	}
-}
-
-func TestRunExit_TypedNilFindingLeavesFinding(t *testing.T) {
-	t.Parallel()
-	j, d := openTestJournal(t)
-	ctx := context.Background()
-	inc := mustCreateIncident(t, d, "T")
-	if err := d.SetIncidentFinding(ctx, inc.ID, map[string]any{"root_cause": "kept"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	var none *exitPayload
-	if err := j.RunExit(ctx, inc.ID, none, 1, "superseded", nil); err != nil {
-		t.Fatal(err)
-	}
-	got, err := d.GetIncident(ctx, inc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m, _ := got.Finding.(map[string]any); m["root_cause"] != "kept" {
-		t.Fatalf("finding = %v, want kept", got.Finding)
 	}
 }
 

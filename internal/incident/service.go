@@ -16,6 +16,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -294,46 +295,6 @@ func (s *Service) addReporter(ctx context.Context, inc *db.Incident, r *Report) 
 	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
 }
 
-func (s *Service) runAgent(
-	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, t Timers, gate *runGate,
-) {
-	if s.agent == nil {
-		return
-	}
-
-	paused, err := s.db.IsAutonomousPaused(ctx)
-	if err != nil || paused {
-		s.log.WarnContext(ctx, "autonomous actions paused, skipping agent", "incident", inc.ID)
-		return
-	}
-
-	// A locked incident is not acted on autonomously. Manual paths (Reopen,
-	// Reinvestigate) clear the lock first, so an explicit human override still runs.
-	if inc.AutonomousLocked {
-		s.log.WarnContext(ctx, "incident autonomous-locked, skipping agent", "incident", inc.ID)
-		return
-	}
-
-	retryDelays := []time.Duration{0, s.minutes(t.RetryFirstMinutes), s.minutes(t.RetrySecondMinutes)}
-
-	for attempt, delay := range retryDelays {
-		if delay > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-			}
-		}
-
-		exit := s.runDiagnosis(ctx, inc, seed, gate)
-		outcome := s.routeExit(ctx, inc, exit, attempt, len(retryDelays))
-		if outcome.done {
-			return
-		}
-		seed = outcome.seed
-	}
-}
-
 // runDiagnosis executes one agent.Run call under the process-wide diagnostic
 // lock (runManager.globalSlot), so a concurrent incident's restart/scan/cleanup
 // can never be observed mid-disruption by this run's evidence gathering — see
@@ -400,6 +361,9 @@ func (s *Service) evaluateDiagnosis(
 
 	proposal := controlProposal(result, riskReason, s.actionHistorySummary(ctx, inc.ID))
 	verdict, verdictErr := s.control.Review(ctx, conversation, proposal)
+	if verdictErr != nil && ctx.Err() != nil {
+		return diagnosisOutcome{done: true}
+	}
 	if verdictErr != nil {
 		// Fail closed. This branch used to apply the fix anyway when the model
 		// hadn't itself asked for approval — but the only reason review was
@@ -431,7 +395,7 @@ func (s *Service) evaluateDiagnosis(
 		return diagnosisOutcome{done: true}
 
 	case agent.VerdictEscalateToOwner:
-		s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+		s.escalate(ctx, inc, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
 			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).",
 			inc.Title,
 			inc.ShortID(),
@@ -440,7 +404,7 @@ func (s *Service) evaluateDiagnosis(
 
 	case agent.VerdictSuggestAlternative:
 		if attempt == maxAttempts-1 {
-			s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
+			s.escalate(ctx, inc, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
 				"⚠️ **%s** (#%s): agent still needs approval after %d retries.",
 				inc.Title, inc.ShortID(), attempt+1,
 			), "",
@@ -577,33 +541,12 @@ func controlProposal(result *agent.DiagnosticResult, riskReason, actionHistory s
 	)
 }
 
-// handleAgentResolved processes a non-approval diagnosis: verifies a stuck_read
-// fix through the stuck-read watcher, routes an arr_search_missing fix to
-// durable pending-outcome tracking (a download can take hours — far longer
-// than the generic verify loop's ~10-minute budget), kicks off the generic verification loop for any other fix that needs time,
-// or marks the incident fixed now.
-func (s *Service) handleAgentResolved(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult) {
-	if inc.What == agent.WhatStuckRead {
-		s.runVerification(ctx, inc, result)
-		return
-	}
-	if result.PrimaryAction == agent.ToolArrSearchMissing {
-		s.startPendingOutcomeTracking(ctx, inc, result)
-		return
-	}
-	if result.VerifyAfterSeconds > 0 {
-		s.runVerification(ctx, inc, result)
-		return
-	}
-	s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
-}
-
-// markFixedAndNotify atomically flips the incident to agent_fixed and DMs reporters
+// legacyFixed atomically flips the incident to agent_fixed and DMs reporters
 // only if this goroutine actually performed the transition. agent_fixed is excluded
 // from the allowed source states, so a second concurrent finisher (e.g. a stale
 // verification loop after a reopen) transitions nothing and stays silent — the fix
 // for the duplicate "fixed automatically" DM.
-func (s *Service) markFixedAndNotify(ctx context.Context, inc *db.Incident, action string) {
+func (s *Service) legacyFixed(ctx context.Context, inc *db.Incident, action string) {
 	changed, err := s.db.TransitionStatus(ctx, inc.ID, db.StatusAgentFixed,
 		db.StatusOpen, db.StatusInvestigating, db.StatusVerifying, db.StatusReopened)
 	if err != nil {
@@ -682,7 +625,7 @@ func (s *Service) legacyVerification(ctx context.Context, inc *db.Incident, resu
 			fixed = s.agent.VerifyResolved(ctx, itemID, inc.Title, result.PreFix)
 		}
 		if fixed {
-			s.markFixedAndNotify(ctx, inc, result.PrimaryAction)
+			s.legacyFixed(ctx, inc, result.PrimaryAction)
 			return
 		}
 	}
@@ -705,16 +648,16 @@ func (s *Service) legacyVerification(ctx context.Context, inc *db.Incident, resu
 
 	// Nothing in progress and still broken — escalate to the owner.
 	s.log.WarnContext(ctx, "fix not verified, escalating", "incident", inc.ID)
-	s.surfaceToOwner(ctx, inc, result, " (autonomous fix applied but could not be verified)")
+	s.legacyEscalate(ctx, inc, surfaceCard(inc, result, " (autonomous fix applied but could not be verified)"))
 }
 
-// escalateToOwner atomically marks the incident manual_test_needed and DMs the
+// legacyEscalate atomically marks the incident manual_test_needed and DMs the
 // owner, but only if this call actually performs the transition. Every "give up
 // and ask a human" path (agent error, control-review escalation, verification
 // exhausted, max retries hit) routes through here so escalation is idempotent
 // under concurrent/superseded runs — the same TransitionStatus pattern used for
 // the "fixed" notification, applied once structurally instead of per call site.
-func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, c card.Card) {
+func (s *Service) legacyEscalate(ctx context.Context, inc *db.Incident, c card.Card) {
 	prior, getErr := s.db.GetIncident(ctx, inc.ID)
 	if getErr != nil {
 		s.log.ErrorContext(ctx, "read status before escalation", "incident", inc.ID, "error", getErr)
@@ -739,46 +682,7 @@ func (s *Service) escalateToOwner(ctx context.Context, inc *db.Incident, c card.
 	}
 }
 
-func (s *Service) routeExit(
-	ctx context.Context, inc *db.Incident, exit agent.RunExit, attempt, maxAttempts int,
-) diagnosisOutcome {
-	switch exit.State {
-	case agent.RunConcluded, agent.RunBudgetTripped, agent.RunStoppedNoTools, agent.RunExhausted:
-		if exit.Finding != nil {
-			return s.evaluateDiagnosis(ctx, inc, exit.Finding, exit.Conversation, attempt, maxAttempts)
-		}
-		s.handleAgentError(ctx, inc, errRunNotExited)
-	case agent.RunLLMFailed, agent.RunBatchFailed, agent.RunClaimFailed:
-		s.handleAgentError(ctx, inc, exit.Err)
-	case agent.RunSuperseded, agent.RunNotClaimed, agent.RunPaused:
-		s.log.InfoContext(ctx, "run superseded, exiting quietly", "incident", inc.ID, "exit", string(exit.State))
-	case agent.RunClaiming, agent.RunAwaitingReply, agent.RunInBatch:
-		s.log.ErrorContext(ctx, "agent run returned without exiting", "incident", inc.ID, "state", string(exit.State))
-		s.handleAgentError(ctx, inc, errRunNotExited)
-	}
-	return diagnosisOutcome{done: true}
-}
-
 var errRunNotExited = errors.New("the agent run returned without an exit")
-
-func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, err error) {
-	s.log.ErrorContext(ctx, "agent error", "incident", inc.ID, "error", err)
-	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
-		"❌ Agent error for incident **%s** (#%s): %v",
-		inc.Title,
-		inc.ShortID(),
-		err,
-	), "Incident marked for manual review."))
-}
-
-func (s *Service) surfaceToOwner(ctx context.Context, inc *db.Incident, result *agent.DiagnosticResult, note string) {
-	s.escalateToOwner(ctx, inc, ownerCard(inc, card.Warn, fmt.Sprintf(
-		"🔍 Incident **%s** (#%s) needs your attention%s.", inc.Title, inc.ShortID(), note,
-	), "",
-		card.Field{Name: fieldRootCause, Value: result.RootCause},
-		card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)},
-		card.Field{Name: fieldReason, Value: result.PrimaryReason}))
-}
 
 // Resolve marks an incident as resolved (called from dashboard or Discord).
 func (s *Service) Resolve(ctx context.Context, id string) error {
@@ -981,7 +885,7 @@ func (s *Service) recordReporterAdded(ctx context.Context, incidentID, reporter,
 // escalation lifecycle, Unlock) happens here, one layer above Agent.Run's own
 // event recording, so without this call the live page would never see its
 // own final status: Agent.Run's last event (run_finished) fires before
-// Service.handleAgentResolved/escalateToOwner ever transitions status away
+// Service.handleAgentResolved/legacyEscalate ever transitions status away
 // from "investigating".
 func (s *Service) recordStatusChanged(ctx context.Context, incidentID, status string) {
 	if s.journal == nil {

@@ -47,6 +47,17 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, result 
 }
 
 func (s *Service) applyOutcome(ctx context.Context, id string, ev lifecycle.Event) {
+	if ctx.Err() != nil {
+		s.log.InfoContext(
+			ctx,
+			"run outcome dropped, the run was stopped",
+			"incident",
+			id,
+			"outcome",
+			string(ev.Outcome.Kind),
+		)
+		return
+	}
 	_, err := s.apply(ctx, id, ev, nil)
 	switch {
 	case err == nil:

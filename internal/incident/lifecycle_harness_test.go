@@ -181,3 +181,9 @@ func dueNow(t *testing.T, database *db.DB, id string) {
 		t.Fatal(err)
 	}
 }
+
+func (n *recNotifier) ownerCards() []card.Card {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]card.Card(nil), n.owner...)
+}

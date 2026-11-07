@@ -203,8 +203,8 @@ func TestEscalationNote_SkippedAfterAgentFixed(t *testing.T) {
 
 	notif.mu.Lock()
 	defer notif.mu.Unlock()
-	if len(notif.msgs) != 1 || notif.msgs[0] != "owner: look at Lost" {
-		t.Errorf("msgs = %q, want only the owner DM", notif.msgs)
+	if len(notif.msgs) != 0 {
+		t.Errorf("msgs = %q, want none: a fixed incident is not escalated", notif.msgs)
 	}
 }
 

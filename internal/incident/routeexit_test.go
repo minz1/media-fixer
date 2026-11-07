@@ -41,7 +41,7 @@ func allRunStates() []agent.RunState {
 	return []agent.RunState{
 		agent.RunClaiming, agent.RunAwaitingReply, agent.RunInBatch, agent.RunConcluded, agent.RunBudgetTripped,
 		agent.RunStoppedNoTools, agent.RunExhausted, agent.RunLLMFailed, agent.RunBatchFailed, agent.RunSuperseded,
-		agent.RunNotClaimed, agent.RunClaimFailed,
+		agent.RunNotClaimed, agent.RunClaimFailed, agent.RunPaused,
 	}
 }
 
@@ -74,7 +74,7 @@ func status(t *testing.T, d *db.DB, id string) db.IncidentStatus {
 
 func TestRouteExit_EveryStateHasARoute(t *testing.T) {
 	t.Parallel()
-	quiet := []agent.RunState{agent.RunSuperseded, agent.RunNotClaimed}
+	quiet := []agent.RunState{agent.RunSuperseded, agent.RunNotClaimed, agent.RunClaimFailed, agent.RunPaused}
 	for _, s := range allRunStates() {
 		t.Run(string(s), func(t *testing.T) {
 			t.Parallel()
@@ -103,17 +103,17 @@ func TestRouteExit_SupersededIsQuiet(t *testing.T) {
 	}
 }
 
-func TestRouteExit_ClaimFailedEscalates(t *testing.T) {
+func TestClaimDBError_LeavesOpenForReconciler(t *testing.T) {
 	t.Parallel()
 	fx, notif, inc := routeFixture(t)
 	fx.svc.RouteExitForTest(context.Background(), inc, agent.RunExit{
 		State: agent.RunClaimFailed, Err: errors.New("database is locked"),
 	})
-	if len(notif.msgs) != 1 || !strings.Contains(notif.msgs[0], "database is locked") {
-		t.Fatalf("owner messages = %v, want the claim error", notif.msgs)
+	if len(notif.msgs) != 0 {
+		t.Fatalf("owner messages = %v, want none: the reconciler retries a claim error", notif.msgs)
 	}
-	if got := status(t, fx.db, inc.ID); got != db.StatusManualTestNeeded {
-		t.Errorf("status = %s, want manual_test_needed", got)
+	if got := status(t, fx.db, inc.ID); got != db.StatusInvestigating {
+		t.Errorf("status = %s, want it left for the reconciler", got)
 	}
 }
 

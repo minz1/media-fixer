@@ -1096,25 +1096,6 @@ func writeFinding(ctx context.Context, tx *sql.Tx, id string, finding, actions [
 	return err
 }
 
-func (d *DB) RecordRunExit(ctx context.Context, incidentID string, finding json.RawMessage, e *Event) error {
-	var seq int64
-	err := runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
-		if len(finding) > 0 && string(finding) != "null" {
-			if err := writeFinding(ctx, tx, incidentID, finding, finding); err != nil {
-				return err
-			}
-		}
-		var err error
-		seq, err = appendEvent(ctx, tx, e)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	e.Seq = seq
-	return nil
-}
-
 // IncrementActionCount atomically increments the action counter and returns the new value.
 func (d *DB) IncrementActionCount(ctx context.Context, id string) (int, error) {
 	var n int

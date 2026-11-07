@@ -454,22 +454,7 @@ type runFinishedPayload struct {
 // RunFinished marks a run's exit, successful or not, and how many rounds it
 // took.
 func (j *Journal) RunFinished(ctx context.Context, incidentID string, rounds int, runErr error) error {
-	return j.RunExit(ctx, incidentID, nil, rounds, "", runErr)
-}
-
-func (j *Journal) RunExit(
-	ctx context.Context, incidentID string, finding any, rounds int, exit string, runErr error,
-) error {
-	raw, err := json.Marshal(finding)
-	if err != nil {
-		return err
-	}
-	e := RunFinishedEvent(incidentID, rounds, exit, runErr)
-	if recErr := j.db.RecordRunExit(ctx, incidentID, raw, e); recErr != nil {
-		return recErr
-	}
-	j.notify(e)
-	return nil
+	return j.Append(ctx, RunFinishedEvent(incidentID, rounds, "", runErr))
 }
 
 func RunFinishedEvent(incidentID string, rounds int, exit string, runErr error) *db.Event {
