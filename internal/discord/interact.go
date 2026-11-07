@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"time"
 
@@ -46,8 +47,8 @@ func (b *Bot) onComponent(i *discordgo.InteractionCreate) {
 		return
 	}
 	subject := card.SubjectOf(a)
-	if !b.begin(subject) {
-		b.ephemeral(ctx, i, msgRunning)
+	if refused := b.begin(subject); refused != "" {
+		b.ephemeral(ctx, i, refused)
 		return
 	}
 	defer b.end(subject)
@@ -64,7 +65,14 @@ func (b *Bot) onComponent(i *discordgo.InteractionCreate) {
 		b.log.WarnContext(ctx, "discord button ack failed", "button", customID, "error", err)
 		return
 	}
-	res := b.runAction(procCtx, msgID, customID, h, a)
+	res, restarting := b.runAction(procCtx, msgID, customID, h, a)
+	if restarting && tracked {
+		b.followup(ctx, i, card.RestartingNotice)
+		return
+	}
+	if restarting {
+		res = card.Result{Line: card.RestartingNotice}
+	}
 	if tracked {
 		b.setOverlay(msgID, overlay{Line: res.Line, Confirm: res.Confirm, At: b.now()})
 		if subject != "" {
@@ -86,17 +94,20 @@ func (b *Bot) onComponent(i *discordgo.InteractionCreate) {
 
 func (b *Bot) runAction(
 	procCtx context.Context, msgID, customID string, h card.Handler, a card.Action,
-) card.Result {
+) (card.Result, bool) {
 	if a.Verb == verbConfirm && !b.confirmOpen(msgID, customID) {
-		return card.Result{Line: msgConfirmGone}
+		return card.Result{Line: msgConfirmGone}, false
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(procCtx), handlerTimeout)
 	defer cancel()
 	res, err := h(ctx, a)
-	if err != nil {
-		return card.Result{Line: failedLinePrefix + err.Error()}
+	if errors.Is(err, card.ErrRestarting) {
+		return card.Result{}, true
 	}
-	return res
+	if err != nil {
+		return card.Result{Line: failedLinePrefix + err.Error()}, false
+	}
+	return res, false
 }
 
 func (b *Bot) handler(kind string) (context.Context, card.Handler, bool) {
@@ -106,22 +117,25 @@ func (b *Bot) handler(kind string) (context.Context, card.Handler, bool) {
 	return b.procCtx, h, ok
 }
 
-func (b *Bot) begin(subject string) bool {
+func (b *Bot) begin(subject string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed || b.inFlight[subject] {
-		return false
+	if b.closed || b.closing {
+		return card.RestartingNotice
+	}
+	if b.inFlight[subject] {
+		return msgRunning
 	}
 	b.inFlight[subject] = true
-	b.running.Add(1)
-	return true
+	b.active++
+	return ""
 }
 
 func (b *Bot) end(subject string) {
 	b.mu.Lock()
 	delete(b.inFlight, subject)
 	b.mu.Unlock()
-	b.running.Done()
+	b.untrack()
 }
 
 func (b *Bot) tracked(ctx context.Context, msgID string) bool {

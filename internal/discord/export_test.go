@@ -70,3 +70,9 @@ func RenderOverlayForTest(
 func TextLenForTest(cs []discordgo.MessageComponent) int { return textLen(cs) }
 
 func SetConnectForTest(b *Bot, connect func() error) { b.connect = connect }
+
+func SetHandlersForTest(b *Bot, handlers map[string]card.Handler) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.handlers, b.procCtx = handlers, context.Background()
+}

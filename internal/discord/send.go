@@ -24,6 +24,10 @@ type sender interface {
 	InteractionResponseEdit(
 		interaction *discordgo.Interaction, newresp *discordgo.WebhookEdit, options ...discordgo.RequestOption,
 	) (*discordgo.Message, error)
+	InteractionResponseDelete(interaction *discordgo.Interaction, options ...discordgo.RequestOption) error
+	FollowupMessageCreate(
+		interaction *discordgo.Interaction, wait bool, data *discordgo.WebhookParams, options ...discordgo.RequestOption,
+	) (*discordgo.Message, error)
 }
 
 func (b *Bot) send(ctx context.Context, userID string, c card.Card) (*discordgo.Message, bool, error) {

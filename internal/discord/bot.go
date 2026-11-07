@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -43,7 +44,9 @@ type Bot struct {
 	procCtx   context.Context
 	inFlight  map[string]bool
 	closed    bool
-	running   sync.WaitGroup
+	closing   bool
+	active    int
+	drained   chan struct{}
 	now       func() time.Time
 	liveMsgs  map[string]bool
 	stopCards context.CancelFunc
@@ -166,19 +169,78 @@ func (b *Bot) openAndRegister() error {
 // Close stops any pending connect retry, closes the Discord gateway connection, waits for running button
 // handlers, then stops the card updater.
 func (b *Bot) Close() error {
-	if b.cancel != nil {
-		b.cancel()
-	}
+	b.StopIntake()
 	err := b.session.Close()
 	b.mu.Lock()
 	b.closed = true
 	b.mu.Unlock()
-	b.running.Wait()
+	_ = b.WaitHandlers(context.Background())
 	if b.stopCards != nil {
 		b.stopCards()
 		<-b.cardsDone
 	}
 	return err
+}
+
+func (b *Bot) StopIntake() {
+	b.mu.Lock()
+	b.closing = true
+	b.mu.Unlock()
+	if b.cancel != nil {
+		b.cancel()
+	}
+}
+
+func (b *Bot) WaitHandlers(ctx context.Context) error {
+	b.mu.Lock()
+	if b.active == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	if b.drained == nil {
+		b.drained = make(chan struct{})
+	}
+	drained := b.drained
+	b.mu.Unlock()
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *Bot) Disconnect(ctx context.Context) error {
+	var err error
+	if b.stopCards != nil {
+		b.stopCards()
+		select {
+		case <-b.cardsDone:
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
+	}
+	return errors.Join(err, b.session.Close())
+}
+
+func (b *Bot) track() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
+	b.active++
+	return true
+}
+
+func (b *Bot) untrack() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.active--
+	if b.active == 0 && b.drained != nil {
+		close(b.drained)
+		b.drained = nil
+	}
 }
 
 // NotifyOwner sends a DM to the configured owner user ID and tracks a card with subjects for live updates.
@@ -220,7 +282,7 @@ func plainText(c card.Card) string {
 	return s[:cut]
 }
 
-func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (b *Bot) onInteraction(_ *discordgo.Session, i *discordgo.InteractionCreate) {
 	if i.Type == discordgo.InteractionMessageComponent {
 		b.onComponent(i)
 		return
@@ -231,13 +293,20 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	if i.ApplicationCommandData().Name != "report" {
 		return
 	}
+	if !b.track() {
+		return
+	}
+	defer b.untrack()
+	b.onReport(context.Background(), i)
+}
 
+func (b *Bot) onReport(ctx context.Context, i *discordgo.InteractionCreate) {
 	opts := optionMap(i.ApplicationCommandData().Options)
 	what := optStr(opts, "what")
 	title := optStr(opts, "title")
 	details := optStr(opts, "details")
 
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	_ = b.api.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	})
 
@@ -246,7 +315,7 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		reporter = i.Member.Nick
 	}
 
-	inc, err := b.svc.Handle(context.Background(), &incident.Report{
+	inc, err := b.svc.Handle(ctx, &incident.Report{
 		Source:            "discord",
 		ReportedBy:        reporter,
 		ReporterDiscordID: i.Member.User.ID,
@@ -255,9 +324,16 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		Details:           details,
 	})
 
+	if err != nil && b.isClosing() {
+		b.log.InfoContext(ctx, "report not stored, shutting down", "error", err)
+		_ = b.api.InteractionResponseDelete(i.Interaction)
+		b.followup(ctx, i, card.RestartingNotice)
+		return
+	}
+
 	var content string
 	if err != nil {
-		b.log.Error("handle report", "error", err)
+		b.log.ErrorContext(ctx, "handle report", "error", err)
 		content = "❌ Failed to create incident. Please try again."
 	} else {
 		content = fmt.Sprintf(
@@ -267,9 +343,23 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		)
 	}
 
-	_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+	_, _ = b.api.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content: &content,
 	})
+}
+
+func (b *Bot) isClosing() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closing || b.closed
+}
+
+func (b *Bot) followup(ctx context.Context, i *discordgo.InteractionCreate, msg string) {
+	if _, err := b.api.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+		Content: msg, Flags: discordgo.MessageFlagsEphemeral,
+	}); err != nil {
+		b.log.WarnContext(ctx, "discord follow-up failed", "error", err)
+	}
 }
 
 func optionMap(

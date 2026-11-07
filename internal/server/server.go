@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/babysit"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -24,6 +26,8 @@ import (
 )
 
 const readHeaderTimeout = 10 * time.Second
+
+var ErrDrainTimeout = errors.New("http drain did not finish")
 
 // shutdownGrace bounds how long [http.Server.Shutdown] waits for connections to drain.
 // [http.Server.Shutdown] does NOT cancel in-flight request contexts, and an SSE
@@ -112,6 +116,7 @@ func New(
 		// point of view form POST; auth lives in Caddy's Authentik
 		// forward_auth, which is cookie-based. See requireSameOrigin.
 		r.Use(requireSameOrigin)
+		r.Use(s.refuseWhileClosing)
 
 		r.Get("/", s.dashboardIndex)
 		r.Get("/events", s.dashboardEvents)
@@ -186,6 +191,28 @@ func (s *Server) Start(ctx context.Context) error {
 		close(s.shutdown)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
-		return s.http.Shutdown(shutdownCtx)
+		if err := s.http.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("%w: %w", ErrDrainTimeout, err)
+		}
+		return nil
 	}
+}
+
+func (s *Server) closing() bool {
+	select {
+	case <-s.shutdown:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) refuseWhileClosing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && s.closing() {
+			http.Error(w, card.RestartingNotice, http.StatusServiceUnavailable)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

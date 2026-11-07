@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/incident"
 )
 
@@ -79,6 +80,11 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	inc, err := s.svc.Handle(r.Context(), rep)
+	if err != nil && s.closing() {
+		s.log.InfoContext(r.Context(), "seerr webhook: report not stored, shutting down", "error", err)
+		http.Error(w, card.RestartingNotice, http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "seerr webhook: handle", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -65,3 +65,5 @@ func LiveTurnsForTest(msgs []openai.ChatCompletionMessage) []transcriptTurn {
 }
 
 func (s *Server) SetSelftestTimeoutForTest(d time.Duration) { s.selftestTimeout = d }
+
+func (s *Server) BeginShutdownForTest() { close(s.shutdown) }

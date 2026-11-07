@@ -97,8 +97,10 @@ func (s *Service) StartRecovery() {
 	s.work.goNamed("recovery", s.RecoverZombies)
 }
 
+func (s *Service) Stop() { s.work.stop() }
+
 func (s *Service) Shutdown(ctx context.Context) error {
-	s.work.stop()
+	s.Stop()
 	if names := s.work.wait(ctx); len(names) > 0 {
 		return fmt.Errorf("%w: %s", ErrShutdownTimeout, strings.Join(names, ", "))
 	}

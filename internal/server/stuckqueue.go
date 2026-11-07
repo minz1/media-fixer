@@ -102,10 +102,7 @@ func (s *Server) stuckAction(w http.ResponseWriter, r *http.Request) {
 	notice, err := s.stuck.Act(
 		context.WithoutCancel(r.Context()), app, r.FormValue("download_id"), action, r.FormValue("targets_fp"),
 	)
-	failure := ""
-	if err != nil {
-		failure = err.Error()
-	}
+	notice, failure := restartingNotice(notice, err)
 	s.renderStuckCard(r.Context(), w, notice, failure)
 }
 

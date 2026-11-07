@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
@@ -36,6 +37,7 @@ const (
 	tplKeyPaused   = "Paused"
 	msgSaved       = "Saved."
 	msgWholeNumber = "must be a whole number"
+	doneRestarting = "restarting"
 )
 
 const (
@@ -179,8 +181,31 @@ func incidentDoneNotice(key string) string {
 		return "Unlocked."
 	case "approve":
 		return "Escalation approved; running it now."
+	case doneRestarting:
+		return card.RestartingNotice
 	}
 	return ""
+}
+
+func restartingNotice(notice string, err error) (string, string) {
+	switch {
+	case errors.Is(err, card.ErrRestarting):
+		return card.RestartingNotice, ""
+	case err != nil:
+		return "", err.Error()
+	}
+	return notice, ""
+}
+
+func (s *Server) finishIncidentAction(w http.ResponseWriter, r *http.Request, id, done string, err error) {
+	switch {
+	case errors.Is(err, card.ErrRestarting):
+		s.redirectIncident(w, r, id, doneRestarting)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		s.redirectIncident(w, r, id, done)
+	}
 }
 
 func (s *Server) redirectIncident(w http.ResponseWriter, r *http.Request, id, done string) {
@@ -221,12 +246,11 @@ func (s *Server) actionResolve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Resolve(context.WithoutCancel(r.Context()), id); err != nil &&
-		!errors.Is(err, incident.ErrAlreadyResolved) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	err := s.svc.Resolve(context.WithoutCancel(r.Context()), id)
+	if errors.Is(err, incident.ErrAlreadyResolved) {
+		err = nil
 	}
-	s.redirectIncident(w, r, id, "resolve")
+	s.finishIncidentAction(w, r, id, "resolve", err)
 }
 
 func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
@@ -234,11 +258,7 @@ func (s *Server) actionRerun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Rerun(context.WithoutCancel(r.Context()), id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.redirectIncident(w, r, id, "rerun")
+	s.finishIncidentAction(w, r, id, "rerun", s.svc.Rerun(context.WithoutCancel(r.Context()), id))
 }
 
 func (s *Server) actionPause(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +270,10 @@ func (s *Server) actionResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setPaused(w http.ResponseWriter, r *http.Request, paused bool, notice string) {
-	if err := s.svc.SetAutonomousPaused(r.Context(), paused); err != nil {
+	err := s.svc.SetAutonomousPaused(r.Context(), paused)
+	if errors.Is(err, card.ErrRestarting) {
+		notice = card.RestartingNotice
+	} else if err != nil {
 		s.log.ErrorContext(r.Context(), "set autonomous paused", "paused", paused, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -272,11 +295,7 @@ func (s *Server) actionKeepSearching(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.KeepSearching(context.WithoutCancel(r.Context()), id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.redirectIncident(w, r, id, "keep")
+	s.finishIncidentAction(w, r, id, "keep", s.svc.KeepSearching(context.WithoutCancel(r.Context()), id))
 }
 
 func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
@@ -284,11 +303,7 @@ func (s *Server) actionUnlock(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Unlock(r.Context(), id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.redirectIncident(w, r, id, "unlock")
+	s.finishIncidentAction(w, r, id, "unlock", s.svc.Unlock(r.Context(), id))
 }
 
 // escalationPreview renders a read-only plan preview for the incident's
@@ -305,9 +320,12 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	data := map[string]any{"BaseURL": s.baseURL, "IncidentID": id}
 	plan, fp, err := s.svc.PreviewEscalation(r.Context(), id)
-	if err != nil {
+	switch {
+	case errors.Is(err, card.ErrRestarting):
+		data["Error"] = card.RestartingNotice
+	case err != nil:
 		data["Error"] = err.Error()
-	} else {
+	default:
 		data["Plan"] = plan
 		data["PlanFP"] = fp
 		// Surfaced out of the plan rather than reached into from the template:
@@ -334,11 +352,8 @@ func (s *Server) approveEscalation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp")); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	s.redirectIncident(w, r, id, "approve")
+	err := s.svc.ApproveEscalation(context.WithoutCancel(r.Context()), id, r.FormValue("plan_fp"))
+	s.finishIncidentAction(w, r, id, "approve", err)
 }
 
 // parseUUIDParam extracts the "id" URL param and validates it as a UUID.

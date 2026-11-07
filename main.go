@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"os"
@@ -124,10 +125,10 @@ func newStuckRead(clients *clientset.Set, svc *incident.Service, database *db.DB
 }
 
 func startMaintenance(
-	ctx context.Context, stop context.CancelFunc, cfg *config.Config, bundle *agentBundle, database *db.DB,
+	ctx context.Context, cfg *config.Config, bundle *agentBundle, database *db.DB,
 	bot *discord.Bot, srv *server.Server, log *slog.Logger,
 	handlers map[string]card.Handler, renderers map[string]card.Renderer, sr *stuckread.Watcher,
-) func() {
+) []step {
 	clients := bundle.clients
 	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log, renderers)
 	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log, handlers, renderers)
@@ -137,35 +138,18 @@ func startMaintenance(
 			Model: cfg.LLM.Model, Now: time.Now, Log: log,
 		})
 	}
+	var waits []step
 	if sr != nil {
 		sr.Start(ctx)
+		waits = append(waits, step{name: "stuckread", run: within(sr.Wait)})
 	}
-	return func() {
-		stop()
-		if sr != nil {
-			sr.Wait()
-		}
-		if sweepSch != nil {
-			sweepSch.Wait()
-		}
-		if stuckSch != nil {
-			stuckSch.Wait()
-		}
+	if sweepSch != nil {
+		waits = append(waits, step{name: "sweep", run: within(sweepSch.Wait)})
 	}
-}
-
-const shutdownBudget = 60 * time.Second
-
-func startService(svc *incident.Service, log *slog.Logger) func() {
-	svc.Start()
-	svc.StartRecovery()
-	return func() {
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
-		defer cancel()
-		if err := svc.Shutdown(ctx); err != nil {
-			log.ErrorContext(ctx, "shutdown bound hit", "error", err)
-		}
+	if stuckSch != nil {
+		waits = append(waits, step{name: "stuckqueue", run: within(stuckSch.Wait)})
 	}
+	return waits
 }
 
 func startCards(
@@ -175,6 +159,18 @@ func startCards(
 	ch, unsub := jrnl.SubscribeAll()
 	bot.StartCards(ctx, database, ch, handlers, renderers)
 	return unsub
+}
+
+type app struct {
+	cfg      *config.Config
+	log      *slog.Logger
+	database *db.DB
+	jrnl     *journal.Journal
+	bundle   *agentBundle
+	bot      *discord.Bot
+	svc      *incident.Service
+	srv      *server.Server
+	sr       *stuckread.Watcher
 }
 
 func run() error {
@@ -194,62 +190,107 @@ func run() error {
 		log.Error("open database", "error", err)
 		return err
 	}
-	defer database.Close()
-	jrnl := journal.New(database)
-
-	bundle, err := buildAgentComponents(cfg, database, jrnl, log)
-	if err != nil {
-		log.Error("build agent components", "error", err)
-		return err
-	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	bot, err := discord.New(cfg.Discord.Token, cfg.Discord.GuildID, cfg.Discord.OwnerID, cfg.Server.PublicURL, log)
+	a, err := build(ctx, cfg, database, log)
 	if err != nil {
-		log.Error("init discord bot", "error", err)
+		_ = database.Close()
 		return err
 	}
+	return a.serve(ctx, stop)
+}
 
-	svc := incident.NewService(ctx, database, jrnl, bundle.ag, bundle.ctrl, bundle.summary, bot, log)
+func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.Logger) (*app, error) {
+	a := &app{cfg: cfg, log: log, database: database, jrnl: journal.New(database)}
+	bundle, err := buildAgentComponents(cfg, database, a.jrnl, log)
+	if err != nil {
+		log.ErrorContext(ctx, "build agent components", "error", err)
+		return nil, err
+	}
+	a.bundle = bundle
+
+	a.bot, err = discord.New(cfg.Discord.Token, cfg.Discord.GuildID, cfg.Discord.OwnerID, cfg.Server.PublicURL, log)
+	if err != nil {
+		log.ErrorContext(ctx, "init discord bot", "error", err)
+		return nil, err
+	}
+
+	a.svc = incident.NewService(ctx, database, a.jrnl, bundle.ag, bundle.ctrl, bundle.summary, a.bot, log)
 	if cfg.Seerr.URL != "" {
-		svc.SetSeerr(client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey))
+		a.svc.SetSeerr(client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey))
 	} else {
-		log.Warn("seerr not configured — seerr reporters get no issue updates")
+		log.WarnContext(ctx, "seerr not configured — seerr reporters get no issue updates")
 	}
-	sr := newStuckRead(bundle.clients, svc, database, log)
-	bot.SetService(svc)
-	defer bot.Close()
+	a.sr = newStuckRead(bundle.clients, a.svc, database, log)
+	a.bot.SetService(a.svc)
 
-	srv, err := server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, jrnl, svc, log)
+	a.srv, err = server.New(cfg.Server.Addr, cfg.Server.BaseURL, database, a.jrnl, a.svc, log)
 	if err != nil {
-		log.Error("init server", "error", err)
-		return err
+		log.ErrorContext(ctx, "init server", "error", err)
+		return nil, err
 	}
 	// A separate dispatcher with no DB/Journal, so live-check runs triggered
 	// from the dashboard (which have no real incident to attach action-log
 	// rows to) never write actions_log entries — same as the media-fixer-check
 	// CLI.
-	srv.SetChecker(bundle.clients.Dispatcher(nil, nil))
-	srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
+	a.srv.SetChecker(bundle.clients.Dispatcher(nil, nil))
+	a.srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 
 	if _, err = database.InterruptRunningSweeps(ctx); err != nil {
-		log.Error("interrupt running sweeps", "error", err)
-		return err
+		log.ErrorContext(ctx, "interrupt running sweeps", "error", err)
+		return nil, err
 	}
-	handlers := map[string]card.Handler{"inc": svc.CardHandler()}
-	renderers := map[string]card.Renderer{"inc": svc.CardRenderer()}
-	defer startMaintenance(ctx, stop, cfg, bundle, database, bot, srv, log, handlers, renderers, sr)()
-	defer startCards(ctx, bot, database, jrnl, handlers, renderers)()
-	bot.Start(ctx)
+	return a, nil
+}
 
-	defer startService(svc, log)()
+func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
+	handlers := map[string]card.Handler{"inc": a.svc.CardHandler()}
+	renderers := map[string]card.Renderer{"inc": a.svc.CardRenderer()}
+	var maintenance []step
+	var unsub func()
+	startup(startSteps{
+		maintenance: func() {
+			maintenance = startMaintenance(
+				ctx, a.cfg, a.bundle, a.database, a.bot, a.srv, a.log, handlers, renderers, a.sr)
+		},
+		cards:    func() { unsub = startCards(ctx, a.bot, a.database, a.jrnl, handlers, renderers) },
+		bot:      func() { a.bot.Start(ctx) },
+		intake:   func() { context.AfterFunc(ctx, a.bot.StopIntake) },
+		service:  a.svc.Start,
+		recovery: a.svc.StartRecovery,
+	})
+	signalled := make(chan time.Time, 1)
+	context.AfterFunc(ctx, func() { signalled <- time.Now() })
 
-	log.Info("media-fixer started")
-	if err = srv.Start(ctx); err != nil {
-		log.Error("server stopped", "error", err)
-		return err
+	a.log.InfoContext(ctx, "media-fixer started")
+	httpErr := a.srv.Start(ctx)
+	if httpErr != nil && !errors.Is(httpErr, server.ErrDrainTimeout) {
+		a.log.ErrorContext(ctx, "server stopped", "error", httpErr)
+	}
+	stop()
+	sctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), (<-signalled).Add(shutdownBudget))
+	defer cancel()
+	shutdown(sctx, a.log, shutdownPlan{
+		intake: a.bot.StopIntake,
+		cancel: func() {
+			stop()
+			a.svc.Stop()
+		},
+		http: httpErr,
+		waits: append([]step{
+			{name: "discord", run: a.bot.WaitHandlers},
+			{name: "incident", run: a.svc.Shutdown},
+		}, maintenance...),
+		subs: []step{
+			{name: "discord session", run: a.bot.Disconnect},
+			{name: "journal", run: plain(unsub)},
+		},
+		closeDB: a.database.Close,
+	})
+	if httpErr != nil && !errors.Is(httpErr, server.ErrDrainTimeout) {
+		return httpErr
 	}
 	return nil
 }

@@ -151,3 +151,13 @@ func TestSend_PlainFallbackFails(t *testing.T) {
 		t.Errorf("logs = %q", logs.String())
 	}
 }
+
+func (f *fakeSender) FollowupMessageCreate(
+	*discordgo.Interaction, bool, *discordgo.WebhookParams, ...discordgo.RequestOption,
+) (*discordgo.Message, error) {
+	return &discordgo.Message{}, nil
+}
+
+func (f *fakeSender) InteractionResponseDelete(*discordgo.Interaction, ...discordgo.RequestOption) error {
+	return nil
+}

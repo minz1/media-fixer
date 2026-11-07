@@ -83,7 +83,7 @@ func (s *Server) monitorImport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	notice, failure := "", ""
+	var notice, failure string
 	err := r.ParseForm()
 	var rows []stuckqueue.MappedFile
 	if err == nil {
@@ -98,9 +98,7 @@ func (s *Server) monitorImport(w http.ResponseWriter, r *http.Request) {
 		notice, err = s.stuck.ImportMapped(
 			context.WithoutCancel(r.Context()), id, r.FormValue("download_id"), r.FormValue("targets_fp"), rows,
 		)
-		if err != nil {
-			notice, failure = "", err.Error()
-		}
+		notice, failure = restartingNotice(notice, err)
 	}
 	s.renderMonitorShow(w, r, id, tplMonitorCard, notice, failure, false)
 }
