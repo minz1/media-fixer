@@ -217,8 +217,8 @@ func (s *Server) incidentEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // renderIncidentFragments executes the live regions of the incident page (or,
-// for the full thought-process page, just the transcript), plus the pause
-// toggle, against data and packs them into one combined SSE payload.
+// for the full thought-process page, just the transcript) against data and
+// packs them into one combined SSE payload.
 func (s *Server) renderIncidentFragments(data map[string]any, transcriptOnly bool) (string, error) {
 	targets := map[string]string{"incident-transcript": "incident_transcript", "pause-toggle": "pause_toggle"}
 	if !transcriptOnly {

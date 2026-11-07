@@ -315,7 +315,7 @@ func TestAct_ForgetLeavesHandedOutResultsAlone(t *testing.T) {
 	}
 }
 
-func TestQ2_8_RegrabSearchFailsRecordsRemoved(t *testing.T) {
+func TestQ2_8_Q5b_4_RegrabSearchFailsRecordsRemoved(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))

@@ -1225,9 +1225,7 @@ type ActionLog struct {
 	Error       string       `json:"error,omitempty"`
 }
 
-// LogAction inserts an action record, generating an ID if absent. Callers
-// only log an action once the underlying operation has finished, applied or failed,
-// so "now" is an accurate applied_at — there is no separate "pending" phase
+// LogAction inserts an action record, generating an ID if absent. There is no separate "pending" phase
 // in this codebase's usage, unlike the applied_at pair the
 // schema was originally built for. Production code now writes actions_log
 // exclusively via internal/journal (an action_applied event's projection,

@@ -1165,13 +1165,8 @@ func shortID(id string) string {
 
 // attemptHistory renders every action already logged against this incident, so
 // a resumed or rerun diagnosis knows what has already been tried instead of
-// re-discovering — and re-applying — the same fix from a blank slate. Each
-// row is labelled with its logged status: Dispatcher.logAction only fires
-// after the underlying call succeeds, but an owner-approved escalation that
-// errored is logged failed. The fact that Run is being invoked again at all
-// means the incident is still open, so "did not resolve it" is a safe
-// inference, not a guess. Returns "" when nothing has been logged yet, the
-// common case for a brand-new incident.
+// re-discovering — and re-applying — the same fix from a blank slate. Returns ""
+// when nothing has been logged yet, the common case for a brand-new incident.
 func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 	actions, err := a.db.ListActions(ctx, incidentID)
 	if err != nil || len(actions) == 0 {
