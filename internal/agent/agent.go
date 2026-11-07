@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -596,9 +597,6 @@ func (a *Agent) processToolCalls(
 			}
 			continue
 		}
-		if kind, stop := gateStop(gate.Live(ctx)); stop {
-			return runEvent{kind: kind}, nil
-		}
 
 		resultJSON := a.executeRead(ctx, inc, fn, call.Function.Arguments)
 		*messages = append(*messages, openai.ChatCompletionMessage{
@@ -926,7 +924,8 @@ func (v *invocation) afterAct(result any, err error) {
 	case errors.Is(err, errAppliedNotReady):
 		v.step(evNotReady, stepInfo{reply: errorReply(err.Error()), errText: err.Error(), params: v.c.params})
 	case v.c.cut:
-		v.a.log.WarnContext(v.ctx, "action outcome unknown", "tool", v.fn, "error", err)
+		v.a.log.WarnContext(v.ctx, "action outcome unknown", "tool", v.fn, "error",
+			client.RedactCredentials(err.Error()))
 		v.step(evCut, stepInfo{reply: errorReply(fmt.Sprintf(
 			"%s was interrupted and its outcome is unknown (interrupted). Check the service before repeating it, "+
 				"or call complete_diagnosis with your current findings.", v.fn)),
@@ -1342,7 +1341,10 @@ func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 	if err != nil {
 		return ""
 	}
-	unknown, _ := a.unknownAttempts(ctx, incidentID)
+	unknown, err := a.unknownAttempts(ctx, incidentID)
+	if err != nil {
+		a.log.WarnContext(ctx, "attempt history: read unknown attempts", "incident", incidentID, "error", err)
+	}
 	if len(actions) == 0 && len(unknown) == 0 {
 		return ""
 	}
@@ -1545,6 +1547,15 @@ func (a *Agent) BuildSummarySeed(ctx context.Context, inc *db.Incident, summary 
 }
 
 func (v *invocation) earlierCall(args map[string]any) (CallRecord, bool) {
+	if v.fn == toolArrSearchMissing {
+		sentinels := []string{paramSeason, paramEpisode}
+		resolved := make(map[string]any, len(args)+len(sentinels))
+		maps.Copy(resolved, args)
+		for _, k := range sentinels {
+			resolved[k] = intArgOrSentinel(args, k)
+		}
+		args = resolved
+	}
 	calls := v.c.gate.Calls()
 	for _, rec := range slices.Backward(calls) {
 		if rec.Tool == v.fn && identityParamsMatch(args, rec.Params) {

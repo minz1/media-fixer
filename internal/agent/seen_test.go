@@ -167,6 +167,28 @@ func TestSeen_DifferentEpisodesNotBlocked(t *testing.T) {
 	}
 }
 
+func TestReviewP3_SeasonSearchAfterEpisodeNotBlocked(t *testing.T) {
+	t.Parallel()
+	s, srv := newCallServer(t)
+	s.episodeHasFile = true
+	ag, database, inc := newRig(t, srv.URL, []string{
+		toolCallResponse("arr_search_missing", searchEpisode7),
+		toolCallResponse("arr_search_missing", `{"media_type":"tv","title":"Rick and Morty","season":9}`),
+		toolCallResponse("complete_diagnosis", diagnosisArgs),
+	}, rigOpts{})
+	g := newRecGate(database, inc)
+	exit := runGated(context.Background(), t, ag, database, inc, g)
+	if exit.State != agent.RunConcluded {
+		t.Fatalf("exit %s: %v", exit.State, exit.Err)
+	}
+	if got := g.acted(); len(got) != 1 {
+		t.Errorf("Act ran %d times, want the season search to run: %v", len(got), got)
+	}
+	if n := len(g.Calls()); n != 2 {
+		t.Errorf("%d gate records, want the refused episode and the season search: %+v", n, g.Calls())
+	}
+}
+
 func TestSeen_RetryAttemptInheritsCalls(t *testing.T) {
 	t.Parallel()
 	s, srv := newCallServer(t)
