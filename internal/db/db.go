@@ -1210,14 +1210,6 @@ func (d *DB) AddSeerrIssue(ctx context.Context, incidentID, issueID string) (boo
 	return rowChanged(res, err)
 }
 
-func (d *DB) ClaimReporterNote(ctx context.Context, id string, now time.Time, minGap time.Duration) (bool, error) {
-	res, err := d.write.ExecContext(ctx,
-		`UPDATE incidents SET last_reporter_note_at = ?
-		 WHERE id = ? AND (last_reporter_note_at IS NULL OR last_reporter_note_at <= ?)`,
-		now, id, now.Add(-minGap))
-	return rowChanged(res, err)
-}
-
 func (d *DB) LastReporterNoteAt(ctx context.Context, id string) (time.Time, error) {
 	var t sql.NullTime
 	err := d.read.QueryRowContext(ctx, `SELECT last_reporter_note_at FROM incidents WHERE id = ?`, id).Scan(&t)

@@ -28,7 +28,7 @@ func effectObligations(cur lifecycle.Snapshot, d lifecycle.Decision) error {
 			if e.Gen != n.Generation {
 				return fmt.Errorf("%s carries gen %d, snapshot has %d", e.Kind, e.Gen, n.Generation)
 			}
-		case lifecycle.NotifyReporters, lifecycle.NotifyOwner, lifecycle.SeerrResolve:
+		case lifecycle.NotifyReporters, lifecycle.NotifyOwner, lifecycle.SeerrResolve, lifecycle.SeerrComment:
 		}
 		if e.Kind == lifecycle.LaunchRun && (cur.In.Paused || n.Parked) {
 			return errors.New("D4: launched while paused")

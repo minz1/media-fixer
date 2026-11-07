@@ -12,6 +12,7 @@ const (
 	NotifyReporters EffectKind = "notify_reporters"
 	NotifyOwner     EffectKind = "notify_owner"
 	SeerrResolve    EffectKind = "seerr_resolve"
+	SeerrComment    EffectKind = "seerr_comment"
 )
 
 type Seed string

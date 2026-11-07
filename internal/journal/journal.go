@@ -164,6 +164,15 @@ func (j *Journal) notify(e *db.Event) {
 	send(j.allSubs, e)
 }
 
+func (j *Journal) Publish(events ...*db.Event) {
+	if j == nil {
+		return
+	}
+	for _, e := range events {
+		j.notify(e)
+	}
+}
+
 func (j *Journal) AutonomousPauseChanged() {
 	e := &db.Event{At: time.Now(), Kind: string(KindAutonomousPauseChanged)}
 	j.mu.Lock()
@@ -451,22 +460,23 @@ func (j *Journal) RunFinished(ctx context.Context, incidentID string, rounds int
 func (j *Journal) RunExit(
 	ctx context.Context, incidentID string, finding any, rounds int, exit string, runErr error,
 ) error {
-	p := runFinishedPayload{Rounds: rounds, Exit: exit}
-	if runErr != nil {
-		p.Error = runErr.Error()
-	}
-	payload, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
 	raw, err := json.Marshal(finding)
 	if err != nil {
 		return err
 	}
-	e := &db.Event{IncidentID: incidentID, At: time.Now(), Kind: string(KindRunFinished), Payload: payload}
+	e := RunFinishedEvent(incidentID, rounds, exit, runErr)
 	if recErr := j.db.RecordRunExit(ctx, incidentID, raw, e); recErr != nil {
 		return recErr
 	}
 	j.notify(e)
 	return nil
+}
+
+func RunFinishedEvent(incidentID string, rounds int, exit string, runErr error) *db.Event {
+	p := runFinishedPayload{Rounds: rounds, Exit: exit}
+	if runErr != nil {
+		p.Error = runErr.Error()
+	}
+	payload, _ := json.Marshal(p)
+	return &db.Event{IncidentID: incidentID, At: time.Now(), Kind: string(KindRunFinished), Payload: payload}
 }
