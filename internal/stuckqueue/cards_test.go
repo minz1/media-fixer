@@ -307,7 +307,7 @@ func TestRenderer_StuckAgainAfterActClearsOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
-	e.tickAt(s, time.Minute)
+	e.tickAt(s, 11*time.Minute)
 	up, ok := render(t, s, card.StuckSubject("s", "D"))
 	if !ok || strings.HasPrefix(up.Status, "✅") || len(up.Buttons) == 0 {
 		t.Fatalf("update = %+v, %v; want the still-stuck buttons, not the old outcome", up, ok)
@@ -380,7 +380,7 @@ func TestHandler_ActsWithFingerprint(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
-	if _, err := e.db.UpsertStuckSeen(context.Background(), "sonarr", "D", "D", "", e.clock.Now()); err != nil {
+	if err := seedSeen(e, stuckqueue.AppSonarr, "D", e.clock.Now().Add(-7*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	fp := card.Fingerprint([]byte("e1"))

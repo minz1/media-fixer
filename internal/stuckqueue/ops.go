@@ -200,7 +200,9 @@ func (s *Scheduler) Resume(
 	if err = opError(op); err != nil {
 		return "", err
 	}
-	s.recordOutcome(subject, ActionRegrab)
+	s.record(ctx, Key{App: app, DownloadID: op.Steps[0].DownloadID}, Event{
+		Kind: EvResumed, OpID: op.ID, Done: op.Status == operation.Done,
+	}, 0)
 	s.r.logger().InfoContext(ctx, "stuck-queue: resumed re-grab", "app", app, "download", downloadID, "op", op.ID)
 	return "Search sent for " + op.Title + ".", nil
 }

@@ -1,12 +1,15 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/server"
 )
 
@@ -18,6 +21,7 @@ const (
 var fpRe = regexp.MustCompile(`name="targets_fp" value="([^"]+)"`)
 
 func (e *bEnv) importSetup() {
+	e.seedStuckWaiting("d1", 7*time.Hour)
 	e.son.setQueue(liveRec(1, 7, "d1", "Seven.S01", "no files found"))
 	e.son.setCandidates(
 		candidate("/dl/Seven.S01/a.mkv"),
@@ -277,5 +281,19 @@ func TestMonitorActions_SonarrDownSaysWhy(t *testing.T) {
 			t.Errorf("%s: %d, want 502", p, rec.Code)
 		}
 		mustContain(t, rec.Body.String(), "Sonarr could not be read")
+	}
+}
+
+func (e *bEnv) seedStuckWaiting(downloadID string, age time.Duration) {
+	e.t.Helper()
+	err := e.db.ApplyStuck(context.Background(), "sonarr", []string{downloadID},
+		func(map[string]*db.StuckRow) ([]db.StuckRow, []string, error) {
+			return []db.StuckRow{{
+				App: "sonarr", DownloadID: downloadID, State: "waiting",
+				FirstSeen: time.Now().Add(-age), Offered: "remove",
+			}}, nil, nil
+		})
+	if err != nil {
+		e.t.Fatal(err)
 	}
 }

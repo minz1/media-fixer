@@ -96,7 +96,6 @@ func (s *Scheduler) start(now time.Time, set Settings) error {
 		res := s.r.Run(s.base, set)
 		release(func(sl *slot) {
 			sl.last, sl.hasLast = res, true
-			sl.clearStuckOutcomes(res)
 		})
 		s.refresh(cardPrefix)
 	})

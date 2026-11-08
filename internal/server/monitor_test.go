@@ -205,6 +205,7 @@ func (l *bLLM) count() int {
 }
 
 type bEnv struct {
+	t     *testing.T
 	srv   *server.Server
 	db    *db.DB
 	sch   *sweep.Scheduler
@@ -239,7 +240,7 @@ func newMonitorTestServer(t *testing.T) *bEnv {
 	t.Cleanup(sq.Wait)
 	srv.SetStuckQueue(sq)
 
-	e := &bEnv{srv: srv, db: database, sch: sch, son: son, llm: &bLLM{reply: "indexers have nothing"}}
+	e := &bEnv{t: t, srv: srv, db: database, sch: sch, son: son, llm: &bLLM{reply: "indexers have nothing"}}
 	e.queue = &stuckqueue.Result{}
 	srv.SetBabysit(&babysit.Service{
 		DB: database, Sonarr: arr, LLM: e.llm, Model: "m1", Now: time.Now,

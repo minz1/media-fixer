@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/operation"
@@ -23,13 +22,8 @@ const (
 	goneLine     = "left the queue"
 )
 
-type outcome struct {
-	action Action
-	at     time.Time
-}
-
-func (o outcome) line() string {
-	return fmt.Sprintf("✅ %s · <t:%d:t>", actionDone(o.action), o.at.Unix())
+func actedLine(a Acted) string {
+	return fmt.Sprintf("✅ %s · <t:%d:t>", actionDone(a.Action), a.At.Unix())
 }
 
 func actionDone(a Action) string {
@@ -97,7 +91,7 @@ func buttonLook(a Action) (string, card.Style) {
 }
 
 func (s *Scheduler) CardRenderer() card.Renderer {
-	return func(_ context.Context, subject string) (card.Rendering, error) {
+	return func(ctx context.Context, subject string) (card.Rendering, error) {
 		parts := strings.SplitN(subject, ":", subjectParts)
 		if len(parts) != subjectParts || parts[0] != cardKind {
 			return card.Rendering{Outcome: card.Gone}, nil
@@ -106,38 +100,46 @@ func (s *Scheduler) CardRenderer() card.Renderer {
 		if !ok {
 			return card.Rendering{Outcome: card.Gone}, nil
 		}
+		done, hasDone, err := s.actedRow(ctx, app, parts[2])
+		if err != nil {
+			return card.Rendering{}, err
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if op, failed := s.slot.failedOps[OpSubject(app, parts[2]).ID]; failed {
 			return card.Rendered(failedUpdate(app, op)), nil
 		}
-		if o, acted := s.slot.outcomes[subject]; acted {
-			return card.Rendered(card.Update{Status: o.line()}), nil
+		if hasDone {
+			return card.Rendered(card.Update{Status: actedLine(done)}), nil
 		}
-		if !s.slot.hasLast {
-			return card.Rendering{}, nil
-		}
-		i := slices.IndexFunc(s.slot.last.Apps, func(ar AppResult) bool { return ar.App == app })
-		if i < 0 || !s.slot.last.Apps[i].Configured || s.slot.last.Apps[i].Unreachable {
-			return card.Rendering{}, nil
-		}
-		ar := s.slot.last.Apps[i]
-		match := func(it Item) bool { return strings.EqualFold(it.DownloadID, parts[2]) }
-		if j := slices.IndexFunc(ar.Items, match); j >= 0 {
-			return card.Rendered(card.Update{Buttons: itemButtons(ar.Items[j].Download, ar.Items[j].Actions)}), nil
-		}
-		if j := slices.IndexFunc(ar.Waiting, match); j >= 0 {
-			w := ar.Waiting[j]
-			return card.Rendered(card.Update{
-				Status:  fmt.Sprintf("⏳ Inside the wait until <t:%d:t>; only Remove until then", w.Due.Unix()),
-				Buttons: itemButtons(w.Download, w.Actions),
-			}), nil
-		}
-		if s.slot.holder == holderRun {
-			return card.Rendering{}, nil
-		}
-		return card.Rendered(card.Update{Status: goneLine}), nil
+		return s.renderLast(app, parts[2]), nil
 	}
+}
+
+func (s *Scheduler) renderLast(app App, downloadID string) card.Rendering {
+	if !s.slot.hasLast {
+		return card.Rendering{}
+	}
+	i := slices.IndexFunc(s.slot.last.Apps, func(ar AppResult) bool { return ar.App == app })
+	if i < 0 || !s.slot.last.Apps[i].Configured || s.slot.last.Apps[i].Unreachable {
+		return card.Rendering{}
+	}
+	ar := s.slot.last.Apps[i]
+	match := func(it Item) bool { return strings.EqualFold(it.DownloadID, downloadID) }
+	if j := slices.IndexFunc(ar.Items, match); j >= 0 {
+		return card.Rendered(card.Update{Buttons: itemButtons(ar.Items[j].Download, ar.Items[j].Actions)})
+	}
+	if j := slices.IndexFunc(ar.Waiting, match); j >= 0 {
+		w := ar.Waiting[j]
+		return card.Rendered(card.Update{
+			Status:  fmt.Sprintf("⏳ Inside the wait until <t:%d:t>; only Remove until then", w.Due.Unix()),
+			Buttons: itemButtons(w.Download, w.Actions),
+		})
+	}
+	if s.slot.holder == holderRun {
+		return card.Rendering{}
+	}
+	return card.Rendered(card.Update{Status: goneLine})
 }
 
 func (s *Scheduler) CardHandler() card.Handler {
@@ -167,21 +169,17 @@ func (s *Scheduler) CardHandler() card.Handler {
 	}
 }
 
-func (s *Scheduler) recordOutcome(subject string, a Action) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.slot.outcomes == nil {
-		s.slot.outcomes = map[string]outcome{}
+func (s *Scheduler) actedRow(ctx context.Context, app App, downloadID string) (Acted, bool, error) {
+	rows, err := s.d.ListStuckInState(ctx, string(StateActed))
+	if err != nil {
+		return Acted{}, false, err
 	}
-	s.slot.outcomes[subject] = outcome{action: a, at: s.r.Now()}
-}
-
-func (sl *slot) clearStuckOutcomes(res Result) {
-	for _, ar := range res.Apps {
-		for _, it := range slices.Concat(ar.Items, ar.Waiting) {
-			delete(sl.outcomes, subjectOf(it.Download))
+	for _, row := range rows {
+		if App(row.App) == app && strings.EqualFold(row.DownloadID, downloadID) && row.ActedResult == string(ResultOK) {
+			return *fromRow(row).Acted, true, nil
 		}
 	}
+	return Acted{}, false, nil
 }
 
 func (s *Scheduler) refresh(subject string) {

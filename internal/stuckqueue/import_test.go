@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
@@ -30,6 +31,9 @@ func importEnv(t *testing.T) (*runEnv, *stuckqueue.Scheduler) {
 	e.sonarr.set(rawRec(1, "D", "Show", 1, false, sample), rawRec(2, "D", "Show", 2, false, sample))
 	e.sonarr.setCandidates("D", twoFiles)
 	e.sonarr.setEpisodes(rawEpisode(1, 1, 1, false), rawEpisode(2, 1, 2, false))
+	if err := seedSeen(e, stuckqueue.AppSonarr, "D", e.clock.Now().Add(-7*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	return e, s
 }
 
@@ -111,15 +115,11 @@ func TestImportMapped_PostsMapping(t *testing.T) {
 		!slices.Equal(f1["episodeIds"].([]any), []any{float64(2)}) {
 		t.Fatalf("second file = %v", f1)
 	}
-	if res, _, _ := s.State(); len(
-		app(res, stuckqueue.AppSonarr).Items,
-	)+len(
-		app(res, stuckqueue.AppSonarr).Waiting,
-	) != 0 {
-		t.Fatalf("download still tracked: %+v", res)
+	if row, _ := e.rowOf(t, "D"); row.State != string(stuckqueue.StateImportInflight) {
+		t.Fatalf("row = %+v, want import_inflight", row)
 	}
-	if got := statuses(); len(got) != 1 || !strings.HasPrefix(got[0], "✅ Imported") {
-		t.Fatalf("refresh statuses = %q, want one outcome", got)
+	if got := statuses(); len(got) != 1 || strings.HasPrefix(got[0], "✅") {
+		t.Fatalf("refresh statuses = %q, want one refresh without an outcome", got)
 	}
 }
 
@@ -167,6 +167,9 @@ func TestImportMapped_TargetsChanged(t *testing.T) {
 func TestImportMapped_Gone(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
+	if err := seedSeen(e, stuckqueue.AppSonarr, "D", e.clock.Now().Add(-7*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	_, err := s.ImportMapped(context.Background(), 1, "D", "x", bothRows())
 	refusedNoWrite(t, e.sonarr, err, "no longer in the Sonarr queue")
 }

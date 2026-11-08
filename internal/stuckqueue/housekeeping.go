@@ -16,11 +16,7 @@ func (s *Scheduler) housekeep(now time.Time, timeout time.Duration) {
 	}
 	effs := append(s.pollImports(s.base, now, timeout), s.expireActed(s.base, now)...)
 	release(nil)
-	for _, e := range effs {
-		if r, ok := e.(EffRefreshCard); ok {
-			s.refresh(subjectOf(Download{App: r.Key.App, DownloadID: r.Key.DownloadID}))
-		}
-	}
+	s.runEffects(effs)
 }
 
 func (s *Scheduler) pollImports(ctx context.Context, now time.Time, timeout time.Duration) []Effect {

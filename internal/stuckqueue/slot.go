@@ -55,7 +55,6 @@ type slot struct {
 	last      Result
 	hasLast   bool
 	warned    string
-	outcomes  map[string]outcome
 	failedOps map[string]operation.Op
 }
 

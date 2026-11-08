@@ -192,7 +192,7 @@ func TestAct_Remove(t *testing.T) {
 	}
 }
 
-func TestAct_DropsFromLast(t *testing.T) {
+func TestAct_MarksActedInLast(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
@@ -211,12 +211,12 @@ func TestAct_DropsFromLast(t *testing.T) {
 	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
 		t.Fatal(err)
 	}
-	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Items) != 0 {
-		t.Fatalf("last still lists it: %+v", res)
+	if res, _, _ := s.State(); !markedActed(app(res, stuckqueue.AppSonarr).Items) {
+		t.Fatalf("last does not show it acted: %+v", res)
 	}
 }
 
-func TestAct_DropsWaitingFromLast(t *testing.T) {
+func TestAct_MarksActedWaitingInLast(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
@@ -230,8 +230,8 @@ func TestAct_DropsWaitingFromLast(t *testing.T) {
 	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
 		t.Fatal(err)
 	}
-	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Waiting) != 0 {
-		t.Fatalf("last still lists it as waiting: %+v", res)
+	if res, _, _ := s.State(); !markedActed(app(res, stuckqueue.AppSonarr).Waiting) {
+		t.Fatalf("last does not show it acted: %+v", res)
 	}
 }
 
@@ -261,6 +261,9 @@ func TestAct_RefusesRemappedTargets(t *testing.T) {
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "Link Click", 2, false, sample))
 	e.sonarr.setCandidates("D", candidateJSON("D", 2, false))
+	if err := seedSeen(e, stuckqueue.AppSonarr, "D", e.clock.Now().Add(-7*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	_, err := actOnEpisode1(s, stuckqueue.ActionImport)
 	refusedNoWrite(t, e.sonarr, err, "this changed, look again")
 }
@@ -269,9 +272,7 @@ func TestAct_RefusesOnTargetsFingerprintMismatch(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "Link Click", 2, false, sample))
-	if _, err := e.db.UpsertStuckSeen(
-		context.Background(), string(stuckqueue.AppSonarr), "D", "D", "", e.clock.Now().Add(-7*time.Hour),
-	); err != nil {
+	if err := seedSeen(e, stuckqueue.AppSonarr, "D", e.clock.Now().Add(-7*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	const stale = "0123456789ab"
@@ -286,9 +287,7 @@ func TestFingerprint_StaleButtonSaysLookAgain(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "Link Click", 1, false, sample))
-	if _, err := e.db.UpsertStuckSeen(
-		context.Background(), string(stuckqueue.AppSonarr), "D", "D", "", e.clock.Now().Add(-7*time.Hour),
-	); err != nil {
+	if err := seedSeen(e, stuckqueue.AppSonarr, "D", e.clock.Now().Add(-7*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	labelFP := card.Fingerprint([]byte("S01E01"))
@@ -345,8 +344,8 @@ func TestQ2_8_Q5b_4_RegrabSearchFailsRecordsRemoved(t *testing.T) {
 	if refreshed != subject {
 		t.Fatalf("refreshed %q, want %q", refreshed, subject)
 	}
-	if res, _, _ := s.State(); len(app(res, stuckqueue.AppSonarr).Items) != 0 {
-		t.Fatalf("last still lists the removed download: %+v", res)
+	if res, _, _ := s.State(); !markedActed(app(res, stuckqueue.AppSonarr).Items) {
+		t.Fatalf("last does not show the download acted: %+v", res)
 	}
 	up, ok := render(t, s, subject)
 	if !ok || !strings.Contains(up.Status, "Removed; the search may have been sent") || len(up.Buttons) != 1 {
@@ -365,4 +364,8 @@ func seedSeen(e *runEnv, a stuckqueue.App, dl string, first time.Time) error {
 				Offered: stuckqueue.OfferRemove,
 			})}, nil, nil
 		})
+}
+
+func markedActed(items []stuckqueue.Item) bool {
+	return len(items) == 1 && items[0].State == stuckqueue.StateActed && items[0].Acted != nil
 }

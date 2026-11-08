@@ -7,12 +7,26 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 var errSearchFailed = errors.New("removed; search failed")
+
+func ownerOf(a Action) (OwnerAction, bool) {
+	switch a {
+	case ActionRemove:
+		return OwnerRemove, true
+	case ActionRegrab:
+		return OwnerRegrab, true
+	case ActionImport:
+		return OwnerImport, true
+	}
+	return "", false
+}
 
 func (s *Scheduler) Act(
 	ctx context.Context, app App, downloadID string, action Action, targetsFp string,
@@ -29,26 +43,47 @@ func (s *Scheduler) Act(
 	if c == nil {
 		return "", refuse("%s is not configured", app.Name())
 	}
-	entries, err := c.QueueEntries(ctx)
+	owner, known := ownerOf(action)
+	if !known {
+		return "", refuse("%s is not offered for this download", action)
+	}
+	key := Key{App: app, DownloadID: downloadID}
+	minAge, err := s.guard(ctx, c, key, owner)
 	if err != nil {
 		return "", err
+	}
+	d, cands, err := s.liveChecks(ctx, c, app, downloadID, action, targetsFp)
+	if err != nil {
+		return "", err
+	}
+	notice, res, cmdID, err := s.perform(ctx, c, d, action, cands)
+	if err != nil && !res.Resumable {
+		return "", err
+	}
+	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
+		"app", d.App, "download", d.DownloadID, "title", d.Title, "action", action, "result", resultWord(res))
+	u, subject = s.record(ctx, key, actedEvent(action, res, cmdID, len(cands)), minAge), subjectOf(d)
+	return notice, err
+}
+
+func (s *Scheduler) liveChecks(
+	ctx context.Context, c *client.ArrClient, app App, downloadID string, action Action, targetsFp string,
+) (Download, []client.ImportCandidate, error) {
+	entries, err := c.QueueEntries(ctx)
+	if err != nil {
+		return Download{}, nil, err
 	}
 	downloads := Group(app, entries)
 	i := slices.IndexFunc(downloads, func(d Download) bool { return strings.EqualFold(d.DownloadID, downloadID) })
 	if i < 0 {
-		return "", refuse("this download is no longer in the %s queue", app.Name())
+		return Download{}, nil, refuse("this download is no longer in the %s queue", app.Name())
 	}
 	d := downloads[i]
 	if !d.Stuck() {
-		return "", refuse("this download is no longer stuck")
+		return Download{}, nil, refuse("this download is no longer stuck")
 	}
 	if d.TargetsFP() != targetsFp {
-		return "", refuse(changedRefusal)
-	}
-	if action != ActionRemove {
-		if err = s.waitOver(ctx, app, d.DownloadID); err != nil {
-			return "", err
-		}
+		return Download{}, nil, refuse(changedRefusal)
 	}
 	v := Classify(d)
 	var cands []client.ImportCandidate
@@ -63,25 +98,116 @@ func (s *Scheduler) Act(
 	}
 	if !slices.Contains(offered(d, v, guardErr), action) {
 		if action == ActionImport && guardErr != nil {
-			return "", guardErr
+			return Download{}, nil, guardErr
 		}
-		return "", refuse("%s is not offered for this download", action)
+		return Download{}, nil, refuse("%s is not offered for this download", action)
 	}
-	notice, res, err := s.apply(ctx, c, d, action, cands)
-	if err != nil && !res.Resumable {
-		return "", err
+	if action == ActionImport {
+		if err = s.refusePending(ctx, c, cands); err != nil {
+			return Download{}, nil, err
+		}
 	}
-	u, subject = s.finish(ctx, d, action, res), subjectOf(d)
-	return notice, err
+	return d, cands, nil
 }
 
-func (s *Scheduler) finish(ctx context.Context, d Download, action Action, res RegrabResult) update {
-	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
-		"app", d.App, "download", d.DownloadID, "title", d.Title, "action", action, "unfinished", res.Resumable)
-	if !res.Resumable {
-		s.recordOutcome(subjectOf(d), action)
+func actedEvent(action Action, res RegrabResult, cmdID, files int) Event {
+	ev := Event{Kind: EvActed, Action: action}
+	switch action {
+	case ActionRegrab:
+		ev.OpID, ev.Resumable = res.Op.ID, res.Resumable
+	case ActionImport:
+		ev.Files = Files{N: files, M: files}
+		if cmdID > 0 {
+			ev.Kind, ev.CommandID = EvImportPosted, cmdID
+		}
+	case ActionRemove:
 	}
-	return forgetDownload(d.App, d.DownloadID)
+	return ev
+}
+
+func resultWord(res RegrabResult) ActResult {
+	if res.Resumable {
+		return ResultUnfinished
+	}
+	return ResultOK
+}
+
+func (s *Scheduler) refusePending(ctx context.Context, c *client.ArrClient, cands []client.ImportCandidate) error {
+	paths := make([]string, 0, len(cands))
+	for _, ic := range cands {
+		paths = append(paths, ic.Path)
+	}
+	pending, err := c.ManualImportPending(ctx, paths)
+	if err != nil {
+		return err
+	}
+	if pending {
+		return refuse("an import for this download is already running")
+	}
+	return nil
+}
+
+func (s *Scheduler) guard(ctx context.Context, c *client.ArrClient, key Key, a OwnerAction) (time.Duration, error) {
+	set, err := LoadSettings(ctx, s.d)
+	if err != nil {
+		return 0, err
+	}
+	row, stored, err := s.d.GetStuck(ctx, string(key.App), key.DownloadID)
+	if err != nil {
+		return 0, err
+	}
+	snap := Snapshot{Key: key, State: StateUntracked}
+	if stored {
+		snap = fromRow(row)
+	}
+	now := s.r.Now()
+	if snap.State == StateImportInflight {
+		if snap, err = s.observeInflight(ctx, c, row, set.ImportTimeout(), now); err != nil {
+			return 0, err
+		}
+	}
+	return set.MinAge(), Allowed(snap, a, now, set.MinAge())
+}
+
+func (s *Scheduler) observeInflight(
+	ctx context.Context, c *client.ArrClient, row db.StuckRow, timeout time.Duration, now time.Time,
+) (Snapshot, error) {
+	cmd, ok := s.readCommand(ctx, c, row)
+	if !ok {
+		return Snapshot{}, ctx.Err()
+	}
+	key := Key{App: App(row.App), DownloadID: row.DownloadID}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opSettleBound)
+	defer cancel()
+	snaps, effs, err := s.r.apply(wctx, key.App, map[Key]Event{key: {
+		Kind: EvCommandObserved, Cmd: cmd, Timeout: timeout, At: now,
+	}})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	s.runEffects(effs)
+	return snaps[0], nil
+}
+
+func (s *Scheduler) runEffects(effs []Effect) {
+	for _, e := range effs {
+		if r, ok := e.(EffRefreshCard); ok {
+			s.refresh(subjectOf(Download{App: r.Key.App, DownloadID: r.Key.DownloadID}))
+		}
+	}
+}
+
+func (s *Scheduler) record(ctx context.Context, key Key, ev Event, minAge time.Duration) update {
+	ev.At, ev.MinAge = s.r.Now(), minAge
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opSettleBound)
+	defer cancel()
+	snaps, _, err := s.r.apply(wctx, key.App, map[Key]Event{key: ev})
+	if err != nil || len(snaps) == 0 {
+		s.r.logger().ErrorContext(ctx, "stuck-queue: recording the owner action failed",
+			"app", key.App, "download", key.DownloadID, "event", ev.Kind, "err", err)
+		return nil
+	}
+	return updateLast(snaps[0], Actions(snaps[0], ev.At, minAge))
 }
 
 func (s *Scheduler) ImportMapped(
@@ -105,6 +231,11 @@ func (s *Scheduler) ImportMapped(
 	if c == nil {
 		return "", refuse("Sonarr is not configured")
 	}
+	key := Key{App: AppSonarr, DownloadID: downloadID}
+	minAge, err := s.guard(ctx, c, key, OwnerMappedImport)
+	if err != nil {
+		return "", err
+	}
 	entries, err := c.QueueEntries(ctx)
 	if err != nil {
 		return "", err
@@ -121,32 +252,25 @@ func (s *Scheduler) ImportMapped(
 	if err != nil {
 		return "", err
 	}
-	paths := make([]string, 0, len(cands))
-	for _, ic := range cands {
-		paths = append(paths, ic.Path)
-	}
-	pending, err := c.ManualImportPending(ctx, paths)
-	if err != nil {
+	if err = s.refusePending(ctx, c, cands); err != nil {
 		return "", err
-	}
-	if pending {
-		return "", refuse("an import for this download is already running")
 	}
 	results, err := CheckMapping(seriesID, rows, cands, eps, entries, d.DownloadID)
 	if err != nil {
 		return "", err
 	}
 	files, labels := mappedCandidates(seriesID, results, cands, eps)
-	if _, err = c.ManualImport(ctx, files); err != nil {
+	cmdID, err := c.ManualImport(ctx, files)
+	if err != nil {
 		return "", err
 	}
 	s.r.logger().InfoContext(ctx, "stuck-queue: manual import",
 		"series", seriesID, "download", d.DownloadID, "files", labels.lines)
-	if len(files) == len(cands) {
-		s.recordOutcome(subjectOf(d), ActionImport)
-		u = forgetDownload(AppSonarr, d.DownloadID)
+	ev := Event{Kind: EvActed, Action: ActionImport, Files: Files{N: len(files), M: len(cands)}}
+	if cmdID > 0 {
+		ev.Kind, ev.CommandID, ev.Mapped = EvImportPosted, cmdID, true
 	}
-	subject = subjectOf(d)
+	u, subject = s.record(ctx, key, ev, minAge), subjectOf(d)
 	return fmt.Sprintf(
 		"Import started for %d files (%s). Sonarr moves them; the page shows them on disk once it is done.",
 		len(files),
@@ -226,62 +350,50 @@ func mappedCandidates(
 	return files, labels
 }
 
-func (s *Scheduler) waitOver(ctx context.Context, app App, downloadID string) error {
-	set, err := LoadSettings(ctx, s.d)
-	if err != nil {
-		return err
-	}
-	row, ok, err := s.d.GetStuck(ctx, string(app), downloadID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return refuse("no run has checked this download yet; only Remove is allowed until one does")
-	}
-	if due := row.FirstSeen.Add(set.MinAge()); s.r.Now().Before(due) {
-		return refuse("this download is inside the %d h wait until %s; only Remove is allowed",
-			set.MinAgeHours, due.UTC().Format("2006-01-02 15:04 UTC"))
-	}
-	return nil
-}
-
-func (s *Scheduler) apply(
+func (s *Scheduler) perform(
 	ctx context.Context, c *client.ArrClient, d Download, action Action, cands []client.ImportCandidate,
-) (string, RegrabResult, error) {
+) (string, RegrabResult, int, error) {
 	var none RegrabResult
 	switch action {
 	case ActionImport:
-		if _, err := c.ManualImport(ctx, cands); err != nil {
-			return "", none, err
+		id, err := c.ManualImport(ctx, cands)
+		if err != nil {
+			return "", none, 0, err
 		}
-		return "Import started for " + d.Targets() + ".", none, nil
+		return "Import started for " + d.Targets() + ".", none, id, nil
 	case ActionRegrab:
-		return s.regrab(ctx, c, d)
+		notice, res, err := s.regrab(ctx, c, d)
+		return notice, res, 0, err
 	case ActionRemove:
 		if err := c.RemoveQueueItem(ctx, d.Records[0].ID, false, false, true); err != nil {
-			return "", none, err
+			return "", none, 0, err
 		}
-		return "Removed.", none, nil
+		return "Removed.", none, 0, nil
 	}
-	return "", none, refuse("unknown action %q", action)
+	return "", none, 0, refuse("unknown action %q", action)
 }
 
-func forgetDownload(app App, downloadID string) update {
+func updateLast(snap Snapshot, actions []Action) update {
 	return func(sl *slot) {
-		sl.last.Apps = withoutDownload(sl.last.Apps, app, downloadID)
+		apps := slices.Clone(sl.last.Apps)
+		for i := range apps {
+			if apps[i].App == snap.Key.App {
+				apps[i].Items = withSnapshot(apps[i].Items, snap, actions)
+				apps[i].Waiting = withSnapshot(apps[i].Waiting, snap, actions)
+			}
+		}
+		sl.last.Apps = apps
 	}
 }
 
-func withoutDownload(current []AppResult, app App, downloadID string) []AppResult {
-	apps := slices.Clone(current)
-	gone := func(it Item) bool { return strings.EqualFold(it.DownloadID, downloadID) }
-	for i := range apps {
-		if apps[i].App == app {
-			apps[i].Items = slices.DeleteFunc(slices.Clone(apps[i].Items), gone)
-			apps[i].Waiting = slices.DeleteFunc(slices.Clone(apps[i].Waiting), gone)
+func withSnapshot(items []Item, snap Snapshot, actions []Action) []Item {
+	out := slices.Clone(items)
+	for i := range out {
+		if strings.EqualFold(out[i].DownloadID, snap.Key.DownloadID) {
+			out[i].State, out[i].Acted, out[i].Actions = snap.State, snap.Acted, actions
 		}
 	}
-	return apps
+	return out
 }
 
 func (s *Scheduler) refreshSubject(subject string) {
