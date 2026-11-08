@@ -405,15 +405,15 @@ func TestReusedPIDIsNewTask(t *testing.T) {
 func TestClearSemantics(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	if h.w.Clear("T") {
-		t.Fatal("new watcher must answer false")
+	if h.w.Clear("T") != incident.ReadUnknown {
+		t.Fatal("new watcher must answer unknown")
 	}
 	h.poll()
-	if h.w.Clear("T") {
-		t.Fatal("one clear poll must answer false")
+	if h.w.Clear("T") != incident.ReadUnknown {
+		t.Fatal("one clear poll must answer unknown")
 	}
 	h.poll()
-	if !h.w.Clear("T") {
+	if h.w.Clear("T") != incident.ReadClear {
 		t.Fatal("two clear polls must answer true")
 	}
 
@@ -421,15 +421,15 @@ func TestClearSemantics(t *testing.T) {
 	h.poll(rd("T", 1, 5))
 	h.poll(rd("T", 1, 5))
 	h.poll()
-	if h.w.Clear("T") {
+	if h.w.Clear("T") != incident.ReadStuck {
 		t.Fatal("one clear poll after a stuck poll must answer false")
 	}
 	h.failPoll()
-	if h.w.Clear("T") {
+	if h.w.Clear("T") != incident.ReadUnknown {
 		t.Fatal("a failed poll must not count")
 	}
 	h.poll()
-	if !h.w.Clear("T") {
+	if h.w.Clear("T") != incident.ReadClear {
 		t.Fatal("two clear polls around a failed poll must answer true")
 	}
 }
@@ -442,7 +442,7 @@ func TestFailedPollKeepsState(t *testing.T) {
 	}
 	h.failPoll()
 	h.failPoll()
-	if h.w.Clear("T") {
+	if h.w.Clear("T") == incident.ReadClear {
 		t.Fatal("a failed poll must not flip Clear to true")
 	}
 	h.poll(rd("T", 1, 5))
@@ -503,7 +503,7 @@ func TestClearedTitlesForgotten(t *testing.T) {
 	if n := h.w.TrackedTitlesForTest(); n != 0 {
 		t.Fatalf("tracked titles after two clear polls = %d, want 0", n)
 	}
-	if !h.w.Clear("T3") {
+	if h.w.Clear("T3") != incident.ReadClear {
 		t.Fatal("a forgotten title must answer clear")
 	}
 }
@@ -597,5 +597,62 @@ func TestWatcher_SystemRerunOnlyFromFixed(t *testing.T) {
 	other.poll(three("T", 7)...)
 	if s := other.status(waiting.ID); s != db.StatusManualTestNeeded {
 		t.Fatalf("a stuck-read incident waiting for the owner was rerun: %s", s)
+	}
+}
+
+func TestQ4b_4_ClearUnknownWhilePollingFails(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.poll()
+	h.poll()
+	if got := h.w.Clear("T"); got != incident.ReadClear {
+		t.Fatalf("after two clear polls = %v, want clear", got)
+	}
+	h.failPoll()
+	if got := h.w.Clear("T"); got != incident.ReadUnknown {
+		t.Fatalf("while the source errors = %v, want unknown", got)
+	}
+	h.failPoll()
+	if got := h.w.Clear("T"); got != incident.ReadUnknown {
+		t.Fatalf("after repeated errors = %v, want unknown", got)
+	}
+	h.poll()
+	if got := h.w.Clear("T"); got != incident.ReadClear {
+		t.Fatalf("after recovery = %v, want clear", got)
+	}
+}
+
+func TestQ4b_4_ClearUnknownWhenPollsStale(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.poll()
+	h.poll()
+	h.clock = h.clock.Add(3 * time.Minute)
+	if got := h.w.Clear("T"); got != incident.ReadClear {
+		t.Fatalf("at 3 poll intervals = %v, want clear", got)
+	}
+	h.clock = h.clock.Add(time.Second)
+	if got := h.w.Clear("T"); got != incident.ReadUnknown {
+		t.Fatalf("past 3 poll intervals = %v, want unknown", got)
+	}
+	h.poll()
+	if got := h.w.Clear("T"); got != incident.ReadClear {
+		t.Fatalf("after a fresh poll = %v, want clear", got)
+	}
+}
+
+func TestQ4b_4_StartupIsUnknown(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	if got := h.w.Clear("T"); got != incident.ReadUnknown {
+		t.Fatalf("before any poll = %v, want unknown", got)
+	}
+	h.poll()
+	if got := h.w.Clear("T"); got != incident.ReadUnknown {
+		t.Fatalf("after one good poll = %v, want unknown", got)
+	}
+	h.poll()
+	if got := h.w.Clear("T"); got != incident.ReadClear {
+		t.Fatalf("after two good polls = %v, want clear", got)
 	}
 }

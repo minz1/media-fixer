@@ -249,3 +249,20 @@ func TestChecks_CanceledApplyLogsInfo(t *testing.T) {
 		t.Fatalf("canceled check logs:\n%s", env.logs.String())
 	}
 }
+
+func TestQ4b_4_StuckReadVerifyUnknownExtends(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	chk := &fakeStuckChecker{state: func(int) incident.ReadState { return incident.ReadUnknown }}
+	env.svc.SetStuckRead(chk)
+	s := env.verifying(t, "Stuck unknown", lifecycle.WhatStuckRead)
+	env.svc.StartRecovery()
+	var got lifecycle.Snapshot
+	eventually(t, "the unknown extension", func() bool {
+		got = env.snap(t, s.ID)
+		return got.Verify != nil && got.Verify.Spec.Extensions == 1
+	})
+	if got.Status != lifecycle.Verifying || got.Verify.ChecksLeft != s.Verify.ChecksLeft {
+		t.Fatalf("unknown read state changed %+v", got)
+	}
+}

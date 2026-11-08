@@ -22,6 +22,7 @@ import (
 const (
 	pollInterval = time.Minute
 	clearPolls   = 2
+	staleAfter   = 3 * pollInterval
 )
 
 type Source interface {
@@ -43,11 +44,12 @@ type Watcher struct {
 
 	prev       map[taskKey]mediaagentapi.StuckReader
 	firstStuck map[taskKey]time.Time
-	failing    bool
 	rerun      map[string]bool
 	warned     map[string]bool
 
 	mu        sync.Mutex
+	failing   bool
+	lastGood  time.Time
 	okPolls   int
 	lastStuck map[string]int
 }
@@ -80,28 +82,33 @@ func (w *Watcher) Start(ctx context.Context) {
 
 func (w *Watcher) Wait() { w.wg.Wait() }
 
-func (w *Watcher) Clear(title string) bool {
+func (w *Watcher) Clear(title string) incident.ReadState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.okPolls-w.lastStuck[title] >= clearPolls
+	if w.failing || w.okPolls < clearPolls || w.now().Sub(w.lastGood) > staleAfter {
+		return incident.ReadUnknown
+	}
+	if w.okPolls-w.lastStuck[title] >= clearPolls {
+		return incident.ReadClear
+	}
+	return incident.ReadStuck
 }
 
 func (w *Watcher) Poll(ctx context.Context) {
 	res, err := w.src.StuckReads(ctx)
 	if err != nil {
-		if !w.failing {
-			w.failing = true
+		w.mu.Lock()
+		wasFailing := w.failing
+		w.failing = true
+		w.mu.Unlock()
+		if !wasFailing {
 			w.log.WarnContext(ctx, "stuck-read poll failing", "error", err)
 		}
 		return
 	}
-	if w.failing {
-		w.failing = false
-		w.log.InfoContext(ctx, "stuck-read poll recovered")
-	}
 	now := w.now()
 	stuck := w.track(res.Readers, now)
-	w.recordClear(ctx, stuck)
+	w.recordClear(ctx, stuck, now)
 
 	timers, _ := incident.LoadTimers(ctx, w.db)
 	limit := time.Duration(timers.StuckReadMinutes) * time.Minute
@@ -138,9 +145,14 @@ func (w *Watcher) track(readers []mediaagentapi.StuckReader, now time.Time) map[
 	return stuck
 }
 
-func (w *Watcher) recordClear(ctx context.Context, stuck map[string][]mediaagentapi.StuckReader) {
+func (w *Watcher) recordClear(ctx context.Context, stuck map[string][]mediaagentapi.StuckReader, now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.failing {
+		w.failing = false
+		w.log.InfoContext(ctx, "stuck-read poll recovered")
+	}
+	w.lastGood = now
 	w.okPolls++
 	for title, last := range w.lastStuck {
 		if _, now := stuck[title]; !now && last == w.okPolls-1 {

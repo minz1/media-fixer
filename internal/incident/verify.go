@@ -128,13 +128,18 @@ func (s *Service) observeVerify(ctx context.Context, inc *db.Incident, snap life
 ) {
 	spec := snap.Verify.Spec
 	if spec.Kind == lifecycle.VerifyStuckRead {
-		switch {
-		case s.stuckRead == nil:
+		if s.stuckRead == nil {
 			return lifecycle.VerifyUnknown, false
-		case s.stuckRead.Clear(inc.Title):
-			return lifecycle.VerifyFixed, false
 		}
-		return lifecycle.VerifyNotYet, false
+		switch s.stuckRead.Clear(inc.Title) {
+		case ReadClear:
+			return lifecycle.VerifyFixed, false
+		case ReadStuck:
+			return lifecycle.VerifyNotYet, false
+		case ReadUnknown:
+			return lifecycle.VerifyUnknown, false
+		}
+		return lifecycle.VerifyUnknown, false
 	}
 	obs := s.observer()
 	if obs == nil {

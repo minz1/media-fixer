@@ -129,8 +129,15 @@ func (s *Service) SetSeerr(seerr SeerrIssues) {
 	s.seerr = seerr
 }
 
-// StuckReadChecker reports whether a title's stuck reads have cleared.
-type StuckReadChecker interface{ Clear(title string) bool }
+type ReadState int
+
+const (
+	ReadUnknown ReadState = iota
+	ReadStuck
+	ReadClear
+)
+
+type StuckReadChecker interface{ Clear(title string) ReadState }
 
 const stuckReadVerifyFloorMinutes = 3
 

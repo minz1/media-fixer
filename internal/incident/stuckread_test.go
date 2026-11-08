@@ -17,16 +17,23 @@ import (
 type fakeStuckChecker struct {
 	mu     sync.Mutex
 	clear  func(call int) bool
+	state  func(call int) incident.ReadState
 	titles []string
 	times  []time.Time
 }
 
-func (c *fakeStuckChecker) Clear(title string) bool {
+func (c *fakeStuckChecker) Clear(title string) incident.ReadState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.titles = append(c.titles, title)
 	c.times = append(c.times, time.Now())
-	return c.clear(len(c.titles))
+	if c.state != nil {
+		return c.state(len(c.titles))
+	}
+	if c.clear(len(c.titles)) {
+		return incident.ReadClear
+	}
+	return incident.ReadStuck
 }
 
 func (c *fakeStuckChecker) calls() int {
