@@ -1227,6 +1227,15 @@ func waitUntilReady(ctx context.Context, timeout, interval time.Duration, probe 
 	return lastErr
 }
 
+func (c *toolCall) settleRestart(ctx context.Context, action string) {
+	if c.journal == nil || c.scope.IncidentID == "" {
+		return
+	}
+	jctx, cancel := detached(ctx)
+	defer cancel()
+	_ = c.journal.SettleDisruption(jctx, action, c.scope.IncidentID)
+}
+
 func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
 	sctx, actErr := c.act(ctx, nil)
 	if actErr != nil {
@@ -1243,6 +1252,7 @@ func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, 
 	if err := waitUntilReady(ctx, timeout, interval, probe); err != nil {
 		return nil, notReady(fmt.Errorf("decypharr restarted but did not become ready: %w", err))
 	}
+	c.settleRestart(ctx, toolRestartDecypharr)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
@@ -1280,6 +1290,7 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _
 	if err := waitUntilReady(ctx, timeout, interval, d.jellyfinServing); err != nil {
 		return nil, notReady(fmt.Errorf("jellyfin restarted but did not become ready: %w", err))
 	}
+	c.settleRestart(ctx, toolRestartJellyfin)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 

@@ -446,3 +446,30 @@ func TestUnknownKinds_IgnoredByConversation(t *testing.T) {
 		t.Fatalf("conversation %+v, want only the seed", got)
 	}
 }
+
+func TestE3_SettleDisruptionRoundTrip(t *testing.T) {
+	t.Parallel()
+	j, d := openTestJournal(t)
+	ctx := context.Background()
+	inc := mustCreateIncident(t, d, "T")
+
+	if _, ok := j.DisruptionSettledAt(ctx, "restart_jellyfin", inc.ID); ok {
+		t.Fatal("a settle exists before any was recorded")
+	}
+	if err := j.SettleDisruption(ctx, "restart_jellyfin", inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	at, ok := j.DisruptionSettledAt(ctx, "restart_jellyfin", inc.ID)
+	if !ok {
+		t.Fatal("the settle was not recorded")
+	}
+	if at.IsZero() {
+		t.Fatal("the settle has no time")
+	}
+	if _, ok := j.DisruptionSettledAt(ctx, "restart_decypharr", inc.ID); ok {
+		t.Fatal("a different action matched the settle")
+	}
+	if _, ok := j.DisruptionSettledAt(ctx, "restart_jellyfin", "other-incident"); ok {
+		t.Fatal("a different incident matched the settle")
+	}
+}

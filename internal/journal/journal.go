@@ -67,6 +67,8 @@ const (
 
 	KindActionAttempted Kind = "action_attempted"
 	KindOwnerRerun      Kind = "owner_rerun"
+
+	KindDisruptionSettled Kind = "disruption_settled"
 )
 
 // Journal owns the event log: appending (with atomic projection writes) and
@@ -330,6 +332,31 @@ func (j *Journal) LastDisruption(ctx context.Context) (*Disruption, error) {
 		return &Disruption{Action: p.Action, IncidentID: e.IncidentID, At: e.At}, nil
 	}
 	return nil, db.ErrNotFound
+}
+
+type disruptionSettledPayload struct {
+	Action     string `json:"action"`
+	IncidentID string `json:"incident_id"`
+}
+
+func (j *Journal) SettleDisruption(ctx context.Context, action, incidentID string) error {
+	payload, _ := json.Marshal(disruptionSettledPayload{Action: action, IncidentID: incidentID})
+	return j.Append(ctx, &db.Event{IncidentID: incidentID, Kind: string(KindDisruptionSettled), Payload: payload})
+}
+
+func (j *Journal) DisruptionSettledAt(ctx context.Context, action, incidentID string) (time.Time, bool) {
+	events, err := j.db.EventsByKind(ctx, string(KindDisruptionSettled), lastDisruptionScanLimit)
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, e := range events {
+		var p disruptionSettledPayload
+		if json.Unmarshal(e.Payload, &p) != nil || p.Action != action || p.IncidentID != incidentID {
+			continue
+		}
+		return e.At, true
+	}
+	return time.Time{}, false
 }
 
 // --- run_started / llm_round / Conversation ---

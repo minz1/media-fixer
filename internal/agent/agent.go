@@ -710,6 +710,7 @@ func (a *Agent) invoke(
 		c: &toolCall{
 			scope:         Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
 			gate:          gate,
+			journal:       a.journal,
 			readyTimeout:  a.readyTimeout,
 			readyInterval: a.readyInterval,
 			sideBound:     a.sideBound,
@@ -1285,27 +1286,31 @@ Call complete_diagnosis when done.`,
 	)
 }
 
-// disruptionQuietWindow is how long after a service-wide disruptive action a
-// newly-starting run is warned about it. Comfortably above waitUntilReady's
-// restartReadyTimeout (30s) and a typical library-scan-trigger call, so the
-// warning covers the period where the disrupted service is plausibly still
-// settling, not indefinitely.
-const disruptionQuietWindow = 2 * time.Minute
+// disruptionCap is how long after a service-wide disruptive action a
+// newly-starting run keeps being warned about it when nothing settles it
+// sooner (a restart's readiness probe, or a scan that finished).
+const disruptionCap = 30 * time.Minute
 
 // disruptionNote returns a warning for a run starting shortly after a
 // service-wide action (restart, scan, cleanup, sweep) was applied — possibly
 // by a different, concurrently-running incident (see runManager.globalSlot,
 // which prevents them literally overlapping, but not a fresh run starting
 // just after one finishes while the disrupted service is still settling).
-// Returns "" when nothing was recorded, the disruption is stale, or it was
-// this same incident's own action (already covered by attemptHistory, and
-// not something to warn an incident about itself).
+// Returns "" when nothing was recorded, the disruption has settled or is past
+// the cap, or it was this same incident's own action (already covered by
+// attemptHistory, and not something to warn an incident about itself).
 func (a *Agent) disruptionNote(ctx context.Context, incidentID string) string {
 	if a.journal == nil {
 		return ""
 	}
 	disp, err := a.journal.LastDisruption(ctx)
-	if err != nil || disp.IncidentID == incidentID || time.Since(disp.At) > disruptionQuietWindow {
+	if err != nil || disp.IncidentID == incidentID || time.Since(disp.At) > disruptionCap {
+		return ""
+	}
+	if _, settled := a.journal.DisruptionSettledAt(ctx, disp.Action, disp.IncidentID); settled {
+		return ""
+	}
+	if disp.Action == toolJellyfinLibraryScan && !a.ScanRunning(ctx) {
 		return ""
 	}
 	return fmt.Sprintf(

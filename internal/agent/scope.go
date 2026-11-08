@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/journal"
 )
 
 type Scope struct {
@@ -15,6 +17,7 @@ type Scope struct {
 type toolCall struct {
 	scope         Scope
 	gate          Gate
+	journal       *journal.Journal
 	tool          string
 	readyTimeout  time.Duration
 	readyInterval time.Duration

@@ -512,7 +512,7 @@ func TestDisruptionNote(t *testing.T) {
 		t.Fatalf("expected a note naming the action and incident, got %q", gotNote)
 	}
 
-	// A stale disruption (older than disruptionQuietWindow) must not warn —
+	// A stale disruption (older than disruptionCap) must not warn —
 	// simulated via a second raw connection to backdate the event's
 	// timestamp, since LogAction always stamps time.Now() (same pattern as
 	// TestSweepStaleRuns_RerunsHungIncident in internal/incident/service_test.go).
@@ -522,7 +522,7 @@ func TestDisruptionNote(t *testing.T) {
 	}
 	if _, execErr := raw.ExecContext(ctx,
 		`UPDATE incident_events SET at = ? WHERE incident_id = ? AND kind = 'action_applied'`,
-		time.Now().Add(-10*time.Minute), incidentB,
+		time.Now().Add(-40*time.Minute), incidentB,
 	); execErr != nil {
 		t.Fatal(execErr)
 	}
@@ -531,6 +531,141 @@ func TestDisruptionNote(t *testing.T) {
 	}
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
 		t.Fatalf("expected no note for a stale disruption, got %q", note)
+	}
+}
+
+func TestE3_RestartSettledGivesNoNote(t *testing.T) {
+	t.Parallel()
+	database := newTestAgentDB(t)
+	jrnl := journal.New(database)
+	ctx := context.Background()
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	for _, id := range []string{incidentA, incidentB} {
+		lifecycletest.Incident(t, database, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		})
+	}
+	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
+
+	if err := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: incidentB, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
+		t.Fatal("expected a note before the restart settled")
+	}
+	if err := jrnl.SettleDisruption(ctx, "restart_jellyfin", incidentB); err != nil {
+		t.Fatal(err)
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
+		t.Fatalf("expected no note after the restart settled, got %q", note)
+	}
+}
+
+func TestE3_ScanStillRunningGivesNote(t *testing.T) {
+	t.Parallel()
+	database := newTestAgentDB(t)
+	jrnl := journal.New(database)
+	ctx := context.Background()
+	cs, srv := newCallServer(t)
+	cs.scanRunning = true
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	for _, id := range []string{incidentA, incidentB} {
+		lifecycletest.Incident(t, database, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		})
+	}
+	a := agent.New(nil, "", fullDispatcher(srv.URL), database, jrnl, slog.New(slog.DiscardHandler))
+
+	if err := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: incidentB, Action: "jellyfin_library_scan", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
+		t.Fatal("expected a note while the scan is still running")
+	}
+	cs.scanRunning = false
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
+		t.Fatalf("expected no note once the scan finished, got %q", note)
+	}
+}
+
+func TestE3_OwnDisruptionNeverNotes(t *testing.T) {
+	t.Parallel()
+	database := newTestAgentDB(t)
+	jrnl := journal.New(database)
+	ctx := context.Background()
+	inc := lifecycletest.Incident(t, database, &db.Incident{
+		ID: "11111111-1111-1111-1111-111111111111", Status: db.StatusOpen, Source: "discord", ReportedBy: "x",
+		What: "cant_play", Title: "own",
+	})
+	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
+	if err := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if note := a.DisruptionNoteForTest(ctx, inc.ID); note != "" {
+		t.Fatalf("expected no note for the incident's own disruption, got %q", note)
+	}
+}
+
+func TestE3_CapEndsNote(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	dbPath := f.Name()
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	jrnl := journal.New(database)
+	ctx := context.Background()
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	for _, id := range []string{incidentA, incidentB} {
+		lifecycletest.Incident(t, database, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		})
+	}
+	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
+	if err := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: incidentB, Action: "refresh_decypharr_links", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
+		t.Fatal("expected a note inside the cap for a disruption with no settle signal")
+	}
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, execErr := raw.ExecContext(ctx,
+		`UPDATE incident_events SET at = ? WHERE incident_id = ? AND kind = 'action_applied'`,
+		time.Now().Add(-40*time.Minute), incidentB,
+	); execErr != nil {
+		t.Fatal(execErr)
+	}
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
+		t.Fatalf("expected the 30-minute cap to end the note, got %q", note)
 	}
 }
 
