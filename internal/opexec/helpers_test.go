@@ -189,7 +189,7 @@ func (d *fakeDecy) AddTorrent(_ context.Context, _, _ string) error {
 	return d.fail["tadd"]
 }
 
-func (d *fakeDecy) TorrentByHash(context.Context, string, string) (bool, error) {
+func (d *fakeDecy) TorrentByHash(context.Context, string) (bool, error) {
 	d.j.add("read:torrent")
 	return d.present, d.presentErr
 }

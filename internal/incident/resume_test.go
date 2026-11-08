@@ -164,7 +164,7 @@ func (d *resumeDecy) AddTorrent(_ context.Context, magnet, _ string) error {
 	return d.failAdd
 }
 
-func (d *resumeDecy) TorrentByHash(context.Context, string, string) (bool, error) {
+func (d *resumeDecy) TorrentByHash(context.Context, string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = append(d.calls, "tread")

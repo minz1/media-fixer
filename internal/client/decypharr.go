@@ -246,12 +246,12 @@ func (c *DecypharrClient) setAuth(req *http.Request) {
 	}
 }
 
-func (c *DecypharrClient) TorrentByHash(ctx context.Context, name, hash string) (bool, error) {
+func (c *DecypharrClient) TorrentByHash(ctx context.Context, hash string) (bool, error) {
 	if hash == "" {
 		return false, nil
 	}
 	for page, seen := 1, 0; ; page++ {
-		resp, err := c.listTorrentsPage(ctx, name, "", page)
+		resp, err := c.listTorrentsPage(ctx, strings.ToLower(hash), "", page)
 		if err != nil {
 			return false, err
 		}

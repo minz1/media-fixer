@@ -188,17 +188,32 @@ func TestDecypharr_TorrentByHash_ExactHash(t *testing.T) {
 	c := torrentPager(t, map[int][]*client.TorrentEntry{
 		1: {{Name: "Show.S01", InfoHash: "abcd"}, {Name: "Show.S01", InfoHash: "ABC"}},
 	}, 2, &seen)
-	got, err := c.TorrentByHash(context.Background(), "Show.S01", "abc")
+	got, err := c.TorrentByHash(context.Background(), "abc")
 	if err != nil || !got {
 		t.Fatalf("TorrentByHash(abc) = %v, %v; want true (case-insensitive exact)", got, err)
 	}
-	got, err = c.TorrentByHash(context.Background(), "Show.S01", "ab")
+	got, err = c.TorrentByHash(context.Background(), "ab")
 	if err != nil || got {
 		t.Fatalf("TorrentByHash(ab) = %v, %v; a prefix must not match", got, err)
 	}
-	got, err = c.TorrentByHash(context.Background(), "Show.S01", "")
+	got, err = c.TorrentByHash(context.Background(), "")
 	if err != nil || got {
 		t.Fatalf("TorrentByHash(empty) = %v, %v; want false", got, err)
+	}
+}
+
+func TestDecypharr_TorrentByHash_SearchesByHashNotName(t *testing.T) {
+	t.Parallel()
+	var seen []string
+	c := torrentPager(t, map[int][]*client.TorrentEntry{
+		1: {{Name: "Renamed From Debrid", InfoHash: "abcdef"}},
+	}, 1, &seen)
+	got, err := c.TorrentByHash(context.Background(), "ABCDEF")
+	if err != nil || !got {
+		t.Fatalf("TorrentByHash(ABCDEF) = %v, %v; want true", got, err)
+	}
+	if len(seen) != 1 || seen[0] != "abcdef|1" {
+		t.Errorf("requests = %v, want one search by the lowercased hash", seen)
 	}
 }
 
@@ -216,16 +231,16 @@ func TestDecypharr_TorrentByHash_PagesToTheHash(t *testing.T) {
 	c := torrentPager(t, map[int][]*client.TorrentEntry{
 		1: hashPage(1, 100), 2: hashPage(2, 100), 3: hashPage(3, 50),
 	}, 250, &seen)
-	got, err := c.TorrentByHash(context.Background(), "Show", "h2-7")
+	got, err := c.TorrentByHash(context.Background(), "h2-7")
 	if err != nil || !got {
 		t.Fatalf("TorrentByHash(h2-7) = %v, %v; want true", got, err)
 	}
-	if len(seen) != 2 || seen[0] != "Show|1" || seen[1] != "Show|2" {
+	if len(seen) != 2 || seen[0] != "h2-7|1" || seen[1] != "h2-7|2" {
 		t.Errorf("requests = %v, want pages 1 and 2 only", seen)
 	}
 
 	seen = nil
-	got, err = c.TorrentByHash(context.Background(), "Show", "zz")
+	got, err = c.TorrentByHash(context.Background(), "zz")
 	if err != nil || got {
 		t.Fatalf("TorrentByHash(zz) = %v, %v; want false", got, err)
 	}

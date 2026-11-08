@@ -47,7 +47,7 @@ type Arr interface {
 type Decypharr interface {
 	DeleteTorrent(ctx context.Context, category, hash string, removeFromDebrid bool) error
 	AddTorrent(ctx context.Context, magnet, category string) error
-	TorrentByHash(ctx context.Context, name, hash string) (bool, error)
+	TorrentByHash(ctx context.Context, hash string) (bool, error)
 }
 
 type Ports struct {
