@@ -70,6 +70,9 @@ func (s *Service) apply(ctx context.Context, id string, ev lifecycle.Event, extr
 		return a, err
 	}
 	s.afterCommit(ctx, a, t, "")
+	if (ev.Kind == lifecycle.AttemptFinished || ev.Kind == lifecycle.RunFinished) && lifecycle.Meta(a.Snap.Status).Progress {
+		s.armReporterNote(ctx, a.Snap.ID, time.Now())
+	}
 	return a, nil
 }
 

@@ -176,6 +176,29 @@ func (s *Service) ApplyForTest(ctx context.Context, id string, ev lifecycle.Even
 	return s.apply(ctx, id, ev, nil)
 }
 
+func (s *Service) ArmReporterNoteForTest(ctx context.Context, id string, now time.Time) {
+	s.armReporterNote(ctx, id, now)
+}
+
+func (s *Service) RearmReporterNotesForTest(ctx context.Context) { s.rearmReporterNotes(ctx) }
+
+func (s *Service) HasProgressTimerForTest(id string) bool {
+	s.progressTimersMu.Lock()
+	defer s.progressTimersMu.Unlock()
+	return s.progressTimers[id] != nil
+}
+
+func (s *Service) FireProgressTimerForTest(ctx context.Context, id string, now time.Time) {
+	s.progressTimersMu.Lock()
+	t := s.progressTimers[id]
+	delete(s.progressTimers, id)
+	s.progressTimersMu.Unlock()
+	if t != nil {
+		t.Stop()
+		s.armReporterNote(ctx, id, now)
+	}
+}
+
 func (s *Service) ScheduleCheckForTest(inc *db.Incident, gen int64, at time.Time) {
 	s.scheduleCheck(
 		inc.ID,

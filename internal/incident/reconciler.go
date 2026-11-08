@@ -22,6 +22,7 @@ func (s *Service) StartRecovery() {
 		c := s.reconcile(ctx)
 		s.log.InfoContext(ctx, fmt.Sprintf("reconciler: startup runs=%d checks=%d plans_lost=%d parked=%d",
 			c.Runs, c.Checks, c.PlansLost, c.Parked))
+		s.rearmReporterNotes(ctx)
 	})
 }
 
@@ -44,7 +45,6 @@ func (s *Service) reconcileLoop(base context.Context) {
 			s.reconcile(base)
 		case <-ticker.C:
 			s.reconcile(base)
-			s.AdvanceReporterProgress(base, time.Now())
 			s.endLockEpisode(base)
 			if next := s.minutes(s.timers(base).CheckEveryMinutes); next != d {
 				ticker.Reset(next)

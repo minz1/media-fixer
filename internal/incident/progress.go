@@ -69,3 +69,68 @@ func progressPhrases(actions []*db.ActionLog, since time.Time, po *db.PendingOut
 	}
 	return out
 }
+
+func (s *Service) armReporterNote(ctx context.Context, id string, now time.Time) {	inc, err := s.db.GetIncident(ctx, id)
+	if err != nil {
+		s.log.ErrorContext(ctx, "load incident for progress", "incident", id, "error", err)
+		return
+	}
+	if !lifecycle.Meta(inc.Status).Progress {
+		return
+	}
+	last, err := s.db.LastReporterNoteAt(ctx, id)
+	if err != nil {
+		s.log.ErrorContext(ctx, "read last reporter note", "incident", id, "error", err)
+		return
+	}
+	since := last
+	if since.IsZero() {
+		since = inc.CreatedAt
+	}
+	actions, err := s.db.ListActions(ctx, id)
+	if err != nil {
+		s.log.ErrorContext(ctx, "list actions for progress", "incident", id, "error", err)
+		return
+	}
+	hasNew := false
+	for _, a := range actions {
+		if a.Status == db.ActionApplied && a.AppliedAt != nil && a.AppliedAt.After(since) &&
+			agent.UserPhrase(a.Action) != "" {
+			hasNew = true
+			break
+		}
+	}
+	if !hasNew {
+		return
+	}
+	gap := s.minutes(s.timers(ctx).ProgressNoteGapMinutes)
+	if !now.Before(last.Add(gap)) {
+		s.reportProgress(ctx, inc, now)
+		return
+	}
+	s.progressTimersMu.Lock()
+	if prev, ok := s.progressTimers[id]; ok {
+		prev.Stop()
+	}
+	s.progressTimers[id] = time.AfterFunc(time.Until(last.Add(gap)), func() {
+		s.progressTimersMu.Lock()
+		delete(s.progressTimers, id)
+		s.progressTimersMu.Unlock()
+		s.armReporterNote(s.work.base, id, time.Now())
+	})
+	s.progressTimersMu.Unlock()
+}
+
+func (s *Service) rearmReporterNotes(ctx context.Context) {
+	now := time.Now()
+	for _, status := range lifecycle.StatesWhere(func(m lifecycle.StateMeta) bool { return m.Progress }) {
+		incs, err := s.db.FindByStatus(ctx, status)
+		if err != nil {
+			s.log.ErrorContext(ctx, "find incidents for progress", "status", status, "error", err)
+			continue
+		}
+		for _, inc := range incs {
+			s.armReporterNote(ctx, inc.ID, now)
+		}
+	}
+}

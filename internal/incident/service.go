@@ -50,6 +50,9 @@ type Service struct {
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
+
+	progressTimersMu sync.Mutex
+	progressTimers   map[string]*time.Timer
 }
 
 type SeerrIssues interface {
@@ -91,6 +94,7 @@ func NewService(
 		work:       work,
 	}
 	s.runs.wake = s.wakeReconciler
+	s.progressTimers = make(map[string]*time.Timer)
 	if paused, err := database.IsAutonomousPaused(base); err == nil {
 		s.paused.Store(paused)
 	}
