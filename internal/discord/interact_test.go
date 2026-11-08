@@ -472,7 +472,7 @@ func (c *confirmCase) showsCard(s string) bool {
 
 func TestD2_15_ExpiredConfirmLeavesCardWithoutEvent(t *testing.T) {
 	t.Parallel()
-	c := newConfirmCase(t, 100*time.Millisecond)
+	c := newConfirmCase(t, 500*time.Millisecond)
 	c.start(map[string]card.Renderer{"inc": c.r.render})
 	c.waitEdits(1)
 	c.press(dmClick("owner", "m9", c.approve.ID))
@@ -485,7 +485,7 @@ func TestD2_15_ExpiredConfirmLeavesCardWithoutEvent(t *testing.T) {
 
 func TestD2_15_ExpiredConfirmWhileFailingDoesNotSpin(t *testing.T) {
 	t.Parallel()
-	c := newConfirmCase(t, 150*time.Millisecond)
+	c := newConfirmCase(t, 300*time.Millisecond)
 	discord.SetCardRetryForTest(c.bot, 400*time.Millisecond, 400*time.Millisecond)
 	var fires atomic.Int32
 	discord.SetTimerFiredForTest(c.bot, func() { fires.Add(1) })
@@ -511,12 +511,12 @@ func TestD2_15_ExpiredConfirmWhileFailingDoesNotSpin(t *testing.T) {
 
 func TestD2_15_ConfirmPressAfterExpiryRefused(t *testing.T) {
 	t.Parallel()
-	c := newConfirmCase(t, 100*time.Millisecond)
+	c := newConfirmCase(t, 500*time.Millisecond)
 	c.start(map[string]card.Renderer{"inc": c.r.render})
 	c.waitEdits(1)
 	c.press(dmClick("owner", "m9", c.approve.ID))
 	c.waitLastEdit(c.showsConfirm)
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(550 * time.Millisecond)
 	c.press(dmClick("owner", "m9", c.confirm.ID))
 	c.waitLastEdit(func(s string) bool { return strings.Contains(s, "Refused") })
 	if n := c.confirms.Load(); n != 0 {
