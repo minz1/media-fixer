@@ -125,14 +125,14 @@ func seedSweep(ctx context.Context, d *db.DB) error {
 	counts := db.SweepCounts{
 		Grabs: 1, Lookups: len(items), Searched: len(items), Refused: 1, NoPack: 1,
 	}
-	if err = d.FinishSweepRun(ctx, run, "finished", "", counts, start.Add(time.Hour)); err != nil {
+	if err = d.FinishSweepRun(ctx, run, "done", "", counts, start.Add(time.Hour)); err != nil {
 		return err
 	}
 	bs, err := d.CreateSweepRun(ctx, db.BabysitTrigger+" Link Click", false, start.Add(time.Hour))
 	if err != nil {
 		return err
 	}
-	return d.FinishSweepRun(ctx, bs, "finished", "", db.SweepCounts{}, start.Add(time.Hour+time.Minute))
+	return d.FinishSweepRun(ctx, bs, "done", "", db.SweepCounts{}, start.Add(time.Hour+time.Minute))
 }
 
 func seedTargets(ctx context.Context, d *db.DB) error {

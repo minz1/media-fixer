@@ -162,7 +162,7 @@ func buildDashboardTemplate(discordConn func() connView) (*dashboardTemplates, e
 		"utc":            utcStamp,
 		"statusMeta":     statusMeta,
 		"checkTone":      checkTone,
-		"sweepTone":      sweepTone,
+		"sweepMeta":      sweepMeta,
 		"season":         seasonLabel,
 		"ms":             lookupDuration,
 		"confidenceTone": confidenceTone,

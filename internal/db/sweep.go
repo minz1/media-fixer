@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 const BabysitTrigger = "babysit:"
@@ -31,7 +34,7 @@ type SweepRun struct {
 	Dry        bool
 	StartedAt  time.Time
 	FinishedAt *time.Time
-	Status     string
+	Status     sweepstate.RunStatus
 	Reason     string
 	Counts     SweepCounts
 	Items      []SweepItem
@@ -87,24 +90,80 @@ func (d *DB) CreateSweepRun(ctx context.Context, trigger string, dry bool, at ti
 	return res.LastInsertId()
 }
 
-func (d *DB) FinishSweepRun(ctx context.Context, id int64, status, reason string, c SweepCounts, at time.Time) error {
+var (
+	ErrSweepRunSettled    = errors.New("sweep run already settled")
+	ErrSweepFinishInvalid = errors.New("invalid sweep run finish")
+)
+
+func (d *DB) FinishSweepRun(
+	ctx context.Context, id int64, status sweepstate.RunStatus, reason string, c SweepCounts, at time.Time,
+) error {
+	if m := sweepstate.Meta(status); !m.Stored || !m.Settled {
+		return fmt.Errorf("%w: %s is not a stored settled status", ErrSweepFinishInvalid, status)
+	}
+	snap := sweepstate.RunSnap{Status: status, HasCounts: true, HasFinished: true, Reason: reason}
+	if err := sweepstate.CheckRun(snap); err != nil {
+		return fmt.Errorf("%w: %w", ErrSweepFinishInvalid, err)
+	}
 	counts, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	_, err = d.write.ExecContext(ctx,
-		`UPDATE sweep_runs SET status = ?, reason = ?, counts = ?, finished_at = ? WHERE id = ?`,
-		status, reason, string(counts), at, id)
-	return err
-}
-
-func (d *DB) InterruptRunningSweeps(ctx context.Context) (int, error) {
-	res, err := d.write.ExecContext(ctx, `UPDATE sweep_runs SET status = 'interrupted' WHERE status = 'running'`)
+	res, err := d.write.ExecContext(ctx,
+		`UPDATE sweep_runs SET status = ?, reason = ?, counts = ?, finished_at = ? WHERE id = ? AND status = ?`,
+		string(status), reason, string(counts), at, id, string(sweepstate.Running))
 	if err != nil {
-		return 0, err
+		return err
 	}
 	n, err := res.RowsAffected()
-	return int(n), err
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrSweepRunSettled
+	}
+	return nil
+}
+
+func (d *DB) CrashRunningSweeps(ctx context.Context) ([]int64, error) {
+	rows, err := d.write.QueryContext(ctx,
+		`UPDATE sweep_runs SET status = ? WHERE status = ? RETURNING id`,
+		string(sweepstate.Interrupted), string(sweepstate.Running))
+	if err != nil {
+		return nil, err
+	}
+	return scanIDs(rows)
+}
+
+func (d *DB) RunningSweepIDs(ctx context.Context) ([]int64, error) {
+	rows, err := d.read.QueryContext(ctx,
+		`SELECT id FROM sweep_runs WHERE status = ? ORDER BY id`, string(sweepstate.Running))
+	if err != nil {
+		return nil, err
+	}
+	return scanIDs(rows)
+}
+
+func scanIDs(rows *sql.Rows) ([]int64, error) {
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func statusesJSON(pred func(sweepstate.RunMeta) bool) (string, error) {
+	statuses := sweepstate.StatusesWhere(pred)
+	if statuses == nil {
+		statuses = []sweepstate.RunStatus{}
+	}
+	b, err := json.Marshal(statuses)
+	return string(b), err
 }
 
 func (d *DB) ListSweepRuns(ctx context.Context, limit int) ([]SweepRun, error) {
@@ -133,6 +192,8 @@ func (d *DB) ListSweepRuns(ctx context.Context, limit int) ([]SweepRun, error) {
 	return runs, d.attachSweepItems(ctx, runs, byID, runs[len(runs)-1].ID)
 }
 
+const crashedRunSQL = `(status = 'interrupted' AND counts IS NULL)`
+
 const sweepRunColumns = `SELECT id, trigger, dry, started_at, finished_at, status, COALESCE(reason, ''), counts
 	FROM sweep_runs`
 
@@ -149,8 +210,9 @@ func scanSweepRun(row interface{ Scan(dest ...any) error }) (SweepRun, error) {
 		r        SweepRun
 		finished sql.NullTime
 		counts   sql.NullString
+		stored   sweepstate.RunStatus
 	)
-	if err := row.Scan(&r.ID, &r.Trigger, &r.Dry, &r.StartedAt, &finished, &r.Status, &r.Reason, &counts); err != nil {
+	if err := row.Scan(&r.ID, &r.Trigger, &r.Dry, &r.StartedAt, &finished, &stored, &r.Reason, &counts); err != nil {
 		return SweepRun{}, err
 	}
 	if finished.Valid {
@@ -161,6 +223,7 @@ func scanSweepRun(row interface{ Scan(dest ...any) error }) (SweepRun, error) {
 			return SweepRun{}, err
 		}
 	}
+	r.Status = sweepstate.Derive(stored, counts.Valid)
 	return r, nil
 }
 
@@ -238,8 +301,8 @@ func (d *DB) attachSweepItems(ctx context.Context, runs []SweepRun, byID map[int
 	return rows.Err()
 }
 
-func (d *DB) LastSweepRunStart(ctx context.Context, excludeStatus []string) (*time.Time, error) {
-	exclude, err := json.Marshal(append([]string{}, excludeStatus...))
+func (d *DB) LastSweepRunStart(ctx context.Context) (*time.Time, error) {
+	exclude, err := statusesJSON(func(m sweepstate.RunMeta) bool { return m.Stored && !m.AnchorsSlot })
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +310,7 @@ func (d *DB) LastSweepRunStart(ctx context.Context, excludeStatus []string) (*ti
 	err = d.read.QueryRowContext(ctx,
 		`SELECT started_at FROM sweep_runs
 		 WHERE dry = 0 AND trigger NOT LIKE ? AND status NOT IN (SELECT value FROM json_each(?))
-		 ORDER BY id DESC LIMIT 1`, BabysitTrigger+"%", string(exclude)).Scan(&at)
+		 ORDER BY id DESC LIMIT 1`, BabysitTrigger+"%", exclude).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -322,10 +385,14 @@ func (d *DB) DeleteSweepRefused(ctx context.Context, id int64) error {
 }
 
 func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int, time.Time, error) {
+	retryable, err := statusesJSON(func(m sweepstate.RunMeta) bool { return m.Stored && m.Retryable })
+	if err != nil {
+		return 0, time.Time{}, err
+	}
 	rows, err := d.read.QueryContext(ctx,
 		`SELECT started_at, finished_at FROM sweep_runs
-		 WHERE dry = 0 AND trigger NOT LIKE ? AND status IN ('failed', 'interrupted') AND started_at >= ?`,
-		BabysitTrigger+"%", since)
+		 WHERE dry = 0 AND trigger NOT LIKE ? AND status IN (SELECT value FROM json_each(?)) AND started_at >= ?`,
+		BabysitTrigger+"%", retryable, since)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
@@ -370,7 +437,7 @@ func (d *DB) LiveSearchesSince(ctx context.Context, since time.Time) (int, bool,
 	var searched, crashed int
 	err := d.read.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(json_extract(counts, '$.searched')), 0),
-		        COALESCE(SUM(counts IS NULL AND status != 'running'), 0)
+		        COALESCE(SUM(`+crashedRunSQL+`), 0)
 		 FROM sweep_runs WHERE dry = 0 AND COALESCE(finished_at,
 		   (SELECT MAX(at) FROM sweep_items WHERE run_id = sweep_runs.id), started_at) >= ?`, since).Scan(&searched, &crashed)
 	return searched, crashed > 0, err

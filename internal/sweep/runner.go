@@ -18,6 +18,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 const (
@@ -39,12 +40,6 @@ const (
 	commandWait    = 15 * time.Minute
 
 	seriesAnime = "anime"
-
-	statusDone        = "done"
-	statusFailed      = "failed"
-	statusPaused      = "paused"
-	statusRefused     = "refused"
-	statusInterrupted = "interrupted"
 
 	resultGrabbing    = "grabbing"
 	resultImported    = "imported"
@@ -168,16 +163,16 @@ func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Sett
 	r.progress = nil
 	r.mu.Unlock()
 
-	status, reason := statusDone, ""
+	status, reason := sweepstate.Done, ""
 	switch {
 	case errors.Is(err, ErrPaused):
-		status, err = statusPaused, nil
+		status, err = sweepstate.Paused, nil
 	case errors.Is(err, errRedownload):
-		status, reason, err = statusRefused, errRedownload.Error(), nil
+		status, reason, err = sweepstate.Refused, errRedownload.Error(), nil
 	case ctx.Err() != nil:
-		status, reason = statusInterrupted, context.Cause(ctx).Error()
+		status, reason = sweepstate.Interrupted, context.Cause(ctx).Error()
 	case err != nil:
-		status, reason = statusFailed, err.Error()
+		status, reason = sweepstate.Failed, err.Error()
 	}
 	fctx := context.WithoutCancel(ctx)
 	end := r.Now()

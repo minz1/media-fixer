@@ -10,12 +10,12 @@ import (
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 const (
 	maintenancePath = "/maintenance"
 	cardPrefix      = "sweep:"
-	statusRunning   = "running"
 )
 
 func runKind(dry bool) string {
@@ -26,15 +26,15 @@ func runKind(dry bool) string {
 }
 
 func statusText(sr db.SweepRun) string {
-	status := sr.Status
+	status := sweepstate.Meta(sr.Status).Label
 	if sr.Reason != "" {
 		status += " (" + sr.Reason + ")"
 	}
 	return status
 }
 
-func runTone(sr db.SweepRun) card.Tone {
-	if sr.Status == statusDone {
+func cardTone(s sweepstate.RunStatus) card.Tone {
+	if sweepstate.Meta(s).OK {
 		return card.Success
 	}
 	return card.Warn
@@ -80,7 +80,7 @@ func startCard(id int64, trigger string, dry bool, s Settings) card.Card {
 
 func summaryCard(sr db.SweepRun) card.Card {
 	return card.Card{
-		Tone:  runTone(sr),
+		Tone:  cardTone(sr.Status),
 		Title: runKind(sr.Dry) + " " + statusText(sr) + ":",
 		Body:  countsText(sr.Counts, sr.Dry) + took(sr) + ". /media/maintenance",
 		Path:  maintenancePath,
@@ -114,10 +114,10 @@ func (r *Runner) CardRenderer() card.Renderer {
 			return card.Rendering{Outcome: card.Gone}, nil
 		case err != nil:
 			return card.Rendering{}, err
-		case sr.Status == statusRunning:
+		case sr.Status == sweepstate.Running:
 			return card.Rendering{}, nil
 		}
-		tone := runTone(sr)
+		tone := cardTone(sr.Status)
 		return card.Rendered(card.Update{
 			Status:   statusText(sr) + took(sr),
 			Sections: []card.Field{{Name: "Counts", Value: countsText(sr.Counts, sr.Dry)}},

@@ -1125,7 +1125,7 @@
         <span class="font-semibold">#{{.ID}}</span>
         <span>{{trigger .Trigger}}</span>
         <span class="text-gray-500">{{template "ts" .StartedAt}}</span>
-        {{template "badge" (dict "Tone" (sweepTone .Status) "Word" .Status)}}
+        {{with sweepMeta .Status}}{{template "badge" (dict "Tone" .Tone "Word" .Label)}}{{with .Info}}{{template "info" .}}{{end}}{{end}}
         {{if .Dry}}{{template "badge" (dict "Tone" "gray" "Word" "dry run")}}{{end}}
         {{with .Reason}}<span class="text-gray-500">({{.}})</span>{{end}}
         {{template "counts" .Counts}}

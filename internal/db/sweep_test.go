@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func sweepT0() time.Time { return time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC) }
@@ -117,36 +118,6 @@ func TestListSweepRuns_NewestFirstWithLimit(t *testing.T) {
 	}
 }
 
-func TestInterruptRunningSweeps(t *testing.T) {
-	t.Parallel()
-	d := openTestDB(t)
-	ctx := context.Background()
-	done, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = d.FinishSweepRun(ctx, done, "done", "", db.SweepCounts{}, sweepT0().Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	n, err := d.InterruptRunningSweeps(ctx)
-	if err != nil || n != 1 {
-		t.Fatalf("InterruptRunningSweeps = %d, %v; want 1", n, err)
-	}
-	runs, err := d.ListSweepRuns(ctx, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runs[0].Status != "interrupted" || runs[1].Status != "done" {
-		t.Errorf("statuses = %s, %s", runs[0].Status, runs[1].Status)
-	}
-	if n, err = d.InterruptRunningSweeps(ctx); err != nil || n != 0 {
-		t.Errorf("second InterruptRunningSweeps = %d, %v; want 0", n, err)
-	}
-}
-
 func TestPruneSweepRuns_CascadesItems(t *testing.T) {
 	t.Parallel()
 	path := tempDBPath(t)
@@ -229,12 +200,11 @@ func TestLastSweepRunStart_ExcludesStatusesAndDryRuns(t *testing.T) {
 	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
-	exclude := []string{"paused", "interrupted"}
 
-	if _, err := d.LastSweepRunStart(ctx, exclude); !errors.Is(err, db.ErrNotFound) {
+	if _, err := d.LastSweepRunStart(ctx); !errors.Is(err, db.ErrNotFound) {
 		t.Fatalf("empty LastSweepRunStart err = %v, want ErrNotFound", err)
 	}
-	for i, status := range []string{"refused", "done", "paused", "interrupted"} {
+	for i, status := range []sweepstate.RunStatus{"refused", "done", "paused", "interrupted"} {
 		id, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(time.Duration(i)*time.Hour))
 		if err != nil {
 			t.Fatal(err)
@@ -243,7 +213,7 @@ func TestLastSweepRunStart_ExcludesStatusesAndDryRuns(t *testing.T) {
 			ctx,
 			id,
 			status,
-			"",
+			reasonFor(status),
 			db.SweepCounts{},
 			sweepT0().Add(time.Duration(i)*time.Hour),
 		); err != nil {
@@ -253,13 +223,9 @@ func TestLastSweepRunStart_ExcludesStatusesAndDryRuns(t *testing.T) {
 	if _, err := d.CreateSweepRun(ctx, "manual", true, sweepT0().Add(4*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := d.LastSweepRunStart(ctx, exclude)
+	got, err := d.LastSweepRunStart(ctx)
 	if err != nil || got == nil || !got.Equal(sweepT0().Add(time.Hour)) {
 		t.Errorf("LastSweepRunStart = %v, %v; want %v", got, err, sweepT0().Add(time.Hour))
-	}
-	got, err = d.LastSweepRunStart(ctx, nil)
-	if err != nil || got == nil || !got.Equal(sweepT0().Add(3*time.Hour)) {
-		t.Errorf("LastSweepRunStart(nil) = %v, %v", got, err)
 	}
 }
 
@@ -270,21 +236,22 @@ func TestRetryableSweepRunsSince(t *testing.T) {
 	for _, r := range []struct {
 		hours  int
 		dry    bool
-		status string
+		status sweepstate.RunStatus
 	}{{-1, false, "failed"}, {1, false, "failed"}, {2, true, "failed"}, {3, false, "done"}, {4, false, "interrupted"}} {
 		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
 		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = d.FinishSweepRun(ctx, id, r.status, "", db.SweepCounts{}, at.Add(time.Minute)); err != nil {
+		finish := at.Add(time.Minute)
+		if err = d.FinishSweepRun(ctx, id, r.status, reasonFor(r.status), db.SweepCounts{}, finish); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(5*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.InterruptRunningSweeps(ctx); err != nil {
+	if _, err := d.CrashRunningSweeps(ctx); err != nil {
 		t.Fatal(err)
 	}
 	n, latest, err := d.RetryableSweepRunsSince(ctx, sweepT0())
@@ -347,7 +314,8 @@ func TestLiveSearchesSince(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = d.FinishSweepRun(ctx, id, "interrupted", "", db.SweepCounts{Searched: r.searched}, at); err != nil {
+		counts := db.SweepCounts{Searched: r.searched}
+		if err = d.FinishSweepRun(ctx, id, "interrupted", "test", counts, at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -358,7 +326,7 @@ func TestLiveSearchesSince(t *testing.T) {
 	if _, err = d.CreateSweepRun(ctx, "schedule", false, sweepT0().Add(4*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.InterruptRunningSweeps(ctx); err != nil {
+	if _, err = d.CrashRunningSweeps(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, crashed, err = d.LiveSearchesSince(ctx, sweepT0()); err != nil || !crashed {
@@ -407,7 +375,7 @@ func TestDB_LiveSearchesSince_RunningNotCrashed(t *testing.T) {
 	if _, crashed, err := d.LiveSearchesSince(ctx, sweepT0()); err != nil || crashed {
 		t.Errorf("running run: crashed = %v, %v; want false", crashed, err)
 	}
-	if _, err := d.InterruptRunningSweeps(ctx); err != nil {
+	if _, err := d.CrashRunningSweeps(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, crashed, err := d.LiveSearchesSince(ctx, sweepT0()); err != nil || !crashed {
@@ -427,7 +395,7 @@ func TestDB_LiveSearchesSince_CrashCountsFromLastItem(t *testing.T) {
 		Result: "searched", At: sweepT0().Add(-23 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = d.InterruptRunningSweeps(ctx); err != nil {
+	if _, err = d.CrashRunningSweeps(ctx); err != nil {
 		t.Fatal(err)
 	}
 	_, crashed, err := d.LiveSearchesSince(ctx, sweepT0().Add(-24*time.Hour))
@@ -510,7 +478,7 @@ func TestLastSweepRunStartIgnoresBabysit(t *testing.T) {
 	if _, err := d.CreateSweepRun(ctx, db.BabysitTrigger+" Foo", false, sweepT0().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := d.LastSweepRunStart(ctx, nil)
+	got, err := d.LastSweepRunStart(ctx)
 	if err != nil || got == nil || !got.Equal(sweepT0()) {
 		t.Errorf("LastSweepRunStart = %v, %v; want %v", got, err, sweepT0())
 	}
@@ -524,7 +492,7 @@ func TestRetryableSweepRunsSinceIgnoresBabysit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = d.FinishSweepRun(ctx, id, "failed", "", db.SweepCounts{}, sweepT0().Add(time.Minute)); err != nil {
+	if err = d.FinishSweepRun(ctx, id, "failed", "test", db.SweepCounts{}, sweepT0().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	n, _, err := d.RetryableSweepRunsSince(ctx, sweepT0().Add(-time.Hour))
@@ -592,4 +560,11 @@ func TestLatestSweepItems(t *testing.T) {
 	if err != nil || len(got) != 2 || got[1].Result != "a-new" || got[2].Result != "b-tie-later-id" {
 		t.Fatalf("LatestSweepItems = %+v, %v", got, err)
 	}
+}
+
+func reasonFor(s sweepstate.RunStatus) string {
+	if sweepstate.CheckRun(sweepstate.RunSnap{Status: s, HasCounts: true, HasFinished: true}) == nil {
+		return ""
+	}
+	return "test"
 }

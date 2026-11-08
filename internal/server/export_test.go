@@ -10,6 +10,7 @@ import (
 	"github.com/minz1/mediafixer/internal/livecheck"
 
 	"github.com/minz1/mediafixer/internal/stuckqueue"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -47,11 +48,11 @@ func StatusTone(s db.IncidentStatus) string { return string(statusMeta(s).Tone) 
 
 func StatusWord(s db.IncidentStatus) string { return statusMeta(s).Label }
 
-func IncidentLive(s db.IncidentStatus) bool { return incidentLive(s) }
-func CheckTone(s livecheck.Status) string   { return checkTone(s) }
-func ConfidenceTone(c string) string        { return confidenceTone(c) }
-func ActionTone(s db.ActionStatus) string   { return actionTone(s) }
-func SweepTone(s string) string             { return sweepTone(s) }
+func IncidentLive(s db.IncidentStatus) bool               { return incidentLive(s) }
+func CheckTone(s livecheck.Status) string                 { return checkTone(s) }
+func ConfidenceTone(c string) string                      { return confidenceTone(c) }
+func ActionTone(s db.ActionStatus) string                 { return actionTone(s) }
+func SweepMeta(s sweepstate.RunStatus) sweepstate.RunMeta { return sweepMeta(s) }
 
 func RelTime(now, t time.Time) string { return relTime(now, t) }
 

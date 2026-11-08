@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/minz1/mediafixer/internal/sweep"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 const (
@@ -244,19 +245,12 @@ func parseSweepSettings(r *http.Request) (sweep.Settings, map[string]string) {
 	return set, errs
 }
 
-func sweepTone(status string) string {
-	switch status {
-	case "done":
-		return toneGreen
-	case "running":
-		return toneBlue
-	case "failed", "refused":
-		return toneRed
-	case "paused", "interrupted":
-		return toneYellow
-	default:
-		return toneGray
+func sweepMeta(s sweepstate.RunStatus) sweepstate.RunMeta {
+	m := sweepstate.Meta(s)
+	if m.Tone == "" {
+		m.Tone, m.Label = toneGray, string(s)
 	}
+	return m
 }
 
 func seasonLabel(n *int) string {

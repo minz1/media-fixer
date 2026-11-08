@@ -12,6 +12,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func scheduledAt(t *testing.T, at time.Time, s sweep.Settings) (*harness, *sweep.Scheduler) {
@@ -138,8 +139,8 @@ func TestScheduler_InterruptedRunReRunsAfterRestart(t *testing.T) {
 	if _, err := h.db.CreateSweepRun(ctx, "schedule", false, t0().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := h.db.InterruptRunningSweeps(ctx); err != nil || n != 1 {
-		t.Fatalf("InterruptRunningSweeps = %d, %v", n, err)
+	if ids, err := h.db.CrashRunningSweeps(ctx); err != nil || len(ids) != 1 {
+		t.Fatalf("CrashRunningSweeps = %v, %v", ids, err)
 	}
 	sch := h.restart(t0().Add(20 * time.Minute))
 	h.tick(sch, t0().Add(21*time.Minute))
@@ -148,7 +149,7 @@ func TestScheduler_InterruptedRunReRunsAfterRestart(t *testing.T) {
 	}
 	h.tick(sch, t0().Add(time.Hour+2*time.Minute))
 	runs := h.runs(t)
-	if len(runs) != 2 || runs[0].Status != "done" || runs[1].Status != "interrupted" {
+	if len(runs) != 2 || runs[0].Status != "done" || runs[1].Status != sweepstate.Crashed {
 		t.Errorf("runs = %+v, want a fresh done run after the interrupted one", runs)
 	}
 }
@@ -554,7 +555,7 @@ func interruptedRun(t *testing.T, h *harness, at time.Time, results ...string) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = h.db.InterruptRunningSweeps(ctx); err != nil {
+	if _, err = h.db.CrashRunningSweeps(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -621,7 +622,7 @@ func usageRun(t *testing.T, h *harness, at time.Time, dry bool, c db.SweepCounts
 			t.Fatal(err)
 		}
 	}
-	if err = h.db.FinishSweepRun(ctx, id, "interrupted", "", c, at); err != nil {
+	if err = h.db.FinishSweepRun(ctx, id, "interrupted", "test", c, at); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -768,14 +769,18 @@ func TestScheduler_ShutdownStillInterrupted(t *testing.T) {
 	}
 }
 
-func finishedRun(t *testing.T, h *harness, at time.Time, status string, c db.SweepCounts) {
+func finishedRun(t *testing.T, h *harness, at time.Time, status sweepstate.RunStatus, c db.SweepCounts) {
 	t.Helper()
 	ctx := context.Background()
 	id, err := h.db.CreateSweepRun(ctx, "schedule", false, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = h.db.FinishSweepRun(ctx, id, status, "", c, at.Add(time.Minute)); err != nil {
+	reason := ""
+	if status == sweepstate.Failed || status == sweepstate.Interrupted {
+		reason = "test"
+	}
+	if err = h.db.FinishSweepRun(ctx, id, status, reason, c, at.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 }

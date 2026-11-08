@@ -10,6 +10,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/livecheck"
 	"github.com/minz1/mediafixer/internal/server"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func TestStatusTone(t *testing.T) {
@@ -48,14 +49,14 @@ func TestConfidenceTone(t *testing.T) {
 	}
 }
 
-func TestSweepTone(t *testing.T) {
+func TestSweepMeta_Tones(t *testing.T) {
 	t.Parallel()
-	for in, want := range map[string]string{
+	for in, want := range map[sweepstate.RunStatus]string{
 		"done": "green", "running": "blue", "failed": "red", "refused": "red",
-		"paused": "yellow", "interrupted": "yellow", "other": "gray",
+		"paused": "yellow", "interrupted": "yellow", "crashed": "yellow", "other": "gray",
 	} {
-		if got := server.SweepTone(in); got != want {
-			t.Errorf("SweepTone(%q) = %q, want %q", in, got, want)
+		if got := server.SweepMeta(in).Tone; got != want {
+			t.Errorf("SweepMeta(%q).Tone = %q, want %q", in, got, want)
 		}
 	}
 }

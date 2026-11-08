@@ -202,7 +202,7 @@ func (s *Scheduler) NextRun(now time.Time) *time.Time {
 func (s *Scheduler) next(set Settings, now time.Time) (time.Time, error) {
 	iv := set.Interval()
 	var anchor time.Time
-	last, err := s.d.LastSweepRunStart(s.base, []string{statusPaused, statusInterrupted, statusFailed})
+	last, err := s.d.LastSweepRunStart(s.base)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		return time.Time{}, err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func settings() sweep.Settings {
@@ -705,7 +706,7 @@ func TestRun_StartCardThenRefresh(t *testing.T) {
 	t.Parallel()
 	for _, dry := range []bool{false, true} {
 		h := newHarness(t)
-		var statusAtRefresh string
+		var statusAtRefresh sweepstate.RunStatus
 		h.runner.Refresh = func(subject string) {
 			h.mu.Lock()
 			h.refreshed = append(h.refreshed, subject)

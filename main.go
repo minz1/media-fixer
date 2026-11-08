@@ -265,8 +265,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 	a.srv.SetDiscord(a.bot.Conn)
 	a.srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 
-	if _, err = database.InterruptRunningSweeps(ctx); err != nil {
-		log.ErrorContext(ctx, "interrupt running sweeps", "error", err)
+	if err = crashRunningSweeps(ctx, database, log); err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -341,6 +340,18 @@ func opPorts(clients *clientset.Set) opexec.Ports {
 		},
 		Decypharr: clients.Decypharr,
 	}
+}
+
+func crashRunningSweeps(ctx context.Context, database *db.DB, log *slog.Logger) error {
+	ids, err := database.CrashRunningSweeps(ctx)
+	if err != nil {
+		log.ErrorContext(ctx, "crash running sweeps", "error", err)
+		return err
+	}
+	if len(ids) > 0 {
+		log.InfoContext(ctx, "sweep runs marked crashed", "n", len(ids))
+	}
+	return nil
 }
 
 func interruptOperations(ctx context.Context, database *db.DB, log *slog.Logger) error {

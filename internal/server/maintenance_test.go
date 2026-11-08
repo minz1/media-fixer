@@ -18,6 +18,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/sweep"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 type maintSonarr struct {
@@ -826,6 +827,71 @@ func TestD7_6_SweepStatusSaysUnknownForUnreadableSettings(t *testing.T) {
 		if strings.Contains(body, "not scheduled (disabled)") ||
 			!strings.Contains(body, `Next run: <span class="v">unknown`) {
 			t.Errorf("%s: sweep status doesn't say the schedule is unknown", path)
+		}
+	}
+}
+
+func TestMaintenance_CrashedBadgeAndInfo(t *testing.T) {
+	t.Parallel()
+	env := newMaintenanceTestServer(t)
+	ctx := context.Background()
+	ids := make(map[sweepstate.RunStatus]int64)
+	crashed, err := env.db.CreateSweepRun(ctx, "schedule", false, time.Now().Add(-8*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.db.CrashRunningSweeps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ids[sweepstate.Crashed] = crashed
+	for i, status := range []sweepstate.RunStatus{
+		sweepstate.Done, sweepstate.Paused, sweepstate.Refused, sweepstate.Failed, sweepstate.Interrupted,
+	} {
+		at := time.Now().Add(time.Duration(i-6) * time.Hour)
+		id, createErr := env.db.CreateSweepRun(ctx, "schedule", false, at)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		reason := ""
+		if status == sweepstate.Refused || status == sweepstate.Failed || status == sweepstate.Interrupted {
+			reason = "test"
+		}
+		if err = env.db.FinishSweepRun(ctx, id, status, reason, db.SweepCounts{}, at.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		ids[status] = id
+	}
+	if ids[sweepstate.Running], err = env.db.CreateSweepRun(ctx, "schedule", false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, env.srv, http.MethodGet, "/media/maintenance", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	badge := regexp.MustCompile(`<span class="badge tone-(\w+)">(\w+)</span>(<span class="info"[^>]*>i</span>)?`)
+	for status, want := range map[sweepstate.RunStatus]struct {
+		tone, word string
+		info       bool
+	}{
+		sweepstate.Running:     {"blue", "running", false},
+		sweepstate.Done:        {"green", "done", false},
+		sweepstate.Paused:      {"yellow", "paused", false},
+		sweepstate.Refused:     {"red", "refused", false},
+		sweepstate.Failed:      {"red", "failed", false},
+		sweepstate.Interrupted: {"yellow", "interrupted", false},
+		sweepstate.Crashed:     {"yellow", "interrupted", true},
+	} {
+		_, rest, ok := strings.Cut(body, "<span class=\"font-semibold\">#"+strconv.FormatInt(ids[status], 10)+"</span>")
+		if !ok {
+			t.Errorf("%s: run %d not on the page", status, ids[status])
+			continue
+		}
+		summary, _, _ := strings.Cut(rest, "</summary>")
+		m := badge.FindStringSubmatch(summary)
+		if m == nil || m[1] != want.tone || m[2] != want.word || (m[3] != "") != want.info {
+			t.Errorf("%s: badge = %q, want tone %s word %s info %v", status, m, want.tone, want.word, want.info)
 		}
 	}
 }

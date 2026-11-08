@@ -9,6 +9,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func TestSummaryCard(t *testing.T) {
@@ -154,8 +155,9 @@ func TestRenderer_Finished(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
-		status, reason string
-		tone           card.Tone
+		status sweepstate.RunStatus
+		reason string
+		tone   card.Tone
 	}{
 		{"done", "", card.Success},
 		{"failed", "sonarr down", card.Warn},
@@ -172,14 +174,14 @@ func TestRenderer_Finished(t *testing.T) {
 		if !ok || up.Live || up.Tone == nil || *up.Tone != tc.tone {
 			t.Fatalf("%s: update = %+v ok=%v", tc.status, up, ok)
 		}
-		if !strings.Contains(up.Status, tc.status) || !strings.Contains(up.Status, tc.reason) ||
+		if !strings.Contains(up.Status, string(tc.status)) || !strings.Contains(up.Status, tc.reason) ||
 			!strings.Contains(up.Status, "took 1m23s") || !strings.Contains(sectionText(up), "imported 1") {
 			t.Errorf("%s: update = %+v", tc.status, up)
 		}
 	}
 }
 
-func TestRenderer_Interrupted(t *testing.T) {
+func TestSweepCard_CrashedRunRenders(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
@@ -187,7 +189,7 @@ func TestRenderer_Interrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = h.db.InterruptRunningSweeps(ctx); err != nil {
+	if _, err = h.db.CrashRunningSweeps(ctx); err != nil {
 		t.Fatal(err)
 	}
 	up, ok := renderSweep(t, h.runner, id)
