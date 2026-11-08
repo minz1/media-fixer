@@ -44,6 +44,7 @@ func TestS6_5_DisableThroughSaveCancelsLiveRun(t *testing.T) {
 
 type goneAfterDisable struct {
 	context.Context
+
 	db   *db.DB
 	mu   sync.Mutex
 	gone bool

@@ -90,7 +90,8 @@ func (s *Scheduler) Save(ctx context.Context, set Settings, now time.Time) error
 	if set.Enabled {
 		return nil
 	}
-	if _, err := s.CancelLive(context.WithoutCancel(ctx), ErrDisabled); err != nil && !errors.Is(err, card.ErrRestarting) {
+	_, err := s.CancelLive(context.WithoutCancel(ctx), ErrDisabled)
+	if err != nil && !errors.Is(err, card.ErrRestarting) {
 		return err
 	}
 	return nil
