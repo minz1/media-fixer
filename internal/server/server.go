@@ -18,6 +18,7 @@ import (
 	"github.com/minz1/mediafixer/internal/babysit"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/livecheck"
@@ -75,6 +76,20 @@ type Server struct {
 	babysit *babysit.Service
 
 	listener net.Listener
+
+	discord atomic.Pointer[func() discord.Conn]
+}
+
+func (s *Server) SetDiscord(conn func() discord.Conn) {
+	s.discord.Store(&conn)
+}
+
+func (s *Server) discordView() connView {
+	f := s.discord.Load()
+	if f == nil {
+		return connView{}
+	}
+	return newConnView((*f)(), time.Now())
 }
 
 // SetChecker wires the dispatcher the /selftest page runs checks against.
@@ -91,20 +106,19 @@ func (s *Server) SetSeerrWebhookSecret(secret string) {
 func New(
 	addr, baseURL string, database *db.DB, jrnl *journal.Journal, svc *incident.Service, log *slog.Logger,
 ) (*Server, error) {
-	tmpl, err := buildDashboardTemplate()
-	if err != nil {
-		return nil, fmt.Errorf("parse dashboard template: %w", err)
-	}
-
 	s := &Server{
 		db:       database,
 		journal:  jrnl,
 		svc:      svc,
 		baseURL:  baseURL,
 		log:      log,
-		tmpl:     tmpl,
 		shutdown: make(chan struct{}),
 	}
+	tmpl, err := buildDashboardTemplate(s.discordView)
+	if err != nil {
+		return nil, fmt.Errorf("parse dashboard template: %w", err)
+	}
+	s.tmpl = tmpl
 
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)

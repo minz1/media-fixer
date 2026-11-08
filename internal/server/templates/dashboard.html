@@ -278,6 +278,7 @@
     <div class="max-w-5xl mx-auto px-4 py-8">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
         <h1 class="brand"><span class="brand-dot" aria-hidden="true"></span>Media Fixer</h1>
+        {{with discordConn}}{{if .Header}}<span class="flex items-center gap-1.5">{{template "badge" .}}{{with .Info}}{{template "info" .}}{{end}}</span>{{end}}{{end}}
         {{template "pause_toggle" (dict "BaseURL" .BaseURL "Paused" .Paused)}}
       </div>
       {{template "tabs" (dict "BaseURL" .BaseURL "Active" .Active)}}
@@ -683,6 +684,7 @@
 {{define "selftest"}}{{template "page_top" (dict "Title" "Live tool check · Media Fixer" "BaseURL" .BaseURL "Active" "selftest" "Paused" .Paused)}}
       <div class="card">
         <h2 class="card-title mb-4">Live tool check {{template "info" "Drives every agent tool against the real configured services and reports whether each one works."}}</h2>
+        {{with discordConn}}{{if .Word}}<p class="mb-4 flex items-center gap-1.5">{{template "badge" .}}{{with .Info}}{{template "info" .}}{{end}}</p>{{end}}{{end}}
 
         {{if not .Configured}}
         <p class="notice notice-err">Live checks not configured.</p>

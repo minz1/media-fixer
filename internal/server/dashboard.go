@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/livecheck"
@@ -110,7 +111,43 @@ type dashboardTemplates struct {
 	t *template.Template
 }
 
-func buildDashboardTemplate() (*dashboardTemplates, error) {
+const discordHeaderAfter = 2 * time.Minute
+
+type connView struct {
+	Word   string
+	Tone   string
+	Info   string
+	Header bool
+}
+
+func newConnView(c discord.Conn, now time.Time) connView {
+	var v connView
+	down := false
+	switch c.State {
+	case discord.ConnConnected:
+		v = connView{Word: "Discord connected", Tone: toneGreen}
+	case discord.ConnConnecting, discord.ConnReconnecting:
+		v = connView{Word: "Discord connecting", Tone: toneYellow}
+		down = true
+	case discord.ConnBackoff:
+		v = connView{Word: "Discord offline", Tone: toneRed, Info: retryInfo(c)}
+		down = true
+	case discord.ConnIdle, discord.ConnClosed:
+		v = connView{Word: "Discord stopped", Tone: toneGray}
+	}
+	v.Header = down && now.Sub(c.DownSince) > discordHeaderAfter
+	return v
+}
+
+func retryInfo(c discord.Conn) string {
+	info := "Retrying at " + c.RetryAt.UTC().Format("15:04:05 MST")
+	if c.Err != "" {
+		info += ": " + c.Err
+	}
+	return info
+}
+
+func buildDashboardTemplate(discordConn func() connView) (*dashboardTemplates, error) {
 	t, err := template.New("dashboard.html").Funcs(template.FuncMap{
 		"json": func(v any) string {
 			b, _ := json.MarshalIndent(v, "", "  ")
@@ -131,6 +168,7 @@ func buildDashboardTemplate() (*dashboardTemplates, error) {
 		"confidenceTone": confidenceTone,
 		"actionTone":     actionTone,
 		"restarting":     func(s string) bool { return s == card.RestartingNotice || strings.HasPrefix(s, refusedPrefix) },
+		"discordConn":    discordConn,
 		"restartingText": func() string { return card.RestartingNotice },
 	}).ParseFS(templateFS, "templates/dashboard.html")
 	if err != nil {

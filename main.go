@@ -262,6 +262,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 		return nil, err
 	}
 	a.srv.SetChecker(bundle.clients.Dispatcher())
+	a.srv.SetDiscord(a.bot.Conn)
 	a.srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 
 	if _, err = database.InterruptRunningSweeps(ctx); err != nil {
