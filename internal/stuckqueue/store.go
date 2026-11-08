@@ -84,6 +84,10 @@ func (r *Runner) stepRows(
 		if stored {
 			before = fromRow(*row)
 		}
+		if stored && r.prunedAsIllegal(ctx, before, events[k]) {
+			snaps, del = append(snaps, before), append(del, id)
+			continue
+		}
 		after, e, ok := r.step(ctx, before, stored, events[k])
 		if !ok {
 			snaps = append(snaps, before)
@@ -98,6 +102,18 @@ func (r *Runner) stepRows(
 		}
 	}
 	return snaps, effs, put, del
+}
+
+func (r *Runner) prunedAsIllegal(ctx context.Context, before Snapshot, ev Event) bool {
+	if ev.Kind != EvExpire && ev.Kind != EvCommandObserved {
+		return false
+	}
+	err := Check(before)
+	if err != nil {
+		r.logger().ErrorContext(ctx, "stuck-queue: stored row is illegal, pruned",
+			"app", before.Key.App, "download", before.Key.DownloadID, "state", before.State, "err", err)
+	}
+	return err != nil
 }
 
 func (r *Runner) step(ctx context.Context, before Snapshot, stored bool, ev Event) (Snapshot, []Effect, bool) {

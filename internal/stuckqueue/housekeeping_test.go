@@ -228,3 +228,26 @@ func TestQ2_4_ActedRowExpiresWhileSweepDisabled(t *testing.T) {
 		t.Fatal("the 15 day old outcome was pruned")
 	}
 }
+
+func TestP6Followup_BadStoredRowIsPrunedWithOneError(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	disableSweep(t, e)
+	now := e.clock.Now()
+	seedRows(t, e.db, stuckqueue.ToRowForTest(stuckqueue.Snapshot{
+		Key: sonarrKey("BAD"), State: stuckqueue.StateActed, FirstSeen: now.Add(-24 * time.Hour),
+		Acted: &stuckqueue.Acted{
+			Action: stuckqueue.ActionRemove, At: now.Add(-17 * 24 * time.Hour), Result: stuckqueue.ResultOK,
+		},
+	}))
+	for range 3 {
+		s.Tick(now)
+		s.Wait()
+	}
+	if n := strings.Count(e.logs.String(), "level=ERROR"); n != 1 {
+		t.Fatalf("%d ERROR lines over three passes, want 1", n)
+	}
+	if _, ok := rowOf(t, e, "BAD"); ok {
+		t.Fatal("the bad row was kept")
+	}
+}
