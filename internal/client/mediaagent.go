@@ -40,6 +40,8 @@ func NewMediaAgent(baseURL, apiKey string) *MediaAgentClient {
 	}
 }
 
+func (c *MediaAgentClient) Configured() bool { return c != nil && c.baseURL != "" }
+
 func (c *MediaAgentClient) DDReadabilityTest(ctx context.Context, path string) (*mediaagentapi.DDTestResult, error) {
 	body, _ := json.Marshal(mediaagentapi.DDTestRequest{Path: path})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/dd-test", bytes.NewReader(body))

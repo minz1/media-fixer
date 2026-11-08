@@ -24,6 +24,8 @@ func NewSeerr(baseURL, apiKey string) *SeerrClient {
 	}
 }
 
+func (c *SeerrClient) Configured() bool { return c != nil && c.base != "" }
+
 func (c *SeerrClient) Comment(ctx context.Context, issueID, message string) error {
 	body, err := json.Marshal(map[string]string{"message": message})
 	if err != nil {

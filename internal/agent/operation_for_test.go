@@ -62,7 +62,7 @@ func TestOperationFor_DecodesStoredPlanExactly(t *testing.T) {
 	t.Parallel()
 	ag := operationAgent(&agent.Dispatcher{
 		Sonarr:    client.NewArr("http://sonarr.invalid", "k"),
-		Decypharr: &client.DecypharrClient{},
+		Decypharr: client.NewDecypharr("http://decypharr.invalid", "k"),
 	})
 
 	plan := client.ReplacePlan{

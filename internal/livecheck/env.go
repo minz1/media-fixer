@@ -28,7 +28,7 @@ const (
 )
 
 func checkMountHealth(ctx context.Context, disp *agent.Dispatcher) (Result, bool) {
-	if disp.MediaAgent == nil {
+	if !disp.MediaAgent.Configured() {
 		return Result{}, false
 	}
 	disk, err := disp.MediaAgent.DiskUsage(ctx)

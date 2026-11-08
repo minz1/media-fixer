@@ -27,6 +27,8 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 	}
 }
 
+func (c *DecypharrClient) Configured() bool { return c != nil && c.base != "" }
+
 type TorrentEntry struct {
 	Name             string `json:"name"`
 	OriginalFilename string `json:"original_filename,omitempty"`

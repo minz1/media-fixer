@@ -101,6 +101,7 @@ func newLoggedRunTestAgent(
 	cfg.BaseURL = llmSrv.URL
 	disp := &agent.Dispatcher{
 		Decypharr: client.NewDecypharr(decypharr.URL, "tok"),
+		Jellyfin:  client.NewJellyfin(decypharr.URL, "key"),
 	}
 	for _, opt := range opts {
 		opt(disp)

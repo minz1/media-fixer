@@ -319,7 +319,10 @@ func TestDiscoverSamplePath_SingleFileMatchesNameOrOriginalFilename(t *testing.T
 
 func TestD11_3_UnconfiguredArrShowsAsUnconfigured(t *testing.T) {
 	t.Parallel()
-	disp := &agent.Dispatcher{Sonarr: client.NewArr("", "key"), Radarr: client.NewArr("", "key")}
+	disp := &agent.Dispatcher{
+		Decypharr: client.NewDecypharr("", "key"), Jellyfin: client.NewJellyfin("", "key"),
+		Sonarr: client.NewArr("", "key"), Radarr: client.NewArr("", "key"),
+	}
 
 	var fx livecheck.Fixtures
 	livecheck.DiscoverArrTitlesForTest(context.Background(), disp, &fx)
@@ -332,7 +335,7 @@ func TestD11_3_UnconfiguredArrShowsAsUnconfigured(t *testing.T) {
 		"arr_search_missing", "arr_remove_and_search",
 	}
 	for _, tool := range tools {
-		result := findCheck(t, tool)(context.Background(), disp, &fx, livecheck.Options{AllowWrite: true})
+		result := runTool(t, disp, tool)
 		if result.Status != livecheck.StatusUnconfigured {
 			t.Errorf("%s: status = %s, detail = %s, err = %s", tool, result.Status, result.Detail, result.Error)
 		}

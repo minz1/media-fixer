@@ -88,10 +88,10 @@ func buildAgentComponents(
 }
 
 func startSweep(
-	ctx context.Context, sonarrURL string, sonarr *client.ArrClient, database *db.DB, bot *discord.Bot,
+	ctx context.Context, sonarr *client.ArrClient, database *db.DB, bot *discord.Bot,
 	srv *server.Server, log *slog.Logger, renderers map[string]card.Renderer,
 ) *sweep.Scheduler {
-	if sonarrURL == "" {
+	if !sonarr.Configured() {
 		log.WarnContext(ctx, "sonarr not configured — pack sweep unavailable")
 		return nil
 	}
@@ -107,14 +107,14 @@ func startSweep(
 }
 
 func startStuckQueue(
-	ctx context.Context, cfg *config.Config, clients *clientset.Set, database *db.DB, bot *discord.Bot,
+	ctx context.Context, clients *clientset.Set, database *db.DB, bot *discord.Bot,
 	srv *server.Server, log *slog.Logger, handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) *stuckqueue.Scheduler {
 	r := &stuckqueue.Runner{DB: database, Notify: bot.NotifyOwner, Now: time.Now, Log: log}
-	if cfg.Sonarr.URL != "" {
+	if clients.Sonarr.Configured() {
 		r.Sonarr = clients.Sonarr
 	}
-	if cfg.Radarr.URL != "" {
+	if clients.Radarr.Configured() {
 		r.Radarr = clients.Radarr
 	}
 	if r.Sonarr == nil && r.Radarr == nil {
@@ -133,7 +133,7 @@ func startStuckQueue(
 }
 
 func newStuckRead(clients *clientset.Set, svc *incident.Service, database *db.DB, log *slog.Logger) *stuckread.Watcher {
-	if clients.MediaAgent == nil {
+	if !clients.MediaAgent.Configured() {
 		return nil
 	}
 	sr := stuckread.New(clients.MediaAgent, svc, database, log)
@@ -147,8 +147,8 @@ func startMaintenance(
 	handlers map[string]card.Handler, renderers map[string]card.Renderer, sr *stuckread.Watcher,
 ) []step {
 	clients := bundle.clients
-	sweepSch := startSweep(ctx, cfg.Sonarr.URL, clients.Sonarr, database, bot, srv, log, renderers)
-	stuckSch := startStuckQueue(ctx, cfg, clients, database, bot, srv, log, handlers, renderers)
+	sweepSch := startSweep(ctx, clients.Sonarr, database, bot, srv, log, renderers)
+	stuckSch := startStuckQueue(ctx, clients, database, bot, srv, log, handlers, renderers)
 	if sweepSch != nil && stuckSch != nil {
 		srv.SetBabysit(&babysit.Service{
 			DB: database, Sonarr: clients.Sonarr, State: stuckSch.State, LLM: bundle.summary,
@@ -239,6 +239,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 		return nil, err
 	}
 	a.bundle = bundle
+	log.InfoContext(ctx, "features enabled", "features", enabledFeatures(bundle.clients))
 
 	a.bot, err = discord.New(cfg.Discord.Token, cfg.Discord.GuildID, cfg.Discord.OwnerID, cfg.Server.PublicURL, log)
 	if err != nil {
@@ -247,8 +248,8 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 	}
 
 	a.svc = incident.NewService(ctx, database, a.jrnl, bundle.ag, bundle.ctrl, bundle.summary, a.bot, log)
-	if cfg.Seerr.URL != "" {
-		a.svc.SetSeerr(client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey))
+	if bundle.clients.Seerr.Configured() {
+		a.svc.SetSeerr(bundle.clients.Seerr)
 	} else {
 		log.WarnContext(ctx, "seerr not configured — seerr reporters get no issue updates")
 	}
@@ -371,4 +372,21 @@ func interruptOperations(ctx context.Context, database *db.DB, log *slog.Logger)
 			op.ID, op.Subject.Kind, op.Subject.ID, op.Index))
 	}
 	return nil
+}
+
+func enabledFeatures(clients *clientset.Set) []string {
+	var features []string
+	if clients.Sonarr.Configured() {
+		features = append(features, "sweep", "stuck-queue:sonarr")
+	}
+	if clients.Radarr.Configured() {
+		features = append(features, "stuck-queue:radarr")
+	}
+	if clients.MediaAgent.Configured() {
+		features = append(features, "stuck-read")
+	}
+	if clients.Seerr.Configured() {
+		features = append(features, "seerr")
+	}
+	return features
 }

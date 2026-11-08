@@ -179,7 +179,7 @@ func discoverTorrentAndSample(ctx context.Context, disp *agent.Dispatcher, fx *F
 	case fx.TorrentName == "":
 	case fx.SamplePath == "":
 		discoverSamplePath(ctx, disp, fx)
-	case disp.MediaAgent != nil:
+	case disp.MediaAgent.Configured():
 		if _, ok := singleFileTorrentPath(ctx, disp, fx); ok {
 			fx.TorrentIsFile = true
 		}
@@ -261,7 +261,7 @@ func decypharrCandidateDirs(folder, name string) []string {
 }
 
 func discoverSamplePath(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
-	if disp.MediaAgent == nil {
+	if !disp.MediaAgent.Configured() {
 		fx.missing("media-agent not configured, cannot discover sample file")
 		return
 	}

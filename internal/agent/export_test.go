@@ -6,6 +6,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
 
@@ -242,3 +243,7 @@ func (a *Agent) RefuseForTest(ctx context.Context, inc *db.Incident, tool, reaso
 }
 
 func ManualFindingForTest(s RunState, err error) *DiagnosticResult { return manualFinding(s, err) }
+
+func (a *Agent) FetchQueueForTest(ctx context.Context, mediaType string) ([]client.QueueRecord, error) {
+	return a.fetchQueue(ctx, mediaType)
+}

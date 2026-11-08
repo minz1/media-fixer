@@ -1040,12 +1040,12 @@ func (a *Agent) arrHasFileForTitle(ctx context.Context, title string) (bool, boo
 	if title == "" {
 		return false, false
 	}
-	if a.disp.Sonarr != nil {
+	if a.disp.Sonarr.Configured() {
 		if status, err := a.disp.resolveMediaStatus(ctx, client.ReplaceMediaTV, title, -1, -1); err == nil {
 			return status.HasFile, true
 		}
 	}
-	if a.disp.Radarr != nil {
+	if a.disp.Radarr.Configured() {
 		if status, err := a.disp.resolveMediaStatus(ctx, client.ReplaceMediaMovie, title, -1, -1); err == nil {
 			return status.HasFile, true
 		}
@@ -1236,13 +1236,13 @@ const progressPercentScale = 100.0
 func (a *Agent) fetchQueue(ctx context.Context, mediaType string) ([]client.QueueRecord, error) {
 	switch mediaType {
 	case client.ReplaceMediaMovie:
-		if a.disp.Radarr == nil {
-			return nil, nil
+		if !a.disp.Radarr.Configured() {
+			return nil, errRadarrNotConfigured
 		}
 		return a.disp.Radarr.GetQueue(ctx)
 	default:
-		if a.disp.Sonarr == nil {
-			return nil, nil
+		if !a.disp.Sonarr.Configured() {
+			return nil, errSonarrNotConfigured
 		}
 		return a.disp.Sonarr.GetQueue(ctx)
 	}

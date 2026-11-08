@@ -131,9 +131,6 @@ func checkJellyfinScanStatus(ctx context.Context, disp *agent.Dispatcher, _ *Fix
 }
 
 func checkDDReadability(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if disp.MediaAgent == nil {
-		return unconfiguredMediaAgent()
-	}
 	if fx.SamplePath == "" {
 		return degraded("no fixture: no sample file discovered")
 	}
@@ -176,9 +173,6 @@ func checkLokiQuery(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ 
 // here previously ENOENT'd even when discoverSamplePath (which already tries
 // both) had found the file fine.
 func checkListDirectory(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if disp.MediaAgent == nil {
-		return unconfiguredMediaAgent()
-	}
 	if fx.TorrentName == "" {
 		return degraded("no fixture: no torrent discovered")
 	}
@@ -198,9 +192,6 @@ func checkListDirectory(ctx context.Context, disp *agent.Dispatcher, fx *Fixture
 }
 
 func checkGetDiskInfo(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
-	if disp.MediaAgent == nil {
-		return unconfiguredMediaAgent()
-	}
 	result, err := disp.Call(ctx, "get_disk_info", map[string]any{})
 	return classify(result, err)
 }
@@ -230,9 +221,6 @@ func arrMediaStatusArgs(fx *Fixtures) (map[string]any, string, bool) {
 }
 
 func checkArrMediaStatus(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if r, ok := unconfiguredArr(disp); ok {
-		return r
-	}
 	args, reason, ok := arrMediaStatusArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -242,9 +230,6 @@ func checkArrMediaStatus(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 }
 
 func checkArrGrabHistory(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if r, ok := unconfiguredArr(disp); ok {
-		return r
-	}
 	args, reason, ok := arrMediaStatusArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -286,9 +271,6 @@ func checkDecypharrRecheck(ctx context.Context, disp *agent.Dispatcher, fx *Fixt
 }
 
 func checkSonarrRescan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if !disp.Sonarr.Configured() {
-		return Result{Status: StatusUnconfigured, Detail: "sonarr not configured"}
-	}
 	if fx.SeriesTitle == "" {
 		return degraded("no fixture: no series title discovered")
 	}
@@ -297,9 +279,6 @@ func checkSonarrRescan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures
 }
 
 func checkRadarrRescan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if !disp.Radarr.Configured() {
-		return Result{Status: StatusUnconfigured, Detail: "radarr not configured"}
-	}
 	if fx.MovieTitle == "" {
 		return degraded("no fixture: no movie title discovered")
 	}
@@ -324,9 +303,6 @@ func checkClearJellyfinCache(ctx context.Context, disp *agent.Dispatcher, fx *Fi
 // make this genuinely trigger a search, which is an acceptable (and correct)
 // outcome too — either way the tool worked as designed.
 func checkArrSearchMissing(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if r, ok := unconfiguredArr(disp); ok {
-		return r
-	}
 	args, reason, ok := arrMediaStatusArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -341,17 +317,11 @@ func checkArrSearchMissing(ctx context.Context, disp *agent.Dispatcher, fx *Fixt
 // --- disruptive checks ---
 
 func checkRestartDecypharr(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
-	if disp.MediaAgent == nil {
-		return unconfiguredMediaAgent()
-	}
 	result, err := disp.Call(ctx, "restart_decypharr", map[string]any{})
 	return classify(result, err)
 }
 
 func checkRestartJellyfin(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
-	if disp.MediaAgent == nil {
-		return unconfiguredMediaAgent()
-	}
 	result, err := disp.Call(ctx, "restart_jellyfin", map[string]any{})
 	return classify(result, err)
 }
@@ -367,9 +337,6 @@ func checkJellyfinLibraryScan(ctx context.Context, disp *agent.Dispatcher, _ *Fi
 // --- approval (dry-run) checks ---
 
 func checkArrRemoveAndSearch(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
-	if r, ok := unconfiguredArr(disp); ok {
-		return r
-	}
 	args, reason, ok := arrRemoveAndSearchArgs(fx)
 	if !ok {
 		return degraded("no fixture: " + reason)
@@ -528,16 +495,6 @@ func decypharrRepairRunning(raw json.RawMessage) (bool, bool) {
 }
 
 func degraded(detail string) Result { return Result{Status: StatusDegraded, Detail: detail} }
-func unconfiguredMediaAgent() Result {
-	return Result{Status: StatusUnconfigured, Detail: "media_agent not configured"}
-}
-
-func unconfiguredArr(disp *agent.Dispatcher) (Result, bool) {
-	if disp.Sonarr.Configured() || disp.Radarr.Configured() {
-		return Result{}, false
-	}
-	return Result{Status: StatusUnconfigured, Detail: "sonarr and radarr not configured"}, true
-}
 
 // classify is the default error→Status mapping: any error is a failure.
 func classify(result any, err error) Result {

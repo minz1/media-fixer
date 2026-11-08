@@ -33,6 +33,8 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 	}
 }
 
+func (c *JellyfinClient) Configured() bool { return c != nil && c.base != "" }
+
 func (c *JellyfinClient) authorize(req *http.Request) {
 	req.Header.Set("Authorization", `MediaBrowser Token="`+c.apiKey+`"`)
 }

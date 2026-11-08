@@ -167,6 +167,7 @@ type toolSpec struct {
 	Risk       toolRisk
 	Impact     toolImpact
 	Handler    func(*Dispatcher, context.Context, *toolCall, map[string]any) (any, error)
+	Needs      toolNeed
 	UserPhrase string
 }
 
@@ -183,7 +184,7 @@ type toolSpec struct {
 // slice because .golangci.yml enables gochecknoglobals; rebuilding it per
 // call is a handful of struct copies against a handful of incidents a day.
 func toolRegistry() []toolSpec {
-	return slices.Concat(
+	specs := slices.Concat(
 		jellyfinReadToolSpecs(),
 		hostReadToolSpecs(),
 		arrReadToolSpecs(),
@@ -194,6 +195,11 @@ func toolRegistry() []toolSpec {
 		approvalToolSpecs(),
 		[]toolSpec{completionSpec()},
 	)
+	needs := toolNeeds()
+	for i := range specs {
+		specs[i].Needs = needs[specs[i].Name]
+	}
+	return specs
 }
 
 // arrReadToolSpecs returns the Sonarr/Radarr read-only diagnostic tools:
@@ -857,6 +863,11 @@ func (d *Dispatcher) call(ctx context.Context, c *toolCall, name string, args ma
 	}
 	c.tool = name
 	defer c.finish()
+	if spec.Needs != nil {
+		if reason, met := spec.Needs(d); !met {
+			return nil, refuseCause(errors.New(reason))
+		}
+	}
 	return spec.Handler(d, ctx, c, args)
 }
 
@@ -900,9 +911,6 @@ func (d *Dispatcher) readDDReadability(ctx context.Context, c *toolCall, args ma
 	filePath, _ := args["file_path"].(string)
 	if c.scope.What == WhatStuckRead {
 		return nil, errStuckReadNoProbe
-	}
-	if d.MediaAgent == nil {
-		return nil, errMediaAgentNotConfigured
 	}
 	return d.MediaAgent.DDReadabilityTest(ctx, filePath)
 }
@@ -956,9 +964,6 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, c *toolCall, args map[st
 	if now := time.Now(); to.After(now) {
 		to = now
 	}
-	if d.Loki == nil {
-		return nil, errLokiNotConfigured
-	}
 	return d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
 }
 
@@ -974,16 +979,10 @@ func (d *Dispatcher) readListDirectory(ctx context.Context, c *toolCall, args ma
 	if c.scope.What == WhatStuckRead {
 		return nil, errStuckReadNoList
 	}
-	if d.MediaAgent == nil {
-		return nil, errMediaAgentNotConfigured
-	}
 	return d.MediaAgent.ListDirectory(ctx, path)
 }
 
 func (d *Dispatcher) readDiskInfo(ctx context.Context, _ *toolCall, _ map[string]any) (any, error) {
-	if d.MediaAgent == nil {
-		return nil, errMediaAgentNotConfigured
-	}
 	return d.MediaAgent.DiskUsage(ctx)
 }
 
@@ -1229,9 +1228,6 @@ func waitUntilReady(ctx context.Context, timeout, interval time.Duration, probe 
 }
 
 func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
-	if d.MediaAgent == nil {
-		return nil, refuseCause(errMediaAgentNotConfigured)
-	}
 	sctx, actErr := c.act(ctx, nil)
 	if actErr != nil {
 		return nil, actErr
@@ -1273,9 +1269,6 @@ func (d *Dispatcher) jellyfinServing(ctx context.Context) error {
 }
 
 func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
-	if d.MediaAgent == nil {
-		return nil, refuseCause(errMediaAgentNotConfigured)
-	}
 	sctx, actErr := c.act(ctx, nil)
 	if actErr != nil {
 		return nil, actErr
@@ -1499,7 +1492,7 @@ const maxReadabilityProbes = 10
 // read as either healthy or broken.
 func (d *Dispatcher) probeReplaceReadability(ctx context.Context, plan *client.ReplacePlan) *client.ReadabilityProbe {
 	probe := &client.ReadabilityProbe{}
-	if d.MediaAgent == nil {
+	if !d.MediaAgent.Configured() {
 		return probe
 	}
 	probe.Checked = true
@@ -1530,7 +1523,7 @@ func (d *Dispatcher) probeReplaceReadability(ctx context.Context, plan *client.R
 // including whether the torrent even has a magnet to be restored from. Never
 // deletes anything.
 func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
-	if d.Decypharr == nil {
+	if !d.Decypharr.Configured() {
 		return nil, errors.New("decypharr not configured")
 	}
 	name, _ := args[paramName].(string)
@@ -1538,7 +1531,7 @@ func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, _ *toolCall, ar
 }
 
 func (d *Dispatcher) readdOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
-	if d.Decypharr == nil {
+	if !d.Decypharr.Configured() {
 		return operation.Spec{}, errors.New("decypharr not configured")
 	}
 	var plan client.ReaddPlan

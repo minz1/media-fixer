@@ -121,6 +121,10 @@ func (r *Runner) runOne(ctx context.Context, spec checkSpec, fx *Fixtures) Resul
 		return Result{Tool: spec.Tool, Risk: string(tier), Status: StatusSkipped, Detail: "needs -disruptive"}
 	}
 
+	if reason, state := agent.NeedOf(r.disp, spec.Tool); state != agent.NeedMet {
+		return needResult(spec.Tool, tier, reason, state)
+	}
+
 	start := time.Now()
 	result := spec.Run(ctx, r.disp, fx, r.opts)
 	result.Latency = time.Since(start)
@@ -160,4 +164,11 @@ func toSet(items []string) map[string]bool {
 
 func failing(s Status) bool {
 	return s == StatusFail || s == StatusMissing
+}
+
+func needResult(tool string, tier agent.LiveTier, reason string, state agent.NeedState) Result {
+	if state == agent.NeedBroken {
+		return Result{Tool: tool, Risk: string(tier), Status: StatusFail, Error: reason}
+	}
+	return Result{Tool: tool, Risk: string(tier), Status: StatusUnconfigured, Detail: reason}
 }

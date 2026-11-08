@@ -13,8 +13,9 @@ import (
 )
 
 type LokiClient struct {
-	base string
-	http *http.Client
+	base    string
+	http    *http.Client
+	loadErr error
 }
 
 func NewLoki(base, tlsCert, tlsKey string) (*LokiClient, error) {
@@ -41,6 +42,17 @@ func NewLoki(base, tlsCert, tlsKey string) (*LokiClient, error) {
 	}
 
 	return &LokiClient{base: base, http: httpClient}, nil
+}
+
+func NewLokiUnavailable(err error) *LokiClient { return &LokiClient{loadErr: err} }
+
+func (c *LokiClient) Configured() bool { return c != nil && c.base != "" }
+
+func (c *LokiClient) Err() error {
+	if c == nil {
+		return nil
+	}
+	return c.loadErr
 }
 
 type LokiQueryResult struct {

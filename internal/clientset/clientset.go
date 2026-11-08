@@ -22,6 +22,8 @@ type Set struct {
 	Radarr     *client.ArrClient
 	Loki       *client.LokiClient
 	MediaAgent *client.MediaAgentClient
+	Seerr      *client.SeerrClient
+	LokiErr    error
 }
 
 // Build constructs a Set from config. It does not fail: every client is dialed
@@ -34,10 +36,14 @@ type Set struct {
 // where an ACME cert that hadn't been issued yet put the unit in a restart
 // loop. Log search is one diagnostic signal, not a precondition for running.
 func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
+	var lokiErr error
 	loki, err := client.NewLoki(cfg.Loki.URL, cfg.Loki.TLSCert, cfg.Loki.TLSKey)
 	if err != nil {
 		log.Warn("loki unavailable — log search disabled, continuing without it", "error", err)
 		loki = nil
+		if cfg.Loki.URL != "" {
+			lokiErr = err
+		}
 	}
 
 	// An https Loki with no client certificate configured is a silent trap:
@@ -68,17 +74,23 @@ func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
 		Radarr:     client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey),
 		Loki:       loki,
 		MediaAgent: mediaAgent,
+		Seerr:      client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey),
+		LokiErr:    lokiErr,
 	}, nil
 }
 
 // Dispatcher builds an [agent.Dispatcher] wired to this Set.
 func (s *Set) Dispatcher() *agent.Dispatcher {
+	loki := s.Loki
+	if loki == nil && s.LokiErr != nil {
+		loki = client.NewLokiUnavailable(s.LokiErr)
+	}
 	return &agent.Dispatcher{
 		Decypharr:  s.Decypharr,
 		Jellyfin:   s.Jellyfin,
 		Sonarr:     s.Sonarr,
 		Radarr:     s.Radarr,
-		Loki:       s.Loki,
+		Loki:       loki,
 		MediaAgent: s.MediaAgent,
 	}
 }
