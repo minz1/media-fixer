@@ -2,9 +2,11 @@ package sweep_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
 	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
@@ -21,13 +23,13 @@ func TestS6_5_DisableThroughSaveCancelsLiveRun(t *testing.T) {
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
 	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
-	var saveErr error
-	h.fake.beforePost = func() { saveErr = sch.Save(context.Background(), disabled(), h.clock.Now()) }
+	saved := make(chan error, 1)
+	h.fake.beforePost = func() { saved <- sch.Save(context.Background(), disabled(), h.clock.Now()) }
 	if err := sch.RunNow(t.Context(), "manual", false); err != nil {
 		t.Fatal(err)
 	}
 	sweep.WaitRunsForTest(sch)
-	if saveErr != nil {
+	if saveErr := <-saved; saveErr != nil {
 		t.Fatalf("Save: %v", saveErr)
 	}
 	runs := h.runs(t)
@@ -40,18 +42,73 @@ func TestS6_5_DisableThroughSaveCancelsLiveRun(t *testing.T) {
 	}
 }
 
+type goneAfterDisable struct {
+	context.Context
+	db   *db.DB
+	mu   sync.Mutex
+	gone bool
+	ch   chan struct{}
+}
+
+func (c *goneAfterDisable) check() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.gone {
+		if set, err := sweep.LoadSettings(context.Background(), c.db); err == nil && !set.Enabled {
+			c.gone = true
+			close(c.ch)
+		}
+	}
+	return c.gone
+}
+
+func (c *goneAfterDisable) Done() <-chan struct{} {
+	c.check()
+	return c.ch
+}
+
+func (c *goneAfterDisable) Err() error {
+	if c.check() {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestS6_5_DisableCancelsLiveRunWhenTheRequestEndsAfterCommit(t *testing.T) {
+	t.Parallel()
+	for i := range 8 {
+		h, sch := scheduledAt(t, t0(), settings())
+		h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+		h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
+		h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
+		ctx := &goneAfterDisable{Context: context.Background(), db: h.db, ch: make(chan struct{})}
+		saved := make(chan error, 1)
+		h.fake.beforePost = func() { saved <- sch.Save(ctx, disabled(), h.clock.Now()) }
+		if err := sch.RunNow(t.Context(), "manual", false); err != nil {
+			t.Fatal(err)
+		}
+		sweep.WaitRunsForTest(sch)
+		if saveErr := <-saved; saveErr != nil {
+			t.Errorf("round %d: Save: %v", i, saveErr)
+		}
+		if runs := h.runs(t); len(runs) != 1 || runs[0].Status != sweepstate.Interrupted {
+			t.Fatalf("round %d: runs = %+v, want the live run interrupted after the committed disable", i, runs)
+		}
+	}
+}
+
 func TestS6_5_DisableSparesDryRun(t *testing.T) {
 	t.Parallel()
 	h, sch := scheduledAt(t, t0(), settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
-	var saveErr error
-	h.fake.beforeLookup = func() { saveErr = sch.Save(context.Background(), disabled(), h.clock.Now()) }
+	saved := make(chan error, 1)
+	h.fake.beforeLookup = func() { saved <- sch.Save(context.Background(), disabled(), h.clock.Now()) }
 	if err := sch.RunNow(t.Context(), "manual", true); err != nil {
 		t.Fatal(err)
 	}
 	sweep.WaitRunsForTest(sch)
-	if saveErr != nil {
+	if saveErr := <-saved; saveErr != nil {
 		t.Fatalf("Save: %v", saveErr)
 	}
 	if runs := h.runs(t); len(runs) != 1 || runs[0].Status != sweepstate.Done {
