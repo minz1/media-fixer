@@ -59,3 +59,11 @@ func RunOneForTest(ctx context.Context, r *Runner, tool string) (Result, bool) {
 	}
 	return Result{}, false
 }
+
+func StatusDisplayOrderForTest() []Status { return statusDisplayOrder() }
+
+func StatusRankForTest(s Status) int { return statusRank(s) }
+
+func SummaryLineForTest(results []Result) string { return summaryLine(results) }
+
+func FailingForTest(s Status) bool { return failing(s) }

@@ -157,3 +157,7 @@ func toSet(items []string) map[string]bool {
 	}
 	return set
 }
+
+func failing(s Status) bool {
+	return s == StatusFail || s == StatusMissing
+}

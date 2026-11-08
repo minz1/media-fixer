@@ -92,7 +92,7 @@ func resultRow(r Result) string {
 }
 
 func summaryLine(results []Result) string {
-	order := []Status{StatusOK, StatusDegraded, StatusFail, StatusMissing, StatusUnconfigured, StatusSkipped}
+	order := statusDisplayOrder()
 	counts := make(map[Status]int, len(order))
 	for _, r := range results {
 		counts[r.Status]++
@@ -110,7 +110,7 @@ func summaryLine(results []Result) string {
 // result — the CLI's exit-code signal.
 func HasFailures(report *Report) bool {
 	for _, r := range report.Results {
-		if r.Status == StatusFail || r.Status == StatusMissing {
+		if failing(r.Status) {
 			return true
 		}
 	}
