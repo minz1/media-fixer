@@ -73,6 +73,7 @@ func TestRehearsal_Migration22(t *testing.T) {
 	if diff := sameExcept(before, up, skip...); len(diff) > 0 {
 		t.Errorf("up changed row counts of %v", diff)
 	}
+	strip23(t, path)
 	var out bytes.Buffer
 	if err = db.MigrateDown(context.Background(), path, 22, &out); err != nil {
 		t.Fatalf("down: %v", err)

@@ -416,7 +416,7 @@ type migration struct {
 func migrations() []migration {
 	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations(),
 		sweepTargetsMigrations(), babysitMigrations(), lifecycleMigrations(),
-		operationsMigrations())
+		operationsMigrations(), discordCardsRenderStateMigrations())
 }
 
 func legacyMigrations() []migration {

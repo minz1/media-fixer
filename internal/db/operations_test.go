@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -157,7 +158,7 @@ func TestMigration22_PreviousBinaryIgnoresIt(t *testing.T) {
 	spec := replaceSpecFor("inc-1")
 	op := newOp(t, d, spec)
 	versions, err := d.SchemaVersionsForTest(context.Background())
-	if err != nil || versions[len(versions)-1] != 22 {
+	if err != nil || !slices.Contains(versions, 22) {
 		t.Fatalf("versions %v %v", versions, err)
 	}
 	d.Close()

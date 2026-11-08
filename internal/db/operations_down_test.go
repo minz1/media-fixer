@@ -43,6 +43,7 @@ func seededOps(t *testing.T) string {
 	dl := newOp(t, d, regrabSpecFor("dl-fail"))
 	step(t, d, dl.ID, startEv(0), finishEv(0, operation.ResultDone), startEv(1), finishEv(1, operation.ResultFailed))
 	d.Close()
+	strip23(t, path)
 	return path
 }
 
@@ -168,7 +169,7 @@ func TestMigrateDown22_RefusesWhileServiceHoldsTheDB(t *testing.T) {
 	if matches, _ := filepath.Glob(path + ".pre-down-22-*"); len(matches) != 0 {
 		t.Fatalf("a refused down wrote a backup: %v", matches)
 	}
-	if v := maxVersion(t, rawOpen(t, path)); v != 22 {
+	if v := maxVersion(t, rawOpen(t, path)); v != 23 {
 		t.Fatalf("version %d", v)
 	}
 }

@@ -3,6 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"maps"
+	"slices"
 	"time"
 )
 
@@ -32,13 +35,37 @@ func discordCardsMigrations() []migration {
 }
 
 type DiscordCard struct {
-	ID        int64
-	Subject   string
-	ChannelID string
-	MessageID string
-	Card      []byte
-	Hash      string
-	SentAt    time.Time
+	ID         int64
+	Subject    string
+	ChannelID  string
+	MessageID  string
+	Card       []byte
+	Hash       string
+	SentAt     time.Time
+	State      string
+	LastUpdate json.RawMessage
+	LastKnown  bool
+}
+
+const (
+	CardTracked = "tracked"
+	CardGone    = "gone"
+
+	migDiscordCardsRenderState = 23
+)
+
+func discordCardsRenderStateMigrations() []migration {
+	return []migration{{
+		version: migDiscordCardsRenderState,
+		name:    "discord_cards_render_state",
+		exec: func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `
+ALTER TABLE discord_cards ADD COLUMN state TEXT NOT NULL DEFAULT 'tracked' CHECK (state IN ('tracked', 'gone'));
+ALTER TABLE discord_cards ADD COLUMN last_update TEXT CHECK (last_update IS NULL OR json_valid(last_update));
+`)
+			return err
+		},
+	}}
 }
 
 func (d *DB) InsertDiscordCards(ctx context.Context, rows []DiscordCard) error {
@@ -50,7 +77,7 @@ func (d *DB) InsertDiscordCards(ctx context.Context, rows []DiscordCard) error {
 	for _, r := range rows {
 		if _, err = tx.ExecContext(
 			ctx,
-			`INSERT INTO discord_cards (subject, channel_id, message_id, card, hash, sent_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO discord_cards (subject, channel_id, message_id, card, hash, sent_at, last_update) VALUES (?, ?, ?, ?, ?, ?, 'null')`,
 			r.Subject,
 			r.ChannelID,
 			r.MessageID,
@@ -64,16 +91,19 @@ func (d *DB) InsertDiscordCards(ctx context.Context, rows []DiscordCard) error {
 	return tx.Commit()
 }
 
-const discordCardColumns = `SELECT id, subject, channel_id, message_id, card, hash, sent_at FROM discord_cards`
+const discordCardColumns = `SELECT id, subject, channel_id, message_id, card, hash, sent_at, state, last_update FROM discord_cards`
 
 func (d *DB) ListDiscordCards(ctx context.Context, subjectPrefix string) ([]DiscordCard, error) {
-	return d.listDiscordCards(ctx,
-		discordCardColumns+` WHERE substr(subject, 1, length(?)) = ? ORDER BY sent_at DESC, id DESC`,
-		subjectPrefix, subjectPrefix)
+	return d.listDiscordCards(
+		ctx,
+		discordCardColumns+` WHERE substr(subject, 1, length(?)) = ? AND state = 'tracked' ORDER BY sent_at DESC, id DESC`,
+		subjectPrefix,
+		subjectPrefix,
+	)
 }
 
 func (d *DB) ListDiscordSubject(ctx context.Context, subject string) ([]DiscordCard, error) {
-	return d.listDiscordCards(ctx, discordCardColumns+` WHERE subject = ? ORDER BY id`, subject)
+	return d.listDiscordCards(ctx, discordCardColumns+` WHERE subject = ? AND state = 'tracked' ORDER BY id`, subject)
 }
 
 func (d *DB) ListDiscordMessage(ctx context.Context, messageID string) ([]DiscordCard, error) {
@@ -91,11 +121,17 @@ func (d *DB) listDiscordCards(ctx context.Context, query string, args ...any) ([
 		var (
 			r    DiscordCard
 			body string
+			last sql.NullString
 		)
-		if err = rows.Scan(&r.ID, &r.Subject, &r.ChannelID, &r.MessageID, &body, &r.Hash, &r.SentAt); err != nil {
+		if err = rows.Scan(
+			&r.ID, &r.Subject, &r.ChannelID, &r.MessageID, &body, &r.Hash, &r.SentAt, &r.State, &last,
+		); err != nil {
 			return nil, err
 		}
 		r.Card = []byte(body)
+		if last.Valid {
+			r.LastUpdate, r.LastKnown = json.RawMessage(last.String), true
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -104,6 +140,44 @@ func (d *DB) listDiscordCards(ctx context.Context, query string, args ...any) ([
 func (d *DB) SetDiscordMessageHash(ctx context.Context, messageID, hash string) error {
 	_, err := d.write.ExecContext(ctx, `UPDATE discord_cards SET hash = ? WHERE message_id = ?`, hash, messageID)
 	return err
+}
+
+func (d *DB) SetDiscordMessageRendered(
+	ctx context.Context, messageID, hash string, updates map[string]json.RawMessage,
+) error {
+	tx, err := d.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE discord_cards SET hash = ? WHERE message_id = ?`, hash, messageID); err != nil {
+		return err
+	}
+	for _, subject := range slices.Sorted(maps.Keys(updates)) {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE discord_cards SET last_update = ? WHERE message_id = ? AND subject = ?`,
+			string(updates[subject]), messageID, subject); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (d *DB) MarkDiscordSubjectsGone(ctx context.Context, messageID string, subjects []string) error {
+	tx, err := d.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, subject := range subjects {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE discord_cards SET state = ? WHERE message_id = ? AND subject = ?`,
+			CardGone, messageID, subject); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (d *DB) DeleteDiscordMessage(ctx context.Context, messageID string) error {

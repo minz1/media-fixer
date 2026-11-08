@@ -368,7 +368,7 @@ func TestMigrateDown_RefusesAbove21(t *testing.T) {
 	t.Parallel()
 	path := upgraded(t)
 	raw := rawOpen(t, path)
-	mustExec(t, raw, `INSERT INTO schema_version (version, name) VALUES (23, 'later')`)
+	mustExec(t, raw, `INSERT INTO schema_version (version, name) VALUES (99, 'later')`)
 	raw.Close()
 	var out bytes.Buffer
 	err := db.MigrateDown(context.Background(), path, 21, &out)
@@ -401,8 +401,21 @@ func TestMigrateDown_PrintsCountsChangedRowsAndIdsOnly(t *testing.T) {
 	}
 }
 
+func strip23(t *testing.T, path string) {
+	t.Helper()
+	raw := rawOpen(t, path)
+	defer raw.Close()
+	if maxVersion(t, raw) != 23 {
+		return
+	}
+	mustExec(t, raw, `ALTER TABLE discord_cards DROP COLUMN last_update`)
+	mustExec(t, raw, `ALTER TABLE discord_cards DROP COLUMN state`)
+	mustExec(t, raw, `DELETE FROM schema_version WHERE version = 23`)
+}
+
 func strip22(t *testing.T, path string) {
 	t.Helper()
+	strip23(t, path)
 	raw := rawOpen(t, path)
 	v := maxVersion(t, raw)
 	raw.Close()

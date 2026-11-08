@@ -132,7 +132,7 @@ func TestDiscordCardsMigration_CreatesTableOnExistingDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.Close()
-	rawExec(t, path, `DROP TABLE discord_cards`, `DELETE FROM schema_version WHERE version = 18`)
+	rawExec(t, path, `DROP TABLE discord_cards`, `DELETE FROM schema_version WHERE version IN (18, 23)`)
 
 	d2, err := db.Open(path)
 	if err != nil {

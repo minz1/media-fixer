@@ -163,6 +163,7 @@ func TestMigration21_RehearsalOnSnapshot(t *testing.T) {
 	t.Logf("reconciler plan: runs=%d checks=%d plans_lost=%d parked=%d", c.Runs, c.Checks, c.PlansLost, c.Parked)
 	d.Close()
 	raw.Close()
+	strip22(t, path)
 	var out bytes.Buffer
 	if err = db.MigrateDown(context.Background(), path, 21, &out); err != nil {
 		t.Fatalf("down: %v", err)
