@@ -160,7 +160,7 @@ func (s *Service) local(ctx context.Context, seriesID int) (local, error) {
 	for _, t := range all {
 		if t.SeriesID == seriesID {
 			l.targets = append(l.targets, t)
-			l.stuck = l.stuck || t.Streak >= set.StuckAfter
+			l.stuck = l.stuck || t.Stuck(set.StuckAfter)
 		}
 	}
 	slices.SortFunc(l.targets, func(a, b db.SweepTarget) int { return cmp.Compare(a.Season, b.Season) })
@@ -376,7 +376,7 @@ func collectRows(
 		r := row(t.SeriesID, t.SeriesTitle)
 		r.Seasons++
 		r.Missing += t.Missing
-		if t.Streak >= stuckAfter {
+		if t.Stuck(stuckAfter) {
 			r.StuckSeasons++
 		}
 	}

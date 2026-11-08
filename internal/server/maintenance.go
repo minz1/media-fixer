@@ -184,7 +184,7 @@ func (s *Server) sweepCard(
 	if targets, err := s.db.ListSweepTargets(ctx); err != nil {
 		card["StuckSeasonsError"] = err.Error()
 	} else {
-		card["StuckSeasons"] = sweep.Stuck(targets, set.StuckAfter)
+		card["StuckSeasons"] = sweep.StuckTargets(targets, set.StuckAfter)
 	}
 	if refused, err := s.db.ListSweepRefused(ctx, now.Add(-sweepstate.MaxRefusalMemory())); err != nil {
 		card["RefusedError"] = err.Error()

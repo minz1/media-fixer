@@ -31,13 +31,13 @@ func TestStuck(t *testing.T) {
 		"s:1:2": stuckRow("s:1:2", "Alpha", 2, 3),
 		"s:2:1": stuckRow("s:2:1", "Beta", 1, 5),
 	}
-	got := sweep.Stuck(rows, 3)
+	got := sweep.StuckTargets(rows, 3)
 	if len(got) != 2 || got[0].Target != "s:2:1" || got[1].Target != "s:1:2" {
 		t.Fatalf("Stuck = %+v, want s:2:1 then s:1:2", got)
 	}
 	rows["s:0:3"] = stuckRow("s:0:3", "Alpha", 1, 3)
 	rows["s:0:1"] = stuckRow("s:0:1", "Aaa", 9, 3)
-	got = sweep.Stuck(rows, 3)
+	got = sweep.StuckTargets(rows, 3)
 	want := []string{"s:2:1", "s:0:1", "s:0:3", "s:1:2"}
 	for i, w := range want {
 		if got[i].Target != w {

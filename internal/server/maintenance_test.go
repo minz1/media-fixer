@@ -772,6 +772,27 @@ func TestSweepCard_StuckList(t *testing.T) {
 	}
 }
 
+func TestS4_Copies_MaintenanceStuckBoundary(t *testing.T) {
+	t.Parallel()
+	after := sweep.DefaultSettings().StuckAfter
+	for _, streak := range []int{after - 1, after} {
+		env := newMaintenanceTestServer(t)
+		err := env.db.UpsertSweepTarget(context.Background(), db.SweepTarget{
+			Target: "s:1:2", SeriesID: 1, SeriesTitle: "Severance", Season: 2, Streak: streak, Missing: 9,
+			Attempts: 5, LastAttempt: time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC),
+			NextEligible: time.Date(2026, 11, 3, 8, 0, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := db.SweepTarget{Streak: streak}.Stuck(after)
+		body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+		if got := !strings.Contains(body, "No seasons are stuck now."); got != want {
+			t.Errorf("streak %d: Maintenance lists it stuck = %v, want %v", streak, got, want)
+		}
+	}
+}
+
 func TestSweepLastRuns_MonitorTrigger(t *testing.T) {
 	t.Parallel()
 	env := newMaintenanceTestServer(t)

@@ -25,10 +25,10 @@ type digestState struct {
 	Stuck  []string  `json:"stuck"`
 }
 
-func Stuck(rows map[string]db.SweepTarget, after int) []db.SweepTarget {
+func StuckTargets(rows map[string]db.SweepTarget, after int) []db.SweepTarget {
 	var out []db.SweepTarget
 	for _, t := range rows {
-		if t.Streak >= after {
+		if t.Stuck(after) {
 			out = append(out, t)
 		}
 	}
@@ -76,7 +76,7 @@ func (s *Scheduler) digest(set Settings, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	stuck := Stuck(rows, set.StuckAfter)
+	stuck := StuckTargets(rows, set.StuckAfter)
 	keys := make([]string, len(stuck))
 	for i, t := range stuck {
 		keys[i] = t.Target

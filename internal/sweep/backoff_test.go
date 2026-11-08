@@ -49,17 +49,19 @@ func TestAttemptTarget(t *testing.T) {
 	}
 }
 
-func TestEligible(t *testing.T) {
+func TestS4_Copies_StuckTargetsBoundary(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	tg := db.SweepTarget{NextEligible: now}
-	if !sweep.EligibleForTest(tg, false, now.Add(-time.Hour)) {
-		t.Error("no row must be eligible")
+	rows := map[string]db.SweepTarget{
+		"s:1:1": {Target: "s:1:1", Streak: 2},
+		"s:1:2": {Target: "s:1:2", Streak: 3},
 	}
-	if !sweep.EligibleForTest(tg, true, now) {
-		t.Error("due row must be eligible")
+	got := sweep.StuckTargets(rows, 3)
+	if len(got) != 1 || got[0].Target != "s:1:2" {
+		t.Fatalf("StuckTargets(after 3) = %+v, want only the streak-3 row", got)
 	}
-	if sweep.EligibleForTest(tg, true, now.Add(-time.Second)) {
-		t.Error("early row must not be eligible")
+	for _, r := range rows {
+		if r.Stuck(3) != (r.Target == got[0].Target) {
+			t.Errorf("%s: StuckTargets and SweepTarget.Stuck disagree", r.Target)
+		}
 	}
 }

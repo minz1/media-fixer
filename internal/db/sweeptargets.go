@@ -40,6 +40,14 @@ type SweepTarget struct {
 	LastAttempt, NextEligible         time.Time
 }
 
+func (t SweepTarget) Stuck(after int) bool {
+	return t.Streak >= after
+}
+
+func (t SweepTarget) Eligible(now time.Time) bool {
+	return !now.Before(t.NextEligible)
+}
+
 func (d *DB) ListSweepTargets(ctx context.Context) (map[string]SweepTarget, error) {
 	rows, err := d.read.QueryContext(ctx, `SELECT target, series_id, series_title, season, streak, missing,
 		attempts, last_attempt, next_eligible FROM sweep_targets`)

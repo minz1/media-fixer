@@ -1366,7 +1366,7 @@
           <tr class="border-b border-gray-100">
             <td class="py-1 pr-3">S{{printf "%02d" .Season}}</td>
             <td class="py-1 pr-3">{{template "stat" (dict "N" .Missing "Label" "missing")}}</td>
-            <td class="py-1 pr-3">{{template "stat" (dict "N" .Streak "Label" "streak")}}{{if ge .Streak $.StuckAfter}} {{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}</td>
+            <td class="py-1 pr-3">{{template "stat" (dict "N" .Streak "Label" "streak")}}{{if .Stuck $.StuckAfter}} {{template "badge" (dict "Tone" "red" "Word" "stuck")}}{{end}}</td>
             <td class="py-1 pr-3">{{template "stat" (dict "N" .Attempts "Label" "attempts" "One" "attempt")}}</td>
             <td class="py-1 pr-3">last {{template "ts" .LastAttempt}}</td>
             <td class="py-1">next {{template "ts" .NextEligible}}</td>

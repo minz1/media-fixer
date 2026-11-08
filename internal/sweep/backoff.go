@@ -33,7 +33,3 @@ func attemptTarget(
 		Missing: missing, Attempts: attempts, LastAttempt: now, NextEligible: nextEligible(now, streak, s),
 	}
 }
-
-func eligible(t db.SweepTarget, ok bool, now time.Time) bool {
-	return !ok || !now.Before(t.NextEligible)
-}

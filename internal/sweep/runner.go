@@ -636,7 +636,7 @@ func (x *run) waitCommand(ctx context.Context, id int) error {
 
 func (x *run) eligibleKey(key string) bool {
 	t, ok := x.targets[key]
-	return x.sc.series != nil || x.burst[key] || eligible(t, ok, x.start)
+	return x.sc.series != nil || x.burst[key] || !ok || t.Eligible(x.start)
 }
 
 func (x *run) attempt(ctx context.Context, s client.Series, season int) error {
