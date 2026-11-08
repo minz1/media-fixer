@@ -113,12 +113,13 @@ type Decision struct {
 type Decide func(cur lifecycle.Snapshot) (Decision, error)
 
 type Applied struct {
-	Snap    lifecycle.Snapshot
-	Effects []lifecycle.Effect
-	Events  []*Event
-	Merged  bool
-	OpID    int64
-	seqs    []int64
+	Snap       lifecycle.Snapshot
+	PrevStatus lifecycle.State
+	Effects    []lifecycle.Effect
+	Events     []*Event
+	Merged     bool
+	OpID       int64
+	seqs       []int64
 }
 
 type NewIncident struct {
@@ -185,7 +186,7 @@ func commitDecision(ctx context.Context, tx *sql.Tx, cur lifecycle.Snapshot, dec
 	if err != nil {
 		return Applied{}, err
 	}
-	out := Applied{Snap: next, Effects: effects, Events: events, seqs: seqs}
+	out := Applied{Snap: next, PrevStatus: cur.Status, Effects: effects, Events: events, seqs: seqs}
 	if next.Op != nil {
 		out.OpID = next.Op.ID
 	}

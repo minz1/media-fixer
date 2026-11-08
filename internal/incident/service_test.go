@@ -249,6 +249,60 @@ func TestHandle_SystemicLockEndsWhenActiveCountDrops(t *testing.T) {
 	}
 }
 
+func TestE5_LockAlertClearsOnLeavingActive(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+	report := func(title string) *db.Incident {
+		t.Helper()
+		inc, err := svc.Handle(ctx, &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inc
+	}
+	first := report("A")
+	for _, title := range []string{"B", "C", "D", "E", "F"} {
+		report(title)
+	}
+	if svc.LockAlertAtForTest() == 0 {
+		t.Fatal("the lock alert never fired for six open incidents")
+	}
+	if _, err := svc.ApplyForTest(ctx, first.ID, lifecycle.Event{Kind: lifecycle.OwnerResolve}); err != nil {
+		t.Fatal(err)
+	}
+	if svc.LockAlertAtForTest() != 0 {
+		t.Fatal("resolving an active incident did not clear the lock alert without a tick")
+	}
+}
+
+func TestE5_ActiveToActiveDoesNotClear(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+	report := func(title string) *db.Incident {
+		t.Helper()
+		inc, err := svc.Handle(ctx, &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inc
+	}
+	first := report("A")
+	for _, title := range []string{"B", "C", "D", "E", "F"} {
+		report(title)
+	}
+	if svc.LockAlertAtForTest() == 0 {
+		t.Fatal("the lock alert never fired for six open incidents")
+	}
+	if _, err := svc.ApplyForTest(ctx, first.ID, lifecycle.Event{Kind: lifecycle.RunClaimed, Gen: first.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	if svc.LockAlertAtForTest() == 0 {
+		t.Fatal("an active-to-active transition cleared the lock alert")
+	}
+}
+
 func TestHandle_SystemicLockRetriesFailedAlert(t *testing.T) {
 	t.Parallel()
 	svc, _, notif := newTestService(t)

@@ -76,6 +76,9 @@ func (s *Service) apply(ctx context.Context, id string, ev lifecycle.Event, extr
 func (s *Service) afterCommit(ctx context.Context, a db.Applied, t Timers, seerrIssue string) {
 	s.runs.observe(a.Snap.ID, a.Snap.Generation)
 	s.journal.Publish(a.Events...)
+	if lifecycle.IsActive(a.PrevStatus) && !lifecycle.IsActive(a.Snap.Status) {
+		s.endLockEpisode(ctx)
+	}
 	s.runEffects(ctx, a, t, seerrIssue)
 }
 

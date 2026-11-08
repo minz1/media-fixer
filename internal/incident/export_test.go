@@ -132,6 +132,10 @@ func (s *Service) LockAlertArmedForTest() bool {
 	return s.lockAlertAt.Load() == 0
 }
 
+func (s *Service) LockAlertAtForTest() int64 {
+	return s.lockAlertAt.Load()
+}
+
 type RunManagerForTest struct{ m *runManager }
 
 func NewRunManagerForTest(base context.Context) *RunManagerForTest {

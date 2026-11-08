@@ -39,6 +39,10 @@ func Meta(s State) StateMeta {
 	return metas()[s]
 }
 
+func IsActive(s State) bool {
+	return Meta(s).Active
+}
+
 func StatesWhere(pred func(StateMeta) bool) []State {
 	var out []State
 	for _, s := range States() {
