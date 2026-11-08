@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1273,6 +1274,46 @@ func TestUpdater_ShutdownMidPassStopsWithoutWarn(t *testing.T) {
 	}
 	if n := calls.Load(); n != 1 {
 		t.Errorf("edit attempts = %d, want 1", n)
+	}
+}
+
+func TestUpdater_ShutdownWithPendingWakeRunsNoPass(t *testing.T) {
+	t.Parallel()
+	for i := range 20 {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			t.Parallel()
+			e, buf := logEnv(t)
+			entered := make(chan struct{})
+			var calls atomic.Int32
+			e.api.hold = func(ctx context.Context, _ string) error {
+				if calls.Add(1) == 1 {
+					close(entered)
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			r := newRenderer(true)
+			r.set("inc:1", card.Update{Status: "Escalated"})
+			e.trackInc("m1", "inc:1")
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			e.bot.StartCards(ctx, e.db, e.events, e.handlers, map[string]card.Renderer{"inc": r.render})
+			select {
+			case <-entered:
+			case <-time.After(waitLimit):
+				t.Fatal("no edit started")
+			}
+			e.bot.Refresh("inc:1")
+			cancel()
+			select {
+			case <-discord.CardsDoneForTest(e.bot):
+			case <-time.After(waitLimit):
+				t.Fatal("cardsDone did not close")
+			}
+			if n := buf.count("level=WARN"); n != 0 {
+				t.Errorf("warnings = %d, want 0", n)
+			}
+		})
 	}
 }
 

@@ -115,15 +115,14 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 				b.onTimer()
 			}
 		case <-poll.C:
-			for id, s := range msgs {
-				if s.Phase == cardLive {
-					addTrigger(trig, id, cardPoll)
-				}
-			}
+			pollLive(msgs, trig)
 		case <-prune.C:
 			for _, id := range b.prune(ctx, d) {
 				delete(msgs, id)
 			}
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		b.collect(ctx, d, trig)
 		b.cardPass(ctx, d, msgs, trig, timer)
@@ -143,6 +142,14 @@ func (b *Bot) startupTriggers(ctx context.Context, d *db.DB) map[string]cardKind
 		addTrigger(trig, id, cardMark)
 	}
 	return trig
+}
+
+func pollLive(msgs map[string]cardSnap, trig map[string]cardKind) {
+	for id, s := range msgs {
+		if s.Phase == cardLive {
+			addTrigger(trig, id, cardPoll)
+		}
+	}
 }
 
 func addTrigger(trig map[string]cardKind, id string, k cardKind) {
@@ -433,7 +440,7 @@ func (b *Bot) planSubject(ctx context.Context, d *db.DB, c card.Card, r db.Disco
 		}
 	case card.Gone:
 		p.gone = true
-		if err := d.MarkDiscordSubjectsGone(ctx, r.MessageID, []string{r.Subject}); err != nil {
+		if err := d.MarkDiscordSubjectsGone(ctx, r.MessageID, []string{r.Subject}); err != nil && ctx.Err() == nil {
 			b.log.WarnContext(ctx, "discord cards: mark gone", "subject", r.Subject, "error", err)
 		}
 	case card.NotYet:
@@ -532,7 +539,7 @@ func (b *Bot) sendAndStore(
 	} else if len(updates) == 0 {
 		return attemptResult{Kind: cardShown}
 	}
-	if err := d.SetDiscordMessageRendered(ctx, id, hash, updates); err != nil {
+	if err := d.SetDiscordMessageRendered(ctx, id, hash, updates); err != nil && ctx.Err() == nil {
 		b.log.WarnContext(ctx, "discord cards: store render", "message", id, "error", err)
 	}
 	return attemptResult{Kind: cardShown}
