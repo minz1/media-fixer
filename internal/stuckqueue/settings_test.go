@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
@@ -23,7 +24,13 @@ func openDB(t *testing.T) *db.DB {
 func TestDefaultSettings(t *testing.T) {
 	t.Parallel()
 	got := stuckqueue.DefaultSettings()
-	want := stuckqueue.Settings{Enabled: true, DryRun: true, IntervalMinutes: 60, MinAgeHours: 6}
+	want := stuckqueue.Settings{
+		Enabled:              true,
+		DryRun:               true,
+		IntervalMinutes:      60,
+		MinAgeHours:          6,
+		ImportTimeoutMinutes: 60,
+	}
 	if got != want {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -107,7 +114,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	t.Parallel()
 	d := openDB(t)
 	ctx := context.Background()
-	want := stuckqueue.Settings{Enabled: true, DryRun: false, IntervalMinutes: 30, MinAgeHours: 12}
+	want := stuckqueue.Settings{
+		Enabled:              true,
+		DryRun:               false,
+		IntervalMinutes:      30,
+		MinAgeHours:          12,
+		ImportTimeoutMinutes: 60,
+	}
 	if err := stuckqueue.SaveSettings(ctx, d, want); err != nil {
 		t.Fatal(err)
 	}
@@ -120,5 +133,50 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.Interval().Minutes() != 30 || got.MinAge().Hours() != 12 {
 		t.Fatalf("durations = %v, %v", got.Interval(), got.MinAge())
+	}
+}
+
+func TestSettings_MissingImportTimeoutKeepsLiveRowValid(t *testing.T) {
+	t.Parallel()
+	d := openDB(t)
+	ctx := context.Background()
+	live := `{"enabled":true,"dry_run":false,"interval_minutes":60,"min_age_hours":6}`
+	if err := d.SetSetting(ctx, stuckqueue.SettingsKey, live); err != nil {
+		t.Fatal(err)
+	}
+	got, err := stuckqueue.LoadSettings(ctx, d)
+	if err != nil {
+		t.Fatalf("live row without the key: %v", err)
+	}
+	if got.ImportTimeoutMinutes != 60 || got.ImportTimeout() != time.Hour || !got.Enabled || got.DryRun {
+		t.Fatalf("got %+v", got)
+	}
+	raw, err := d.GetSetting(ctx, stuckqueue.SettingsKey)
+	if err != nil || raw != live {
+		t.Fatalf("loading rewrote the row: %q, %v", raw, err)
+	}
+}
+
+func TestSettings_MissingEnabledStaysFalse(t *testing.T) {
+	t.Parallel()
+	d := openDB(t)
+	ctx := context.Background()
+	if err := d.SetSetting(ctx, stuckqueue.SettingsKey, `{"interval_minutes":60,"min_age_hours":6}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := stuckqueue.LoadSettings(ctx, d)
+	if err != nil || got.Enabled || got.DryRun {
+		t.Fatalf("got %+v, err %v", got, err)
+	}
+}
+
+func TestSettings_ImportTimeoutBounds(t *testing.T) {
+	t.Parallel()
+	for n, ok := range map[int]bool{9: false, 10: true, 720: true, 721: false} {
+		set := stuckqueue.DefaultSettings()
+		set.ImportTimeoutMinutes = n
+		if got := len(set.Validate()) == 0; got != ok {
+			t.Errorf("%d minutes: valid = %v, want %v", n, got, ok)
+		}
 	}
 }

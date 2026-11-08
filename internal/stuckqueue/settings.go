@@ -14,27 +14,32 @@ import (
 const (
 	SettingsKey = "maintenance.stuck_queue"
 
-	defaultIntervalMinutes = 60
-	defaultMinAgeHours     = 6
-	lowestIntervalMinutes  = 15
-	highestIntervalMinutes = 1440
-	lowestMinAgeHours      = 1
-	highestMinAgeHours     = 168
+	defaultIntervalMinutes  = 60
+	defaultMinAgeHours      = 6
+	defaultImportTimeoutMin = 60
+	lowestImportTimeoutMin  = 10
+	highestImportTimeoutMin = 720
+	lowestIntervalMinutes   = 15
+	highestIntervalMinutes  = 1440
+	lowestMinAgeHours       = 1
+	highestMinAgeHours      = 168
 )
 
 var ErrCorruptSettings = errors.New("stored stuck-queue settings are unreadable")
 
 type Settings struct {
-	Enabled         bool `json:"enabled"`
-	DryRun          bool `json:"dry_run"`
-	IntervalMinutes int  `json:"interval_minutes"`
-	MinAgeHours     int  `json:"min_age_hours"`
+	Enabled              bool `json:"enabled"`
+	DryRun               bool `json:"dry_run"`
+	IntervalMinutes      int  `json:"interval_minutes"`
+	MinAgeHours          int  `json:"min_age_hours"`
+	ImportTimeoutMinutes int  `json:"import_timeout_minutes"`
 }
 
 func DefaultSettings() Settings {
 	return Settings{
 		Enabled: true, DryRun: true,
 		IntervalMinutes: defaultIntervalMinutes, MinAgeHours: defaultMinAgeHours,
+		ImportTimeoutMinutes: defaultImportTimeoutMin,
 	}
 }
 
@@ -46,6 +51,7 @@ func (s Settings) Validate() map[string]string {
 	}{
 		{"interval_minutes", s.IntervalMinutes, lowestIntervalMinutes, highestIntervalMinutes},
 		{"min_age_hours", s.MinAgeHours, lowestMinAgeHours, highestMinAgeHours},
+		{"import_timeout_minutes", s.ImportTimeoutMinutes, lowestImportTimeoutMin, highestImportTimeoutMin},
 	} {
 		if f.v < f.lo || f.v > f.hi {
 			errs[f.name] = fmt.Sprintf("must be between %d and %d", f.lo, f.hi)
@@ -55,6 +61,10 @@ func (s Settings) Validate() map[string]string {
 }
 
 func (s Settings) Interval() time.Duration { return time.Duration(s.IntervalMinutes) * time.Minute }
+
+func (s Settings) ImportTimeout() time.Duration {
+	return time.Duration(s.ImportTimeoutMinutes) * time.Minute
+}
 
 func (s Settings) MinAge() time.Duration { return time.Duration(s.MinAgeHours) * time.Hour }
 
@@ -69,6 +79,12 @@ func LoadSettings(ctx context.Context, d *db.DB) (Settings, error) {
 	var s Settings
 	if err = json.Unmarshal([]byte(raw), &s); err != nil {
 		return disabledDefaults(), fmt.Errorf("%w: %w", ErrCorruptSettings, err)
+	}
+	var probe struct {
+		ImportTimeoutMinutes *int `json:"import_timeout_minutes"`
+	}
+	if err = json.Unmarshal([]byte(raw), &probe); err == nil && probe.ImportTimeoutMinutes == nil {
+		s.ImportTimeoutMinutes = defaultImportTimeoutMin
 	}
 	if errs := s.Validate(); len(errs) != 0 {
 		return disabledDefaults(), fmt.Errorf("%w: %v", ErrCorruptSettings, errs)

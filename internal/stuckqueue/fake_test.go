@@ -43,6 +43,8 @@ type fakeArr struct {
 	movies       []int
 	failEpisodes bool
 	arrived      int
+	cmdStatus    map[int]string
+	cmdCode      map[int]int
 }
 
 func newFakeArr(t *testing.T) *fakeArr {
@@ -93,6 +95,8 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 			c = "[]"
 		}
 		_, _ = io.WriteString(w, c)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/command/"):
+		f.serveCommand(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/command":
 		if f.commandsErr != 0 {
 			w.WriteHeader(f.commandsErr)
@@ -124,6 +128,38 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (f *fakeArr) serveCommand(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/api/v3/command/"))
+	if code := f.cmdCode[id]; code != 0 {
+		w.WriteHeader(code)
+		return
+	}
+	status, ok := f.cmdStatus[id]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": id, "status": status})
+}
+
+func (f *fakeArr) setCommandStatus(id int, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cmdStatus == nil {
+		f.cmdStatus = map[int]string{}
+	}
+	f.cmdStatus[id] = status
+}
+
+func (f *fakeArr) setCommandCode(id, code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cmdCode == nil {
+		f.cmdCode = map[int]int{}
+	}
+	f.cmdCode[id] = code
 }
 
 func (f *fakeArr) serveDelete(w http.ResponseWriter, r *http.Request) {

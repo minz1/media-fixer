@@ -75,6 +75,9 @@ func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set, errs := parseStuckSettings(r)
+	if cur, err := stuckqueue.LoadSettings(r.Context(), s.db); err == nil {
+		set.ImportTimeoutMinutes = cur.ImportTimeoutMinutes
+	}
 	notice := ""
 	if len(errs) == 0 {
 		if err := stuckqueue.SaveSettings(r.Context(), s.db, set); err != nil {
@@ -279,7 +282,8 @@ func stuckButtonFor(a stuckqueue.Action, targets string) stuckButton {
 }
 
 func parseStuckSettings(r *http.Request) (stuckqueue.Settings, map[string]string) {
-	set := stuckqueue.Settings{Enabled: r.FormValue("enabled") == "on", DryRun: r.FormValue("dry_run") == "on"}
+	set := stuckqueue.DefaultSettings()
+	set.Enabled, set.DryRun = r.FormValue("enabled") == "on", r.FormValue("dry_run") == "on"
 	errs := map[string]string{}
 	for _, f := range []struct {
 		name string

@@ -457,3 +457,15 @@ func TestReleaseExpired(t *testing.T) {
 		}
 	}
 }
+
+func TestCommand_NotFoundIsErrNotFound(t *testing.T) {
+	t.Parallel()
+	c, _ := sweepServer(t, http.StatusNotFound, `{}`)
+	_, err := c.Command(context.Background(), 77)
+	if !errors.Is(err, client.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if _, ok := errors.AsType[*client.HTTPStatusError](err); !ok {
+		t.Fatalf("err = %v does not wrap the HTTPStatusError", err)
+	}
+}

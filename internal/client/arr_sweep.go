@@ -181,6 +181,9 @@ func (c *ArrClient) Command(ctx context.Context, id int) (string, error) {
 		Status string `json:"status"`
 	}
 	err := c.do(ctx, c.http, http.MethodGet, fmt.Sprintf("/api/v3/command/%d", id), nil, nil, &cmd)
+	if se, ok := errors.AsType[*HTTPStatusError](err); ok && se.Status == http.StatusNotFound {
+		return "", fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
 	return cmd.Status, err
 }
 

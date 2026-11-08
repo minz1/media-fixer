@@ -192,7 +192,8 @@ func TestStuckSettings_SaveAndInvalid(t *testing.T) {
 	}
 	mustContain(t, rec.Body.String(), "Saved.")
 	got, err := stuckqueue.LoadSettings(context.Background(), env.db)
-	if err != nil || got != (stuckqueue.Settings{Enabled: true, IntervalMinutes: 30, MinAgeHours: 12}) {
+	if err != nil ||
+		got != (stuckqueue.Settings{Enabled: true, IntervalMinutes: 30, MinAgeHours: 12, ImportTimeoutMinutes: 60}) {
 		t.Fatalf("saved = %+v, err = %v", got, err)
 	}
 	for _, bad := range []string{"abc", "5"} {

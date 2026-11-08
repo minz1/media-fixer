@@ -35,7 +35,7 @@ func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
 func (s *Scheduler) Wait() { s.wg.Wait() }
 
 func (s *Scheduler) Start() {
-	go func() {
+	s.wg.Go(func() {
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
 		for {
@@ -46,12 +46,13 @@ func (s *Scheduler) Start() {
 				s.Tick(s.r.Now())
 			}
 		}
-	}()
+	})
 }
 
 func (s *Scheduler) Tick(now time.Time) {
 	set, err := LoadSettings(s.base, s.d)
 	s.warnOnce(err)
+	s.housekeep(now, set.ImportTimeout())
 	if err != nil || !set.Enabled {
 		return
 	}
