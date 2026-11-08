@@ -145,15 +145,19 @@ func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) erro
 			return s, err
 		}
 		s.Weekday, s.HourUTC, s.ExcludedSeries = prev.Weekday, prev.HourUTC, prev.ExcludedSeries
-		switch {
-		case !s.Enabled:
-			s.EnabledAt = nil
-		case prev.Enabled && prev.IntervalHours == s.IntervalHours:
-			s.EnabledAt = prev.EnabledAt
-		default:
-			at := now.UTC()
-			s.EnabledAt = &at
-		}
+		s.EnabledAt = enabledAt(prev, s, now)
 		return s, nil
 	})
+}
+
+func enabledAt(prev, next Settings, now time.Time) *time.Time {
+	switch {
+	case !next.Enabled:
+		return nil
+	case prev.Enabled && prev.IntervalHours == next.IntervalHours:
+		return prev.EnabledAt
+	default:
+		at := now.UTC()
+		return &at
+	}
 }

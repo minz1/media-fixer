@@ -500,7 +500,7 @@ func (e *maintEnv) waitIdle(t *testing.T) {
 	}
 }
 
-func TestSweepSettingsSave_DisableCancelsRun(t *testing.T) {
+func TestMaintenance_SaveDisabledStopsRun(t *testing.T) {
 	t.Parallel()
 	env := newMaintenanceTestServer(t)
 	env.startHeldLiveRun(t)

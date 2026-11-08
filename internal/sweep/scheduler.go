@@ -291,6 +291,16 @@ func (s *Scheduler) start(trigger string, dry bool, set Settings, sc scope) erro
 	return nil
 }
 
+func (s *Scheduler) Save(ctx context.Context, set Settings, now time.Time) error {
+	if err := SaveSettings(ctx, s.d, set, now); err != nil {
+		return err
+	}
+	if !set.Enabled {
+		s.CancelLive(ErrDisabled)
+	}
+	return nil
+}
+
 func (s *Scheduler) CancelLive(cause error) {
 	s.cmu.Lock()
 	defer s.cmu.Unlock()

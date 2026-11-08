@@ -36,6 +36,10 @@ func AttemptTargetForTest(
 	return attemptTarget(prev, key, series, season, missing, now, s)
 }
 
+func EnabledAtForTest(prev, next Settings, now time.Time) *time.Time {
+	return enabledAt(prev, next, now)
+}
+
 func DigestCardForTest(stuck []db.SweepTarget) card.Card { return digestCard(stuck) }
 
 func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) (int64, error) {

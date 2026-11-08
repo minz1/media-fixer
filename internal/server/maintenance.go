@@ -60,12 +60,9 @@ func (s *Server) sweepSettingsSave(w http.ResponseWriter, r *http.Request) {
 	set, errs := parseSweepSettings(r)
 	notice := ""
 	if len(errs) == 0 {
-		if err := sweep.SaveSettings(r.Context(), s.db, set, time.Now()); err != nil {
+		if err := s.sweep.Save(r.Context(), set, time.Now()); err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
-		}
-		if !set.Enabled {
-			s.sweep.CancelLive(sweep.ErrDisabled)
 		}
 		notice = msgSaved
 	}
