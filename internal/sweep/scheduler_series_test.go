@@ -38,10 +38,10 @@ func twoShows(t *testing.T, s sweep.Settings) (*harness, *sweep.Scheduler) {
 
 func (h *harness) runSeries(t *testing.T, sch *sweep.Scheduler, id int, pass sweep.Pass) {
 	t.Helper()
-	if err := sch.RunSeries(h.seriesByID(id), pass); err != nil {
+	if err := sch.RunSeries(t.Context(), h.seriesByID(id), pass); err != nil {
 		t.Fatal(err)
 	}
-	sch.Wait()
+	sweep.WaitRunsForTest(sch)
 }
 
 func TestRunSeriesOnlyTouchesSeries(t *testing.T) {
@@ -133,10 +133,10 @@ func TestRunSeriesRemaining(t *testing.T) {
 	if used := len(h.fake.commands()); used == 0 {
 		t.Fatal("setup: first run searched nothing")
 	}
-	if err := sch.RunSeries(h.seriesByID(1), sweep.PassPacks); !errors.Is(err, sweep.ErrNoBudget) {
+	if err := sch.RunSeries(t.Context(), h.seriesByID(1), sweep.PassPacks); !errors.Is(err, sweep.ErrNoBudget) {
 		t.Errorf("packs = %v, want ErrNoBudget", err)
 	}
-	if err := sch.RunSeries(h.seriesByID(2), sweep.PassSingles); !errors.Is(err, sweep.ErrNoBudget) {
+	if err := sch.RunSeries(t.Context(), h.seriesByID(2), sweep.PassSingles); !errors.Is(err, sweep.ErrNoBudget) {
 		t.Errorf("singles = %v, want ErrNoBudget", err)
 	}
 	s.MaxSearches = 3
@@ -180,7 +180,7 @@ func TestRunSeriesRefused(t *testing.T) {
 				}
 			}
 			h.setPaused(t, tc.pause)
-			if err := sch.RunSeries(sr, sweep.PassPacks); !errors.Is(err, tc.want) {
+			if err := sch.RunSeries(t.Context(), sr, sweep.PassPacks); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 			if n := len(h.runs(t)); n != 0 {
@@ -198,7 +198,8 @@ func TestRunSeriesRefusedSettingsAndRun(t *testing.T) {
 		if err := h.db.SetSetting(context.Background(), sweep.SettingsKey, "{"); err != nil {
 			t.Fatal(err)
 		}
-		if err := sch.RunSeries(h.seriesByID(1), sweep.PassPacks); !errors.Is(err, sweep.ErrCorruptSettings) {
+		err := sch.RunSeries(t.Context(), h.seriesByID(1), sweep.PassPacks)
+		if !errors.Is(err, sweep.ErrCorruptSettings) {
 			t.Errorf("err = %v, want ErrCorruptSettings", err)
 		}
 		if n := len(h.runs(t)); n != 0 {
@@ -214,15 +215,15 @@ func TestRunSeriesRefusedSettingsAndRun(t *testing.T) {
 			enter()
 			<-release
 		}
-		if err := sch.RunNow("manual", false); err != nil {
+		if err := sch.RunNow(t.Context(), "manual", false); err != nil {
 			t.Fatal(err)
 		}
 		<-entered
-		if err := sch.RunSeries(h.seriesByID(1), sweep.PassPacks); !errors.Is(err, sweep.ErrRunActive) {
+		if err := sch.RunSeries(t.Context(), h.seriesByID(1), sweep.PassPacks); !errors.Is(err, sweep.ErrRunActive) {
 			t.Errorf("err = %v, want ErrRunActive", err)
 		}
 		close(release)
-		sch.Wait()
+		sweep.WaitRunsForTest(sch)
 		if n := len(h.runs(t)); n != 1 {
 			t.Errorf("%d runs, want only the manual one", n)
 		}

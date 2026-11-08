@@ -84,6 +84,7 @@ func newMaintenanceTestServer(t *testing.T) *maintEnv {
 		Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	}
 	sch := sweep.NewScheduler(ctx, r, database)
+	sch.Start()
 	srv.SetSweep(sch)
 	env := &maintEnv{srv: srv, db: database, sch: sch, sonarr: fake, cancel: cancel}
 	t.Cleanup(env.stop)
@@ -96,6 +97,7 @@ func (e *maintEnv) stop() {
 	for time.Now().Before(deadline) {
 		runs, _ := e.db.ListSweepRuns(context.Background(), 1)
 		if _, active := e.sch.Runner().Progress(); !active && (len(runs) == 0 || runs[0].Status != "running") {
+			e.sch.Wait()
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -104,7 +106,7 @@ func (e *maintEnv) stop() {
 
 func (e *maintEnv) startHeldRun(t *testing.T) {
 	t.Helper()
-	if err := e.sch.RunNow("manual", true); err != nil {
+	if err := e.sch.RunNow(t.Context(), "manual", true); err != nil {
 		t.Fatalf("RunNow: %v", err)
 	}
 	select {
@@ -476,7 +478,7 @@ func (e *maintEnv) startHeldLiveRun(t *testing.T) {
 	if err := sweep.SaveSettings(context.Background(), e.db, enabled, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.sch.RunNow("manual", false); err != nil {
+	if err := e.sch.RunNow(t.Context(), "manual", false); err != nil {
 		t.Fatalf("RunNow: %v", err)
 	}
 	select {
@@ -488,16 +490,14 @@ func (e *maintEnv) startHeldLiveRun(t *testing.T) {
 
 func (e *maintEnv) waitIdle(t *testing.T) {
 	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		e.sch.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the run is still going 5s later")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if view, err := e.sch.Status(t.Context()); err == nil && !view.Active {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
+	t.Fatal("the run is still going 5s later")
 }
 
 func TestMaintenance_SaveDisabledStopsRun(t *testing.T) {

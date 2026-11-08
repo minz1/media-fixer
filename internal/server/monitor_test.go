@@ -228,6 +228,7 @@ func newMonitorTestServer(t *testing.T) *bEnv {
 		Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 	}
 	sch := sweep.NewScheduler(ctx, r, database)
+	sch.Start()
 	t.Cleanup(func() {
 		cancel()
 		sch.Wait()
@@ -289,16 +290,14 @@ func (e *bEnv) stuckSeven(t *testing.T) {
 
 func (e *bEnv) waitIdle(t *testing.T) {
 	t.Helper()
-	done := make(chan struct{})
-	go func() {
-		e.sch.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the run is still going 5s later")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if view, err := e.sch.Status(t.Context()); err == nil && !view.Active {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
+	t.Fatal("the run is still going 5s later")
 }
 
 func (e *bEnv) runs(t *testing.T) []db.SweepRun {

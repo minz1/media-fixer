@@ -208,7 +208,7 @@ func (s *Server) monitorSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil {
-		err = s.sweep.RunSeries(series, pass)
+		err = s.sweep.RunSeries(r.Context(), series, pass)
 	}
 	if err != nil {
 		s.renderMonitorShow(w, r, id, tplMonitorCard, "", err.Error(), false)

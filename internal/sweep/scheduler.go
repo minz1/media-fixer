@@ -3,8 +3,8 @@ package sweep
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
@@ -32,150 +32,68 @@ type Scheduler struct {
 	d    *db.DB
 	base context.Context
 
-	mu sync.Mutex
-	wg sync.WaitGroup
-
-	cmu    sync.Mutex
-	cancel context.CancelCauseFunc
-
-	wmu       sync.Mutex
-	warned    string
-	badDigest string
+	inbox   chan ask
+	loopWG  sync.WaitGroup
+	jobs    sync.WaitGroup
+	started atomic.Bool
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
-	return &Scheduler{r: r, d: d, base: base}
+	return &Scheduler{r: r, d: d, base: base, inbox: make(chan ask)}
 }
 
 func (s *Scheduler) Runner() *Runner { return s.r }
 
-func (s *Scheduler) Wait() { s.wg.Wait() }
+func (s *Scheduler) Wait() {
+	s.loopWG.Wait()
+	s.jobs.Wait()
+}
 
 func (s *Scheduler) Start() {
-	go func() {
-		t := time.NewTicker(time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-s.base.Done():
-				return
-			case <-t.C:
-				s.Tick(s.r.Now())
-			}
-		}
-	}()
+	ticker := time.NewTicker(time.Minute)
+	s.started.Store(true)
+	s.loopWG.Go(func() {
+		defer ticker.Stop()
+		s.loop(s.base, ticker.C)
+	})
 }
 
-func (s *Scheduler) Tick(now time.Time) {
-	err := s.tick(now)
-	if errors.Is(err, ErrRunActive) || errors.Is(err, ErrPaused) || errors.Is(err, context.Canceled) {
-		err = nil
-	}
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	switch {
-	case err != nil && err.Error() != s.warned:
-		s.warned = err.Error()
-		s.r.logger().WarnContext(s.base, "pack sweep scheduler", "err", err)
-	case err == nil && s.warned != "":
-		s.warned = ""
-		s.r.logger().InfoContext(s.base, "pack sweep scheduler error cleared")
-	}
+func (s *Scheduler) Tick(ctx context.Context, now time.Time) error {
+	a, err := s.call(ctx, ask{kind: askTick, at: now})
+	return errors.Join(err, a.err)
 }
 
-func (s *Scheduler) reconcile() error {
-	ids, err := s.d.RunningSweepIDs(s.base)
-	if err != nil || len(ids) == 0 {
+func (s *Scheduler) RunNow(ctx context.Context, trigger string, dry bool) error {
+	a, err := s.call(ctx, ask{kind: askRunNow, trigger: trigger, dry: dry})
+	return errors.Join(err, a.err)
+}
+
+func (s *Scheduler) RunSeries(ctx context.Context, series client.Series, pass Pass) error {
+	a, err := s.call(ctx, ask{kind: askRunSeries, series: series, pass: pass})
+	return errors.Join(err, a.err)
+}
+
+func (s *Scheduler) CancelLive(ctx context.Context, cause error) (bool, error) {
+	a, err := s.call(ctx, ask{kind: askCancelLive, cause: cause})
+	return a.cancelled, errors.Join(err, a.err)
+}
+
+func (s *Scheduler) Status(ctx context.Context) (SlotView, error) {
+	a, err := s.call(ctx, ask{kind: askStatus})
+	return a.view, errors.Join(err, a.err)
+}
+
+func (s *Scheduler) Save(ctx context.Context, set Settings, now time.Time) error {
+	if err := SaveSettings(ctx, s.d, set, now); err != nil {
 		return err
 	}
-	if !s.mu.TryLock() {
+	if set.Enabled {
 		return nil
 	}
-	crashed, err := s.d.CrashRunningSweeps(s.base)
-	s.mu.Unlock()
-	if s.r.Refresh != nil {
-		for _, id := range crashed {
-			s.r.Refresh(card.SweepSubject(id))
-		}
-	}
-	return err
-}
-
-func (s *Scheduler) tick(now time.Time) error {
-	rerr := s.reconcile()
-	set, err := LoadSettings(s.base, s.d)
-	if err != nil || !set.Enabled {
-		return errors.Join(rerr, err)
-	}
-	runErr := s.runDue(set, now)
-	if errors.Is(runErr, ErrRunActive) || errors.Is(runErr, ErrPaused) {
-		runErr = nil
-	}
-	return errors.Join(rerr, s.digest(set, now), runErr)
-}
-
-func (s *Scheduler) runDue(set Settings, now time.Time) error {
-	next, err := s.next(set, now)
-	if err != nil || now.Before(next) {
+	if _, err := s.CancelLive(ctx, ErrDisabled); err != nil && !errors.Is(err, card.ErrRestarting) {
 		return err
 	}
-	u, err := s.Used(now)
-	if err != nil {
-		return err
-	}
-	return s.start(triggerSchedule, false, Remaining(set, u), scope{})
-}
-
-func (s *Scheduler) RunNow(trigger string, dry bool) error {
-	set, err := LoadSettings(s.base, s.d)
-	if err != nil {
-		return err
-	}
-	if !dry && !set.Enabled {
-		return ErrDisabled
-	}
-	if !dry {
-		u, uerr := s.Used(s.r.Now())
-		if uerr != nil {
-			return uerr
-		}
-		set = Remaining(set, u)
-	}
-	return s.start(trigger, dry, set, scope{})
-}
-
-func (s *Scheduler) RunSeries(series client.Series, pass Pass) error {
-	set, err := LoadSettings(s.base, s.d)
-	if err != nil {
-		return err
-	}
-	switch {
-	case !set.Enabled:
-		return ErrDisabled
-	case slices.Contains(set.ExcludedSeries, series.ID):
-		return ErrExcluded
-	case !series.Monitored:
-		return ErrUnmonitored
-	case series.SeriesType == seriesAnime && !set.Anime:
-		return ErrAnimeOff
-	}
-	u, err := s.Used(s.r.Now())
-	if err != nil {
-		return err
-	}
-	set = Remaining(set, u)
-	if pass == PassPacks {
-		set.MaxSearches = 0
-		if set.MaxLookups == 0 || set.MaxGrabs == 0 {
-			return ErrNoBudget
-		}
-	} else {
-		set.MaxGrabs, set.MaxLookups = 0, 0
-		if set.MaxSearches == 0 {
-			return ErrNoBudget
-		}
-	}
-	return s.start(db.BabysitTrigger+" "+series.Title, false, set, scope{series: &series, pass: pass})
+	return nil
 }
 
 type Usage struct {
@@ -253,60 +171,6 @@ func (s *Scheduler) next(set Settings, now time.Time) (time.Time, error) {
 		return following, nil
 	}
 	return at, nil
-}
-
-func (s *Scheduler) start(trigger string, dry bool, set Settings, sc scope) error {
-	if !s.mu.TryLock() {
-		return ErrRunActive
-	}
-	paused, err := s.d.IsAutonomousPaused(s.base)
-	if err == nil && paused {
-		err = ErrPaused
-	}
-	if err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	ctx, cancel := context.WithCancelCause(s.base)
-	if !dry {
-		s.cmu.Lock()
-		s.cancel = cancel
-		s.cmu.Unlock()
-		if cur, lerr := LoadSettings(s.base, s.d); lerr == nil && !cur.Enabled {
-			cancel(ErrDisabled)
-		}
-	}
-	s.wg.Go(func() {
-		defer s.mu.Unlock()
-		defer func() {
-			s.cmu.Lock()
-			s.cancel = nil
-			s.cmu.Unlock()
-			cancel(nil)
-		}()
-		if _, rerr := s.r.runScoped(ctx, trigger, dry, set, sc); rerr != nil {
-			s.r.logger().ErrorContext(s.base, "pack sweep run", "trigger", trigger, "err", rerr)
-		}
-	})
-	return nil
-}
-
-func (s *Scheduler) Save(ctx context.Context, set Settings, now time.Time) error {
-	if err := SaveSettings(ctx, s.d, set, now); err != nil {
-		return err
-	}
-	if !set.Enabled {
-		s.CancelLive(ErrDisabled)
-	}
-	return nil
-}
-
-func (s *Scheduler) CancelLive(cause error) {
-	s.cmu.Lock()
-	defer s.cmu.Unlock()
-	if s.cancel != nil {
-		s.cancel(cause)
-	}
 }
 
 func Sleep(ctx context.Context, d time.Duration) error {

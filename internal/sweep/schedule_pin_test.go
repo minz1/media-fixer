@@ -33,7 +33,7 @@ func pinSeed(t *testing.T) (*harness, *sweep.Scheduler) {
 	finishedRun(t, h, slot.Add(time.Minute), sweepstate.Failed, db.SweepCounts{})
 	finishedRun(t, h, slot.Add(2*time.Hour+5*time.Minute), sweepstate.Interrupted, db.SweepCounts{})
 	finishedRun(t, h, slot.Add(5*time.Hour), sweepstate.Paused, db.SweepCounts{})
-	return h, sweep.NewScheduler(ctx, h.runner, h.db)
+	return h, newSchedulerForTest(t, h.runner, h.db)
 }
 
 func pinHash(t *testing.T, d *db.DB) string {
@@ -167,7 +167,7 @@ func TestQA1_NoScheduleDriftOnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sch := sweep.NewScheduler(ctx, &sweep.Runner{DB: d}, d)
+	sch := newSchedulerForTest(t, &sweep.Runner{DB: d}, d)
 	for k := range 337 {
 		now := last.Add(time.Duration(k) * time.Hour)
 		next := sch.NextRun(now)

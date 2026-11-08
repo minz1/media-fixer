@@ -94,10 +94,10 @@ func TestS1_9_CompletedRunStaysDoneAfterCancel(t *testing.T) {
 		reads.Add(1)
 		return probeNow()
 	}
-	if err := psch.RunNow("manual", false); err != nil {
+	if err := psch.RunNow(t.Context(), "manual", false); err != nil {
 		t.Fatal(err)
 	}
-	psch.Wait()
+	sweep.WaitRunsForTest(psch)
 	total, last := probe.fake.requestCount(), reads.Load()
 	if total == 0 || last == 0 {
 		t.Fatal("the probe run made no Sonarr request or clock read")
@@ -108,14 +108,14 @@ func TestS1_9_CompletedRunStaysDoneAfterCancel(t *testing.T) {
 	now := h.runner.Now
 	h.runner.Now = func() time.Time {
 		if seen.Add(1) == last {
-			sch.CancelLive(errors.New("cancelled after the last request"))
+			_, _ = sch.CancelLive(t.Context(), errors.New("cancelled after the last request"))
 		}
 		return now()
 	}
-	if err := sch.RunNow("manual", false); err != nil {
+	if err := sch.RunNow(t.Context(), "manual", false); err != nil {
 		t.Fatal(err)
 	}
-	sch.Wait()
+	sweep.WaitRunsForTest(sch)
 	runs := h.runs(t)
 	if len(runs) != 1 || runs[0].Status != sweepstate.Done {
 		t.Fatalf("runs = %+v, want one run done", runs)
@@ -183,9 +183,8 @@ func TestS1_11_StaleRunningRowReconciledOnTick(t *testing.T) {
 	}
 
 	h.rawExec(t, dropBlockSQL)
-	sch := h.restart(t0())
-	sch.Tick(t0())
-	sch.Wait()
+	sch := h.restart(t, t0())
+	h.tick(sch, t0())
 	got, err := h.db.GetSweepRun(context.Background(), run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -214,20 +213,26 @@ func TestS1_11_TickSkipsLiveRun(t *testing.T) {
 			<-release
 		})
 	}
-	if err := sch.RunNow("manual", true); err != nil {
+	if err := sch.RunNow(t.Context(), "manual", true); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
-	sch.Tick(t0())
+	if err := sch.Tick(t.Context(), t0()); err != nil {
+		t.Errorf("Tick = %v, want nil", err)
+	}
 	runs := h.runs(t)
 	if len(runs) != 1 || runs[0].Status != sweepstate.Running {
 		t.Errorf("runs = %+v, want one still running", runs)
 	}
 	close(release)
-	sch.Wait()
+	sweep.WaitRunsForTest(sch)
 	if runs = h.runs(t); len(runs) != 1 || runs[0].Status != sweepstate.Done {
 		t.Errorf("runs = %+v, want one done", runs)
 	}
+	if err := sch.RunNow(t.Context(), "manual", true); err != nil {
+		t.Errorf("RunNow after the run ended = %v, want nil", err)
+	}
+	sweep.WaitRunsForTest(sch)
 }
 
 func TestS1_11_TickAfterShutdownIsQuiet(t *testing.T) {
@@ -239,10 +244,11 @@ func TestS1_11_TickAfterShutdownIsQuiet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, cancel := context.WithCancel(context.Background())
-	cancel()
-	sch := sweep.NewScheduler(base, h.runner, h.db)
-	sch.Tick(t0())
+	sch, _, cancel := startedScheduler(t, h.runner, h.db)
+	cancel(nil)
+	if terr := sch.Tick(t.Context(), t0()); !errors.Is(terr, card.ErrRestarting) {
+		t.Errorf("Tick = %v, want ErrRestarting", terr)
+	}
 	got, err := h.db.GetSweepRun(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)

@@ -78,7 +78,7 @@ func (s *Server) sweepRun(w http.ResponseWriter, r *http.Request) {
 	if dry {
 		notice = "Dry run started."
 	}
-	if err := s.sweep.RunNow(triggerManual, dry); err != nil {
+	if err := s.sweep.RunNow(r.Context(), triggerManual, dry); err != nil {
 		notice, failure = "", err.Error()
 	}
 	set, unreadable, err := s.loadSweepSettings(r.Context())
@@ -193,7 +193,13 @@ func (s *Server) sweepCard(
 
 func (s *Server) sweepStatus(ctx context.Context, started bool) sweepStatus {
 	st := sweepStatus{BaseURL: s.baseURL}
-	st.Progress, st.Active = s.sweep.Runner().Progress()
+	var progressActive bool
+	st.Progress, progressActive = s.sweep.Runner().Progress()
+	if view, err := s.sweep.Status(ctx); err == nil {
+		st.Active = view.Active
+	} else {
+		st.Active = progressActive
+	}
 	st.Active = st.Active || started
 	if _, err := sweep.LoadSettings(ctx, s.db); err != nil {
 		st.Unknown = true

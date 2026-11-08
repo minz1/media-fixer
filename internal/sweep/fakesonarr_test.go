@@ -455,6 +455,7 @@ type harness struct {
 	path   string
 	runner *sweep.Runner
 	dms    *[]string
+	t      *testing.T
 
 	mu        sync.Mutex
 	cards     []card.Card
@@ -478,7 +479,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	h := &harness{fake: fake, clock: clock, db: d, path: path, dms: &[]string{}}
+	h := &harness{fake: fake, clock: clock, db: d, path: path, dms: &[]string{}, t: t}
 	h.runner = &sweep.Runner{
 		Sonarr: fake.client(),
 		DB:     d,

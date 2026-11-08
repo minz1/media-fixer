@@ -41,7 +41,7 @@ func TestScheduler_CorruptSettingsWarnsOncePerDistinctError(t *testing.T) {
 	logs := &lockedBuffer{}
 	h.runner.Log = slog.New(slog.NewTextHandler(logs, nil))
 	ctx := context.Background()
-	sch := sweep.NewScheduler(ctx, h.runner, h.db)
+	sch := newSchedulerForTest(t, h.runner, h.db)
 	minute := 0
 	tickN := func(n int) {
 		for range n {

@@ -150,7 +150,7 @@ func TestScheduler_DigestRestart(t *testing.T) {
 	h.seedStuck(t, "s:1:1", 1)
 	h.tick(sch, at(0, 9, 0))
 	h.seedStuck(t, "s:1:2", 2)
-	sch = h.restart(at(0, 9, 5))
+	sch = h.restart(t, at(0, 9, 5))
 	h.tick(sch, at(0, 9, 5))
 	if n := len(h.digests()); n != 1 {
 		t.Fatalf("digests after restart = %d, want 1", n)
@@ -201,6 +201,7 @@ func TestScheduler_DigestErrorDoesNotBlockRun(t *testing.T) {
 	logs := &lockedBuffer{}
 	h.runner.Log = slog.New(slog.NewTextHandler(logs, nil))
 	h.seedStuck(t, "s:1:1", 1)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	notify := h.runner.Notify
 	fail := true
 	h.runner.Notify = func(ctx context.Context, c card.Card) error {

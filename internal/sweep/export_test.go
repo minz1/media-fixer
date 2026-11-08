@@ -87,3 +87,12 @@ var (
 func NextSlot(cur SlotSnap, ev SlotEvent) (SlotSnap, []SlotEff, error) { return nextSlot(cur, ev) }
 
 func CheckSlot(s SlotSnap) error { return checkSlot(s) }
+
+func StartForTest(s *Scheduler, ticks <-chan time.Time) {
+	s.started.Store(true)
+	s.loopWG.Go(func() { s.loop(s.base, ticks) })
+}
+
+func WaitRunsForTest(s *Scheduler) { s.jobs.Wait() }
+
+var ErrNotStartedForTest = errNotStarted

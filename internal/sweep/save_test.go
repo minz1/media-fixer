@@ -23,10 +23,10 @@ func TestS6_5_DisableThroughSaveCancelsLiveRun(t *testing.T) {
 	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 1})
 	var saveErr error
 	h.fake.beforePost = func() { saveErr = sch.Save(context.Background(), disabled(), h.clock.Now()) }
-	if err := sch.RunNow("manual", false); err != nil {
+	if err := sch.RunNow(t.Context(), "manual", false); err != nil {
 		t.Fatal(err)
 	}
-	sch.Wait()
+	sweep.WaitRunsForTest(sch)
 	if saveErr != nil {
 		t.Fatalf("Save: %v", saveErr)
 	}
@@ -47,10 +47,10 @@ func TestS6_5_DisableSparesDryRun(t *testing.T) {
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
 	var saveErr error
 	h.fake.beforeLookup = func() { saveErr = sch.Save(context.Background(), disabled(), h.clock.Now()) }
-	if err := sch.RunNow("manual", true); err != nil {
+	if err := sch.RunNow(t.Context(), "manual", true); err != nil {
 		t.Fatal(err)
 	}
-	sch.Wait()
+	sweep.WaitRunsForTest(sch)
 	if saveErr != nil {
 		t.Fatalf("Save: %v", saveErr)
 	}
@@ -62,9 +62,8 @@ func TestS6_5_DisableSparesDryRun(t *testing.T) {
 func TestS6_5_SaveDuringShutdownStillCommits(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	base, cancel := context.WithCancel(context.Background())
-	sch := sweep.NewScheduler(base, h.runner, h.db)
-	cancel()
+	sch, _, cancel := startedScheduler(t, h.runner, h.db)
+	cancel(nil)
 	if err := sch.Save(context.Background(), settings(), t0()); err != nil {
 		t.Fatalf("enable during shutdown: %v", err)
 	}

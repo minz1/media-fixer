@@ -63,12 +63,12 @@ func digestCard(stuck []db.SweepTarget) card.Card {
 	return c
 }
 
-func (s *Scheduler) digest(set Settings, now time.Time) error {
+func (s *Scheduler) digest(set Settings, now time.Time, bad *string) error {
 	now = now.UTC()
 	if now.Hour() < set.DigestHourUTC || s.r.Notify == nil {
 		return nil
 	}
-	prev, err := s.loadDigest(now)
+	prev, err := s.loadDigest(now, bad)
 	if err != nil || prev.SentAt.UTC().Truncate(day).Equal(now.Truncate(day)) {
 		return err
 	}
@@ -91,7 +91,7 @@ func (s *Scheduler) digest(set Settings, now time.Time) error {
 	return s.saveDigest(digestState{SentAt: now, Stuck: keys})
 }
 
-func (s *Scheduler) loadDigest(now time.Time) (digestState, error) {
+func (s *Scheduler) loadDigest(now time.Time, bad *string) (digestState, error) {
 	var st digestState
 	raw, err := s.d.GetSetting(s.base, digestKey)
 	switch {
@@ -104,10 +104,8 @@ func (s *Scheduler) loadDigest(now time.Time) (digestState, error) {
 	if uerr == nil {
 		return st, nil
 	}
-	s.wmu.Lock()
-	logged := s.badDigest == raw
-	s.badDigest = raw
-	s.wmu.Unlock()
+	logged := *bad == raw
+	*bad = raw
 	if !logged {
 		s.r.logger().WarnContext(s.base, "pack sweep scheduler",
 			"err", fmt.Errorf("stored digest state is unreadable, resetting: %w", uerr),
