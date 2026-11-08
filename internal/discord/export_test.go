@@ -57,6 +57,10 @@ func SetCardRetryForTest(b *Bot, first, ceiling time.Duration) {
 
 func SetPassDoneForTest(b *Bot, fn func()) { b.onPass = fn }
 
+func SetTimerFiredForTest(b *Bot, fn func()) { b.onTimer = fn }
+
+func SetConfirmForTest(b *Bot, d time.Duration) { b.confirmFor = d }
+
 func CardsDoneForTest(b *Bot) <-chan struct{} { return b.cardsDone }
 
 func OnInteractionForTest(b *Bot, i *discordgo.InteractionCreate) { b.onInteraction(nil, i) }

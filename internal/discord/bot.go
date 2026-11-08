@@ -54,7 +54,9 @@ type Bot struct {
 
 	cardRetryFirst time.Duration
 	cardRetryCap   time.Duration
+	confirmFor     time.Duration
 	onPass         func()
+	onTimer        func()
 }
 
 // New creates a Bot from a Discord bot token.
@@ -84,6 +86,7 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 
 		cardRetryFirst: cardRetryFirstDefault,
 		cardRetryCap:   cardRetryCapDefault,
+		confirmFor:     confirmWindow,
 	}
 	b.connect = b.openAndRegister
 	b.closeConn = sess.Close

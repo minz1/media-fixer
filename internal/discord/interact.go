@@ -74,7 +74,7 @@ func (b *Bot) onComponent(i *discordgo.InteractionCreate) {
 		res = card.Result{Line: card.RestartingNotice}
 	}
 	if tracked {
-		b.setOverlay(msgID, overlay{Line: res.Line, Confirm: res.Confirm, At: b.now()})
+		b.setOverlay(msgID, overlay{Line: res.Line, Confirm: res.Confirm})
 		if subject != "" {
 			b.Refresh(subject)
 		}
@@ -155,7 +155,7 @@ func (b *Bot) confirmOpen(msgID, customID string) bool {
 	b.mu.Lock()
 	ov, ok := b.cards.overlays[msgID]
 	b.mu.Unlock()
-	return ok && b.now().Sub(ov.At) < confirmWindow &&
+	return ok && b.now().Before(ov.ExpiresAt) &&
 		slices.ContainsFunc(ov.Confirm, func(bt card.Button) bool { return bt.ID == customID })
 }
 

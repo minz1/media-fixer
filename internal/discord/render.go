@@ -22,7 +22,7 @@ const (
 type overlay struct {
 	Line       string
 	Confirm    []card.Button
-	At         time.Time
+	ExpiresAt  time.Time
 	UpdateHash string
 }
 

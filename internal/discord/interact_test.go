@@ -425,3 +425,174 @@ func TestClose_BeforeStartCards(t *testing.T) {
 		t.Fatal("Close blocked without StartCards")
 	}
 }
+
+type confirmCase struct {
+	*clickEnv
+
+	r                        *fakeRenderer
+	approve, confirm, cancel card.Button
+	confirms                 atomic.Int32
+}
+
+func newConfirmCase(t *testing.T, confirmFor time.Duration) *confirmCase {
+	t.Helper()
+	c := &confirmCase{
+		clickEnv: newClickEnv(t, "owner"),
+		r:        newRenderer(true),
+		approve:  btn("inc", "approve", "1", "s", "fp"),
+		confirm:  btn("inc", "confirm", "1", "fp"),
+		cancel:   btn("inc", "cancel", "1"),
+	}
+	c.confirm.Style = card.Danger
+	discord.SetConfirmForTest(c.bot, confirmFor)
+	c.r.set("inc:1", card.Update{Buttons: []card.Button{c.approve}})
+	c.handlers["inc"] = func(_ context.Context, a card.Action) (card.Result, error) {
+		switch a.Verb {
+		case "approve":
+			return card.Result{Confirm: []card.Button{c.confirm, c.cancel}}, nil
+		case "confirm":
+			c.confirms.Add(1)
+			return card.Result{Line: "Approved"}, nil
+		}
+		return card.Result{}, nil
+	}
+	ic := incCard("1")
+	ic.Verbs = []string{"approve"}
+	c.track("inc:1", "m9", ic, time.Now())
+	return c
+}
+
+func (c *confirmCase) showsConfirm(s string) bool {
+	return strings.Contains(s, c.confirm.ID) && !strings.Contains(s, c.approve.ID) && strings.Contains(s, `"style":4`)
+}
+
+func (c *confirmCase) showsCard(s string) bool {
+	return strings.Contains(s, c.approve.ID) && !strings.Contains(s, c.confirm.ID) && !strings.Contains(s, `"style":4`)
+}
+
+func TestD2_15_ExpiredConfirmLeavesCardWithoutEvent(t *testing.T) {
+	t.Parallel()
+	c := newConfirmCase(t, 100*time.Millisecond)
+	c.start(map[string]card.Renderer{"inc": c.r.render})
+	c.waitEdits(1)
+	c.press(dmClick("owner", "m9", c.approve.ID))
+	c.waitLastEdit(c.showsConfirm)
+	c.waitLastEdit(func(s string) bool { return c.showsCard(s) && !strings.Contains(s, "Refused") })
+	if discord.HasOverlayForTest(c.bot, "m9") {
+		t.Error("the expired confirm kept its overlay")
+	}
+}
+
+func TestD2_15_ExpiredConfirmWhileFailingDoesNotSpin(t *testing.T) {
+	t.Parallel()
+	c := newConfirmCase(t, 150*time.Millisecond)
+	discord.SetCardRetryForTest(c.bot, 400*time.Millisecond, 400*time.Millisecond)
+	var fires atomic.Int32
+	discord.SetTimerFiredForTest(c.bot, func() { fires.Add(1) })
+	c.start(map[string]card.Renderer{"inc": c.r.render})
+	c.waitEdits(1)
+	c.api.emu.Lock()
+	c.api.editErr = serverError()
+	c.api.emu.Unlock()
+	pressed := time.Now()
+	c.press(dmClick("owner", "m9", c.approve.ID))
+	c.waitLastEdit(c.showsConfirm)
+	time.Sleep(time.Second - time.Since(pressed))
+	if n := fires.Load(); n > 4 {
+		t.Errorf("timer fired %d times in 1s, want at most 4 (expiry, two retries, slack)", n)
+	}
+	if n := len(c.api.editList()); n > 4 {
+		t.Errorf("edits = %d in 1s with a 400ms backoff, want at most 4", n)
+	}
+	if discord.HasOverlayForTest(c.bot, "m9") {
+		t.Error("the expired confirm was not cleared while the message was failing")
+	}
+}
+
+func TestD2_15_ConfirmPressAfterExpiryRefused(t *testing.T) {
+	t.Parallel()
+	c := newConfirmCase(t, 100*time.Millisecond)
+	c.start(map[string]card.Renderer{"inc": c.r.render})
+	c.waitEdits(1)
+	c.press(dmClick("owner", "m9", c.approve.ID))
+	c.waitLastEdit(c.showsConfirm)
+	time.Sleep(150 * time.Millisecond)
+	c.press(dmClick("owner", "m9", c.confirm.ID))
+	c.waitLastEdit(func(s string) bool { return strings.Contains(s, "Refused") })
+	if n := c.confirms.Load(); n != 0 {
+		t.Errorf("an expired confirm ran: confirms = %d", n)
+	}
+}
+
+func TestD2_15_ConfirmPressBeforeExpiryRuns(t *testing.T) {
+	t.Parallel()
+	c := newConfirmCase(t, time.Minute)
+	c.start(map[string]card.Renderer{"inc": c.r.render})
+	c.waitEdits(1)
+	c.press(dmClick("owner", "m9", c.approve.ID))
+	c.waitLastEdit(c.showsConfirm)
+	c.press(dmClick("owner", "m9", c.confirm.ID))
+	c.waitLastEdit(func(s string) bool { return strings.Contains(s, "Approved") })
+	if n := c.confirms.Load(); n != 1 {
+		t.Errorf("confirms = %d, want 1", n)
+	}
+}
+
+func TestD2_15_CancelThenConfirmRefusedWhileLoopBusy(t *testing.T) {
+	t.Parallel()
+	c := newConfirmCase(t, time.Minute)
+	c.trackInc("m8", "inc:2")
+	c.r.set("inc:2", card.Update{Status: "Escalated"})
+	var armed atomic.Bool
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	c.api.hold = func(ctx context.Context, id string) error {
+		if id != "m8" || !armed.Load() {
+			return nil
+		}
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	defer close(release)
+	c.start(map[string]card.Renderer{"inc": c.r.render})
+	c.waitEdits(2)
+	c.press(dmClick("owner", "m9", c.approve.ID))
+	c.waitLastEdit(c.showsConfirm)
+	armed.Store(true)
+	c.r.set("inc:2", card.Update{Status: "Resolved"})
+	c.bot.Refresh("inc:2")
+	<-started
+	c.press(dmClick("owner", "m9", c.cancel.ID))
+	c.press(dmClick("owner", "m9", c.confirm.ID))
+	if n := c.confirms.Load(); n != 0 {
+		t.Errorf("Confirm after Cancel ran while the loop was busy: confirms = %d", n)
+	}
+}
+
+func TestOverlay_LineNeverExpires(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	discord.SetConfirmForTest(e.bot, 50*time.Millisecond)
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	discord.SetOverlayForTest(e.bot, "m1", "Pressed")
+	edits := e.waitEdits(2)
+	if !strings.Contains(editJSON(t, edits[1]), "Pressed") {
+		t.Fatalf("second edit has no line: %s", editJSON(t, edits[1]))
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(e.api.editList()); n != 2 {
+		t.Errorf("edits = %d after the confirm window, want 2", n)
+	}
+	if !discord.HasOverlayForTest(e.bot, "m1") {
+		t.Error("a line overlay expired")
+	}
+}

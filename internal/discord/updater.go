@@ -46,6 +46,9 @@ func (b *Bot) Refresh(subjectOrPrefix string) {
 }
 
 func (b *Bot) setOverlay(messageID string, ov overlay) {
+	if len(ov.Confirm) > 0 {
+		ov.ExpiresAt = b.now().Add(b.confirmFor)
+	}
 	b.mu.Lock()
 	if ov.Line == "" && len(ov.Confirm) == 0 {
 		delete(b.cards.overlays, messageID)
@@ -90,24 +93,14 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 	timer := time.NewTimer(time.Hour)
 	timer.Stop()
 	defer timer.Stop()
-	b.prune(ctx, d)
-	trig := map[string]cardKind{}
-	b.collect(ctx, d, trig)
-	if rows, err := d.ListDiscordCards(ctx, ""); err != nil {
-		b.log.WarnContext(ctx, "discord cards: startup refresh", "error", err)
-	} else {
-		for _, id := range messageIDs(rows) {
-			addTrigger(trig, id, cardMark)
-		}
-	}
-	b.cardPass(ctx, d, msgs, trig, timer)
+	b.cardPass(ctx, d, msgs, b.startupTriggers(ctx, d), timer)
 	poll := time.NewTicker(b.poll)
 	defer poll.Stop()
 	prune := time.NewTicker(pruneEvery)
 	defer prune.Stop()
 	var last int64
 	for {
-		trig = map[string]cardKind{}
+		trig := map[string]cardKind{}
 		select {
 		case <-ctx.Done():
 			return
@@ -118,6 +111,9 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 			last = b.onEvent(ev, last)
 		case <-b.wake:
 		case <-timer.C:
+			if b.onTimer != nil {
+				b.onTimer()
+			}
 		case <-poll.C:
 			for id, s := range msgs {
 				if s.Phase == cardLive {
@@ -132,6 +128,21 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 		b.collect(ctx, d, trig)
 		b.cardPass(ctx, d, msgs, trig, timer)
 	}
+}
+
+func (b *Bot) startupTriggers(ctx context.Context, d *db.DB) map[string]cardKind {
+	b.prune(ctx, d)
+	trig := map[string]cardKind{}
+	b.collect(ctx, d, trig)
+	rows, err := d.ListDiscordCards(ctx, "")
+	if err != nil {
+		b.log.WarnContext(ctx, "discord cards: startup refresh", "error", err)
+		return trig
+	}
+	for _, id := range messageIDs(rows) {
+		addTrigger(trig, id, cardMark)
+	}
+	return trig
 }
 
 func addTrigger(trig map[string]cardKind, id string, k cardKind) {
@@ -160,14 +171,24 @@ func (b *Bot) cardPass(
 			addTrigger(trig, id, cardRetryDue)
 		}
 	}
+	for _, id := range b.expireConfirms(now) {
+		addTrigger(trig, id, cardMark)
+	}
 	for _, id := range slices.Sorted(maps.Keys(trig)) {
 		if ctx.Err() != nil {
 			break
 		}
 		b.cardStep(ctx, d, msgs, id, trig[id])
 	}
+	b.armTimer(msgs, timer)
+	if b.onPass != nil {
+		b.onPass()
+	}
+}
+
+func (b *Bot) armTimer(msgs map[string]cardSnap, timer *time.Timer) {
 	timer.Stop()
-	var next time.Time
+	next := b.nextConfirmExpiry()
 	for _, s := range msgs {
 		if s.Phase == cardFailing && (next.IsZero() || s.NextRetry.Before(next)) {
 			next = s.NextRetry
@@ -176,9 +197,43 @@ func (b *Bot) cardPass(
 	if !next.IsZero() {
 		timer.Reset(max(next.Sub(b.now()), 0))
 	}
-	if b.onPass != nil {
-		b.onPass()
+}
+
+func (b *Bot) expireConfirms(now time.Time) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var ids []string
+	for id, ov := range b.cards.overlays {
+		if b.dropExpiredLocked(id, ov, now) {
+			ids = append(ids, id)
+		}
 	}
+	return ids
+}
+
+func (b *Bot) dropExpiredLocked(id string, ov overlay, now time.Time) bool {
+	if len(ov.Confirm) == 0 || now.Before(ov.ExpiresAt) {
+		return false
+	}
+	ov.Confirm, ov.ExpiresAt = nil, time.Time{}
+	if ov.Line == "" {
+		delete(b.cards.overlays, id)
+	} else {
+		b.cards.overlays[id] = ov
+	}
+	return true
+}
+
+func (b *Bot) nextConfirmExpiry() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var next time.Time
+	for _, ov := range b.cards.overlays {
+		if len(ov.Confirm) > 0 && (next.IsZero() || ov.ExpiresAt.Before(next)) {
+			next = ov.ExpiresAt
+		}
+	}
+	return next
 }
 
 func (b *Bot) cardEventAt(kind cardKind) cardEvent {
@@ -565,6 +620,9 @@ func (b *Bot) pinOverlay(id string, ups map[string]card.Update) overlay {
 	updateHash := card.Fingerprint(h)
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if ov, ok := b.cards.overlays[id]; ok {
+		b.dropExpiredLocked(id, ov, b.now())
+	}
 	ov, ok := b.cards.overlays[id]
 	switch {
 	case !ok:
