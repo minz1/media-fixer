@@ -44,7 +44,6 @@ type Watcher struct {
 
 	prev       map[taskKey]mediaagentapi.StuckReader
 	firstStuck map[taskKey]time.Time
-	rerun      map[string]bool
 	warned     map[string]bool
 
 	mu        sync.Mutex
@@ -59,7 +58,6 @@ func New(src Source, svc *incident.Service, database *db.DB, log *slog.Logger) *
 		src: src, svc: svc, db: database, log: log, now: time.Now,
 		prev:       map[taskKey]mediaagentapi.StuckReader{},
 		firstStuck: map[taskKey]time.Time{},
-		rerun:      map[string]bool{},
 		warned:     map[string]bool{},
 		lastStuck:  map[string]int{},
 	}
@@ -112,12 +110,14 @@ func (w *Watcher) Poll(ctx context.Context) {
 
 	timers, _ := incident.LoadTimers(ctx, w.db)
 	limit := time.Duration(timers.StuckReadMinutes) * time.Minute
+	warned := map[string]bool{}
 	for _, title := range slices.Sorted(maps.Keys(stuck)) {
 		rs := stuck[title]
 		if len(rs) >= timers.StuckReadTasks || w.oldest(rs, now) >= limit {
-			w.handleFinding(ctx, title, rs, now)
+			w.handleFinding(ctx, title, rs, now, warned)
 		}
 	}
+	w.warned = warned
 }
 
 func (w *Watcher) track(readers []mediaagentapi.StuckReader, now time.Time) map[string][]mediaagentapi.StuckReader {
@@ -175,7 +175,9 @@ func (w *Watcher) oldest(rs []mediaagentapi.StuckReader, now time.Time) time.Dur
 	return age
 }
 
-func (w *Watcher) handleFinding(ctx context.Context, title string, rs []mediaagentapi.StuckReader, now time.Time) {
+func (w *Watcher) handleFinding(
+	ctx context.Context, title string, rs []mediaagentapi.StuckReader, now time.Time, warned map[string]bool,
+) {
 	inc, err := w.db.FindUnresolvedByTitle(ctx, title)
 	switch {
 	case errors.Is(err, db.ErrNotFound):
@@ -187,7 +189,7 @@ func (w *Watcher) handleFinding(ctx context.Context, title string, rs []mediaage
 			w.open(ctx, title, rs, now)
 		}
 	case inc.Status == db.StatusAgentFixed:
-		w.rerunFixed(ctx, inc)
+		w.retryFixed(ctx, inc, warned)
 	}
 }
 
@@ -201,10 +203,10 @@ func (w *Watcher) open(ctx context.Context, title string, rs []mediaagentapi.Stu
 	}
 }
 
-func (w *Watcher) rerunFixed(ctx context.Context, inc *db.Incident) {
-	if w.rerun[inc.ID] {
+func (w *Watcher) retryFixed(ctx context.Context, inc *db.Incident, warned map[string]bool) {
+	if inc.StuckReadReran {
+		warned[inc.ID] = true
 		if !w.warned[inc.ID] {
-			w.warned[inc.ID] = true
 			w.log.WarnContext(ctx, "stuck read again after a rerun", "incident", inc.ID, "title", inc.Title)
 		}
 		return
@@ -225,7 +227,6 @@ func (w *Watcher) rerunFixed(ctx context.Context, inc *db.Incident) {
 		w.log.WarnContext(ctx, "rerun stuck-read incident", "incident", inc.ID, "error", err)
 		return
 	}
-	w.rerun[inc.ID] = true
 }
 
 func (w *Watcher) details(rs []mediaagentapi.StuckReader, now time.Time) string {

@@ -21,7 +21,7 @@ type querier interface {
 
 const snapshotColumns = `id, status, version, generation, autonomous_locked, action_count, parked,
 	COALESCE(reason, ''), what, COALESCE(jellyfin_item_id, ''), COALESCE(finding, ''), pending_outcome,
-	escalation_plan, escalation_plan_at, verify_next_check, verify_checks_left, verify_spec`
+	escalation_plan, escalation_plan_at, verify_next_check, verify_checks_left, verify_spec, stuck_read_reran`
 
 const snapshotQuery = `SELECT ` + snapshotColumns + ` FROM incidents WHERE id = ?`
 
@@ -38,11 +38,11 @@ func loadSnapshot(ctx context.Context, q querier, id string) (lifecycle.Snapshot
 }
 
 type snapshotRow struct {
-	locked, parked int
-	finding        string
-	po, plan, spec sql.NullString
-	planAt, next   sql.NullTime
-	checksLeft     sql.NullInt64
+	locked, parked, reran int
+	finding               string
+	po, plan, spec        sql.NullString
+	planAt, next          sql.NullTime
+	checksLeft            sql.NullInt64
 }
 
 func scanSnapshot(sc scanner) (lifecycle.Snapshot, error) { return scanSnapshotWith(sc) }
@@ -53,12 +53,12 @@ func scanSnapshotWith(sc scanner, extra ...any) (lifecycle.Snapshot, error) {
 		r snapshotRow
 	)
 	dest := []any{&s.ID, &s.Status, &s.Version, &s.Generation, &r.locked, &s.ActionCount, &r.parked, &s.Reason,
-		&s.What, &s.ItemID, &r.finding, &r.po, &r.plan, &r.planAt, &r.next, &r.checksLeft, &r.spec}
+		&s.What, &s.ItemID, &r.finding, &r.po, &r.plan, &r.planAt, &r.next, &r.checksLeft, &r.spec, &r.reran}
 	err := sc.Scan(append(dest, extra...)...)
 	if err != nil {
 		return s, err
 	}
-	s.Locked, s.Parked = r.locked == 1, r.parked == 1
+	s.Locked, s.Parked, s.StuckReadReran = r.locked == 1, r.parked == 1, r.reran == 1
 	if err = fillSnapshot(&s, r); err != nil {
 		return s, fmt.Errorf("incident %s: %w", s.ID, err)
 	}
@@ -242,11 +242,11 @@ func readInputs(ctx context.Context, tx *sql.Tx) (lifecycle.Inputs, error) {
 }
 
 type snapshotCols struct {
-	locked, parked   int
-	reason, po, plan sql.NullString
-	planAt, next     sql.NullTime
-	checksLeft       sql.NullInt64
-	spec             sql.NullString
+	locked, parked, reran int
+	reason, po, plan      sql.NullString
+	planAt, next          sql.NullTime
+	checksLeft            sql.NullInt64
+	spec                  sql.NullString
 }
 
 func encodeSnapshot(s lifecycle.Snapshot) (snapshotCols, error) {
@@ -256,6 +256,9 @@ func encodeSnapshot(s lifecycle.Snapshot) (snapshotCols, error) {
 	}
 	if s.Parked {
 		c.parked = 1
+	}
+	if s.StuckReadReran {
+		c.reran = 1
 	}
 	if s.Reason != lifecycle.ReasonNone {
 		c.reason = sql.NullString{String: string(s.Reason), Valid: true}
@@ -294,9 +297,9 @@ func writeSnapshot(ctx context.Context, tx *sql.Tx, cur, next lifecycle.Snapshot
 	_, err = tx.ExecContext(ctx, `UPDATE incidents SET status = ?, version = ?, generation = ?,
 		autonomous_locked = ?, action_count = ?, parked = ?, reason = ?, pending_outcome = ?,
 		pending_outcome_next_check = NULL, escalation_plan = ?, escalation_plan_at = ?, verify_next_check = ?,
-		verify_checks_left = ?, verify_spec = ?, updated_at = ? WHERE id = ?`,
+		verify_checks_left = ?, verify_spec = ?, stuck_read_reran = ?, updated_at = ? WHERE id = ?`,
 		next.Status, next.Version, next.Generation, c.locked, next.ActionCount, c.parked, c.reason, c.po,
-		c.plan, c.planAt, c.next, c.checksLeft, c.spec, now, next.ID)
+		c.plan, c.planAt, c.next, c.checksLeft, c.spec, c.reran, now, next.ID)
 	if err != nil {
 		return err
 	}

@@ -86,6 +86,7 @@ func with(s lifecycle.Snapshot, fns ...func(*lifecycle.Snapshot)) lifecycle.Snap
 
 func locked(s *lifecycle.Snapshot)  { s.Locked, s.ActionCount = true, 3 }
 func parked(s *lifecycle.Snapshot)  { s.Parked = true }
+func reran(s *lifecycle.Snapshot)   { s.StuckReadReran = true }
 func paused(s *lifecycle.Snapshot)  { s.In.Paused = true }
 func spent(s *lifecycle.Snapshot)   { s.ActionCount = 3 }
 func lastChk(s *lifecycle.Snapshot) { s.Verify.ChecksLeft = 1 }
@@ -139,7 +140,9 @@ func samples(s lifecycle.State) []lifecycle.Snapshot {
 			with(b, reason(lifecycle.ReasonNoRelease), finding(escalatable()), planAt(base())))
 	case lifecycle.ExecutingPlan:
 		out = append(out, execSamples()...)
-	case lifecycle.AgentFixed, lifecycle.Blocked, lifecycle.Resolved, lifecycle.None:
+	case lifecycle.AgentFixed:
+		out = append(out, with(b, reran), with(b, reran, paused))
+	case lifecycle.Blocked, lifecycle.Resolved, lifecycle.None:
 	}
 	return out
 }
@@ -345,8 +348,8 @@ func states() []lifecycle.State {
 }
 
 func key(s lifecycle.Snapshot) string {
-	k := fmt.Sprintf("%s|l%v|n%d|p%v|r%s|f%s|plan%v", s.Status, s.Locked, s.ActionCount, s.Parked, s.Reason,
-		s.Finding.EscalateAction, s.Plan != nil)
+	k := fmt.Sprintf("%s|l%v|n%d|p%v|r%s|f%s|plan%v|x%v", s.Status, s.Locked, s.ActionCount, s.Parked, s.Reason,
+		s.Finding.EscalateAction, s.Plan != nil, s.StuckReadReran)
 	if v := s.Verify; v != nil {
 		k += fmt.Sprintf("|v%d/%d/%v/%s", v.ChecksLeft, v.Spec.Extensions, v.Spec.ETANoted, v.Spec.Kind)
 	}

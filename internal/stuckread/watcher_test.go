@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 	"github.com/minz1/mediafixer/internal/stuckread"
@@ -654,5 +655,98 @@ func TestQ4b_4_StartupIsUnknown(t *testing.T) {
 	h.poll()
 	if got := h.w.Clear("T"); got != incident.ReadClear {
 		t.Fatalf("after two good polls = %v, want clear", got)
+	}
+}
+
+func (h *harness) markReran(id string) {
+	h.t.Helper()
+	lifecycletest.Force(h.t, h.db, id, func(n *lifecycle.Snapshot) { n.StuckReadReran = true })
+}
+
+func TestQ4c_10_RerunOnceSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	inc := openOne(t, h)
+	h.setStatus(inc.ID, db.StatusAgentFixed)
+	h.poll(three("T", 7)...)
+	if got := h.status(inc.ID); got != db.StatusReopened {
+		t.Fatalf("status = %s, want reopened", got)
+	}
+	h.setStatus(inc.ID, db.StatusAgentFixed)
+	before, err := h.db.GetIncident(t.Context(), inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.StuckReadReran {
+		t.Fatal("the rerun did not store its marker")
+	}
+
+	second := h.newWatcher()
+	for range 4 {
+		h.clock = h.clock.Add(time.Minute)
+		h.feed.readers, h.feed.err = three("T", 7), nil
+		second.Poll(t.Context())
+	}
+	after, err := h.db.GetIncident(t.Context(), inc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != db.StatusAgentFixed || after.Generation != before.Generation || after.Version != before.Version {
+		t.Fatalf("a restarted watcher reran: %s gen %d version %d, want agent_fixed gen %d version %d",
+			after.Status, after.Generation, after.Version, before.Generation, before.Version)
+	}
+	if n := h.count("WARN"); n != 1 {
+		t.Fatalf("warn lines = %d, want 1 after the restart:\n%s", n, h.logs)
+	}
+}
+
+func TestWatcher_WarnedBoundedByStuckTitles(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var all, some []mediaagentapi.StuckReader
+	for i := range 20 {
+		title := fmt.Sprintf("T%d", i)
+		inc := &db.Incident{Status: db.StatusAgentFixed, Source: "media-agent", ReportedBy: "media-agent",
+			What: agent.WhatStuckRead, Title: title}
+		lifecycletest.Incident(t, h.db, inc)
+		h.markReran(inc.ID)
+		all = append(all, three(title, 7)...)
+		if i < 2 {
+			some = append(some, three(title, 7)...)
+		}
+	}
+	h.poll(all...)
+	h.poll(all...)
+	if n := h.w.WarnedForTest(); n != 20 {
+		t.Fatalf("warned = %d, want 20", n)
+	}
+	h.poll(some...)
+	if n := h.w.WarnedForTest(); n != 2 {
+		t.Fatalf("warned after most titles cleared = %d, want 2", n)
+	}
+	h.poll()
+	if n := h.w.WarnedForTest(); n != 0 {
+		t.Fatalf("warned with nothing stuck = %d, want 0", n)
+	}
+}
+
+func TestWatcher_WarnsOncePerRecurrence(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	inc := openOne(t, h)
+	h.markReran(inc.ID)
+	h.setStatus(inc.ID, db.StatusAgentFixed)
+	for range 4 {
+		h.poll(three("T", 7)...)
+	}
+	if n := h.count("WARN"); n != 1 {
+		t.Fatalf("warn lines during one recurrence = %d, want 1:\n%s", n, h.logs)
+	}
+	h.poll()
+	for range 4 {
+		h.poll(three("T", 9)...)
+	}
+	if n := h.count("WARN"); n != 2 {
+		t.Fatalf("warn lines after a second recurrence = %d, want 2:\n%s", n, h.logs)
 	}
 }

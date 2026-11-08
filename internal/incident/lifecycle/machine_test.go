@@ -60,6 +60,12 @@ func decisionObligations(before, cur lifecycle.Snapshot, t tev, d lifecycle.Deci
 	if slices.Contains(system, t.ev.Kind) && (n.ActionCount != before.ActionCount || n.Locked != before.Locked) {
 		return errors.New("D1: system event reset the budget")
 	}
+	if before.StuckReadReran && !n.StuckReadReran {
+		return errors.New("the rerun marker went from set to clear")
+	}
+	if t.ev.Kind == lifecycle.SystemRerun && before.StuckReadReran {
+		return errors.New("a second system rerun was accepted")
+	}
 	if n.Generation < before.Generation || n.Version < before.Version {
 		return errors.New("a counter went backwards")
 	}

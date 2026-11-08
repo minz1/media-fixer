@@ -464,7 +464,11 @@ func stepPreview(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 }
 
 func stepSystemRerun(cur Snapshot, _ Event, _ time.Time) (Decision, error) {
+	if cur.StuckReadReran {
+		return Decision{Next: cur}, ErrAlreadyReran
+	}
 	next := cur
+	next.StuckReadReran = true
 	enter(&next, Reopened)
 	gen := bump(&next)
 	if cur.In.Paused {

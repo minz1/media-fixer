@@ -866,6 +866,7 @@ type Incident struct {
 	Version            int64          `json:"version"`
 	Generation         int64          `json:"generation"`
 	Parked             bool           `json:"parked"`
+	StuckReadReran     bool           `json:"stuck_read_reran"`
 	Reason             string         `json:"reason,omitempty"`
 }
 
@@ -875,7 +876,7 @@ func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
-		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
+		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, ''), stuck_read_reran
 		FROM incidents WHERE id = ?`, id)
 	return scanIncident(row)
 }
@@ -944,7 +945,7 @@ func (d *DB) ListIncidents(ctx context.Context, statusFilter string, limit, offs
 	q := `SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 	             COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 	             COALESCE(finding,''), COALESCE(recommended_actions,''),
-	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
+	             action_count, autonomous_locked, version, generation, parked, COALESCE(reason, ''), stuck_read_reran
 	      FROM incidents`
 	args := []any{}
 	if statusFilter != "" {
@@ -999,7 +1000,7 @@ const (
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
-		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, '')
+		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, ''), stuck_read_reran
 		FROM incidents
 		WHERE (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || ' (%)' ESCAPE '\')
 		  AND status IN (SELECT value FROM json_each(?))
@@ -1477,19 +1478,20 @@ type scanner interface {
 func scanIncident(s scanner) (*Incident, error) {
 	inc := &Incident{}
 	var findingStr, actionsStr string
-	var locked, parked int
+	var locked, parked, reran int
 	err := s.Scan(
 		&inc.ID, &inc.CreatedAt, &inc.UpdatedAt, &inc.Status,
 		&inc.Source, &inc.ReportedBy, &inc.What, &inc.Title,
 		&inc.JellyfinItemID, &inc.Details,
 		&findingStr, &actionsStr,
-		&inc.ActionCount, &locked, &inc.Version, &inc.Generation, &parked, &inc.Reason,
+		&inc.ActionCount, &locked, &inc.Version, &inc.Generation, &parked, &inc.Reason, &reran,
 	)
 	if err != nil {
 		return nil, err
 	}
 	inc.AutonomousLocked = locked == 1
 	inc.Parked = parked == 1
+	inc.StuckReadReran = reran == 1
 	if findingStr != "" && findingStr != nullJSON {
 		_ = json.Unmarshal([]byte(findingStr), &inc.Finding)
 	}

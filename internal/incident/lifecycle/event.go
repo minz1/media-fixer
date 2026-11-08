@@ -134,10 +134,11 @@ var (
 	ErrNotAwaitingDecision = errors.New("this incident is not waiting for an escalation decision")
 	ErrNoPlan              = errors.New("preview this escalation before approving it, so the plan " +
 		"that runs is the one you saw")
-	ErrPlanExpired = errors.New("may no longer describe the same files; preview it again")
-	ErrPlanChanged = errors.New("the plan changed since you previewed it; preview it again")
-	ErrNotParked   = errors.New("not parked")
-	ErrNoop        = errors.New("nothing to do")
+	ErrPlanExpired  = errors.New("may no longer describe the same files; preview it again")
+	ErrPlanChanged  = errors.New("the plan changed since you previewed it; preview it again")
+	ErrNotParked    = errors.New("not parked")
+	ErrAlreadyReran = errors.New("already_reran")
+	ErrNoop         = errors.New("nothing to do")
 
 	ErrOpRunning     = errors.New("another operation for this incident is running")
 	ErrOpMismatch    = errors.New("the operation does not match this incident")

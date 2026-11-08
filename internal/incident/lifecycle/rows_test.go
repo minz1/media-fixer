@@ -69,6 +69,13 @@ func reasonIs(r lifecycle.Reason) func(*testing.T, lifecycle.Snapshot) {
 	}
 }
 
+func isReran(t *testing.T, s lifecycle.Snapshot) {
+	t.Helper()
+	if !s.StuckReadReran {
+		t.Error("the rerun marker was not set")
+	}
+}
+
 func isParked(t *testing.T, s lifecycle.Snapshot) {
 	t.Helper()
 	if !s.Parked {
@@ -285,9 +292,17 @@ func systemRows() []docRow {
 	staleEv := tev{ev: lifecycle.Event{Kind: lifecycle.StaleRun, Origin: lifecycle.OriginStale}}
 	return []docRow{
 		{name: "system rerun", from: snap(lifecycle.AgentFixed), ev: ev(lifecycle.SystemRerun),
-			to: lifecycle.Reopened, gen: true, effs: []K{launchK}},
+			to: lifecycle.Reopened, gen: true, effs: []K{launchK}, assert: isReran},
 		{name: "system rerun paused", from: snap(lifecycle.AgentFixed), ev: evp(lifecycle.SystemRerun),
-			to: lifecycle.Reopened, gen: true, assert: isParked},
+			to: lifecycle.Reopened, gen: true, assert: func(t *testing.T, s lifecycle.Snapshot) {
+				t.Helper()
+				isParked(t, s)
+				isReran(t, s)
+			}},
+		{name: "system rerun already reran", from: with(snap(lifecycle.AgentFixed), reran),
+			ev: ev(lifecycle.SystemRerun), err: lifecycle.ErrAlreadyReran},
+		{name: "system rerun already reran paused", from: with(snap(lifecycle.AgentFixed), reran),
+			ev: evp(lifecycle.SystemRerun), err: lifecycle.ErrAlreadyReran},
 		{name: "system rerun stale", from: snap(lifecycle.ManualTestNeeded), ev: ev(lifecycle.SystemRerun),
 			err: lifecycle.ErrStale},
 		{name: "stale run restart", from: inv, ev: ev(lifecycle.StaleRun), to: lifecycle.Reopened, gen: true,

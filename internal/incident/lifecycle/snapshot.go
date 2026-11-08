@@ -15,23 +15,24 @@ const (
 )
 
 type Snapshot struct {
-	ID          string
-	Status      State
-	Version     int64
-	Generation  int64
-	Locked      bool
-	ActionCount int
-	Parked      bool
-	Reason      Reason
-	What        string
-	ItemID      string
-	Finding     Finding
-	NextCheck   time.Time
-	Verify      *Verify
-	Download    *Download
-	Plan        *Plan
-	Op          *operation.Op
-	In          Inputs
+	ID             string
+	Status         State
+	Version        int64
+	Generation     int64
+	Locked         bool
+	ActionCount    int
+	Parked         bool
+	StuckReadReran bool
+	Reason         Reason
+	What           string
+	ItemID         string
+	Finding        Finding
+	NextCheck      time.Time
+	Verify         *Verify
+	Download       *Download
+	Plan           *Plan
+	Op             *operation.Op
+	In             Inputs
 }
 
 type Finding struct {

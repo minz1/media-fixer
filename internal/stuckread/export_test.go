@@ -9,3 +9,5 @@ func (w *Watcher) TrackedTitlesForTest() int {
 	defer w.mu.Unlock()
 	return len(w.lastStuck)
 }
+
+func (w *Watcher) WarnedForTest() int { return len(w.warned) }

@@ -2,6 +2,7 @@ package incident_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -128,5 +129,46 @@ func TestOwnerRerun_AppendsMarker(t *testing.T) {
 	after := env.snap(t, parked.ID)
 	if got := ownerRerunGens(t, env, parked.ID); !after.Parked || len(got) != 1 || got[0] != after.Generation {
 		t.Fatalf("paused rerun markers %v, want [%d], parked %v", got, after.Generation, after.Parked)
+	}
+}
+
+func TestSystemRerun_SetsMarkerInSameTx(t *testing.T) {
+	t.Parallel()
+	env := newRoutingEnv(t, newGateAgent(blockOnCtx), nil, nil)
+	ctx := t.Context()
+	s := lifecycletest.SeedReport(t, env.db, lcReport("Marker"), lifecycletest.Spec{State: lifecycle.AgentFixed})
+	if err := env.svc.SystemRerun(ctx, s.ID, s.Generation); err != nil {
+		t.Fatal(err)
+	}
+	got, err := env.db.GetIncidentSnapshot(ctx, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == lifecycle.AgentFixed || !got.StuckReadReran {
+		t.Fatalf("after the rerun: status %s, marker %v", got.Status, got.StuckReadReran)
+	}
+	inc, err := env.db.GetIncident(ctx, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inc.StuckReadReran {
+		t.Fatal("db.Incident does not expose the marker")
+	}
+}
+
+func TestSystemRerun_AlreadyReranRejected(t *testing.T) {
+	t.Parallel()
+	env := newRoutingEnv(t, newGateAgent(blockOnCtx), nil, nil)
+	ctx := t.Context()
+	s := lifecycletest.SeedReport(t, env.db, lcReport("Twice"), lifecycletest.Spec{State: lifecycle.AgentFixed})
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) { n.StuckReadReran = true })
+	before := env.snap(t, s.ID)
+	err := env.svc.SystemRerun(ctx, s.ID, before.Generation)
+	if !errors.Is(err, lifecycle.ErrAlreadyReran) {
+		t.Fatalf("second rerun: %v, want already_reran", err)
+	}
+	after := env.snap(t, s.ID)
+	if after.Status != lifecycle.AgentFixed || after.Generation != before.Generation || !after.StuckReadReran {
+		t.Fatalf("a rejected rerun changed the row: %+v", after)
 	}
 }
