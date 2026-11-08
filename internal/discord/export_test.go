@@ -78,3 +78,63 @@ func SetHandlersForTest(b *Bot, handlers map[string]card.Handler) {
 }
 
 func SetSessionCloseForTest(b *Bot, fn func() error) { b.closeConn = fn }
+
+type (
+	CardPhase     = cardPhase
+	CardKind      = cardKind
+	CardSnap      = cardSnap
+	CardEvent     = cardEvent
+	CardRetry     = cardRetry
+	ConnKind      = connKind
+	ConnEvent     = connEvent
+	RejectedError = rejectedError
+)
+
+const (
+	CardCurrent     = cardCurrent
+	CardDirty       = cardDirty
+	CardLive        = cardLive
+	CardFailing     = cardFailing
+	CardGone        = cardGone
+	CardMark        = cardMark
+	CardPress       = cardPress
+	CardPoll        = cardPoll
+	CardRetryDue    = cardRetryDue
+	CardShown       = cardShown
+	CardHeld        = cardHeld
+	CardMissing     = cardMissing
+	CardUndecodable = cardUndecodable
+	CardAllGone     = cardAllGone
+	CardFailed      = cardFailed
+	CardPruned      = cardPruned
+
+	ConnStart       = connStart
+	ConnOpenOK      = connOpenOK
+	ConnOpenFailed  = connOpenFailed
+	ConnRetryDue    = connRetryDue
+	ConnGatewayDown = connGatewayDown
+	ConnGatewayUp   = connGatewayUp
+	ConnStop        = connStop
+)
+
+func CardPhases() []CardPhase { return cardPhases() }
+
+func CardKinds() []CardKind { return cardKinds() }
+
+func CardMatches(p CardPhase, k CardKind) int { return cardMatches(p, k) }
+
+func NextCard(s CardSnap, ev CardEvent) (CardSnap, error) { return nextCard(s, ev) }
+
+func CheckCard(s CardSnap) error { return checkCard(s) }
+
+func CardBackoff(n int, r CardRetry) time.Duration { return cardBackoff(n, r) }
+
+func ConnStates() []ConnState { return connStates() }
+
+func ConnKinds() []ConnKind { return connKinds() }
+
+func ConnMatches(s ConnState, k ConnKind) int { return connMatches(s, k) }
+
+func NextConn(c Conn, ev ConnEvent) (Conn, error) { return nextConn(c, ev) }
+
+func CheckConn(c Conn) error { return checkConn(c) }
