@@ -39,7 +39,7 @@ func (s *Scheduler) Act(
 		return "", refuse("this download is no longer stuck")
 	}
 	if d.TargetsFP() != targetsFp {
-		return "", refuse("this download now maps to %s; check the card again", d.Targets())
+		return "", refuse(changedRefusal)
 	}
 	if action != ActionRemove {
 		if err = s.waitOver(ctx, app, d.DownloadID); err != nil {

@@ -18,11 +18,11 @@ func act(e *runEnv, s *stuckqueue.Scheduler, a stuckqueue.App, dl string, action
 	if a == stuckqueue.AppRadarr {
 		f = e.radarr
 	}
-	targets := ""
+	fp := ""
 	if entries, err := f.client().QueueEntries(context.Background()); err == nil {
 		for _, d := range stuckqueue.Group(a, entries) {
 			if d.DownloadID == dl {
-				targets = d.Targets()
+				fp = d.TargetsFP()
 			}
 		}
 	}
@@ -36,17 +36,11 @@ func act(e *runEnv, s *stuckqueue.Scheduler, a stuckqueue.App, dl string, action
 	); err != nil {
 		return "", err
 	}
-	return actSeen(s, a, dl, action, targets)
+	return s.Act(context.Background(), a, dl, action, fp)
 }
 
-func actSeen(
-	s *stuckqueue.Scheduler,
-	a stuckqueue.App,
-	dl string,
-	action stuckqueue.Action,
-	seen string,
-) (string, error) {
-	return s.Act(context.Background(), a, dl, action, card.Fingerprint([]byte(seen)))
+func actOnEpisode1(s *stuckqueue.Scheduler, action stuckqueue.Action) (string, error) {
+	return s.Act(context.Background(), stuckqueue.AppSonarr, "D", action, card.Fingerprint([]byte("e1")))
 }
 
 func refusedNoWrite(t *testing.T, f *fakeArr, err error, reason string) {
@@ -171,9 +165,9 @@ func TestAct_InsideWaitOnlyRemoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Wait()
-	_, err := actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRegrab, "S01E01")
+	_, err := actOnEpisode1(s, stuckqueue.ActionRegrab)
 	refusedNoWrite(t, e.sonarr, err, "inside the 6 h wait")
-	if _, err = actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove, "S01E01"); err != nil {
+	if _, err = actOnEpisode1(s, stuckqueue.ActionRemove); err != nil {
 		t.Fatalf("remove inside the wait: %v", err)
 	}
 }
@@ -182,7 +176,7 @@ func TestAct_RefusesUnseen(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
-	_, err := actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRegrab, "S01E01")
+	_, err := actOnEpisode1(s, stuckqueue.ActionRegrab)
 	refusedNoWrite(t, e.sonarr, err, "no run has checked")
 }
 
@@ -273,8 +267,8 @@ func TestAct_RefusesRemappedTargets(t *testing.T) {
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "Link Click", 2, false, sample))
 	e.sonarr.setCandidates("D", candidateJSON("D", 2, false))
-	_, err := actSeen(s, stuckqueue.AppSonarr, "D", stuckqueue.ActionImport, "S01E01")
-	refusedNoWrite(t, e.sonarr, err, "now maps to S01E02")
+	_, err := actOnEpisode1(s, stuckqueue.ActionImport)
+	refusedNoWrite(t, e.sonarr, err, "this changed, look again")
 }
 
 func TestAct_RefusesOnTargetsFingerprintMismatch(t *testing.T) {
@@ -288,9 +282,26 @@ func TestAct_RefusesOnTargetsFingerprintMismatch(t *testing.T) {
 	}
 	const stale = "0123456789ab"
 	_, err := s.Act(context.Background(), stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove, stale)
-	refusedNoWrite(t, e.sonarr, err, "now maps to S01E02")
+	refusedNoWrite(t, e.sonarr, err, "this changed, look again")
 	if strings.Contains(err.Error(), stale) {
 		t.Fatalf("refusal %q shows the fingerprint", err)
+	}
+}
+
+func TestFingerprint_StaleButtonSaysLookAgain(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "Link Click", 1, false, sample))
+	if _, err := e.db.UpsertStuckSeen(
+		context.Background(), string(stuckqueue.AppSonarr), "D", "D", "", e.clock.Now().Add(-7*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	labelFP := card.Fingerprint([]byte("S01E01"))
+	_, err := s.Act(context.Background(), stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove, labelFP)
+	refusedNoWrite(t, e.sonarr, err, "this changed, look again")
+	if _, err = actOnEpisode1(s, stuckqueue.ActionRemove); err != nil {
+		t.Fatalf("remove with the id fingerprint: %v", err)
 	}
 }
 

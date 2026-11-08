@@ -160,7 +160,7 @@ func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 		`due <time datetime="2026-10-30T05:07:00Z" title="2026-10-30 05:07 UTC">`,
 		`name="download_id" value="AH"`,
 		`name="download_id" value="LC"`,
-		`name="targets_fp" value="`+card.Fingerprint([]byte("S03E11"))+`"`,
+		`name="targets_fp" value="`+card.Fingerprint([]byte("e11"))+`"`,
 		"/media/maintenance/stuck-queue/import",
 	)
 }
@@ -288,9 +288,8 @@ func TestStuckAction_RefusalInCard(t *testing.T) {
 func TestStuckAction_SurvivesCancelledRequest(t *testing.T) {
 	t.Parallel()
 	env := newStuckEnv(t)
-	rec := serveCancelled(
-		t, env.srv, "/media/maintenance/stuck-queue/remove?app=sonarr&download_id=D&targets_fp="+card.Fingerprint(nil),
-	)
+	fp := card.Fingerprint([]byte("u7"))
+	rec := serveCancelled(t, env.srv, "/media/maintenance/stuck-queue/remove?app=sonarr&download_id=D&targets_fp="+fp)
 	if rec.Code != http.StatusOK || env.arr.deleteCount() != 1 {
 		t.Fatalf("status %d, deletes %d, body %s", rec.Code, env.arr.deleteCount(), rec.Body.String())
 	}

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/minz1/mediafixer/internal/card"
@@ -66,7 +67,23 @@ func (d Download) MaybeHasFile() bool {
 
 func (d Download) Targets() string { return targets(d.Records) }
 
-func (d Download) TargetsFP() string { return card.Fingerprint([]byte(d.Targets())) }
+func (d Download) TargetsFP() string { return card.Fingerprint([]byte(targetIDs(d.Records))) }
+
+func targetIDs(recs []client.QueueEntry) string {
+	ids := make([]string, 0, len(recs))
+	for _, r := range recs {
+		switch {
+		case r.MovieID != 0:
+			ids = append(ids, "m"+strconv.Itoa(r.MovieID))
+		case r.EpisodeID != 0:
+			ids = append(ids, "e"+strconv.Itoa(r.EpisodeID))
+		default:
+			ids = append(ids, "u"+strconv.Itoa(r.ID))
+		}
+	}
+	slices.Sort(ids)
+	return strings.Join(slices.Compact(ids), " ")
+}
 
 func Classify(d Download) Verdict {
 	if slices.ContainsFunc(d.Records, unmapped) {

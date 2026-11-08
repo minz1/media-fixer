@@ -383,7 +383,7 @@ func TestHandler_ActsWithFingerprint(t *testing.T) {
 	if _, err := e.db.UpsertStuckSeen(context.Background(), "sonarr", "D", "D", "", e.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	fp := card.Fingerprint([]byte("S01E01"))
+	fp := card.Fingerprint([]byte("e1"))
 	if res := handle(t, s, "remove", "s", "D", fp); res.Line != "Removed." {
 		t.Fatalf("line = %q", res.Line)
 	}
@@ -397,9 +397,9 @@ func TestHandler_RefusalLines(t *testing.T) {
 	e, s := newSched(t)
 	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
 	cases := map[string][]string{
-		"Refused: this download now maps to S01E01; check the card again": {"remove", "s", "D", "000000000000"},
-		"Refused: this download is no longer in the Sonarr queue":         {"remove", "s", "GONE", "x"},
-		"Refused: Radarr is not configured":                               {"remove", "r", "D", "x"},
+		"Refused: this changed, look again":                       {"remove", "s", "D", "000000000000"},
+		"Refused: this download is no longer in the Sonarr queue": {"remove", "s", "GONE", "x"},
+		"Refused: Radarr is not configured":                       {"remove", "r", "D", "x"},
 	}
 	e.runner.Radarr = nil
 	for want, a := range cases {

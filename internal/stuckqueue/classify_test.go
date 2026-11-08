@@ -161,3 +161,35 @@ func TestMaybeHasFile(t *testing.T) {
 		t.Fatal("a known missing file is not maybe")
 	}
 }
+
+func TestFingerprint_HashesTargetIDsNotLabels(t *testing.T) {
+	t.Parallel()
+	fp := func(recs ...client.QueueEntry) string {
+		return stuckqueue.Download{App: stuckqueue.AppSonarr, DownloadID: "D", Records: recs}.TargetsFP()
+	}
+	base := stuckRec(1, "D", 101, false)
+	renumbered := base
+	renumbered.SeasonNumber, renumbered.EpisodeNumber = 2, 7
+	if fp(base) != fp(renumbered) {
+		t.Fatal("a renumbered episode changed the fingerprint")
+	}
+	other := base
+	other.EpisodeID = 202
+	if fp(base) == fp(other) {
+		t.Fatal("a different episode with the same label kept the fingerprint")
+	}
+	unmappedA, unmappedB := stuckRec(5, "D", 0, false), stuckRec(6, "D", 0, false)
+	if fp(base, unmappedA) == fp(base, unmappedB) {
+		t.Fatal("an unmapped record's queue id is not in the fingerprint")
+	}
+	if fp(base, unmappedA) == fp(base) {
+		t.Fatal("an unmapped record adds nothing to the fingerprint")
+	}
+	movie := client.QueueEntry{ID: 9, DownloadID: "M", MovieID: 33}
+	if fp(movie) == fp(client.QueueEntry{ID: 9, DownloadID: "M", MovieID: 34}) {
+		t.Fatal("a different movie kept the fingerprint")
+	}
+	if fp(base, base) != fp(base) {
+		t.Fatal("a repeated target changed the fingerprint")
+	}
+}
