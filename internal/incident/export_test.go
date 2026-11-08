@@ -208,6 +208,8 @@ func (s *Service) ScheduleCheckForTest(inc *db.Incident, gen int64, at time.Time
 
 func (s *Service) ArmedForTest(id string) int64 { return s.runs.liveness().armed[id] }
 
+func (s *Service) ArmedAtForTest(id string) (time.Time, bool) { return s.runs.armedAt(id) }
+
 func (s *Service) ClaimCheckForTest(id string, gen int64) func() { return s.runs.claimCheck(id, gen) }
 
 func (s *Service) LogForTest() *slog.Logger { return s.log }

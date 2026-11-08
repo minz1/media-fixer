@@ -700,6 +700,31 @@ func TestQ4c_10_RerunOnceSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestE2_UnknownNeverWakes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.svc.SetStuckRead(h.w)
+	s := lifecycletest.Seed(t, h.db, lifecycletest.Spec{Title: "T", What: agent.WhatStuckRead, State: lifecycle.Verifying})
+	lifecycletest.Force(t, h.db, s.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.VerifyEnteredAt = time.Now().Add(-4 * time.Minute)
+	})
+
+	h.poll(three("T", 7)...)
+	h.poll(three("T", 7)...)
+	h.poll()
+	if h.status(s.ID) == db.StatusAgentFixed {
+		t.Fatal("a single clear poll confirmed the fix")
+	}
+	h.poll()
+	deadline := time.Now().Add(2 * time.Second)
+	for h.status(s.ID) != db.StatusAgentFixed {
+		if time.Now().After(deadline) {
+			t.Fatalf("status = %s, want agent_fixed after the clear", h.status(s.ID))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestWatcher_WarnedBoundedByStuckTitles(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

@@ -313,7 +313,11 @@ func firstVerifyDelay(spec VerifySpec, after time.Duration, l Limits) time.Durat
 func startVerify(next Snapshot, o Outcome, now time.Time) (Decision, error) {
 	enter(&next, Verifying)
 	next.NextCheck = now.Add(firstVerifyDelay(o.Spec, o.After, next.In.Limits))
-	next.Verify = &Verify{ChecksLeft: max(next.In.Limits.VerifyChecks, 1), Spec: o.Spec}
+	spec := o.Spec
+	if spec.Kind == VerifyStuckRead {
+		spec.VerifyEnteredAt = now
+	}
+	next.Verify = &Verify{ChecksLeft: max(next.In.Limits.VerifyChecks, 1), Spec: spec}
 	gen := bump(&next)
 	return moved(next, check(gen, next.NextCheck, CheckVerify))
 }

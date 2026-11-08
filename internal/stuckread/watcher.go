@@ -147,23 +147,33 @@ func (w *Watcher) track(readers []mediaagentapi.StuckReader, now time.Time) map[
 
 func (w *Watcher) recordClear(ctx context.Context, stuck map[string][]mediaagentapi.StuckReader, now time.Time) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.failing {
 		w.failing = false
 		w.log.InfoContext(ctx, "stuck-read poll recovered")
 	}
 	w.lastGood = now
 	w.okPolls++
+	var cleared []string
 	for title, last := range w.lastStuck {
-		if _, now := stuck[title]; !now && last == w.okPolls-1 {
+		_, still := stuck[title]
+		if !still && last == w.okPolls-1 {
 			w.log.InfoContext(ctx, "stuck read cleared", "title", title)
 		}
 		if w.okPolls-last >= clearPolls {
 			delete(w.lastStuck, title)
+			if !still {
+				cleared = append(cleared, title)
+			}
 		}
 	}
 	for title := range stuck {
 		w.lastStuck[title] = w.okPolls
+	}
+	w.mu.Unlock()
+	for _, title := range cleared {
+		if err := w.svc.ArmStuckReadClear(ctx, title); err != nil {
+			w.log.WarnContext(ctx, "arm stuck-read clear", "title", title, "error", err)
+		}
 	}
 }
 

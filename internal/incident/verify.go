@@ -158,6 +158,36 @@ func (s *Service) observeVerify(ctx context.Context, inc *db.Incident, snap life
 	return lifecycle.VerifyNotYet, obs.ScanRunning(ctx)
 }
 
+func (s *Service) ArmStuckReadClear(ctx context.Context, title string) error {
+	incs, err := s.db.FindByStatus(ctx, lifecycle.Verifying)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	floor := s.minutes(stuckReadVerifyFloorMinutes)
+	for _, inc := range incs {
+		if inc.Title != title {
+			continue
+		}
+		snap, err := s.db.GetIncidentSnapshot(ctx, inc.ID)
+		if err != nil {
+			s.log.ErrorContext(ctx, "arm stuck-read clear: load incident", "incident", inc.ID, "error", err)
+			continue
+		}
+		if snap.Verify == nil || snap.Verify.Spec.Kind != lifecycle.VerifyStuckRead {
+			continue
+		}
+		at := snap.Verify.Spec.VerifyEnteredAt.Add(floor)
+		if at.Before(now) {
+			at = now
+		}
+		s.scheduleCheck(inc.ID, lifecycle.Effect{
+			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: at, Check: lifecycle.CheckVerify,
+		})
+	}
+	return nil
+}
+
 func (s *Service) notVerified(inc *db.Incident) lifecycle.Notice {
 	fields := []card.Field{}
 	if result, ok := agent.ParseDiagnosticResult(inc.Finding); ok {

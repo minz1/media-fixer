@@ -59,6 +59,7 @@ type runToken struct {
 
 type armedCheck struct {
 	gen   int64
+	at    time.Time
 	timer *time.Timer
 }
 
@@ -215,7 +216,7 @@ func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func(done
 		}
 		c.timer.Stop()
 	}
-	m.checks[id] = armedCheck{gen: gen, timer: time.AfterFunc(max(time.Until(at), 0), func() {
+	m.checks[id] = armedCheck{gen: gen, at: at, timer: time.AfterFunc(max(time.Until(at), 0), func() {
 		fire(m.claimCheck(id, gen))
 	})}
 	return true
@@ -281,6 +282,13 @@ func (m *runManager) currentGen(id string) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.current[id]
+}
+
+func (m *runManager) armedAt(id string) (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.checks[id]
+	return c.at, ok
 }
 
 func (m *runManager) planStarted(id string) func() {

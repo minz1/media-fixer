@@ -266,3 +266,76 @@ func TestQ4b_4_StuckReadVerifyUnknownExtends(t *testing.T) {
 		t.Fatalf("unknown read state changed %+v", got)
 	}
 }
+
+func TestE2_ClearBeforeFloorArmsAtFloor(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	chk := &fakeStuckChecker{clear: func(int) bool { return true }}
+	env.svc.SetStuckRead(chk)
+	s := env.verifying(t, "Floor show", lifecycle.WhatStuckRead)
+	entered := time.Now()
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) { n.Verify.Spec.VerifyEnteredAt = entered })
+
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Floor show"); err != nil {
+		t.Fatal(err)
+	}
+	at, ok := env.svc.ArmedAtForTest(s.ID)
+	if !ok {
+		t.Fatal("the clear did not arm the verify check")
+	}
+	if d := at.Sub(entered); d < 3*time.Minute || d > 3*time.Minute+2*time.Second {
+		t.Fatalf("armed %v after the entered time, want the 3-minute floor", d)
+	}
+}
+
+func TestE2_ClearAfterFloorConfirmsQuickly(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	chk := &fakeStuckChecker{clear: func(int) bool { return true }}
+	env.svc.SetStuckRead(chk)
+	s := env.verifying(t, "Quick show", lifecycle.WhatStuckRead)
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.VerifyEnteredAt = time.Now().Add(-4 * time.Minute)
+	})
+
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Quick show"); err != nil {
+		t.Fatal(err)
+	}
+	env.waitStatus(t, s.ID, lifecycle.AgentFixed)
+	if n := chk.calls(); n != 1 {
+		t.Fatalf("Clear calls = %d, want 1", n)
+	}
+}
+
+func TestE2_OtherTitlesAndKindsUntouched(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	chk := &fakeStuckChecker{clear: func(int) bool { return true }}
+	env.svc.SetStuckRead(chk)
+	target := env.verifying(t, "Target show", lifecycle.WhatStuckRead)
+	otherTitle := env.verifying(t, "Other show", lifecycle.WhatStuckRead)
+	generic := env.verifying(t, "Generic show", "cant_play")
+	sameTitleGeneric := env.verifying(t, "Same title", lifecycle.WhatStuckRead)
+	lifecycletest.Force(t, env.db, sameTitleGeneric.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.Kind = lifecycle.VerifyGeneric
+	})
+
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Target show"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := env.svc.ArmedAtForTest(target.ID); !ok {
+		t.Fatal("the matching stuck-read verify was not armed")
+	}
+	if _, ok := env.svc.ArmedAtForTest(otherTitle.ID); ok {
+		t.Fatal("a stuck-read verify with a different title was armed")
+	}
+	if _, ok := env.svc.ArmedAtForTest(generic.ID); ok {
+		t.Fatal("a generic verify was armed")
+	}
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Same title"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := env.svc.ArmedAtForTest(sameTitleGeneric.ID); ok {
+		t.Fatal("a same-title generic verify was armed")
+	}
+}

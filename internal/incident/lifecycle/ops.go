@@ -75,6 +75,7 @@ func approvedVerify(cur Snapshot, now time.Time) (Decision, error) {
 	delay := next.In.Limits.ApprovedVerify
 	if cur.What == WhatStuckRead {
 		spec.Kind = VerifyStuckRead
+		spec.VerifyEnteredAt = now
 		delay = max(delay, next.In.Limits.StuckReadFloor)
 	}
 	enter(&next, Verifying)
