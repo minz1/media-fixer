@@ -31,7 +31,7 @@ func TestSettings_DefaultsAndValidate(t *testing.T) {
 	t.Parallel()
 	s := sweep.DefaultSettings()
 	want := sweep.Settings{
-		HourUTC: 12, MinMissing: 1, MaxGrabs: 10, MaxLookups: 40, MaxSearches: 200, IntervalHours: 6,
+		MinMissing: 1, MaxGrabs: 10, MaxLookups: 40, MaxSearches: 200, IntervalHours: 6,
 		BackoffBaseHours: 24, BackoffMaxDays: 30, BurstFailures: 5, StuckAfter: 3, DigestHourUTC: 9,
 		Anime: true, ExcludedSeries: []int{},
 	}

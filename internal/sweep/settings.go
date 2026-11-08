@@ -15,7 +15,6 @@ import (
 const (
 	SettingsKey = "maintenance.pack_sweep"
 
-	defaultHourUTC       = 12
 	defaultIntervalHours = 6
 	legacyIntervalHours  = 168
 	defaultMaxGrabs      = 10
@@ -30,8 +29,6 @@ const (
 
 type Settings struct {
 	Enabled          bool       `json:"enabled"`
-	Weekday          int        `json:"weekday"`
-	HourUTC          int        `json:"hour_utc"`
 	IntervalHours    int        `json:"interval_hours"`
 	MinMissing       int        `json:"min_missing"`
 	MaxGrabs         int        `json:"max_grabs"`
@@ -49,7 +46,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{
-		HourUTC: defaultHourUTC, IntervalHours: defaultIntervalHours, MinMissing: 1, MaxGrabs: defaultMaxGrabs,
+		IntervalHours: defaultIntervalHours, MinMissing: 1, MaxGrabs: defaultMaxGrabs,
 		MaxLookups: defaultMaxLookups, MaxSearches: defaultMaxSearches, BackoffBaseHours: defaultBackoffBase,
 		BackoffMaxDays: defaultBackoffMax, BurstFailures: defaultBurstFailures, StuckAfter: defaultStuckAfter,
 		DigestHourUTC: defaultDigestHour, Anime: true, ExcludedSeries: []int{},
@@ -109,7 +106,9 @@ func parseSettings(raw string, found bool) (Settings, error) {
 	return s, nil
 }
 
-func updateSettings(ctx context.Context, d *db.DB, edit func(Settings, error) (Settings, error)) error {
+func updateSettings(
+	ctx context.Context, d *db.DB, nullEnabledAt bool, edit func(Settings, error) (Settings, error),
+) error {
 	return d.UpdateSetting(ctx, SettingsKey, func(raw string, found bool) (string, error) {
 		s, err := edit(parseSettings(raw, found))
 		if err != nil {
@@ -118,13 +117,31 @@ func updateSettings(ctx context.Context, d *db.DB, edit func(Settings, error) (S
 		if s.ExcludedSeries == nil {
 			s.ExcludedSeries = []int{}
 		}
-		b, err := json.Marshal(s)
-		return string(b), err
+		return mergeSettings(raw, s, nullEnabledAt)
 	})
 }
 
+func mergeSettings(raw string, s Settings, nullEnabledAt bool) (string, error) {
+	merged := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &merged); err != nil || merged == nil {
+		merged = map[string]json.RawMessage{}
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	if err = json.Unmarshal(b, &merged); err != nil {
+		return "", err
+	}
+	if nullEnabledAt {
+		merged["enabled_at"] = json.RawMessage("null")
+	}
+	out, err := json.Marshal(merged)
+	return string(out), err
+}
+
 func SetExcluded(ctx context.Context, d *db.DB, seriesID int, excluded bool) error {
-	return updateSettings(ctx, d, func(s Settings, err error) (Settings, error) {
+	return updateSettings(ctx, d, false, func(s Settings, err error) (Settings, error) {
 		if err != nil {
 			return s, err
 		}
@@ -140,11 +157,11 @@ func SetExcluded(ctx context.Context, d *db.DB, seriesID int, excluded bool) err
 }
 
 func SaveSettings(ctx context.Context, d *db.DB, s Settings, now time.Time) error {
-	return updateSettings(ctx, d, func(prev Settings, err error) (Settings, error) {
+	return updateSettings(ctx, d, !s.Enabled, func(prev Settings, err error) (Settings, error) {
 		if err != nil && !errors.Is(err, ErrCorruptSettings) {
 			return s, err
 		}
-		s.Weekday, s.HourUTC, s.ExcludedSeries = prev.Weekday, prev.HourUTC, prev.ExcludedSeries
+		s.ExcludedSeries = prev.ExcludedSeries
 		s.EnabledAt = enabledAt(prev, s, now)
 		return s, nil
 	})

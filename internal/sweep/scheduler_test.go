@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -816,10 +815,7 @@ func TestSaveSettings_PartlyReadableEnabledRowGetsFreshEnabledAt(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	ctx := context.Background()
-	raw := fmt.Sprintf(
-		`{"enabled":true,"weekday":%d,"hour_utc":%d,"enabled_at":"2020-01-01T00:00:00Z","max_grabs":"x"}`,
-		settings().Weekday, settings().HourUTC,
-	)
+	raw := `{"enabled":true,"weekday":0,"hour_utc":12,"enabled_at":"2020-01-01T00:00:00Z","max_grabs":"x"}`
 	if err := h.db.SetSetting(ctx, sweep.SettingsKey, raw); err != nil {
 		t.Fatal(err)
 	}

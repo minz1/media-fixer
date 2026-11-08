@@ -212,7 +212,7 @@ func TestSweepSave_NewFields(t *testing.T) {
 	}
 	got.EnabledAt = nil
 	want := sweep.Settings{
-		Enabled: true, Weekday: 3, HourUTC: 7, IntervalHours: 12, MinMissing: 2, MaxGrabs: 4, MaxLookups: 40,
+		Enabled: true, IntervalHours: 12, MinMissing: 2, MaxGrabs: 4, MaxLookups: 40,
 		MaxSearches: 10, BackoffBaseHours: 48, BackoffMaxDays: 20, BurstFailures: 6, StuckAfter: 4, DigestHourUTC: 8,
 		Anime: true, ExcludedSeries: []int{4, 6},
 	}
