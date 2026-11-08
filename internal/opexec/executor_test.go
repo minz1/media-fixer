@@ -265,6 +265,28 @@ func TestS9_6_SearchErrorAfterDeletesStopsAtSearch(t *testing.T) {
 	}
 }
 
+func TestQ5a_6_ResumeAfterUnknownDeleteDeletesThenReadds(t *testing.T) {
+	t.Parallel()
+	r := newRig(mustOp(t, readdSpec()))
+	r.decy.fail["tdelete"] = status(500)
+	r.decy.present = true
+	first := r.x.Run(context.Background(), r.store.op)
+	wantStates(t, first, unknown, pending)
+	probes, err := r.x.Probe(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVerdicts(t, probes, operation.VerdictTodo, operation.VerdictTodo)
+	delete(r.decy.fail, "tdelete")
+	resumed := apply(t, first, operation.Event{Kind: operation.OwnerContinued, Version: first.Version, Probes: probes})
+	r.store.op = resumed
+	got := r.x.Run(context.Background(), resumed)
+	wantStates(t, got, done, done)
+	if !r.j.has("call:tadd") {
+		t.Fatalf("re-add never sent: %v", r.j.all())
+	}
+}
+
 func TestQ5a_6_DeletedNotReaddedStopsAtAdd(t *testing.T) {
 	t.Parallel()
 	r := newRig(mustOp(t, readdSpec()))

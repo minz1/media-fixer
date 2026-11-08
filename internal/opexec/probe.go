@@ -12,10 +12,18 @@ import (
 
 func (x *Executor) Probe(ctx context.Context, op operation.Op) ([]operation.Probe, error) {
 	var out []operation.Probe
+	deleteOwed := false
 	for _, i := range operation.Remaining(op) {
+		if deleteOwed && op.Steps[i].Kind == operation.StepTorrentAdd {
+			out = append(out, operation.Probe{Index: i, Verdict: operation.VerdictTodo})
+			continue
+		}
 		p, err := x.probeStep(ctx, op, i)
 		if err != nil {
 			return nil, fmt.Errorf("step %d: %w", i+1, err)
+		}
+		if op.Steps[i].Kind == operation.StepTorrentDelete && p.Verdict == operation.VerdictTodo {
+			deleteOwed = true
 		}
 		out = append(out, p)
 	}
@@ -63,7 +71,7 @@ func (x *Executor) probeTorrent(ctx context.Context, st operation.Step) (operati
 	if x.Ports.Decypharr == nil {
 		return operation.Probe{}, fmt.Errorf("%w: decypharr", errNoPort)
 	}
-	present, err := x.Ports.Decypharr.TorrentByHash(ctx, st.Name, st.InfoHash)
+	present, err := x.Ports.Decypharr.TorrentByHash(ctx, st.InfoHash)
 	if err != nil {
 		return operation.Probe{}, err
 	}

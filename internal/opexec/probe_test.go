@@ -107,7 +107,7 @@ func TestProbe_TorrentPresentIsDone(t *testing.T) {
 		r := newRig(operation.Op{})
 		r.decy.present = true
 		got := probeOf(t, r, interruptedAt(t, readdSpec(), 0))
-		wantVerdicts(t, got, operation.VerdictTodo, operation.VerdictDone)
+		wantVerdicts(t, got, operation.VerdictTodo, operation.VerdictTodo)
 	})
 	t.Run("delete absent", func(t *testing.T) {
 		t.Parallel()
