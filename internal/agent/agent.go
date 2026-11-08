@@ -332,7 +332,7 @@ type DiagnosticResult struct {
 	EscalateAction string `json:"escalate_action,omitempty"`
 	// EscalateParams carries the target for EscalateAction (e.g. media_type,
 	// title, scope, season, episode, blocklist for remove_and_search). Passed
-	// straight through to Agent.PlanEscalation/ExecuteApprovedPlan.
+	// straight through to Agent.PlanEscalation/OperationFor.
 	EscalateParams   map[string]any `json:"escalate_params,omitempty"`
 	RequiresApproval bool           `json:"requires_approval"`
 	// VerifyAfterSeconds, when > 0, tells the system a non-destructive fix was
@@ -1132,7 +1132,7 @@ func improved(pre, post *FixSignature) bool {
 // do not escalate to the owner.
 var ErrIncidentNotInvestigatable = errors.New("incident not in an investigatable status")
 
-// errNoEscalationPlan is returned by PlanEscalation/ExecuteApprovedPlan for
+// errNoEscalationPlan is returned by PlanEscalation/OperationFor for
 // escalate_action values that have no automated preview or execution — the
 // owner must act on them manually from the diagnosis alone.
 var errNoEscalationPlan = errors.New("escalate_action has no automated plan; act manually")
@@ -1146,25 +1146,6 @@ func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult, wh
 		return a.disp.planRemoveAndSearch(ctx, result.EscalateParams, what != WhatStuckRead)
 	case EscalateDeleteTorrentReadd:
 		return a.disp.readDecypharrReaddPlan(ctx, &toolCall{}, result.EscalateParams)
-	default:
-		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
-	}
-}
-
-// ExecuteApprovedPlan executes exactly the plan an owner approved, decoded
-// from what PreviewEscalation stored, instead of re-resolving it against
-// current state.
-//
-// Re-resolving was a TOCTOU on a destructive operation: the owner approves a
-// preview listing one file, and anything that changed in between (a new grab
-// landing, a season expanding) silently widens what actually gets deleted.
-// There is no second confirmation, so the preview has to be the contract.
-func (a *Agent) ExecuteApprovedPlan(ctx context.Context, result *DiagnosticResult, planJSON []byte) (any, error) {
-	switch result.EscalateAction {
-	case EscalateRemoveAndSearch:
-		return a.disp.executeApprovedReplacePlan(ctx, planJSON)
-	case EscalateDeleteTorrentReadd:
-		return a.disp.executeApprovedReaddPlan(ctx, planJSON)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}

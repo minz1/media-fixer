@@ -595,7 +595,7 @@ func arrActionToolSpecs() []toolSpec {
 // offered to the LLM as a callable tool (see toolDefs). The handler here is a
 // read-only PlanReplace preview — never a delete — which is what makes it
 // safe for live-check tooling to exercise unconditionally. Actually deleting
-// files and searching only happens via Agent.ExecuteApprovedPlan, invoked by the
+// files and searching only happens through the operation Agent.OperationFor builds, run by the
 // dashboard's approve-escalation flow after an owner reviews this same plan.
 func approvalToolSpecs() []toolSpec {
 	return []toolSpec{
@@ -1489,7 +1489,7 @@ func (d *Dispatcher) planRemoveAndSearch(ctx context.Context, args map[string]an
 const maxReadabilityProbes = 10
 
 // probeReplaceReadability tests whether any file this plan would delete can
-// actually be read, so executeApprovedReplacePlan can check the agent's
+// actually be read, so replaceOperation can check the agent's
 // stated premise against reality.
 //
 // Stops at the first readable file: one is enough to contradict an
@@ -1535,19 +1535,6 @@ func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, _ *toolCall, ar
 	}
 	name, _ := args[paramName].(string)
 	return d.Decypharr.PlanTorrentReadd(ctx, name)
-}
-
-// executeApprovedReaddPlan runs a ReaddPlan exactly as stored, with no
-// re-resolution — same contract as executeApprovedReplacePlan below.
-func (d *Dispatcher) executeApprovedReaddPlan(ctx context.Context, planJSON []byte) (any, error) {
-	if d.Decypharr == nil {
-		return nil, errors.New("decypharr not configured")
-	}
-	var plan client.ReaddPlan
-	if err := json.Unmarshal(planJSON, &plan); err != nil {
-		return nil, fmt.Errorf("decode approved readd plan: %w", err)
-	}
-	return d.Decypharr.ExecuteTorrentReadd(ctx, &plan)
 }
 
 func (d *Dispatcher) readdOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
@@ -1600,44 +1587,6 @@ func checkReplacePremise(plan *client.ReplacePlan) error {
 			"Either the diagnosis is wrong or the scope is too wide — re-diagnose, or "+
 			"state the real reason",
 		client.ReplaceReasonUnreadable, probe.ReadableFile, probe.BytesRead)
-}
-
-// executeApprovedReplacePlan runs a ReplacePlan exactly as stored, with no
-// re-resolution. The plan was rendered to the owner at preview time; this is
-// the same bytes coming back.
-func (d *Dispatcher) executeApprovedReplacePlan(ctx context.Context, planJSON []byte) (any, error) {
-	var plan client.ReplacePlan
-	if err := json.Unmarshal(planJSON, &plan); err != nil {
-		return nil, fmt.Errorf("decode approved escalation plan: %w", err)
-	}
-	if err := checkReplacePremise(&plan); err != nil {
-		return nil, err
-	}
-
-	arrClient := d.Sonarr
-	if plan.MediaType == client.ReplaceMediaMovie {
-		arrClient = d.Radarr
-	}
-	if arrClient == nil {
-		return nil, fmt.Errorf("no client configured for media_type %q", plan.MediaType)
-	}
-	result, err := arrClient.ExecuteReplace(ctx, &plan)
-	// reason and readable_file are logged together on purpose: the enum is
-	// trusted rather than enforced for the non-readability cases, so the only
-	// way to find a model routinely claiming wrong_content over files that
-	// read fine is to have both recorded on every run.
-	outcome := &approvedReplaceResult{ReplaceResult: result, Reason: plan.Reason}
-	if plan.Readability != nil {
-		outcome.ReadableFile = plan.Readability.ReadableFile
-	}
-	return outcome, err
-}
-
-type approvedReplaceResult struct {
-	*client.ReplaceResult
-
-	Reason       string `json:"reason"`
-	ReadableFile string `json:"readable_file"`
 }
 
 // buildReplaceRequest validates the arguments for the one tool that deletes

@@ -3,7 +3,9 @@ package incident_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -263,16 +265,47 @@ func searchSpec(subject operation.Subject, source []byte) operation.Spec {
 type agentArr struct {
 	opexec.Arr
 
-	ag incident.AgentRunner
+	ag approvedRunner
 }
 
 func (a agentArr) Search(ctx context.Context, _ string, _, _ int, _ []int) error {
-	if _, err := a.ag.ExecuteApprovedPlan(ctx, nil, nil); err != nil {
+	if _, err := a.ag.runApproved(ctx, nil, nil); err != nil {
 		return &client.HTTPStatusError{Status: http.StatusBadRequest, Body: err.Error()}
 	}
 	return nil
 }
 
-func execPorts(ag incident.AgentRunner) opexec.Ports {
+func execPorts(ag approvedRunner) opexec.Ports {
 	return opexec.Ports{Arr: func(string) opexec.Arr { return agentArr{ag: ag} }}
+}
+
+type approvedRunner interface {
+	incident.AgentRunner
+	runApproved(ctx context.Context, result *agent.DiagnosticResult, planJSON []byte) (any, error)
+}
+
+func TestApprove_WithoutSpecLogsAnError(t *testing.T) {
+	t.Parallel()
+	logs := &syncBuffer{}
+	fx := newEscalationFixtureLogger(
+		t, newEscalationAgent(), &captureNotifier{}, slog.New(slog.NewTextHandler(logs, nil)),
+	)
+	inc := fx.incident(t)
+	fp := fx.preview(t, inc.ID)
+	err := fx.svc.ApplyBareApproveForTest(context.Background(), inc.ID, fp)
+	if !errors.Is(err, lifecycle.ErrNoSpec) {
+		t.Fatalf("err = %v", err)
+	}
+	var got []string
+	for line := range strings.SplitSeq(logs.String(), "\n") {
+		if strings.Contains(line, "level=ERROR") {
+			got = append(got, line)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "no_spec") || !strings.Contains(got[0], inc.ID) {
+		t.Fatalf("error records = %q", got)
+	}
+	if incident.IsRefusal(err) {
+		t.Error("ErrNoSpec counted as an owner refusal")
+	}
 }

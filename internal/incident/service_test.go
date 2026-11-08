@@ -503,12 +503,6 @@ func (a *blockingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticRes
 	return map[string]any{}, nil
 }
 
-func (a *blockingAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
-) (any, error) {
-	return map[string]any{}, nil
-}
-
 func (a *blockingAgent) CheckPendingOutcome(
 	_ context.Context, _ *db.PendingOutcome,
 ) (*agent.PendingOutcomeObservation, error) {
@@ -635,12 +629,6 @@ func (a *sequencedAgent) BuildSummarySeed(
 }
 
 func (a *sequencedAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
-	return map[string]any{}, nil
-}
-
-func (a *sequencedAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
-) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -819,12 +807,6 @@ func (a *alwaysFixedAgent) PlanEscalation(_ context.Context, _ *agent.Diagnostic
 	return map[string]any{}, nil
 }
 
-func (a *alwaysFixedAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
-) (any, error) {
-	return map[string]any{}, nil
-}
-
 func (a *alwaysFixedAgent) CheckPendingOutcome(
 	_ context.Context, _ *db.PendingOutcome,
 ) (*agent.PendingOutcomeObservation, error) {
@@ -965,12 +947,6 @@ func (a *concurrencyTrackingAgent) BuildSummarySeed(
 }
 
 func (a *concurrencyTrackingAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
-	return map[string]any{}, nil
-}
-
-func (a *concurrencyTrackingAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
-) (any, error) {
 	return map[string]any{}, nil
 }
 
@@ -1233,12 +1209,6 @@ func (a *lowConfidenceOnceAgent) BuildSummarySeed(
 }
 
 func (a *lowConfidenceOnceAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticResult, _ string) (any, error) {
-	return map[string]any{}, nil
-}
-
-func (a *lowConfidenceOnceAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
-) (any, error) {
 	return map[string]any{}, nil
 }
 

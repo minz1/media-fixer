@@ -13,6 +13,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 // arr_remove_and_search is the one tool that deletes media files, and every
@@ -216,15 +217,15 @@ func planJSON(t *testing.T, plan client.ReplacePlan) []byte {
 	return b
 }
 
-// TestExecuteApprovedPlan_ChecksTheStatedPremise is the guard that closes the
+// TestOperationFor_ChecksTheStatedPremise is the guard that closes the
 // asymmetry with arr_search_missing. That tool verifies its own premise ("the
 // file is missing") and refuses when *arr already has the file; this one had
 // no premise check at all, so a misdiagnosis could delete a file that was
 // fine. "A file exists" cannot be the refusal condition here — that is the
 // normal case — so the check is against the reason the agent stated.
-func TestExecuteApprovedPlan_ChecksTheStatedPremise(t *testing.T) {
+func TestOperationFor_ChecksTheStatedPremise(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	subject := operation.Subject{Kind: operation.SubjectIncident, ID: "inc"}
 	result := &agent.DiagnosticResult{EscalateAction: agent.EscalateRemoveAndSearch}
 	readable := &client.ReadabilityProbe{
 		Checked: true, Probed: 1, ReadableFile: "/data/library/tv/Show/ep.mkv", BytesRead: 104857600,
@@ -236,7 +237,7 @@ func TestExecuteApprovedPlan_ChecksTheStatedPremise(t *testing.T) {
 		// delete is attempted, so this must fail on the premise, not on a nil
 		// client.
 		ag := agent.New(nil, "stub", &agent.Dispatcher{}, nil, nil, slog.New(slog.DiscardHandler))
-		_, err := ag.ExecuteApprovedPlan(ctx, result, planJSON(t, client.ReplacePlan{
+		_, err := ag.OperationFor(subject, result, planJSON(t, client.ReplacePlan{
 			MediaType: "tv", Title: "Show", Scope: "episode",
 			Reason: client.ReplaceReasonUnreadable, Readability: readable,
 		}))
@@ -251,7 +252,7 @@ func TestExecuteApprovedPlan_ChecksTheStatedPremise(t *testing.T) {
 	t.Run("a non-readability reason is not contradicted by a readable file", func(t *testing.T) {
 		t.Parallel()
 		ag := agent.New(nil, "stub", &agent.Dispatcher{}, nil, nil, slog.New(slog.DiscardHandler))
-		_, err := ag.ExecuteApprovedPlan(ctx, result, planJSON(t, client.ReplacePlan{
+		_, err := ag.OperationFor(subject, result, planJSON(t, client.ReplacePlan{
 			MediaType: "tv", Title: "Show", Scope: "episode",
 			Reason: client.ReplaceReasonWrongContent, Readability: readable,
 		}))
@@ -272,7 +273,7 @@ func TestExecuteApprovedPlan_ChecksTheStatedPremise(t *testing.T) {
 			"nothing found":  {Checked: true, Probed: 3},
 			"never probed":   nil,
 		} {
-			_, err := ag.ExecuteApprovedPlan(ctx, result, planJSON(t, client.ReplacePlan{
+			_, err := ag.OperationFor(subject, result, planJSON(t, client.ReplacePlan{
 				MediaType: "tv", Title: "Show", Scope: "episode",
 				Reason: client.ReplaceReasonUnreadable, Readability: probe,
 			}))

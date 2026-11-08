@@ -213,28 +213,19 @@ func downloadRows() []docRow {
 func planRows() []docRow {
 	x := snap(lifecycle.ExecutingPlan)
 	mtn := with(snap(lifecycle.ManualTestNeeded), finding(escalatable()))
-	failed := tev{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted, Err: "boom"}}
-	partial := tev{ev: lifecycle.Event{
-		Kind: lifecycle.PlanExecuted, Err: "boom", Partial: lifecycle.Partial{Applied: true},
-	}}
 	preview := tev{ev: lifecycle.Event{Kind: lifecycle.OwnerPreview, Plan: []byte(`{}`), PlanFP: "fp1"}}
 	approveLate := ev(lifecycle.OwnerApprove)
 	approveLate.late = true
 	return []docRow{
-		{name: "plan ok", from: x, ev: ev(lifecycle.PlanExecuted), to: lifecycle.Verifying, gen: true,
-			effs: []K{checkK}},
-		{name: "plan failed", from: x, ev: failed, to: lifecycle.ManualTestNeeded, gen: true,
-			assert: reasonIs(lifecycle.ReasonPlanFailed)},
-		{name: "plan partial", from: x, ev: partial, to: lifecycle.ManualTestNeeded, gen: true,
-			assert: reasonIs(lifecycle.ReasonPlanPartial)},
 		{name: "plan stale", from: mtn, ev: ev(lifecycle.PlanExecuted), err: lifecycle.ErrStale},
+		{name: "plan no op", from: x, ev: ev(lifecycle.PlanExecuted), err: lifecycle.ErrOpMismatch},
 		{name: "preview", from: mtn, ev: preview, to: lifecycle.ManualTestNeeded},
 		{name: "preview half run", from: with(mtn, reason(lifecycle.ReasonPlanInterrupted)), ev: preview,
 			err: lifecycle.ErrPlanHalfRun},
 		{name: "preview manual", from: snap(lifecycle.ManualTestNeeded), ev: preview, err: lifecycle.ErrNotEscalatable},
 		{name: "preview open", from: snap(lifecycle.Open), ev: preview, err: lifecycle.ErrNotAwaitingDecision},
-		{name: "approve", from: with(mtn, planAt(base())), ev: ev(lifecycle.OwnerApprove), to: lifecycle.ExecutingPlan,
-			gen: true, effs: []K{planK}},
+		{name: "approve no spec", from: with(mtn, planAt(base())), ev: ev(lifecycle.OwnerApprove),
+			err: lifecycle.ErrNoSpec},
 		{name: "approve no plan", from: mtn, ev: ev(lifecycle.OwnerApprove), err: lifecycle.ErrNoPlan},
 		{name: "approve expired", from: with(mtn, planAt(base())), ev: approveLate, err: lifecycle.ErrPlanExpired},
 		{name: "approve changed", from: with(mtn, planAt(base())), ev: tev{

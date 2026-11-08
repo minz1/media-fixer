@@ -67,7 +67,7 @@ func (a *escalationAgent) PlanEscalation(_ context.Context, _ *agent.DiagnosticR
 	return map[string]any{"Title": "Previewed"}, nil
 }
 
-func (a *escalationAgent) ExecuteApprovedPlan(_ context.Context, _ *agent.DiagnosticResult, _ []byte) (any, error) {
+func (a *escalationAgent) runApproved(_ context.Context, _ *agent.DiagnosticResult, _ []byte) (any, error) {
 	a.execCalls.Add(1)
 	a.execStart <- struct{}{}
 	if a.execGate != nil {
@@ -90,15 +90,21 @@ type escalationFixture struct {
 	dbPath string
 }
 
-func newEscalationFixture(t *testing.T, ag incident.AgentRunner) *escalationFixture {
+func newEscalationFixture(t *testing.T, ag approvedRunner) *escalationFixture {
 	t.Helper()
 	return newEscalationFixtureNotifier(t, ag, &captureNotifier{})
 }
 
 func newEscalationFixtureNotifier(
-	t *testing.T, ag incident.AgentRunner, notif *captureNotifier,
+	t *testing.T, ag approvedRunner, notif *captureNotifier,
 ) *escalationFixture {
 	t.Helper()
+	return newEscalationFixtureLogger(t, ag, notif, slog.New(slog.DiscardHandler))
+}
+
+func newEscalationFixtureLogger(
+	t *testing.T, ag approvedRunner, notif *captureNotifier, logger *slog.Logger,
+) *escalationFixture {
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +118,7 @@ func newEscalationFixtureNotifier(
 	base, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	jrnl := journal.New(database)
-	svc := incident.NewService(base, database, jrnl, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	svc := incident.NewService(base, database, jrnl, ag, nil, nil, notif, logger)
 	svc.SetOpPorts(execPorts(ag))
 	t.Cleanup(func() { stopService(t, svc) })
 	return &escalationFixture{svc: svc, db: database, jrnl: jrnl, dbPath: f.Name()}
@@ -196,7 +202,7 @@ func TestApproveEscalation_ConcurrentRunsOnce(t *testing.T) {
 	wg.Wait()
 
 	if n := ag.execCalls.Load(); n != 1 {
-		t.Fatalf("ExecuteApprovedPlan ran %d times, want 1", n)
+		t.Fatalf("the plan ran %d times, want 1", n)
 	}
 	if errs[0] != nil || errs[1] == nil {
 		t.Errorf("errs = %v, want the first to succeed and the second to be refused", errs)
@@ -300,7 +306,7 @@ func TestApproveEscalation_RefusedWhenNotManualTestNeeded(t *testing.T) {
 		t.Errorf("err = %v, want errNotAwaitingDecision", err)
 	}
 	if n := ag.execCalls.Load(); n != 0 {
-		t.Errorf("ExecuteApprovedPlan ran %d times, want 0", n)
+		t.Errorf("the plan ran %d times, want 0", n)
 	}
 }
 
@@ -321,7 +327,7 @@ func TestApproveEscalation_RefusedOnFingerprintMismatch(t *testing.T) {
 		t.Errorf("err = %v, want errPlanChanged", err)
 	}
 	if n := ag.execCalls.Load(); n != 0 {
-		t.Errorf("ExecuteApprovedPlan ran %d times, want 0", n)
+		t.Errorf("the plan ran %d times, want 0", n)
 	}
 }
 

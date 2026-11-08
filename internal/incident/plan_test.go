@@ -22,11 +22,11 @@ type planAgent struct {
 	seen atomic.Value
 }
 
-func (a *planAgent) ExecuteApprovedPlan(ctx context.Context, r *agent.DiagnosticResult, plan []byte) (any, error) {
+func (a *planAgent) runApproved(ctx context.Context, r *agent.DiagnosticResult, plan []byte) (any, error) {
 	if a.fx != nil {
 		a.seen.Store(a.fx.svc.PlanLiveForTest(a.fx.lastID))
 	}
-	_, err := a.escalationAgent.ExecuteApprovedPlan(ctx, r, plan)
+	_, err := a.escalationAgent.runApproved(ctx, r, plan)
 	return nil, err
 }
 

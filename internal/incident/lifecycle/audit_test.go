@@ -213,28 +213,11 @@ func TestPlanLost_DropsPlanAndOffersNoPreview(t *testing.T) {
 
 func TestPlanExecuted_FailedWithoutDestructiveStepOffersPreview(t *testing.T) {
 	t.Parallel()
-	d := mustApply(t, snap(lifecycle.ExecutingPlan), tev{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted, Err: "x"}})
+	d := mustApply(t, execOp(failedFirstOp()), executedEv(opID))
 	if d.Next.Reason != lifecycle.ReasonPlanFailed || d.Next.Plan != nil {
 		t.Fatalf("plan failed: %+v", d.Next)
 	}
 	if !slices.Contains(kinds(d.Next), lifecycle.ActPreview) {
 		t.Fatalf("actions %v lack Preview", kinds(d.Next))
-	}
-}
-
-func TestPlanExecuted_PartialOffersRerunResolveUnlockOnly(t *testing.T) {
-	t.Parallel()
-	e := tev{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted, Err: "x", Partial: lifecycle.Partial{Applied: true}}}
-	d := mustApply(t, with(snap(lifecycle.ExecutingPlan), locked), e)
-	if d.Next.Reason != lifecycle.ReasonPlanPartial {
-		t.Fatalf("reason %s", d.Next.Reason)
-	}
-	want := []lifecycle.ActionKind{lifecycle.ActRerun, lifecycle.ActResolve, lifecycle.ActUnlock}
-	if got := kinds(d.Next); !slices.Equal(got, want) {
-		t.Fatalf("actions %v, want %v", got, want)
-	}
-	if _, err := apply(d.Next, tev{ev: lifecycle.Event{Kind: lifecycle.OwnerPreview}}); !errors.Is(
-		err, lifecycle.ErrPlanHalfRun) {
-		t.Fatalf("preview after partial: %v", err)
 	}
 }

@@ -100,29 +100,25 @@ func execOnRecorder(t *testing.T, rec *recorder, op operation.Op) operation.Op {
 	return x.Run(context.Background(), op)
 }
 
-func TestReplaceSpec_MatchesExecuteReplaceOrder(t *testing.T) {
+func TestReplaceSpec_PinsCallOrder(t *testing.T) {
 	t.Parallel()
 	for _, skip := range []bool{false, true} {
 		for name := range plans(skip) {
 			t.Run(fmt.Sprintf("%s skip=%t", name, skip), func(t *testing.T) {
 				t.Parallel()
 				plan := plans(skip)[name]
-				oldRec := newRecorder(t, "")
-				old := client.NewArr(oldRec.srv.URL, "key")
-				if _, err := old.ExecuteReplace(context.Background(), plan); err != nil {
-					t.Fatalf("ExecuteReplace: %v", err)
-				}
 				spec, err := opexec.ReplaceSpec(incident(), plan, []byte(`{}`))
 				if err != nil {
 					t.Fatalf("ReplaceSpec: %v", err)
 				}
-				newRec := newRecorder(t, "")
-				got := execOnRecorder(t, newRec, mustOp(t, spec))
+				rec := newRecorder(t, "")
+				got := execOnRecorder(t, rec, mustOp(t, spec))
 				if got.Status != operation.Done {
 					t.Fatalf("status = %s", got.Status)
 				}
-				if !slices.Equal(oldRec.log(), newRec.log()) {
-					t.Fatalf("calls differ\nold %q\nnew %q", oldRec.log(), newRec.log())
+				want := wantReplaceCalls(skip, name)
+				if !slices.Equal(want, rec.log()) {
+					t.Fatalf("calls differ\nwant %q\nhave %q", want, rec.log())
 				}
 			})
 		}
@@ -166,4 +162,23 @@ func TestReaddSpec_RefusesBlankMagnet(t *testing.T) {
 		t.Fatalf("spec = %+v", spec)
 	}
 	mustOp(t, spec)
+}
+
+func wantReplaceCalls(skip bool, name string) []string {
+	var out []string
+	if !skip {
+		out = append(out, "POST /api/v3/history/failed/11 ", "POST /api/v3/history/failed/12 ")
+	}
+	kind := "episodefile"
+	if name == "movie" {
+		kind = "moviefile"
+	}
+	out = append(out, "DELETE /api/v3/"+kind+"/21 ", "DELETE /api/v3/"+kind+"/22 ")
+	search := map[string]string{
+		"movie":   `{"movieIds":[7],"name":"MoviesSearch"}`,
+		"episode": `{"episodeIds":[55],"name":"EpisodeSearch"}`,
+		"season":  `{"name":"SeasonSearch","seasonNumber":3,"seriesId":5}`,
+		"series":  `{"name":"SeriesSearch","seriesId":5}`,
+	}[name]
+	return append(out, "POST /api/v3/command "+search)
 }

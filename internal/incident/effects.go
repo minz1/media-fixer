@@ -64,6 +64,9 @@ func (s *Service) apply(ctx context.Context, id string, ev lifecycle.Event, extr
 	t := s.timers(ctx)
 	a, err := s.db.ApplyIncident(ctx, id, s.decide(ev, s.limits(t), extra))
 	if err != nil {
+		if errors.Is(err, lifecycle.ErrNoSpec) {
+			s.log.ErrorContext(ctx, "owner approve without an operation spec", "reject", "no_spec", "incident", id)
+		}
 		return a, err
 	}
 	s.afterCommit(ctx, a, t, "")

@@ -132,6 +132,15 @@ func TestVersionChecked_MatchesRuling(t *testing.T) {
 	}
 }
 
+func actionEvent(k lifecycle.ActionKind) lifecycle.Event {
+	ev := lifecycle.Event{Kind: k.Event(), Plan: []byte(`{}`), PlanFP: "fp1"}
+	if k == lifecycle.ActApprove {
+		spec := opSpec()
+		ev.Spec = &spec
+	}
+	return ev
+}
+
 func TestIncidentMachine_ActionsAreAccepted(t *testing.T) {
 	t.Parallel()
 	for _, s := range lifecycle.States() {
@@ -140,7 +149,7 @@ func TestIncidentMachine_ActionsAreAccepted(t *testing.T) {
 				continue
 			}
 			for _, k := range lifecycle.ActionKinds() {
-				ev := lifecycle.Event{Kind: k.Event(), Plan: []byte(`{}`), PlanFP: "fp1"}
+				ev := actionEvent(k)
 				_, err := apply(sn, tev{ev: ev})
 				offered := lifecycle.Offers(sn, base(), k)
 				if k == lifecycle.ActPreview || k == lifecycle.ActRefresh {

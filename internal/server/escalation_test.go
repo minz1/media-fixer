@@ -42,7 +42,7 @@ type stubEscalationAgent struct {
 	runResult  any
 	runErr     error
 
-	// gotPlanJSON records the bytes ExecuteApprovedPlan was handed, so a test
+	// gotPlanJSON records the bytes runApproved was handed, so a test
 	// can assert the approval ran the stored preview rather than a
 	// re-resolution.
 	mu          sync.Mutex
@@ -70,7 +70,7 @@ func (a *stubEscalationAgent) PlanEscalation(_ context.Context, _ *agent.Diagnos
 	return a.planResult, a.planErr
 }
 
-func (a *stubEscalationAgent) ExecuteApprovedPlan(
+func (a *stubEscalationAgent) runApproved(
 	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
 ) (any, error) {
 	return a.runResult, a.runErr
@@ -665,7 +665,7 @@ type stubArr struct {
 }
 
 func (a stubArr) Search(ctx context.Context, _ string, _, _ int, _ []int) error {
-	if _, err := a.ag.ExecuteApprovedPlan(ctx, nil, nil); err != nil {
+	if _, err := a.ag.runApproved(ctx, nil, nil); err != nil {
 		return &client.HTTPStatusError{Status: http.StatusBadRequest, Body: err.Error()}
 	}
 	return nil

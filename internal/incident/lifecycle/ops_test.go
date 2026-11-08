@@ -78,7 +78,7 @@ func TestOwnerApprove_CreatesOpAndExecutes(t *testing.T) {
 		t.Fatalf("next op %+v", n.Op)
 	}
 	e := onlyEffect(t, d, lifecycle.ExecutePlan)
-	if e.Gen != n.Generation || e.OpID != n.Op.ID || e.Plan != nil {
+	if e.Gen != n.Generation || e.OpID != n.Op.ID {
 		t.Errorf("effect %+v", e)
 	}
 	if n.Version != from.Version+1 || n.Generation != from.Generation+1 {
@@ -132,20 +132,6 @@ func TestOwnerApprove_OpRunningRejected(t *testing.T) {
 	if err := rejected(t, with(freshMtn(), func(s *lifecycle.Snapshot) { s.Plan = nil }), running); !errors.Is(
 		err, lifecycle.ErrNoPlan) {
 		t.Errorf("no plan err = %v", err)
-	}
-}
-
-func TestOwnerApprove_P2CallerUnchanged(t *testing.T) {
-	t.Parallel()
-	from := freshMtn(setOp(failedFirstOp()), reason(lifecycle.ReasonPlanFailed))
-	d := decide(t, from, ev(lifecycle.OwnerApprove))
-	n := d.Next
-	if n.Status != lifecycle.ExecutingPlan || n.Op != nil || d.OpWrite != nil || d.OpNew {
-		t.Fatalf("next %s op %v write %v", n.Status, n.Op, d.OpWrite)
-	}
-	e := onlyEffect(t, d, lifecycle.ExecutePlan)
-	if !bytes.Equal(e.Plan, from.Plan.JSON) || e.OpID != 0 || e.Gen != n.Generation {
-		t.Errorf("effect %+v", e)
 	}
 }
 
@@ -220,25 +206,6 @@ func TestPlanExecuted_NotFinishedOrMismatched(t *testing.T) {
 			t.Errorf("no op: err = %v", err)
 		}
 	})
-}
-
-func TestPlanExecuted_P2CallerUnchanged(t *testing.T) {
-	t.Parallel()
-	x := snap(lifecycle.ExecutingPlan)
-	ok := decide(t, x, ev(lifecycle.PlanExecuted))
-	if ok.Next.Status != lifecycle.Verifying || ok.Next.Op != nil {
-		t.Errorf("ok: %s op %v", ok.Next.Status, ok.Next.Op)
-	}
-	failed := decide(t, x, tev{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted, Err: "boom"}})
-	if failed.Next.Reason != lifecycle.ReasonPlanFailed || failed.Next.Op != nil {
-		t.Errorf("failed: %s op %v", failed.Next.Reason, failed.Next.Op)
-	}
-	partial := decide(t, x, tev{ev: lifecycle.Event{
-		Kind: lifecycle.PlanExecuted, Err: "boom", Partial: lifecycle.Partial{Applied: true},
-	}})
-	if partial.Next.Reason != lifecycle.ReasonPlanPartial || partial.Next.Op != nil {
-		t.Errorf("partial: %s op %v", partial.Next.Reason, partial.Next.Op)
-	}
 }
 
 func TestPlanLost_InterruptsRunningOp(t *testing.T) {
@@ -417,7 +384,7 @@ func TestOwnerResumeOp_RestoresPlanAndExecutes(t *testing.T) {
 		t.Errorf("op write %+v next op %+v", d.OpWrite, n.Op)
 	}
 	e := onlyEffect(t, d, lifecycle.ExecutePlan)
-	if e.Gen != n.Generation || e.OpID != opID || e.Plan != nil {
+	if e.Gen != n.Generation || e.OpID != opID {
 		t.Errorf("effect %+v", e)
 	}
 	if n.Version != from.Version+1 || n.Generation != from.Generation+1 {
@@ -611,6 +578,26 @@ func TestOwnerResumeOp_NoOpRejected(t *testing.T) {
 		from := with(snap(lifecycle.ManualTestNeeded), finding(escalatable()), reason(r))
 		if err := rejected(t, from, resumeEv()); !errors.Is(err, lifecycle.ErrChanged) {
 			t.Errorf("%s: err = %v", r, err)
+		}
+	}
+}
+
+func TestOwnerApprove_WithoutSpecIsRejected(t *testing.T) {
+	t.Parallel()
+	bare := ev(lifecycle.OwnerApprove)
+	if err := rejected(t, freshMtn(), bare); !errors.Is(err, lifecycle.ErrNoSpec) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestPlanExecuted_WithoutOpIsRejected(t *testing.T) {
+	t.Parallel()
+	for _, e := range []tev{
+		ev(lifecycle.PlanExecuted),
+		{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted, Err: "boom"}},
+	} {
+		if err := rejected(t, snap(lifecycle.ExecutingPlan), e); !errors.Is(err, lifecycle.ErrOpMismatch) {
+			t.Errorf("err = %v", err)
 		}
 	}
 }

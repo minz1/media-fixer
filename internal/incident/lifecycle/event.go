@@ -85,11 +85,6 @@ type Observation struct {
 	ProgressPct float64
 }
 
-type Partial struct {
-	Applied bool
-	Line    string
-}
-
 type Report struct {
 	What   string
 	ItemID string
@@ -111,7 +106,6 @@ type Event struct {
 	Err        string
 	Plan       []byte
 	PlanFP     string
-	Partial    Partial
 	Report     *Report
 	Notice     Notice
 	Spec       *operation.Spec
@@ -149,6 +143,7 @@ var (
 	ErrOpMismatch    = errors.New("the operation does not match this incident")
 	ErrOpNotFinished = errors.New("the operation has not finished")
 	ErrNotResumable  = errors.New("this incident has nothing to resume")
+	ErrNoSpec        = errors.New("the approval carries no operation spec")
 )
 
 func workerEvent(k EventKind) bool {

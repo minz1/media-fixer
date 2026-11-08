@@ -197,7 +197,7 @@ const minFuzzyTitleLen = 4
 // contains (or is contained by) want, or nil if there is no match or more
 // than one. Used as a fallback after an exact match fails.
 //
-// Both guards exist because this feeds PlanReplace/ExecuteReplace, which
+// Both guards exist because this feeds PlanReplace, which
 // delete files: an empty want matched the first item in the library outright
 // (strings.Contains(x, "") is always true), and taking the first of several
 // candidates silently picked an arbitrary one. Refusing is always recoverable

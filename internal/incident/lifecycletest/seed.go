@@ -182,7 +182,7 @@ func (sd *seeder) conclude(sp Spec) {
 		sd.toOwner(sp)
 	case lifecycle.ExecutingPlan:
 		sd.toOwner(Spec{Reason: lifecycle.ReasonNeedsOwner, Plan: planOr(sp.Plan)})
-		sd.step(lifecycle.Event{Kind: lifecycle.OwnerApprove, PlanFP: card.Fingerprint(planOr(sp.Plan))})
+		sd.force(func(n *lifecycle.Snapshot) { shape(n, lifecycle.ExecutingPlan, Limits()) })
 	case lifecycle.Open, lifecycle.Reopened, lifecycle.Investigating, lifecycle.Blocked, lifecycle.Resolved,
 		lifecycle.None:
 	}

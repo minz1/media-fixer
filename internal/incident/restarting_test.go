@@ -54,7 +54,7 @@ func TestA10_10_ApproveDuringShutdownIsRefused(t *testing.T) {
 		t.Fatalf("Approve after the slot freed during shutdown = %v, want ErrRestarting", err)
 	}
 	if n := ag.execCalls.Load(); n != 0 {
-		t.Errorf("ExecuteApprovedPlan ran %d times during shutdown", n)
+		t.Errorf("the plan ran %d times during shutdown", n)
 	}
 	if _, _, err := fx.db.GetEscalationPlan(context.Background(), inc.ID); err != nil {
 		t.Errorf("the refused approve consumed the plan: %v", err)
@@ -101,10 +101,10 @@ type ctxRecordingAgent struct {
 	execOK bool
 }
 
-func (a *ctxRecordingAgent) ExecuteApprovedPlan(
+func (a *ctxRecordingAgent) runApproved(
 	ctx context.Context, result *agent.DiagnosticResult, plan []byte,
 ) (any, error) {
-	out, err := a.escalationAgent.ExecuteApprovedPlan(ctx, result, plan)
+	out, err := a.escalationAgent.runApproved(ctx, result, plan)
 	a.mu.Lock()
 	a.execOK = ctx.Err() == nil
 	a.mu.Unlock()

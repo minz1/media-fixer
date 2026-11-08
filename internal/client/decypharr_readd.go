@@ -15,8 +15,8 @@ import (
 // won't fix, so the torrent has to be removed from the debrid provider and
 // added back to be re-fetched.
 //
-// Same plan/execute split as arr_replace.go, for the same reason — the owner
-// approves a concrete plan, and the execute step is irreversible.
+// Same plan split as arr_replace.go, for the same reason — the owner
+// approves a concrete plan, and the operation that runs it is irreversible.
 
 // ReaddPlan is what a delete-and-re-add would do, resolved against live
 // decypharr state and rendered for owner approval before anything is removed.
@@ -33,7 +33,7 @@ type ReaddPlan struct {
 	Provider string `json:"provider"`
 }
 
-// ReaddResult reports what ExecuteTorrentReadd actually did. On a partial
+// ReaddResult reports what a re-add actually did. On a partial
 // failure it reflects everything completed before the error.
 type ReaddResult struct {
 	Deleted bool   `json:"deleted"`
@@ -100,35 +100,6 @@ func (c *DecypharrClient) PlanTorrentReadd(ctx context.Context, name string) (*R
 		State:    match.State,
 		Provider: match.ActiveProvider,
 	}, nil
-}
-
-// ExecuteTorrentReadd deletes the torrent (including from the debrid provider)
-// and adds it straight back from the magnet the plan captured.
-//
-// Ordering is deliberate: the delete must land before the add, or the provider
-// returns the same cached entry and nothing is actually re-fetched. That makes
-// the window between them the dangerous part, which is why the plan refuses
-// without a magnet rather than discovering the problem here.
-func (c *DecypharrClient) ExecuteTorrentReadd(ctx context.Context, plan *ReaddPlan) (*ReaddResult, error) {
-	result := &ReaddResult{Name: plan.Name, Magnet: plan.Magnet}
-	if strings.TrimSpace(plan.Magnet) == "" {
-		return result, ErrNoMagnet
-	}
-
-	if err := c.DeleteTorrent(ctx, plan.Category, plan.InfoHash, true); err != nil {
-		return result, fmt.Errorf("decypharr readd: delete %s: %w", plan.InfoHash, err)
-	}
-	result.Deleted = true
-
-	if err := c.AddTorrent(ctx, plan.Magnet, plan.Category); err != nil {
-		// The content is gone at this point and the caller must be told
-		// precisely that, with the magnet, so it can be re-added by hand.
-		return result, fmt.Errorf(
-			"decypharr readd: deleted %q but re-adding it failed (%w); re-add manually from: %s",
-			plan.Name, err, plan.Magnet)
-	}
-	result.Readded = true
-	return result, nil
 }
 
 // AddTorrent submits a magnet to decypharr's qBittorrent-compatible API,

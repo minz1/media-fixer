@@ -140,7 +140,7 @@ func (s *Service) PartialLine(ctx context.Context, snap lifecycle.Snapshot) stri
 			if a.Result != "" {
 				result = json.RawMessage(a.Result)
 			}
-			return partialOf(a.Action, result).Line
+			return partialOf(a.Action, result)
 		}
 	}
 	return ""

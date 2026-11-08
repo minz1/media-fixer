@@ -235,3 +235,10 @@ func (s *Service) MarkLostForTest(id string, cause operation.Cause) { s.runs.mar
 func (s *Service) ClearLostForTest(id string) { s.runs.clearLost(id) }
 
 func (s *Service) SetBeforePlanLostForTest(f func(id string)) { s.beforePlanLost = f }
+
+func (s *Service) ApplyBareApproveForTest(ctx context.Context, id, planFP string) error {
+	v := s.CurrentVersion(ctx, id)
+	ev := lifecycle.Event{Kind: lifecycle.OwnerApprove, Version: v.N, HasVersion: v.Set, PlanFP: planFP}
+	_, err := s.apply(ctx, id, ev, nil)
+	return err
+}

@@ -74,12 +74,6 @@ func (a *scriptedPendingOutcomeAgent) PlanEscalation(
 	return map[string]any{}, nil
 }
 
-func (a *scriptedPendingOutcomeAgent) ExecuteApprovedPlan(
-	_ context.Context, _ *agent.DiagnosticResult, _ []byte,
-) (any, error) {
-	return map[string]any{}, nil
-}
-
 func (a *scriptedPendingOutcomeAgent) CheckPendingOutcome(
 	ctx context.Context, po *db.PendingOutcome,
 ) (*agent.PendingOutcomeObservation, error) {

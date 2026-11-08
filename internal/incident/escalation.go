@@ -208,9 +208,9 @@ func (s *Service) approvable(
 	return result, planJSON, nil
 }
 
-func partialOf(action string, execResult any) lifecycle.Partial {
+func partialOf(action string, execResult any) string {
 	b, err := json.Marshal(execResult)
-	unreadable := lifecycle.Partial{Applied: true, Line: "Partial: the result could not be read"}
+	const unreadable = "Partial: the result could not be read"
 	if err != nil || string(b) == nullResult {
 		return unreadable
 	}
@@ -224,17 +224,14 @@ func partialOf(action string, execResult any) lifecycle.Partial {
 		if r.SearchTriggered != "" {
 			search = "search sent"
 		}
-		return lifecycle.Partial{
-			Applied: len(r.DeletedFiles) > 0 || len(r.BlocklistedGrabs) > 0 || r.SearchTriggered != "",
-			Line: fmt.Sprintf("Partial: deleted %d files, blocklisted %d, %s",
-				len(r.DeletedFiles), len(r.BlocklistedGrabs), search),
-		}
+		return fmt.Sprintf("Partial: deleted %d files, blocklisted %d, %s",
+			len(r.DeletedFiles), len(r.BlocklistedGrabs), search)
 	case agent.EscalateDeleteTorrentReadd:
 		var r client.ReaddResult
 		if json.Unmarshal(b, &r) != nil {
 			return unreadable
 		}
-		return lifecycle.Partial{Applied: r.Deleted, Line: "Partial: torrent deleted, re-add failed"}
+		return "Partial: torrent deleted, re-add failed"
 	}
 	return unreadable
 }

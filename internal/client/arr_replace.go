@@ -88,7 +88,7 @@ type ReplaceRequest struct {
 	SkipBlocklist bool
 }
 
-// ReplaceFile is one file ExecuteReplace will delete.
+// ReplaceFile is one file a replace plan deletes.
 type ReplaceFile struct {
 	ID   int    `json:"id"`
 	Path string `json:"path"`
@@ -98,7 +98,7 @@ type ReplaceFile struct {
 // ReplacePlan is the fully-resolved, read-only preview of a ReplaceRequest:
 // exactly which files would be deleted, which grabs would be blocklisted,
 // and what search would follow. Building a plan makes no changes —
-// ExecuteReplace does.
+// the replace operation does.
 //
 // Tagged explicitly because a plan is now persisted between the owner's
 // preview and their approval (see db.ApplyIncident), so its stored shape
@@ -125,7 +125,7 @@ type ReplacePlan struct {
 	Readability *ReadabilityProbe `json:"readability,omitempty"`
 }
 
-// ReplaceResult reports what ExecuteReplace actually did. On a partial
+// ReplaceResult reports what a replace actually did. On a partial
 // failure it reflects everything completed before the error occurred.
 type ReplaceResult struct {
 	DeletedFiles     []ReplaceFile `json:"deleted_files"`
@@ -135,7 +135,7 @@ type ReplaceResult struct {
 
 // PlanReplace resolves a ReplaceRequest against live Sonarr/Radarr state
 // without making any changes. Callers should show this plan for approval
-// before calling ExecuteReplace.
+// before running its operation.
 func (c *ArrClient) PlanReplace(ctx context.Context, req ReplaceRequest) (*ReplacePlan, error) {
 	switch req.MediaType {
 	case ReplaceMediaMovie:
@@ -318,61 +318,4 @@ func findEpisodeByNumber(episodes []Episode, number int) *Episode {
 		}
 	}
 	return nil
-}
-
-// ExecuteReplace applies a previously built ReplacePlan: blocklists grabs,
-// deletes files, then triggers the appropriate search command. On error it
-// stops and returns everything completed so far so the caller can report
-// exactly how far the operation got.
-func (c *ArrClient) ExecuteReplace(ctx context.Context, plan *ReplacePlan) (*ReplaceResult, error) {
-	result := &ReplaceResult{}
-
-	if !plan.SkipBlocklist {
-		for _, g := range plan.GrabsToBlocklist {
-			if err := c.MarkHistoryFailed(ctx, g.ID); err != nil {
-				return result, fmt.Errorf("arr replace: blocklist grab %d: %w", g.ID, err)
-			}
-			result.BlocklistedGrabs = append(result.BlocklistedGrabs, g.ID)
-		}
-	}
-
-	for _, f := range plan.Files {
-		if err := c.deleteReplaceFile(ctx, plan.MediaType, f); err != nil {
-			return result, fmt.Errorf("arr replace: delete file %d (%s): %w", f.ID, f.Path, err)
-		}
-		result.DeletedFiles = append(result.DeletedFiles, f)
-	}
-
-	cmd, err := c.triggerReplaceSearch(ctx, plan)
-	if err != nil {
-		return result, err
-	}
-	result.SearchTriggered = cmd
-	return result, nil
-}
-
-func (c *ArrClient) deleteReplaceFile(ctx context.Context, mediaType string, f ReplaceFile) error {
-	if mediaType == ReplaceMediaMovie {
-		return c.DeleteMovieFile(ctx, f.ID)
-	}
-	return c.DeleteEpisodeFile(ctx, f.ID)
-}
-
-// triggerReplaceSearch fires the search command matching the plan's scope
-// and returns its name for reporting.
-func (c *ArrClient) triggerReplaceSearch(ctx context.Context, plan *ReplacePlan) (string, error) {
-	switch {
-	case plan.MediaType == ReplaceMediaMovie:
-		return CommandMoviesSearch, c.SearchMovieNow(ctx, plan.MediaID)
-	case plan.Scope == ReplaceScopeEpisode:
-		_, err := c.SearchEpisodes(ctx, []int{plan.EpisodeID})
-		return CommandEpisodeSearch, err
-	case plan.Scope == ReplaceScopeSeason:
-		return CommandSeasonSearch, c.SeasonSearch(ctx, plan.MediaID, plan.SeasonNumber)
-	case plan.Scope == ReplaceScopeSeries:
-		return CommandSeriesSearch, c.SeriesSearch(ctx, plan.MediaID)
-	default:
-		return "", fmt.Errorf("arr replace: cannot determine search command for media_type=%s scope=%s",
-			plan.MediaType, plan.Scope)
-	}
 }

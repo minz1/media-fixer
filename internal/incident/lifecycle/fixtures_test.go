@@ -256,7 +256,6 @@ func payloads(k lifecycle.EventKind) []lifecycle.Event {
 		return []lifecycle.Event{
 			e,
 			{Kind: k, Err: "boom"},
-			{Kind: k, Err: "boom", Partial: lifecycle.Partial{Applied: true}},
 			{Kind: k, OpID: opID},
 			{Kind: k, OpID: opID + 1},
 		}

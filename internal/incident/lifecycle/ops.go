@@ -46,14 +46,10 @@ func stepApprove(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 		next := cur
 		next.Op = nil
 		return toOwner(cur, next, ReasonPlanFailed, opNotice("", ev.BuildErr))
-	case ev.Spec != nil:
-		return approveSpec(cur, ev, now)
+	case ev.Spec == nil:
+		return Decision{Next: cur}, ErrNoSpec
 	}
-	next := cur
-	next.Op = nil
-	enter(&next, ExecutingPlan)
-	gen := bump(&next)
-	return moved(next, Effect{Kind: ExecutePlan, Gen: gen, Plan: next.Plan.JSON})
+	return approveSpec(cur, ev, now)
 }
 
 func approveSpec(cur Snapshot, ev Event, now time.Time) (Decision, error) {
@@ -103,10 +99,7 @@ func opFailed(cur Snapshot) (Decision, error) {
 
 func stepPlanExecuted(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 	op := cur.Op
-	switch {
-	case op == nil && ev.OpID == 0:
-		return planExecutedBare(cur, ev, now)
-	case op == nil || op.ID != ev.OpID:
+	if op == nil || op.ID != ev.OpID {
 		return Decision{Next: cur}, ErrOpMismatch
 	}
 	switch op.Status {
@@ -117,16 +110,6 @@ func stepPlanExecuted(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 	case operation.None, operation.Running:
 	}
 	return Decision{Next: cur}, ErrOpNotFinished
-}
-
-func planExecutedBare(cur Snapshot, ev Event, now time.Time) (Decision, error) {
-	switch {
-	case ev.Err == "":
-		return approvedVerify(cur, now)
-	case ev.Partial.Applied:
-		return toOwner(cur, cur, ReasonPlanPartial, Notice{})
-	}
-	return toOwner(cur, cur, ReasonPlanFailed, Notice{})
 }
 
 func stepPlanLost(cur Snapshot, ev Event, now time.Time) (Decision, error) {
