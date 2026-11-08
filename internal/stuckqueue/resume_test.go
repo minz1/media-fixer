@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,68 @@ func TestStuckResume_CrashBeforeResumedWriteCaughtUpAtStartup(t *testing.T) {
 	if logLineWith(e, 0, adoptedMsg(0, 1)) == "" {
 		t.Fatalf("logs = %s", e.logs.String())
 	}
+}
+
+func deadAfterResume(t *testing.T) (*runEnv, *stuckqueue.Scheduler, operation.Op) {
+	t.Helper()
+	e, s := regrabEnv(t)
+	e.sonarr.failDelete(http.StatusGatewayTimeout, false)
+	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRegrab); err == nil {
+		t.Fatal("setup: the removal timeout was not returned")
+	}
+	op := latestOp(t, e)
+	if !operation.Resumable(op) {
+		t.Fatalf("setup: op = %+v, want resumable", op)
+	}
+	e.sonarr.failDelete(http.StatusBadRequest, false)
+	e.clock.Add(time.Hour)
+	return e, s, op
+}
+
+func requireButtonsBack(t *testing.T, e *runEnv, s *stuckqueue.Scheduler) {
+	t.Helper()
+	row, _ := e.rowOf(t, "D")
+	if row.ActedResult == string(stuckqueue.ResultUnfinished) {
+		t.Fatalf("row = %+v, want the dead op settled", row)
+	}
+	e.clock.Add(stuckqueue.Grace + time.Minute)
+	e.runner.Run(context.Background(), liveSettings())
+	up, ok := render(t, s, stuckSub())
+	if !ok || !slices.Contains(buttonVerbs(t, up.Buttons), "regrab") {
+		t.Fatalf("update = %+v, %v; want the owner buttons back", up, ok)
+	}
+}
+
+func TestP6Review_ResumeOfDeadOpReturnsButtons(t *testing.T) {
+	t.Parallel()
+	e, s, op := deadAfterResume(t)
+	if _, err := resumeD(s, op); err == nil || errors.Is(err, stuckqueue.ErrRefused) {
+		t.Fatalf("err = %v, want the removal failure", err)
+	}
+	if got := latestOp(t, e); operation.Resumable(got) || got.Status != operation.FailedAtStep {
+		t.Fatalf("setup: op = %+v, want failed for good", got)
+	}
+	requireButtonsBack(t, e, s)
+}
+
+func TestP6Review_CatchUpOfDeadOpReturnsButtons(t *testing.T) {
+	t.Parallel()
+	e, _, op := deadAfterResume(t)
+	s := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
+	t.Cleanup(s.Wait)
+	e.rawExec(t, `CREATE TRIGGER refuse_resumed BEFORE UPDATE ON stuck_downloads
+		BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	if _, err := resumeD(s, op); err == nil {
+		t.Fatal("setup: the removal failure was not returned")
+	}
+	e.rawExec(t, `DROP TRIGGER refuse_resumed`)
+	if row, _ := e.rowOf(t, "D"); row.ActedResult != string(stuckqueue.ResultUnfinished) {
+		t.Fatalf("setup: row = %+v, want the write refused", row)
+	}
+	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
+	t.Cleanup(s2.Wait)
+	adoptNow(t, s2)
+	requireButtonsBack(t, e, s2)
 }
 
 func TestStuckResume_ReleaseOnEveryPath(t *testing.T) {

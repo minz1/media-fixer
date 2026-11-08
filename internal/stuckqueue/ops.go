@@ -166,6 +166,10 @@ func (s *Scheduler) resumeOp(
 	return s.runOp(ctx, op), nil
 }
 
+func opSettled(op operation.Op) bool {
+	return op.Status != operation.Running && !operation.Resumable(op)
+}
+
 func refuseOp(err error) error {
 	rej, ok := errors.AsType[*operation.RejectError](err)
 	switch {
@@ -203,7 +207,7 @@ func (s *Scheduler) Resume(
 	if err != nil {
 		return "", err
 	}
-	u = s.record(ctx, key, Event{Kind: EvResumed, OpID: op.ID, Done: op.Status == operation.Done}, minAge)
+	u = s.record(ctx, key, Event{Kind: EvResumed, OpID: op.ID, Done: opSettled(op)}, minAge)
 	subject = card.StuckSubject(appCode(app), op.Steps[0].DownloadID)
 	if err = opError(op); err != nil {
 		return "", err

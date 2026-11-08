@@ -153,5 +153,5 @@ func (s *Scheduler) resumedEvent(ctx context.Context, row db.StuckRow) (Event, b
 	case !op.UpdatedAt.After(row.ActedAt):
 		return Event{}, false
 	}
-	return Event{Kind: EvResumed, OpID: op.ID, Done: op.Status == operation.Done, At: op.UpdatedAt}, true
+	return Event{Kind: EvResumed, OpID: op.ID, Done: opSettled(op), At: op.UpdatedAt}, true
 }
