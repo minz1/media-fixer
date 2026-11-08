@@ -123,9 +123,7 @@ func seedFailedRegrab(t *testing.T, e *stuckEnv) operation.Op {
 		operation.Event{Kind: operation.Interrupted, Cause: operation.CauseRestart},
 	)
 	op = saveOp(t, e.db, op)
-	if err := e.sch.LoadOperations(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	seedActedRow(t, e, "D", string(stuckqueue.ActionRegrab), string(stuckqueue.ResultUnfinished), op.ID)
 	return op
 }
 

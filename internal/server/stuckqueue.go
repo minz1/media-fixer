@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -19,6 +20,7 @@ const (
 	stuckUnavailable        = "Stuck queue unavailable (Sonarr and Radarr not configured)"
 	stuckSettingsUnreadable = "Stored stuck-queue settings couldn't be read; saving replaces them."
 	ageRounding             = time.Minute
+	stuckStamp              = "2006-01-02 15:04 MST"
 )
 
 type stuckButton struct {
@@ -37,6 +39,9 @@ type stuckItemView struct {
 	Targets       string
 	TargetsFP     string
 	Messages      []string
+	Badge         string
+	BadgeTone     string
+	BadgeInfo     string
 	ImportRefusal string
 	Rejections    []string
 	Buttons       []stuckButton
@@ -75,9 +80,6 @@ func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set, errs := parseStuckSettings(r)
-	if cur, err := stuckqueue.LoadSettings(r.Context(), s.db); err == nil {
-		set.ImportTimeoutMinutes = cur.ImportTimeoutMinutes
-	}
 	notice := ""
 	if len(errs) == 0 {
 		if err := stuckqueue.SaveSettings(r.Context(), s.db, set); err != nil {
@@ -87,7 +89,9 @@ func (s *Server) stuckSettingsSave(w http.ResponseWriter, r *http.Request) {
 		notice = msgSaved
 	}
 	res, running := s.stuckState()
-	s.writeStuckCard(w, s.stuckCardData(res, running, set, errs, notice, "", ""))
+	data := s.stuckCardData(res, running, set, errs, notice, "", "")
+	data["Failed"] = s.stuckFailedFor(r.Context())
+	s.writeStuckCard(w, data)
 }
 
 func (s *Server) stuckRun(w http.ResponseWriter, r *http.Request) {
@@ -178,6 +182,7 @@ func (s *Server) stuckCardFor(ctx context.Context, notice, failure string) map[s
 	res, running := s.stuckState()
 	card := s.stuckCardData(res, running, set, nil, notice, failure, unreadable)
 	card["StateErr"] = stateErr
+	card["Failed"] = s.stuckFailedFor(ctx)
 	return card
 }
 
@@ -193,9 +198,9 @@ func (s *Server) stuckCardData(
 		tplKeyFailure: failure,
 		"Unreadable":  unreadable,
 		"Bounds":      stuckqueue.SettingBounds(),
+		"Defaults":    stuckqueue.DefaultSettings(),
 		"Running":     running,
 		"StartedAt":   s.stuck.StartedAt(),
-		"Failed":      stuckFailed(s.stuck.FailedOperations()),
 	}
 	if res == nil {
 		return card
@@ -212,15 +217,27 @@ func (s *Server) stuckCardData(
 	return card
 }
 
-func stuckFailed(ops []operation.Op) []stuckFailedView {
-	out := make([]stuckFailedView, 0, len(ops))
-	for _, op := range ops {
+func (s *Server) stuckFailedFor(ctx context.Context) []stuckFailedView {
+	rows, err := s.db.ListStuckInState(ctx, string(stuckqueue.StateActed))
+	if err != nil {
+		return nil
+	}
+	var out []stuckFailedView
+	for _, row := range rows {
+		if row.ActedResult != string(stuckqueue.ResultUnfinished) {
+			continue
+		}
+		op, opErr := s.db.Operation(ctx, row.ActedOpID)
+		if opErr != nil || !operation.Resumable(op) {
+			continue
+		}
 		code, _, _ := strings.Cut(op.Subject.ID, ":")
 		out = append(out, stuckFailedView{
-			App: code, DownloadID: op.Steps[0].DownloadID, Title: op.Title, Line: operation.Line(op),
+			App: code, DownloadID: row.DownloadID, Title: op.Title, Line: operation.Line(op),
 			Op: op.ID, Version: op.Version,
 		})
 	}
+	slices.SortFunc(out, func(a, b stuckFailedView) int { return cmp.Compare(a.Op, b.Op) })
 	return out
 }
 
@@ -255,6 +272,7 @@ func stuckItem(it stuckqueue.Item) stuckItemView {
 			}
 		}
 	}
+	v.setBadge(it)
 	for _, a := range it.Actions {
 		v.Buttons = append(v.Buttons, stuckButtonFor(a, v.Targets))
 	}
@@ -291,6 +309,7 @@ func parseStuckSettings(r *http.Request) (stuckqueue.Settings, map[string]string
 	}{
 		{"interval_minutes", &set.IntervalMinutes},
 		{"min_age_hours", &set.MinAgeHours},
+		{"import_timeout_minutes", &set.ImportTimeoutMinutes},
 	} {
 		n, err := strconv.Atoi(r.FormValue(f.name))
 		if err != nil {
@@ -305,4 +324,21 @@ func parseStuckSettings(r *http.Request) (stuckqueue.Settings, map[string]string
 		}
 	}
 	return set, errs
+}
+
+func (v *stuckItemView) setBadge(it stuckqueue.Item) {
+	if it.State != stuckqueue.StateImportInflight && it.State != stuckqueue.StateActed {
+		return
+	}
+	meta := stuckqueue.Meta(stuckqueue.Snapshot{State: it.State, Acted: it.Acted})
+	if meta.Label == "" || meta.Label == "Unfinished" {
+		return
+	}
+	v.Badge, v.BadgeTone, v.BadgeInfo = meta.Label, toneGray, "Import running"
+	if meta.Tone == stuckqueue.ToneOK {
+		v.BadgeTone = toneGreen
+	}
+	if it.Acted != nil {
+		v.BadgeInfo = meta.Label + " " + it.Acted.At.UTC().Format(stuckStamp)
+	}
 }

@@ -70,7 +70,9 @@ func TestNotice_ActionEmitsOOB(t *testing.T) {
 
 	s := newStuckEnv(t)
 	path := "/media/maintenance/stuck-queue/settings"
-	ok := url.Values{"enabled": {"on"}, "interval_minutes": {"30"}, "min_age_hours": {"12"}}
+	ok := url.Values{
+		"enabled": {"on"}, "interval_minutes": {"30"}, "min_age_hours": {"12"}, "import_timeout_minutes": {"60"},
+	}
 	mustContain(t, do(t, s.srv, http.MethodPost, path, ok).Body.String(),
 		`<div id="notice" hx-swap-oob="innerHTML"`, "Saved.")
 	ok.Set("interval_minutes", "abc")

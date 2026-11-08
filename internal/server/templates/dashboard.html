@@ -843,11 +843,12 @@
   {{with .StateErr}}<p class="notice notice-err">{{.}}</p>{{end}}
   {{template "stuck_results" .}}
   <form hx-post="{{.BaseURL}}/maintenance/stuck-queue/settings" hx-target="#stuck-queue" hx-swap="outerHTML"
-    hx-disable="find button" class="flex flex-wrap items-end gap-4">
+    hx-disable="find button[type=submit]" class="flex flex-wrap items-end gap-4">
     <label class="text-sm text-gray-700"><input type="checkbox" name="enabled" {{if .Settings.Enabled}}checked{{end}} /> Enabled</label>
     <label class="text-sm text-gray-700"><input type="checkbox" name="dry_run" {{if .Settings.DryRun}}checked{{end}} /> Dry run</label>
     {{template "sweep_num" (dict "Label" "Every (minutes)" "Name" "interval_minutes" "Value" .Settings.IntervalMinutes "Min" .Bounds.IntervalLo "Max" .Bounds.IntervalHi "Err" (index .Errors "interval_minutes"))}}
     {{template "sweep_num" (dict "Label" "Wait before acting (hours)" "Name" "min_age_hours" "Value" .Settings.MinAgeHours "Min" .Bounds.MinAgeLo "Max" .Bounds.MinAgeHi "Err" (index .Errors "min_age_hours"))}}
+    {{template "sweep_num" (dict "Label" "Import timeout (minutes)" "Name" "import_timeout_minutes" "Value" .Settings.ImportTimeoutMinutes "Min" .Bounds.ImportLo "Max" .Bounds.ImportHi "Default" .Defaults.ImportTimeoutMinutes "Err" (index .Errors "import_timeout_minutes"))}}
     <button type="submit" class="btn btn-primary">Save</button>
   </form>
   {{end}}
@@ -897,16 +898,17 @@
     {{if .Counted}}<div class="stats mt-1">{{template "stat" (dict "N" .Cleared "Label" "cleared")}}{{template "stat" (dict "N" .WouldClear "Label" "would clear")}}{{template "stat" (dict "N" .Listed "Label" "listed")}}{{template "stat" (dict "N" .Waiting "Label" "waiting")}}{{if .Waiting}}{{template "info" (printf "waiting out the %d h delay" .MinAge)}}{{end}}</div>{{end}}
     {{with .Error}}<p class="text-sm text-red-600">{{.}}</p>{{end}}
     {{range .Items}}
+    {{$item := .}}
     <div class="mt-3 border border-gray-200 rounded-sm p-3 text-sm">
       <div class="flex flex-wrap justify-between gap-x-4">
         <span class="font-medium text-gray-900 break-all">{{.Title}}</span>
-        <span class="text-gray-500">{{template "badge" (dict "Tone" "gray" "Word" .Verdict)}} {{.Targets}} · {{.Age}}{{if not .Due.IsZero}} · due {{template "ts" .Due}}{{end}}</span>
+        <span class="text-gray-500">{{with .Badge}}{{template "badge" (dict "Tone" $item.BadgeTone "Word" .)}}{{template "info" $item.BadgeInfo}} {{end}}{{template "badge" (dict "Tone" "gray" "Word" .Verdict)}} {{.Targets}} · {{.Age}}{{if not .Due.IsZero}} · due {{template "ts" .Due}}{{end}}</span>
       </div>
       {{range .Messages}}<p class="text-gray-600">{{.}}</p>{{end}}
       {{with .Rejections}}<p class="text-gray-600">Import check: {{range $i, $r := .}}{{if $i}}; {{end}}{{$r}}{{end}}</p>{{end}}
       {{with .ImportRefusal}}<p class="text-amber-700">No import: {{.}}</p>{{end}}
       <div class="mt-2 flex gap-2">
-        {{$item := .}}{{range .Buttons}}
+        {{range .Buttons}}
         <form hx-post="{{$.BaseURL}}/maintenance/stuck-queue/{{.Action}}" hx-target="#stuck-queue" hx-swap="outerHTML"
           hx-confirm="{{.Confirm}}" hx-disable="find button">
           <input type="hidden" name="app" value="{{$item.App}}" />
@@ -924,7 +926,7 @@
   <div class="border border-gray-200 rounded-sm p-3 text-sm">
     <div class="flex flex-wrap justify-between gap-x-4">
       <span class="font-medium text-gray-900 break-all">{{.Title}}</span>
-      <span class="text-gray-600">{{.Line}}</span>
+      <span>{{template "badge" (dict "Tone" "orange" "Word" "Unfinished")}} {{template "info" .Line}}</span>
     </div>
     <form hx-post="{{$.BaseURL}}/maintenance/stuck-queue/resume" hx-target="#stuck-queue" hx-swap="outerHTML"
       hx-disable="find button" class="mt-2">
@@ -955,9 +957,13 @@
 {{define "sweep_num"}}
 <label class="block text-sm text-gray-700">
   {{.Label}}
-  <input type="number" name="{{.Name}}" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}"
-    class="mt-1 block w-28 bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900"
-  />
+  <span class="mt-1 flex items-center gap-2">
+    <input type="number" name="{{.Name}}" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}"
+      class="block w-28 bg-white border border-gray-200 rounded-sm px-2 py-1 text-gray-900"
+    />
+    {{if .Default}}<button type="button" class="btn btn-secondary btn-sm" data-reset="{{.Name}}" data-default="{{.Default}}"
+      title="Reset to {{.Default}}" {{if eq .Value .Default}}disabled{{end}}>Reset</button>{{end}}
+  </span>
   {{with .Err}}<span class="block text-xs text-red-600 mt-0.5">{{.}}</span>{{end}}
 </label>
 {{end}}

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"html"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
@@ -185,7 +188,9 @@ func TestStuckCard_CorruptSettings(t *testing.T) {
 func TestStuckSettings_SaveAndInvalid(t *testing.T) {
 	t.Parallel()
 	env := newStuckEnv(t)
-	ok := url.Values{"enabled": {"on"}, "interval_minutes": {"30"}, "min_age_hours": {"12"}}
+	ok := url.Values{
+		"enabled": {"on"}, "interval_minutes": {"30"}, "min_age_hours": {"12"}, "import_timeout_minutes": {"60"},
+	}
 	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/settings", ok)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
@@ -197,7 +202,10 @@ func TestStuckSettings_SaveAndInvalid(t *testing.T) {
 		t.Fatalf("saved = %+v, err = %v", got, err)
 	}
 	for _, bad := range []string{"abc", "5"} {
-		form := url.Values{"enabled": {"on"}, "dry_run": {"on"}, "interval_minutes": {bad}, "min_age_hours": {"6"}}
+		form := url.Values{
+			"enabled": {"on"}, "dry_run": {"on"}, "interval_minutes": {bad}, "min_age_hours": {"6"},
+			"import_timeout_minutes": {"60"},
+		}
 		rec = do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/settings", form)
 		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "Saved.") {
 			t.Fatalf("%s: status %d body %s", bad, rec.Code, rec.Body.String())
@@ -329,4 +337,164 @@ func TestQ6d_4_PausedRunLabelled(t *testing.T) {
 	if strings.Contains(body, "<span>dry run</span>") {
 		t.Fatal("paused run labelled dry run")
 	}
+}
+
+func seedActedRow(t *testing.T, e *stuckEnv, id, action, result string, opID int64) {
+	t.Helper()
+	row := db.StuckRow{
+		App: "sonarr", DownloadID: id, State: "acted", FirstSeen: time.Now().Add(-time.Hour),
+		ActedAction: action, ActedAt: time.Now(), ActedResult: result, ActedOpID: opID,
+	}
+	if action == string(stuckqueue.ActionImport) {
+		row.ImportFiles, row.ImportTotal = 1, 1
+	}
+	err := e.db.ApplyStuck(context.Background(), "sonarr", []string{id},
+		func(map[string]*db.StuckRow) ([]db.StuckRow, []string, error) { return []db.StuckRow{row}, nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stuckItemBody(t *testing.T, env *stuckEnv, items ...stuckqueue.Item) string {
+	t.Helper()
+	res := stuckqueue.Result{
+		FinishedAt: time.Date(2026, 10, 29, 22, 0, 0, 0, time.UTC), MinAgeHours: 6,
+		Apps: []stuckqueue.AppResult{{App: stuckqueue.AppSonarr, Configured: true, Items: items}},
+	}
+	var buf bytes.Buffer
+	data := env.srv.StuckCardDataForTest(res, stuckqueue.DefaultSettings(), "")
+	if err := env.srv.ExecuteTemplateForTest(&buf, "stuck_card", data); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func stateItem(id, title string, state stuckqueue.State, acted *stuckqueue.Acted) stuckqueue.Item {
+	d := stuckqueue.Group(stuckqueue.AppSonarr, []client.QueueEntry{{
+		ID: 1, DownloadID: id, Status: "completed", TrackedDownloadState: "importPending", EpisodeID: 1,
+		SeasonNumber: 1, EpisodeNumber: 1, Messages: []string{"m"},
+	}})[0]
+	d.Title = title
+	return stuckqueue.Item{
+		Download: d, Verdict: stuckqueue.VerdictGap, State: state, Acted: acted, Age: time.Hour,
+		Actions: []stuckqueue.Action{stuckqueue.ActionRemove},
+	}
+}
+
+func TestStuckItem_ImportingChipNoButtons(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	it := stateItem("IMP", "Importing Show", stuckqueue.StateImportInflight, nil)
+	it.Actions = nil
+	body := stuckItemBody(t, env, it)
+	mustContain(t, body, "Importing Show", `<span class="badge tone-gray">Importing</span>`, `class="info"`)
+	for _, banned := range []string{`name="download_id"`, "/stuck-queue/import", "/stuck-queue/regrab", "/stuck-queue/remove"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("an importing download offers %q:\n%s", banned, body)
+		}
+	}
+}
+
+func TestStuckItem_ActedStaysListedWithBadge(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	at := time.Date(2026, 10, 29, 21, 0, 0, 0, time.UTC)
+	acted := func(a stuckqueue.Action) *stuckqueue.Acted {
+		return &stuckqueue.Acted{Action: a, At: at, Result: stuckqueue.ResultOK}
+	}
+	imp := stateItem("A1", "Imported Show", stuckqueue.StateActed, acted(stuckqueue.ActionImport))
+	grab := stateItem("A2", "Grabbed Show", stuckqueue.StateActed, acted(stuckqueue.ActionRegrab))
+	gone := stateItem("A3", "Removed Show", stuckqueue.StateActed, acted(stuckqueue.ActionRemove))
+	for _, it := range []*stuckqueue.Item{&imp, &grab, &gone} {
+		it.Actions = nil
+	}
+	body := stuckItemBody(t, env, imp, grab, gone)
+	mustContain(t, body,
+		"Imported Show", "Grabbed Show", "Removed Show",
+		`<span class="badge tone-green">Imported</span>`,
+		`<span class="badge tone-green">Re-grabbed</span>`,
+		`<span class="badge tone-green">Removed</span>`,
+		"2026-10-29 21:00 UTC",
+	)
+	if strings.Contains(body, `name="download_id"`) {
+		t.Fatalf("an acted download offers buttons:\n%s", body)
+	}
+}
+
+func TestStuckItem_UnfinishedRegrabListedOffQueue(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	env.arr.mu.Lock()
+	env.arr.records = nil
+	env.arr.mu.Unlock()
+	op := seedFailedRegrab(t, env)
+
+	body := do(t, env.srv, http.MethodGet, "/media/maintenance", nil).Body.String()
+
+	mustContain(t, body,
+		"One Piece", "Unfinished", `class="info"`, `data-tip="`+html.EscapeString(operation.Line(op))+`"`,
+		"/media/maintenance/stuck-queue/resume",
+		`name="app" value="s"`, `name="id" value="D"`,
+		`name="op" value="`+strconv.FormatInt(op.ID, 10)+`"`,
+		`name="v" value="`+strconv.FormatInt(op.Version, 10)+`"`,
+		">Resume<",
+	)
+}
+
+func TestStuckSettings_ImportTimeoutSavedBoundedAndResettable(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	form := func(timeout string) url.Values {
+		return url.Values{
+			"enabled": {"on"}, "interval_minutes": {"30"}, "min_age_hours": {"12"}, "import_timeout_minutes": {timeout},
+		}
+	}
+	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/settings", form("90"))
+	mustContain(t, rec.Body.String(), "Saved.", `name="import_timeout_minutes"`, `value="90"`, `min="10"`, `max="720"`,
+		`data-reset="import_timeout_minutes"`, `data-default="60"`, `class="btn btn-secondary btn-sm"`, ">Reset<")
+	got, err := stuckqueue.LoadSettings(context.Background(), env.db)
+	if err != nil || got.ImportTimeoutMinutes != 90 {
+		t.Fatalf("saved = %+v, err = %v", got, err)
+	}
+	for _, bad := range []string{"9", "721", "abc", ""} {
+		rec = do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/settings", form(bad))
+		if strings.Contains(rec.Body.String(), "Saved.") {
+			t.Fatalf("%q was saved", bad)
+		}
+		if again, _ := stuckqueue.LoadSettings(context.Background(), env.db); again.ImportTimeoutMinutes != 90 {
+			t.Fatalf("%q: stored timeout = %d", bad, again.ImportTimeoutMinutes)
+		}
+	}
+	mustContain(t, rec.Body.String(), "must be a whole number")
+	rec = do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/settings", form("721"))
+	mustContain(t, rec.Body.String(), "must be between 10 and 720")
+}
+
+func TestStuckRun_OwnerActingNotice(t *testing.T) {
+	t.Parallel()
+	env := newStuckEnv(t)
+	if err := stuckqueue.SaveSettings(context.Background(), env.db, stuckqueue.DefaultSettings()); err != nil {
+		t.Fatal(err)
+	}
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
+	env.arr.mu.Lock()
+	env.arr.hold = hold
+	env.arr.mu.Unlock()
+	acted := make(chan struct{})
+	go func() {
+		defer close(acted)
+		_, _ = env.sch.Act(context.Background(), stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove, "x")
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for env.arr.requests() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	rec := do(t, env.srv, http.MethodPost, "/media/maintenance/stuck-queue/run", url.Values{})
+	release()
+	<-acted
+
+	mustContain(t, rec.Body.String(), `id="stuck-queue"`, "an owner action is running, try again in a moment")
 }
