@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ type cardState struct {
 	messages map[string]bool
 	overlays map[string]overlay
 	store    *db.DB
+	warned   map[string]bool
 }
 
 // Refresh queues a re-render of every message tracking subjectOrPrefix (a prefix ends in ":").
@@ -161,42 +163,169 @@ func messageIDs(rows []db.DiscordCard) []string {
 	return slices.Compact(ids)
 }
 
+type attemptResult struct {
+	Kind cardKind
+	Live bool
+	Err  error
+}
+
+type subjectPlan struct {
+	row   db.DiscordCard
+	gone  bool
+	held  bool
+	live  bool
+	shown *card.Update
+	store json.RawMessage
+}
+
 func (b *Bot) refreshMessages(ctx context.Context, d *db.DB, ids []string) {
 	slices.Sort(ids)
 	for _, id := range slices.Compact(ids) {
-		b.refreshMessage(ctx, d, id)
+		res := b.refreshMessage(ctx, d, id)
+		if slices.Contains([]cardKind{cardShown, cardHeld, cardFailed}, res.Kind) {
+			if res.Live {
+				b.liveMsgs[id] = true
+			} else {
+				delete(b.liveMsgs, id)
+			}
+		}
 	}
 }
 
-func (b *Bot) refreshMessage(ctx context.Context, d *db.DB, id string) {
+func (b *Bot) refreshMessage(ctx context.Context, d *db.DB, id string) attemptResult {
+	rows, c, res, ok := b.loadMessage(ctx, d, id)
+	if !ok {
+		return res
+	}
+	plans := b.classify(ctx, d, c, rows)
+	if allGone(plans) {
+		if err := d.DeleteDiscordMessage(ctx, id); err != nil {
+			b.log.WarnContext(ctx, "discord cards: drop gone message", "message", id, "error", err)
+		}
+		b.forget(id)
+		return attemptResult{Kind: cardAllGone}
+	}
+	live := slices.ContainsFunc(plans, func(p subjectPlan) bool { return p.live })
+	if slices.ContainsFunc(plans, func(p subjectPlan) bool { return p.held }) {
+		return attemptResult{Kind: cardHeld, Live: live}
+	}
+	comps, hash, err := b.renderPlans(id, c, plans)
+	if err != nil {
+		return attemptResult{Kind: cardFailed, Live: live, Err: err}
+	}
+	res = b.sendAndStore(ctx, d, rows[0], hash, comps, storedUpdates(plans))
+	res.Live = live
+	return res
+}
+
+func (b *Bot) loadMessage(
+	ctx context.Context, d *db.DB, id string,
+) ([]db.DiscordCard, card.Card, attemptResult, bool) {
+	var c card.Card
 	rows, err := d.ListDiscordMessage(ctx, id)
 	if err != nil {
 		b.log.WarnContext(ctx, "discord cards: load message", "message", id, "error", err)
-		return
+		return nil, c, attemptResult{Kind: cardFailed, Err: err}, false
 	}
 	if len(rows) == 0 {
 		b.forget(id)
-		return
+		return nil, c, attemptResult{Kind: cardMissing}, false
 	}
-	var c card.Card
 	if err = json.Unmarshal(rows[0].Card, &c); err != nil {
 		b.log.WarnContext(ctx, "discord cards: decode card", "message", id, "error", err)
-		return
+		return nil, c, attemptResult{Kind: cardUndecodable, Err: err}, false
 	}
-	ups := make(map[string]card.Update, len(rows))
-	live := false
+	return rows, c, attemptResult{}, true
+}
+
+func (b *Bot) classify(ctx context.Context, d *db.DB, c card.Card, rows []db.DiscordCard) []subjectPlan {
+	asSent, _ := renderHash(render(c, nil, overlay{}, b.publicURL))
+	plans := make([]subjectPlan, 0, len(rows))
 	for _, r := range rows {
-		up, ok := b.renderSubject(ctx, r.Subject)
-		if !ok {
-			return
-		}
-		ups[r.Subject] = keepSentVerbs(c, r.Subject, up)
-		live = live || up.Live
+		plans = append(plans, b.planSubject(ctx, d, c, r, asSent))
 	}
-	if live {
-		b.liveMsgs[id] = true
-	} else {
-		delete(b.liveMsgs, id)
+	return plans
+}
+
+func (b *Bot) planSubject(ctx context.Context, d *db.DB, c card.Card, r db.DiscordCard, asSent string) subjectPlan {
+	last, known := b.decodeLast(ctx, r)
+	p := subjectPlan{row: r, shown: sentVerbs(c, r.Subject, last)}
+	if r.State == db.CardGone {
+		p.gone = true
+		return p
+	}
+	res := b.renderSubject(ctx, r.Subject)
+	switch res.Outcome {
+	case card.Render:
+		kept := keepSentVerbs(c, r.Subject, res.Update)
+		p.shown, p.live = &kept, res.Update.Live
+		if j, err := json.Marshal(res.Update); err == nil && string(j) != string(r.LastUpdate) {
+			p.store = j
+		}
+	case card.Gone:
+		p.gone = true
+		if err := d.MarkDiscordSubjectsGone(ctx, r.MessageID, []string{r.Subject}); err != nil {
+			b.log.WarnContext(ctx, "discord cards: mark gone", "subject", r.Subject, "error", err)
+		}
+	case card.NotYet:
+		switch {
+		case known:
+		case r.Hash == asSent:
+			p.store = json.RawMessage("null")
+		default:
+			p.held = true
+		}
+	}
+	return p
+}
+
+func (b *Bot) decodeLast(ctx context.Context, r db.DiscordCard) (*card.Update, bool) {
+	if !r.LastKnown {
+		return nil, false
+	}
+	if bytes.Equal(bytes.TrimSpace(r.LastUpdate), []byte("null")) {
+		return nil, true
+	}
+	var u card.Update
+	if err := json.Unmarshal(r.LastUpdate, &u); err != nil {
+		if !b.cards.warned[r.MessageID] {
+			b.cards.warned[r.MessageID] = true
+			b.log.WarnContext(ctx, "discord cards: last_update undecodable", "message", r.MessageID,
+				"subject", r.Subject, "error", err)
+		}
+		return nil, false
+	}
+	return &u, true
+}
+
+func sentVerbs(c card.Card, subject string, last *card.Update) *card.Update {
+	if last == nil {
+		return nil
+	}
+	kept := keepSentVerbs(c, subject, *last)
+	return &kept
+}
+
+func allGone(plans []subjectPlan) bool {
+	return !slices.ContainsFunc(plans, func(p subjectPlan) bool { return !p.gone })
+}
+
+func storedUpdates(plans []subjectPlan) map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for _, p := range plans {
+		if p.store != nil {
+			out[p.row.Subject] = p.store
+		}
+	}
+	return out
+}
+
+func (b *Bot) renderPlans(id string, c card.Card, plans []subjectPlan) ([]discordgo.MessageComponent, string, error) {
+	ups := make(map[string]card.Update, len(plans))
+	for _, p := range plans {
+		if p.shown != nil {
+			ups[p.row.Subject] = *p.shown
+		}
 	}
 	ov := b.pinOverlay(id, ups)
 	comps := render(c, ups, ov, b.publicURL)
@@ -205,26 +334,37 @@ func (b *Bot) refreshMessage(ctx context.Context, d *db.DB, id string) {
 		comps = render(c, ups, ov, b.publicURL)
 	}
 	hash, err := renderHash(comps)
-	if err != nil || hash == rows[0].Hash {
-		return
-	}
-	_, err = b.api.ChannelMessageEditComplex(&discordgo.MessageEdit{
-		ID: id, Channel: rows[0].ChannelID, Components: &comps, Flags: discordgo.MessageFlagsIsComponentsV2,
-	})
-	var rest *discordgo.RESTError
-	switch {
-	case errors.As(err, &rest) && rest.Response != nil && rest.Response.StatusCode == http.StatusNotFound:
-		if err = d.DeleteDiscordMessage(ctx, id); err != nil {
-			b.log.WarnContext(ctx, "discord cards: drop deleted message", "message", id, "error", err)
+	return comps, hash, err
+}
+
+func (b *Bot) sendAndStore(
+	ctx context.Context, d *db.DB, first db.DiscordCard, hash string, comps []discordgo.MessageComponent,
+	updates map[string]json.RawMessage,
+) attemptResult {
+	id := first.MessageID
+	if hash != first.Hash {
+		_, err := b.api.ChannelMessageEditComplex(&discordgo.MessageEdit{
+			ID: id, Channel: first.ChannelID, Components: &comps, Flags: discordgo.MessageFlagsIsComponentsV2,
+		})
+		var rest *discordgo.RESTError
+		switch {
+		case errors.As(err, &rest) && rest.Response != nil && rest.Response.StatusCode == http.StatusNotFound:
+			if err = d.DeleteDiscordMessage(ctx, id); err != nil {
+				b.log.WarnContext(ctx, "discord cards: drop deleted message", "message", id, "error", err)
+			}
+			b.forget(id)
+			return attemptResult{Kind: cardMissing}
+		case err != nil:
+			b.log.WarnContext(ctx, "discord card edit failed", "message", id, "error", err)
+			return attemptResult{Kind: cardFailed, Err: err}
 		}
-		b.forget(id)
-	case err != nil:
-		b.log.WarnContext(ctx, "discord card edit failed", "message", id, "error", err)
-	default:
-		if err = d.SetDiscordMessageHash(ctx, id, hash); err != nil {
-			b.log.WarnContext(ctx, "discord cards: store hash", "message", id, "error", err)
-		}
+	} else if len(updates) == 0 {
+		return attemptResult{Kind: cardShown}
 	}
+	if err := d.SetDiscordMessageRendered(ctx, id, hash, updates); err != nil {
+		b.log.WarnContext(ctx, "discord cards: store render", "message", id, "error", err)
+	}
+	return attemptResult{Kind: cardShown}
 }
 
 func textLen(cs []discordgo.MessageComponent) int {
@@ -258,17 +398,17 @@ func withinTextLimit(ups map[string]card.Update, ov overlay) (map[string]card.Up
 	return out, ov
 }
 
-func (b *Bot) renderSubject(ctx context.Context, subject string) (card.Update, bool) {
+func (b *Bot) renderSubject(ctx context.Context, subject string) card.Rendering {
 	r, ok := b.renderers[card.Kind(subject)]
 	if !ok {
-		return card.Update{}, false
+		return card.Rendering{}
 	}
 	res, err := r(ctx, subject)
 	if err != nil {
 		b.log.WarnContext(ctx, "discord cards: render", "subject", subject, "error", err)
-		return card.Update{}, false
+		return card.Rendering{}
 	}
-	return res.Update, res.Outcome == card.Render
+	return res
 }
 
 func keepSentVerbs(c card.Card, subject string, up card.Update) card.Update {

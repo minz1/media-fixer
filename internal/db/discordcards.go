@@ -137,11 +137,6 @@ func (d *DB) listDiscordCards(ctx context.Context, query string, args ...any) ([
 	return out, rows.Err()
 }
 
-func (d *DB) SetDiscordMessageHash(ctx context.Context, messageID, hash string) error {
-	_, err := d.write.ExecContext(ctx, `UPDATE discord_cards SET hash = ? WHERE message_id = ?`, hash, messageID)
-	return err
-}
-
 func (d *DB) SetDiscordMessageRendered(
 	ctx context.Context, messageID, hash string, updates map[string]json.RawMessage,
 ) error {

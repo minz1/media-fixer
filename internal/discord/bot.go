@@ -71,6 +71,7 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		retryCap:   connectRetryCap,
 		cards: cardState{
 			pending: map[string]bool{}, messages: map[string]bool{}, overlays: map[string]overlay{},
+			warned: map[string]bool{},
 		},
 		wake:      make(chan struct{}, 1),
 		poll:      livePoll,

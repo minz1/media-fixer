@@ -1,7 +1,9 @@
 package discord_test
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,17 +69,28 @@ type fakeRenderer struct {
 	ups   map[string]card.Update
 	ok    bool
 	calls map[string]int
+	gone  map[string]bool
+	errs  map[string]error
 }
 
 func newRenderer(ok bool) *fakeRenderer {
-	return &fakeRenderer{ups: map[string]card.Update{}, ok: ok, calls: map[string]int{}}
+	return &fakeRenderer{
+		ups: map[string]card.Update{}, ok: ok, calls: map[string]int{}, gone: map[string]bool{},
+		errs: map[string]error{},
+	}
 }
 
 func (r *fakeRenderer) render(_ context.Context, subject string) (card.Rendering, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls[subject]++
-	if !r.ok {
+	if err := r.errs[subject]; err != nil {
+		return card.Rendering{}, err
+	}
+	if r.gone[subject] {
+		return card.Rendering{Outcome: card.Gone}, nil
+	}
+	if _, set := r.ups[subject]; !set && !r.ok {
 		return card.Rendering{}, nil
 	}
 	return card.Rendered(r.ups[subject]), nil
@@ -90,6 +103,18 @@ func (r *fakeRenderer) set(subject string, up card.Update) {
 	r.ok = true
 }
 
+func (r *fakeRenderer) setGone(subject string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gone[subject] = true
+}
+
+func (r *fakeRenderer) setErr(subject string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errs[subject] = err
+}
+
 func (r *fakeRenderer) count(subject string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -98,6 +123,8 @@ func (r *fakeRenderer) count(subject string) int {
 
 type cardEnv struct {
 	t        *testing.T
+	path     string
+	public   string
 	api      *editSender
 	bot      *discord.Bot
 	db       *db.DB
@@ -107,21 +134,35 @@ type cardEnv struct {
 
 func openCardDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "cards.db"))
+	d, _ := openCardDBAt(t)
+	return d
+}
+
+func openCardDBAt(t *testing.T) (*db.DB, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "cards.db")
+	d, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	return d
+	return d, path
 }
 
 func newCardEnv(t *testing.T, publicURL string) *cardEnv {
 	t.Helper()
-	d := openCardDB(t)
+	return newCardEnvLog(t, publicURL, slog.New(slog.DiscardHandler))
+}
+
+func newCardEnvLog(t *testing.T, publicURL string, log *slog.Logger) *cardEnv {
+	t.Helper()
+	d, path := openCardDBAt(t)
 	api := &editSender{}
-	b := discord.NewWithSenderForTest(slog.New(slog.DiscardHandler), api, "owner", publicURL)
+	b := discord.NewWithSenderForTest(log, api, "owner", publicURL)
 	t.Cleanup(func() { _ = b.Close() })
-	return &cardEnv{t: t, api: api, bot: b, db: d, events: make(chan *db.Event, 8)}
+	return &cardEnv{
+		t: t, path: path, public: publicURL, api: api, bot: b, db: d, events: make(chan *db.Event, 8),
+	}
 }
 
 func (e *cardEnv) start(renderers map[string]card.Renderer) {
@@ -130,14 +171,100 @@ func (e *cardEnv) start(renderers map[string]card.Renderer) {
 
 func (e *cardEnv) track(subject, messageID string, c card.Card, sentAt time.Time) {
 	e.t.Helper()
+	e.trackRows(messageID, c, sentAt, subject)
+}
+
+func (e *cardEnv) trackRows(messageID string, c card.Card, sentAt time.Time, subjects ...string) {
+	e.t.Helper()
 	body, err := json.Marshal(c)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	if err = e.db.InsertDiscordCards(e.t.Context(), []db.DiscordCard{{
-		Subject: subject, ChannelID: "dm", MessageID: messageID, Card: body, SentAt: sentAt,
-	}}); err != nil {
+	hash := e.hashOf(discord.RenderForTest(c, e.public))
+	rows := make([]db.DiscordCard, 0, len(subjects))
+	for _, s := range subjects {
+		rows = append(rows, db.DiscordCard{
+			Subject: s, ChannelID: "dm", MessageID: messageID, Card: body, Hash: hash, SentAt: sentAt,
+		})
+	}
+	if err = e.db.InsertDiscordCards(e.t.Context(), rows); err != nil {
 		e.t.Fatal(err)
+	}
+}
+
+func (e *cardEnv) hashOf(comps []discordgo.MessageComponent) string {
+	e.t.Helper()
+	j, err := json.Marshal(comps)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return card.Fingerprint(j)
+}
+
+func (e *cardEnv) rawDB() *sql.DB {
+	e.t.Helper()
+	raw, err := sql.Open("sqlite", e.path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Cleanup(func() { _ = raw.Close() })
+	return raw
+}
+
+func (e *cardEnv) rawExec(query string, args ...any) {
+	e.t.Helper()
+	if _, err := e.rawDB().ExecContext(e.t.Context(), query, args...); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *cardEnv) rawCount(query string) int {
+	e.t.Helper()
+	var n int
+	if err := e.rawDB().QueryRowContext(e.t.Context(), query).Scan(&n); err != nil {
+		e.t.Fatal(err)
+	}
+	return n
+}
+
+func (e *cardEnv) setLast(subject string, value any) {
+	e.t.Helper()
+	e.rawExec(
+		`UPDATE discord_cards SET last_update = ? WHERE message_id = ? AND subject = ?`,
+		value,
+		"m1",
+		subject,
+	)
+}
+
+func (e *cardEnv) setHash(hash string) {
+	e.t.Helper()
+	e.rawExec(`UPDATE discord_cards SET hash = ? WHERE message_id = ?`, hash, "m1")
+}
+
+func (e *cardEnv) row(subject string) db.DiscordCard {
+	e.t.Helper()
+	rows, err := e.db.ListDiscordMessage(e.t.Context(), "m1")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.Subject == subject {
+			return r
+		}
+	}
+	e.t.Fatalf("no row %s", subject)
+	return db.DiscordCard{}
+}
+
+func (e *cardEnv) waitLast(want string) {
+	e.t.Helper()
+	deadline := time.Now().Add(waitLimit)
+	for string(e.row("inc:1").LastUpdate) != want {
+		if time.Now().After(deadline) {
+			e.t.Fatalf("last_update = %s, want %s", e.row("inc:1").LastUpdate, want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -602,4 +729,274 @@ func TestRefresh_OverTextLimitDropsSectionsAndDanger(t *testing.T) {
 		!strings.Contains(s, "too long for Discord") {
 		t.Errorf("edit = %.300s…", s)
 	}
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuf) count(sub string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Count(l.b.String(), sub)
+}
+
+func twoItemCard() card.Card {
+	return card.Card{
+		Subject: "t:card", Title: "Two",
+		Items: []card.Item{{Subject: "r:1", Text: "first"}, {Subject: "s:1", Text: "second"}},
+	}
+}
+
+func updateJSON(t *testing.T, u card.Update) string {
+	t.Helper()
+	b, err := json.Marshal(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func (e *cardEnv) waitNoRows(messageID string) {
+	e.t.Helper()
+	deadline := time.Now().Add(waitLimit)
+	for {
+		rows, err := e.db.ListDiscordMessage(e.t.Context(), messageID)
+		if err == nil && len(rows) == 0 && !discord.HasOverlayForTest(e.bot, messageID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatalf("rows %+v err %v overlay %v", rows, err, discord.HasOverlayForTest(e.bot, messageID))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestD1_10_UnreachableAppKeepsOtherItemsUpdating(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.trackRows("m1", twoItemCard(), time.Now(), "t:card", "r:1", "s:1")
+	e.setLast("r:1", updateJSON(t, card.Update{Status: "r-old-status"}))
+	notYet := newRenderer(false)
+	s := newRenderer(true)
+	s.set("s:1", card.Update{Status: "s-new-status"})
+	e.start(map[string]card.Renderer{"t": notYet.render, "r": notYet.render, "s": s.render})
+	got := editJSON(t, e.waitEdits(1)[0])
+	if !strings.Contains(got, "r-old-status") || !strings.Contains(got, "s-new-status") {
+		t.Errorf("edit = %s", got)
+	}
+}
+
+func TestD1_10_PrunedSweepRunIsForgotten(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	r := newRenderer(false)
+	r.setGone("sweep:1")
+	e.track("sweep:1", "m1", card.Card{Subject: "sweep:1", Title: "Sweep"}, time.Now())
+	e.start(map[string]card.Renderer{"sweep": r.render})
+	e.waitNoRows("m1")
+	e.bot.Refresh("sweep:")
+	time.Sleep(50 * time.Millisecond)
+	if n := r.count("sweep:1"); n != 1 {
+		t.Errorf("renders = %d, want 1", n)
+	}
+	if n := len(e.api.editList()); n != 0 {
+		t.Errorf("edits = %d, want 0", n)
+	}
+}
+
+func TestD1_10_MissingRendererFreezesOnlyItsSubject(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.trackRows("m1", twoItemCard(), time.Now(), "t:card", "r:1", "s:1")
+	e.setLast("r:1", updateJSON(t, card.Update{Status: "r-old-status"}))
+	notYet := newRenderer(false)
+	s := newRenderer(true)
+	s.set("s:1", card.Update{Status: "s-new-status"})
+	e.start(map[string]card.Renderer{"t": notYet.render, "s": s.render})
+	got := editJSON(t, e.waitEdits(1)[0])
+	if !strings.Contains(got, "r-old-status") || !strings.Contains(got, "s-new-status") {
+		t.Errorf("edit = %s", got)
+	}
+}
+
+func TestD1_10_NotYetAfterRestartKeepsStoredUpdate(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	up := card.Update{Status: "Escalated"}
+	e.setLast("inc:1", updateJSON(t, up))
+	e.setHash("stale")
+	r := newRenderer(false)
+	e.start(map[string]card.Renderer{"inc": r.render})
+	if got := editJSON(t, e.waitEdits(1)[0]); !strings.Contains(got, "Escalated") {
+		t.Errorf("edit = %s", got)
+	}
+	if row := e.row("inc:1"); string(row.LastUpdate) != updateJSON(t, up) {
+		t.Errorf("last_update = %s", row.LastUpdate)
+	}
+}
+
+func TestD1_10_NullLastNotYetSkipsEdit(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	e.setLast("inc:1", nil)
+	e.setHash("edited-before-p5")
+	r := newRenderer(false)
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitCalls(r, "inc:1", 1)
+	if row := e.row("inc:1"); len(e.api.editList()) != 0 || row.LastKnown || row.Hash != "edited-before-p5" {
+		t.Fatalf("edits %d, row %+v", len(e.api.editList()), row)
+	}
+	up := card.Update{Status: "Escalated"}
+	r.set("inc:1", up)
+	e.bot.Refresh("inc:1")
+	e.waitEdits(1)
+	e.waitLast(updateJSON(t, up))
+}
+
+func TestD1_10_NullLastWithAsSentHashRendersAsSent(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	e.setLast("inc:1", nil)
+	r := newRenderer(false)
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitCalls(r, "inc:1", 1)
+	e.waitLast("null")
+	if n := len(e.api.editList()); n != 0 {
+		t.Errorf("edits = %d, want 0", n)
+	}
+}
+
+func TestD1_10_RenderErrorKeepsLast(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	up := card.Update{Status: "kept-status"}
+	e.setLast("inc:1", updateJSON(t, up))
+	e.setHash("stale")
+	r := newRenderer(false)
+	r.setErr("inc:1", errors.New("probe failed"))
+	e.start(map[string]card.Renderer{"inc": r.render})
+	if got := editJSON(t, e.waitEdits(1)[0]); !strings.Contains(got, "kept-status") {
+		t.Errorf("edit = %s", got)
+	}
+	if row := e.row("inc:1"); string(row.LastUpdate) != updateJSON(t, up) {
+		t.Errorf("last_update = %s", row.LastUpdate)
+	}
+}
+
+func TestD1_10_UndecodableLastWarnsOncePerMessage(t *testing.T) {
+	t.Parallel()
+	buf := &lockedBuf{}
+	e := newCardEnvLog(t, "", slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	e.setLast("inc:1", `"junk"`)
+	e.setHash("stale")
+	r := newRenderer(false)
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitCalls(r, "inc:1", 1)
+	for i := 2; i <= 4; i++ {
+		e.bot.Refresh("inc:1")
+		e.waitCalls(r, "inc:1", i)
+	}
+	if n := buf.count("last_update"); n != 1 {
+		t.Errorf("last_update warnings = %d, want 1", n)
+	}
+	if n := len(e.api.editList()); n != 0 {
+		t.Errorf("edits = %d, want 0", n)
+	}
+	fresh := card.Update{Status: "fresh"}
+	r.set("inc:1", fresh)
+	e.bot.Refresh("inc:1")
+	e.waitEdits(1)
+	e.waitLast(updateJSON(t, fresh))
+}
+
+func TestD2_20_OverlayShownWhileASubjectIsNotYet(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	r := newRenderer(false)
+	discord.SetOverlayForTest(e.bot, "m1", "Resolve refused")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	if got := editJSON(t, e.waitEdits(1)[0]); !strings.Contains(got, "Resolve refused") {
+		t.Errorf("edit = %s", got)
+	}
+}
+
+func TestUpdater_GoneSubjectNeverRenderedAgain(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.trackRows("m1", twoItemCard(), time.Now(), "t:card", "r:1", "s:1")
+	e.setLast("r:1", updateJSON(t, card.Update{Status: "r-last-status"}))
+	notYet := newRenderer(false)
+	r := newRenderer(false)
+	r.setGone("r:1")
+	s := newRenderer(true)
+	s.set("s:1", card.Update{Status: "s-new-status"})
+	e.start(map[string]card.Renderer{"t": notYet.render, "r": r.render, "s": s.render})
+	got := editJSON(t, e.waitEdits(1)[0])
+	if !strings.Contains(got, "r-last-status") || !strings.Contains(got, "s-new-status") {
+		t.Errorf("edit = %s", got)
+	}
+	if st := e.row("r:1").State; st != db.CardGone {
+		t.Errorf("r:1 state = %q", st)
+	}
+	s.set("s:1", card.Update{Status: "s-newer-status"})
+	e.bot.Refresh("s:1")
+	if got = editJSON(t, e.waitEdits(2)[1]); !strings.Contains(got, "r-last-status") ||
+		!strings.Contains(got, "s-newer-status") {
+		t.Errorf("second edit = %s", got)
+	}
+	if n := r.count("r:1"); n != 1 {
+		t.Errorf("r:1 rendered %d times, want 1", n)
+	}
+}
+
+func TestUpdater_AllGoneSkipsEditEvenWithOverlay(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	r := newRenderer(false)
+	r.setGone("inc:1")
+	discord.SetOverlayForTest(e.bot, "m1", "Resolved")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitNoRows("m1")
+	if n := len(e.api.editList()); n != 0 {
+		t.Errorf("edits = %d, want 0", n)
+	}
+}
+
+func TestUpdater_StoresLastUpdateOnlyWhenChanged(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	a := card.Update{Status: "A"}
+	r := newRenderer(true)
+	r.set("inc:1", a)
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	e.waitLast(updateJSON(t, a))
+	e.rawExec(`CREATE TABLE writes (n INTEGER)`)
+	e.rawExec(`CREATE TRIGGER count_writes AFTER UPDATE ON discord_cards BEGIN INSERT INTO writes VALUES (1); END`)
+	e.bot.Refresh("inc:1")
+	e.waitCalls(r, "inc:1", 2)
+	if n := e.rawCount(`SELECT count(*) FROM writes`); n != 0 {
+		t.Errorf("writes after an unchanged render = %d, want 0", n)
+	}
+	bb := card.Update{Status: "B"}
+	r.set("inc:1", bb)
+	e.bot.Refresh("inc:1")
+	e.waitEdits(2)
+	e.waitLast(updateJSON(t, bb))
 }

@@ -81,7 +81,7 @@ func TestDiscordCards_MessageHashAndDelete(t *testing.T) {
 	ctx := context.Background()
 	insertCards(t, d, "M1", cardT0(), "sq:s:a", "sq:s:b")
 	insertCards(t, d, "M2", cardT0(), "inc:x")
-	if err := d.SetDiscordMessageHash(ctx, "M1", "h1"); err != nil {
+	if err := d.SetDiscordMessageRendered(ctx, "M1", "h1", nil); err != nil {
 		t.Fatal(err)
 	}
 	m1, err := d.ListDiscordMessage(ctx, "M1")
