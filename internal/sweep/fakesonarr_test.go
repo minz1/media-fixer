@@ -88,6 +88,8 @@ type fakeSonarr struct {
 	beforeLookup  func()
 	beforeHistory func()
 	historyStatus int
+	requests      int
+	afterServe    func(n int)
 }
 
 func newFakeSonarr(t *testing.T, clock *fakeClock) *fakeSonarr {
@@ -104,7 +106,7 @@ func newFakeSonarr(t *testing.T, clock *fakeClock) *fakeSonarr {
 		completedAt:  map[int]time.Time{},
 		nextID:       100,
 	}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -556,4 +558,21 @@ func itemResults(run db.SweepRun) []string {
 		out = append(out, it.Result)
 	}
 	return out
+}
+
+func (f *fakeSonarr) handle(w http.ResponseWriter, r *http.Request) {
+	f.serve(w, r)
+	f.mu.Lock()
+	f.requests++
+	n, hook := f.requests, f.afterServe
+	f.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
+}
+
+func (f *fakeSonarr) requestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.requests
 }

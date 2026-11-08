@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
@@ -67,7 +68,7 @@ func (s *Scheduler) Start() {
 
 func (s *Scheduler) Tick(now time.Time) {
 	err := s.tick(now)
-	if errors.Is(err, ErrRunActive) || errors.Is(err, ErrPaused) {
+	if errors.Is(err, ErrRunActive) || errors.Is(err, ErrPaused) || errors.Is(err, context.Canceled) {
 		err = nil
 	}
 	s.wmu.Lock()
@@ -82,16 +83,35 @@ func (s *Scheduler) Tick(now time.Time) {
 	}
 }
 
+func (s *Scheduler) reconcile() error {
+	ids, err := s.d.RunningSweepIDs(s.base)
+	if err != nil || len(ids) == 0 {
+		return err
+	}
+	if !s.mu.TryLock() {
+		return nil
+	}
+	crashed, err := s.d.CrashRunningSweeps(s.base)
+	s.mu.Unlock()
+	if s.r.Refresh != nil {
+		for _, id := range crashed {
+			s.r.Refresh(card.SweepSubject(id))
+		}
+	}
+	return err
+}
+
 func (s *Scheduler) tick(now time.Time) error {
+	rerr := s.reconcile()
 	set, err := LoadSettings(s.base, s.d)
 	if err != nil || !set.Enabled {
-		return err
+		return errors.Join(rerr, err)
 	}
 	runErr := s.runDue(set, now)
 	if errors.Is(runErr, ErrRunActive) || errors.Is(runErr, ErrPaused) {
 		runErr = nil
 	}
-	return errors.Join(s.digest(set, now), runErr)
+	return errors.Join(rerr, s.digest(set, now), runErr)
 }
 
 func (s *Scheduler) runDue(set Settings, now time.Time) error {

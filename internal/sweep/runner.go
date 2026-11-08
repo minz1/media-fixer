@@ -38,6 +38,8 @@ const (
 	searchGap      = 60 * time.Second
 	commandPoll    = 15 * time.Second
 	commandWait    = 15 * time.Minute
+	finishTries    = 3
+	finishGap      = time.Second
 
 	seriesAnime = "anime"
 
@@ -137,8 +139,19 @@ type searchBatch struct {
 	anime  bool
 }
 
-func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) (int64, error) {
-	return r.runScoped(ctx, trigger, dry, s, scope{})
+func outcome(err, ctxErr error) (sweepstate.Outcome, string) {
+	switch {
+	case err == nil:
+		return sweepstate.OutcomeOK, ""
+	case errors.Is(err, ErrPaused):
+		return sweepstate.OutcomePaused, ""
+	case errors.Is(err, errRedownload):
+		return sweepstate.OutcomeRedownload, errRedownload.Error()
+	case ctxErr != nil:
+		return sweepstate.OutcomeCancelled, cmp.Or(ctxErr.Error(), "cancelled")
+	default:
+		return sweepstate.OutcomeError, cmp.Or(err.Error(), "error")
+	}
 }
 
 func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Settings, sc scope) (int64, error) {
@@ -163,43 +176,72 @@ func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Sett
 	r.progress = nil
 	r.mu.Unlock()
 
-	status, reason := sweepstate.Done, ""
-	switch {
-	case errors.Is(err, ErrPaused):
-		status, err = sweepstate.Paused, nil
-	case errors.Is(err, errRedownload):
-		status, reason, err = sweepstate.Refused, errRedownload.Error(), nil
-	case ctx.Err() != nil:
-		status, reason = sweepstate.Interrupted, context.Cause(ctx).Error()
-	case err != nil:
-		status, reason = sweepstate.Failed, err.Error()
-	}
 	fctx := context.WithoutCancel(ctx)
 	end := r.Now()
-	if ferr := r.DB.FinishSweepRun(fctx, id, status, reason, x.c, end); ferr != nil {
+	out, reason := outcome(err, context.Cause(ctx))
+	next, nerr := sweepstate.NextRun(
+		sweepstate.RunSnap{Status: sweepstate.Running},
+		sweepstate.RunEvent{Kind: sweepstate.EvFinished, Outcome: out, Reason: reason},
+	)
+	if nerr != nil {
+		return id, errors.Join(err, nerr)
+	}
+	if ferr := r.finish(fctx, id, next.Status, next.Reason, x.c, end); ferr != nil {
 		return id, errors.Join(err, ferr)
 	}
+	sr := db.SweepRun{
+		ID: id, Trigger: trigger, Dry: dry, StartedAt: start, FinishedAt: &end,
+		Status: next.Status, Reason: next.Reason, Counts: x.c,
+	}
+	r.announce(fctx, sr, tracked)
+	if out == sweepstate.OutcomeCancelled || out == sweepstate.OutcomeError {
+		return id, err
+	}
+	return id, nil
+}
+
+func (r *Runner) announce(ctx context.Context, sr db.SweepRun, tracked bool) {
 	switch {
 	case tracked:
 		if r.Refresh != nil {
-			r.Refresh(card.SweepSubject(id))
+			r.Refresh(card.SweepSubject(sr.ID))
 		}
 	case r.Notify != nil:
-		sr := db.SweepRun{
-			ID:         id,
-			Trigger:    trigger,
-			Dry:        dry,
-			StartedAt:  start,
-			FinishedAt: &end,
-			Status:     status,
-			Reason:     reason,
-			Counts:     x.c,
-		}
-		if nerr := r.Notify(fctx, summaryCard(sr)); nerr != nil {
-			r.logger().WarnContext(fctx, "sweep summary DM failed", "run", id, "err", nerr)
+		if nerr := r.Notify(ctx, summaryCard(sr)); nerr != nil {
+			r.logger().WarnContext(ctx, "sweep summary DM failed", "run", sr.ID, "err", nerr)
 		}
 	}
-	return id, err
+}
+
+func (r *Runner) finish(
+	ctx context.Context, id int64, status sweepstate.RunStatus, reason string, c db.SweepCounts, at time.Time,
+) error {
+	var err error
+	for try := range finishTries {
+		if try > 0 {
+			if serr := r.Sleep(ctx, finishGap*time.Duration(try)); serr != nil {
+				err = errors.Join(err, serr)
+				break
+			}
+		}
+		err = r.DB.FinishSweepRun(ctx, id, status, reason, c, at)
+		if errors.Is(err, db.ErrSweepRunSettled) && r.settledAs(ctx, id, status) {
+			return nil
+		}
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, db.ErrSweepFinishInvalid) || errors.Is(err, db.ErrSweepRunSettled) {
+			break
+		}
+	}
+	r.logger().ErrorContext(ctx, "sweep finish failed", "run", id, "err", err)
+	return err
+}
+
+func (r *Runner) settledAs(ctx context.Context, id int64, status sweepstate.RunStatus) bool {
+	got, err := r.DB.GetSweepRun(ctx, id)
+	return err == nil && got.Status == status
 }
 
 func (x *run) sweep(ctx context.Context) error {

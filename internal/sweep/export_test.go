@@ -1,11 +1,13 @@
 package sweep
 
 import (
+	"context"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func SummaryCardForTest(sr db.SweepRun) card.Card {
@@ -37,3 +39,11 @@ func AttemptTargetForTest(
 func EligibleForTest(t db.SweepTarget, ok bool, now time.Time) bool { return eligible(t, ok, now) }
 
 func DigestCardForTest(stuck []db.SweepTarget) card.Card { return digestCard(stuck) }
+
+func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) (int64, error) {
+	return r.runScoped(ctx, trigger, dry, s, scope{})
+}
+
+func OutcomeForTest(err, ctxErr error) (sweepstate.Outcome, string) { return outcome(err, ctxErr) }
+
+func ErrRedownloadForTest() error { return errRedownload }
