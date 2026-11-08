@@ -53,3 +53,37 @@ func ErrRedownloadForTest() error { return errRedownload }
 func AddItemForTest(ctx context.Context, r *Runner, dry bool, it *db.SweepItem) error {
 	return (&run{Runner: r, dry: dry}).addItem(ctx, it)
 }
+
+type (
+	SlotState = slotState
+	SlotKind  = slotKind
+	SlotSnap  = slotSnap
+	SlotEvent = slotEvent
+	SlotEff   = slotEff
+	EffKind   = effKind
+)
+
+const (
+	SlotIdle       = slotIdle
+	SlotLive       = slotLive
+	SlotDry        = slotDry
+	SlotStopped    = slotStopped
+	SlotStart      = slotStart
+	SlotDone       = slotDone
+	SlotCancelLive = slotCancelLive
+	SlotReconcile  = slotReconcile
+	SlotStop       = slotStop
+	EffLaunch      = effLaunch
+	EffCancel      = effCancel
+	EffCrashStale  = effCrashStale
+)
+
+var (
+	ErrSlotNoRun   = errSlotNoRun
+	ErrSlotBusy    = errSlotBusy
+	ErrSlotStopped = errSlotStopped
+)
+
+func NextSlot(cur SlotSnap, ev SlotEvent) (SlotSnap, []SlotEff, error) { return nextSlot(cur, ev) }
+
+func CheckSlot(s SlotSnap) error { return checkSlot(s) }
