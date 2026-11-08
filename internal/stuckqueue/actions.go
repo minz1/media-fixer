@@ -268,9 +268,9 @@ func (s *Scheduler) ImportMapped(
 	}
 	s.r.logger().InfoContext(ctx, "stuck-queue: manual import",
 		"series", seriesID, "download", d.DownloadID, "files", labels.lines)
-	ev := Event{Kind: EvActed, Action: ActionImport, Files: Files{N: len(files), M: len(cands)}}
+	ev := Event{Kind: EvActed, Action: ActionImport, Files: Files{N: len(files), M: len(cands)}, Mapped: true}
 	if cmdID > 0 {
-		ev.Kind, ev.CommandID, ev.Mapped = EvImportPosted, cmdID, true
+		ev.Kind, ev.CommandID = EvImportPosted, cmdID
 	}
 	u, subject = s.record(ctx, key, ev, minAge), subjectOf(d)
 	return fmt.Sprintf(

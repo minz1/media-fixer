@@ -218,3 +218,21 @@ func TestRegrab_DefinitiveRemovalFailureRecordsNothing(t *testing.T) {
 		t.Fatalf("row = %+v, want no acted record", row)
 	}
 }
+
+func TestP6Followup_ImportCommandIDZeroOnActedImportRecordsOutcome(t *testing.T) {
+	t.Parallel()
+	e, s := importEnv(t)
+	seedSnap(t, e, actedImportRow(e, stuckqueue.Files{N: 1, M: 2}))
+	e.sonarr.mu.Lock()
+	e.sonarr.nextID = -1
+	e.sonarr.mu.Unlock()
+	rest := importRows(stuckqueue.MappedFile{Path: pathB, EpisodeIDs: []int{2}})
+	if _, err := importMapped(e, s, t, rest); err != nil {
+		t.Fatal(err)
+	}
+	row := storedRow(t, e)
+	if row.State != string(stuckqueue.StateActed) || row.ActedAction != string(stuckqueue.ActionImport) ||
+		!row.ActedAt.Equal(e.clock.Now()) {
+		t.Fatalf("row = %+v, want acted import recorded at %v", row, e.clock.Now())
+	}
+}

@@ -405,6 +405,14 @@ func smRowsActed() []smRow {
 					t.Errorf("import %+v acted %+v", s.Import, s.Acted)
 				}
 			}},
+		{
+			id:      "38a",
+			from:    smActedImport(1, 2),
+			ev:      smMappedActed(tg, files),
+			to:      stuckqueue.StateActed,
+			effects: smRefresh(),
+			assert:  smActedIs(stuckqueue.ActionImport, stuckqueue.ResultOK, tg, 0),
+		},
 		{id: "39", from: smActedRemove(), ev: smKind(stuckqueue.EvClaimed, tg), code: stuckqueue.CodeAlreadyDone},
 		{
 			id:   "39",

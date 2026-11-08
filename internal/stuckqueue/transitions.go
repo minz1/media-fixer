@@ -110,6 +110,10 @@ func mappedRest(s Snapshot, e Event) bool {
 	return actedAction(s, ActionImport) && e.Mapped && e.CommandID > 0
 }
 
+func restWithoutCommand(s Snapshot, e Event) bool {
+	return e.Kind == EvActed && e.Mapped && e.Action == ActionImport && actedAction(s, ActionImport)
+}
+
 func timedOut(s Snapshot, e Event) bool {
 	return s.Import != nil && e.At.Sub(s.Import.StartedAt) >= e.Timeout
 }
@@ -239,9 +243,10 @@ func rowsActed() []row {
 		{"36", acted, kinds(EvExpire), expired, stepPrune},
 		{"37", acted, kinds(EvExpire), not(expired), rejecting(CodeNotExpired)},
 		{"38", acted, kinds(EvImportPosted), mappedRest, stepImportPosted},
+		{"38a", acted, kinds(EvActed), restWithoutCommand, stepActedImport},
 		{
-			"39", acted, kinds(EvClaimed, EvNotifyFailed, EvClearDone, EvClearFailed, EvActed, EvCommandObserved), nil,
-			rejecting(CodeAlreadyDone),
+			"39", acted, kinds(EvClaimed, EvNotifyFailed, EvClearDone, EvClearFailed, EvActed, EvCommandObserved),
+			not(restWithoutCommand), rejecting(CodeAlreadyDone),
 		},
 		{"39", acted, kinds(EvImportPosted), not(mappedRest), rejecting(CodeAlreadyDone)},
 		{"40", acted, kinds(EvSeen), all(graceOver, unfinished), stepUnfinishedSeen},

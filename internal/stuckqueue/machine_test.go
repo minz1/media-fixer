@@ -508,3 +508,9 @@ func smPostedEvents(at time.Time) []stuckqueue.Event {
 	}
 	return out
 }
+
+func smMappedActed(at time.Time, f stuckqueue.Files) stuckqueue.Event {
+	e := smActedEv(at, stuckqueue.ActionImport, 0, false, f)
+	e.Mapped = true
+	return e
+}
