@@ -527,3 +527,17 @@ func TestStateErrors_OneStyle(t *testing.T) {
 		"Stored incident timers couldn",
 	)
 }
+
+func TestD4_11_IncidentPagesHaveNoSSEClose(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	for _, st := range lifecycle.States() {
+		s := lifecycletest.Seed(t, database, lifecycletest.Spec{Title: "Pages " + string(st), State: st})
+		for _, path := range []string{"/media/incidents/" + s.ID, "/media/incidents/" + s.ID + "/transcript"} {
+			body := do(t, srv, http.MethodGet, path, nil).Body.String()
+			if strings.Contains(body, "hx-sse:close") {
+				t.Errorf("%s (%s): the page closes its stream", path, st)
+			}
+		}
+	}
+}

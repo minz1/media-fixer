@@ -15,6 +15,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/server"
@@ -280,4 +281,51 @@ func TestD4_5_IncidentStreamKeepsEventDuringFirstRender(t *testing.T) {
 func TestD4_13_IndexStreamKeepsEventDuringFirstRender(t *testing.T) {
 	t.Parallel()
 	eventDuringFirstRender(t, "/media/events")
+}
+
+func TestD4_11_TranscriptPageKeepsStream(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	s := lifecycletest.Seed(t, database, lifecycletest.Spec{Title: "Done", State: lifecycle.Resolved})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), sseEventDeadline)
+	defer cancel()
+	events := openSSEContext(ctx, t, ts, "/media/incidents/"+s.ID+"/events?full=1")
+	first, ok := nextSSE(t, events, sseEventDeadline)
+	if !ok || strings.Contains(first, "event: settled") || !strings.Contains(first, "incident-transcript") {
+		t.Fatalf("first transcript render of a settled incident: %q", first)
+	}
+	if rec := do(t, srv, http.MethodPost, "/media/incidents/"+s.ID+"/rerun", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("rerun: %d %s", rec.Code, rec.Body.String())
+	}
+	next, ok := nextSSE(t, events, sseEventDeadline)
+	if !ok || strings.Contains(next, "event: settled") || !strings.Contains(next, "incident-transcript") {
+		t.Fatalf("the transcript page did not re-render on status_changed: %q", next)
+	}
+	for drained := false; !drained; {
+		select {
+		case ev, open := <-events:
+			if !open {
+				t.Fatal("the transcript stream closed before its ctx was done")
+			}
+			if strings.Contains(ev, "event: settled") {
+				t.Fatalf("the transcript stream sent settled: %q", ev)
+			}
+		case <-time.After(sseQuietWindow):
+			drained = true
+		}
+	}
+	cancel()
+	closed := time.After(sseEventDeadline)
+	for {
+		select {
+		case _, open := <-events:
+			if !open {
+				return
+			}
+		case <-closed:
+			t.Fatal("the transcript stream did not end on ctx done")
+		}
+	}
 }
