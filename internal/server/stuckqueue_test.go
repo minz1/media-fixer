@@ -95,13 +95,20 @@ func newStuckEnv(t *testing.T) *stuckEnv {
 	return &stuckEnv{srv: srv, db: database, arr: arr, sch: sch}
 }
 
+func fileState(has bool) client.FileState {
+	if has {
+		return client.FilePresent
+	}
+	return client.FileMissing
+}
+
 func TestStuckCard_RendersEveryVerdict(t *testing.T) {
 	t.Parallel()
 	env := newStuckEnv(t)
 	rec := func(id, ep int, dl string, hasFile bool, msg string) client.QueueEntry {
 		return client.QueueEntry{
 			ID: id, DownloadID: dl, Status: "completed", TrackedDownloadState: "importPending", EpisodeID: ep,
-			SeasonNumber: 3, EpisodeNumber: ep, HasFile: hasFile, HasFileKnown: true, Messages: []string{msg},
+			SeasonNumber: 3, EpisodeNumber: ep, File: fileState(hasFile), Messages: []string{msg},
 		}
 	}
 	item := func(r client.QueueEntry, title string, v stuckqueue.Verdict, acts ...stuckqueue.Action) stuckqueue.Item {

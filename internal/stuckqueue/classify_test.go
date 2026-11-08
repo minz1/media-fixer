@@ -19,8 +19,15 @@ func stuckRec(id int, dl string, ep int, hasFile bool, msgs ...string) client.Qu
 	return client.QueueEntry{
 		ID: id, DownloadID: dl, Status: "completed", TrackedDownloadState: "importPending",
 		SeriesID: 1, EpisodeID: ep, SeasonNumber: 1, EpisodeNumber: ep,
-		HasFile: hasFile, HasFileKnown: true, Messages: msgs,
+		File: fileOf(hasFile), Messages: msgs,
 	}
+}
+
+func fileOf(has bool) client.FileState {
+	if has {
+		return client.FilePresent
+	}
+	return client.FileMissing
 }
 
 func liveDownloads(t *testing.T, app stuckqueue.App, path string) []stuckqueue.Download {
@@ -153,7 +160,7 @@ func TestTargets(t *testing.T) {
 func TestMaybeHasFile(t *testing.T) {
 	t.Parallel()
 	r := stuckRec(1, "D", 1, false)
-	r.HasFileKnown = false
+	r.File = client.FileUnknown
 	if !stuckqueue.Group(stuckqueue.AppSonarr, []client.QueueEntry{r})[0].MaybeHasFile() {
 		t.Fatal("an unknown has-file key must count as maybe")
 	}

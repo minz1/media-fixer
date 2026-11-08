@@ -87,7 +87,7 @@ func TestImportGuard_Radarr(t *testing.T) {
 	t.Parallel()
 	r := client.QueueEntry{
 		ID: 1, DownloadID: "M", Status: "completed", TrackedDownloadState: "importPending",
-		MovieID: 5, HasFileKnown: true,
+		MovieID: 5, File: client.FileMissing,
 	}
 	d := stuckqueue.Group(stuckqueue.AppRadarr, []client.QueueEntry{r})[0]
 	c := client.ImportCandidate{Path: "/m.mkv", DownloadID: "M", MovieID: 5}

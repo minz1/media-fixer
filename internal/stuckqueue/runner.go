@@ -451,14 +451,14 @@ func reason(it Item) string {
 		return "not matched to any episode"
 	}
 	missing := slices.DeleteFunc(slices.Clone(it.Records), func(r client.QueueEntry) bool {
-		return !r.HasFileKnown || r.HasFile
+		return r.File != client.FileMissing
 	})
 	switch {
 	case len(missing) > 0 && movie:
 		return "movie missing — blocked by: " + firstMessage(missing)
 	case len(missing) > 0:
 		return "episode missing (" + targets(missing) + ") — blocked by: " + firstMessage(missing)
-	case slices.ContainsFunc(it.Records, func(r client.QueueEntry) bool { return !r.HasFileKnown }):
+	case slices.ContainsFunc(it.Records, func(r client.QueueEntry) bool { return r.File == client.FileUnknown }):
 		return "can't tell if it has a file — blocked by: " + firstMessage(it.Records)
 	case movie:
 		return "Radarr has a file for this movie but didn't compare it"

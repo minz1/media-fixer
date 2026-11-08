@@ -26,8 +26,22 @@ type QueueEntry struct {
 	SeasonNumber         int
 	EpisodeNumber        int
 	MovieID              int
-	HasFile              bool
-	HasFileKnown         bool
+	File                 FileState
+}
+
+type FileState uint8
+
+const (
+	FileUnknown FileState = iota
+	FileMissing
+	FilePresent
+)
+
+func fileStateOf(has bool) FileState {
+	if has {
+		return FilePresent
+	}
+	return FileMissing
 }
 
 type queueEntryJSON struct {
@@ -101,9 +115,9 @@ func (r queueEntryJSON) entry() QueueEntry {
 	}
 	switch {
 	case r.EpisodeID != 0 && r.EpisodeHasFile != nil:
-		e.HasFile, e.HasFileKnown = *r.EpisodeHasFile, true
+		e.File = fileStateOf(*r.EpisodeHasFile)
 	case r.Movie != nil && r.Movie.HasFile != nil:
-		e.HasFile, e.HasFileKnown = *r.Movie.HasFile, true
+		e.File = fileStateOf(*r.Movie.HasFile)
 	}
 	return e
 }

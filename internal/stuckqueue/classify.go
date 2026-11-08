@@ -62,7 +62,7 @@ func (d Download) Stuck() bool {
 }
 
 func (d Download) MaybeHasFile() bool {
-	return slices.ContainsFunc(d.Records, func(r client.QueueEntry) bool { return r.HasFile || !r.HasFileKnown })
+	return slices.ContainsFunc(d.Records, func(r client.QueueEntry) bool { return r.File != client.FileMissing })
 }
 
 func (d Download) Targets() string { return targets(d.Records) }
@@ -91,7 +91,7 @@ func Classify(d Download) Verdict {
 	}
 	allHaveFiles := !slices.ContainsFunc(
 		d.Records,
-		func(r client.QueueEntry) bool { return !r.HasFileKnown || !r.HasFile },
+		func(r client.QueueEntry) bool { return r.File != client.FilePresent },
 	)
 	notUpgrade, otherMessage := false, false
 	for _, r := range d.Records {

@@ -57,11 +57,11 @@ func TestQueueEntries_ParsesLiveSonarr(t *testing.T) {
 		t.Fatalf("entries = %d, want 18", len(es))
 	}
 	flash := entryByID(t, es, 1464435435)
-	if flash.EpisodeID != 13781 || !flash.HasFile || !flash.HasFileKnown || flash.EpisodeNumber != 19 ||
+	if flash.EpisodeID != 13781 || flash.File != client.FilePresent || flash.EpisodeNumber != 19 ||
 		flash.SeasonNumber != 2 || flash.DownloadID == "" || flash.TrackedDownloadState != "importPending" {
 		t.Errorf("flash = %+v", flash)
 	}
-	if op := entryByID(t, es, 1304969599); op.EpisodeID != 0 || op.HasFileKnown {
+	if op := entryByID(t, es, 1304969599); op.EpisodeID != 0 || op.File != client.FileUnknown {
 		t.Errorf("one piece = %+v", op)
 	}
 	lc := entryByID(t, es, 1910858291)
@@ -79,7 +79,7 @@ func TestQueueEntries_ParsesLiveRadarr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(es) != 1 || es[0].MovieID != 0 || es[0].HasFileKnown {
+	if len(es) != 1 || es[0].MovieID != 0 || es[0].File != client.FileUnknown {
 		t.Fatalf("entries = %+v", es)
 	}
 }
