@@ -90,7 +90,7 @@ func buildFacts(in bundleInput) string {
 				it.At,
 			),
 			intPtr(it.Season),
-			clean(it.Result),
+			clean(string(it.Result)),
 			clean(it.Episodes),
 			clean(it.ReleaseTitle),
 			clean(it.Indexer),

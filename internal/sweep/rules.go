@@ -8,6 +8,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 const seasonAlts = `Existing file on disk (is of equal or higher preference|has a equal or higher Custom Format score)` +
@@ -84,17 +85,17 @@ func rankTier(r client.Release) int {
 	return tier
 }
 
-func Outcome(hist []client.HistoryRecord, downloadID string) string {
-	out := ""
+func Outcome(hist []client.HistoryRecord, downloadID string) sweepstate.ItemResult {
+	out := sweepstate.ItemNone
 	for _, h := range hist {
 		if !strings.EqualFold(h.DownloadID, downloadID) {
 			continue
 		}
 		switch h.EventType {
 		case "downloadFolderImported":
-			return "imported"
+			return sweepstate.Imported
 		case client.FailedEventType:
-			out = "failed"
+			out = sweepstate.ItemFailed
 		}
 	}
 	return out

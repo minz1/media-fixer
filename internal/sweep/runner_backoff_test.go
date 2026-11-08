@@ -9,6 +9,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 func (h *harness) targets(t *testing.T) map[string]db.SweepTarget {
@@ -170,10 +171,10 @@ func TestRun_OrderNewestSeriesFewestMissing(t *testing.T) {
 	run := h.run(t, false, searchSettings())
 	var packs, searches []string
 	for _, it := range run.Items {
-		switch it.Result {
-		case "no_pack":
+		if it.Result == sweepstate.NoPack {
 			packs = append(packs, it.Target)
-		case "searched":
+		}
+		if it.Result == sweepstate.Searched {
 			searches = append(searches, it.Target)
 		}
 	}

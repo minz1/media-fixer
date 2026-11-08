@@ -42,17 +42,6 @@ const (
 	finishGap      = time.Second
 
 	seriesAnime = "anime"
-
-	resultGrabbing    = "grabbing"
-	resultImported    = "imported"
-	resultFailed      = "failed"
-	resultRefused     = "refused"
-	resultArchive     = "archive"
-	resultDownloading = "downloading"
-	resultNoPack      = "no_pack"
-	resultWouldGrab   = "would_grab"
-	resultSearched    = "searched"
-	resultWouldSearch = "would_search"
 )
 
 var (
@@ -504,7 +493,7 @@ func (x *run) keepLookup(ctx context.Context, item db.SweepItem, err error) erro
 	if item.LookupResults == nil {
 		return err
 	}
-	item.ReleaseTitle, item.Indexer, item.Result = "", "", resultFailed
+	item.ReleaseTitle, item.Indexer, item.Result = "", "", sweepstate.ItemFailed
 	return errors.Join(err, x.addItem(context.WithoutCancel(ctx), &item))
 }
 
@@ -591,7 +580,7 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 	x.report("episode pass", item.SeriesTitle+" "+item.Episodes)
 	if x.dry {
 		x.c.Searched += len(ids)
-		item.Result = resultWouldSearch
+		item.Result = sweepstate.WouldSearch
 		return x.addItem(ctx, &item)
 	}
 	if !x.lastSearch.IsZero() {
@@ -609,7 +598,7 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 			return err
 		}
 	}
-	item.Result = resultSearched
+	item.Result = sweepstate.Searched
 	if err := x.addItem(ctx, &item); err != nil {
 		return err
 	}
@@ -621,7 +610,7 @@ func (x *run) search(ctx context.Context, b searchBatch) error {
 		}
 		x.lastSearch = x.Now()
 		x.logger().WarnContext(ctx, "sweep episode search failed", "target", item.Target, "err", err)
-		return x.DB.UpdateSweepItem(ctx, item.ID, resultFailed, "")
+		return x.DB.UpdateSweepItem(ctx, item.ID, sweepstate.Searched, sweepstate.ItemFailed, "")
 	}
 	err = x.waitCommand(ctx, cmdID)
 	x.lastSearch = x.Now()
@@ -754,7 +743,7 @@ func (x *run) attempts(
 	if tries > 0 {
 		return client.Release{}, false, nil
 	}
-	base.Result = resultNoPack
+	base.Result = sweepstate.NoPack
 	x.c.NoPack++
 	return client.Release{}, false, x.addItem(context.WithoutCancel(ctx), &base)
 }
@@ -766,7 +755,7 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 	item.ReleaseTitle, item.Indexer = rel.Title, rel.Indexer
 	if x.dry {
 		x.c.Grabs++
-		item.Result = resultWouldGrab
+		item.Result = sweepstate.WouldGrab
 		return true, x.addItem(ctx, &item)
 	}
 	if !x.lastGrab.IsZero() {
@@ -779,7 +768,7 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 	if err := x.guard(ctx); err != nil {
 		return false, x.keepLookup(ctx, item, err)
 	}
-	item.Result = resultGrabbing
+	item.Result = sweepstate.Grabbing
 	if err := x.addItem(ctx, &item); err != nil {
 		return false, x.keepLookup(ctx, item, err)
 	}
@@ -805,28 +794,21 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 	if err != nil {
 		return false, err
 	}
-	switch result {
-	case resultImported:
-		x.c.Imported++
-		x.imported = append(x.imported, dlID)
-	case resultFailed:
-		x.c.Failed++
-	case resultDownloading:
-		x.c.Downloading++
-	}
-	return result == resultImported || result == resultDownloading, x.DB.UpdateSweepItem(ctx, item.ID, result, dlID)
+	x.countGrab(result, dlID)
+	return result == sweepstate.Imported || result == sweepstate.Downloading,
+		x.DB.UpdateSweepItem(ctx, item.ID, sweepstate.Grabbing, result, dlID)
 }
 
-func (x *run) wait(ctx context.Context, title, dlID string, since time.Time) (string, string, error) {
+func (x *run) wait(ctx context.Context, title, dlID string, since time.Time) (sweepstate.ItemResult, string, error) {
 	for range int(grabWait / grabPoll) {
 		if err := x.Sleep(ctx, grabPoll); err != nil {
-			return "", dlID, err
+			return sweepstate.ItemNone, dlID, err
 		}
 		hist, err := retry(ctx, x, false, func() ([]client.HistoryRecord, error) {
 			return x.Sonarr.HistorySince(ctx, since)
 		})
 		if err != nil {
-			return "", dlID, err
+			return sweepstate.ItemNone, dlID, err
 		}
 		if dlID == "" {
 			if dlID = GrabbedDownloadID(hist, title); dlID == "" {
@@ -835,19 +817,19 @@ func (x *run) wait(ctx context.Context, title, dlID string, since time.Time) (st
 		}
 		queue, err := retry(ctx, x, false, func() ([]client.QueueDetail, error) { return x.Sonarr.QueueDetails(ctx) })
 		if err != nil {
-			return "", dlID, err
+			return sweepstate.ItemNone, dlID, err
 		}
 		outcome := Outcome(hist, dlID)
 		for _, q := range queue {
 			if strings.EqualFold(q.DownloadID, dlID) && IsArchive(q) {
-				return resultArchive, dlID, x.dropArchive(ctx, q.ID, outcome == resultImported)
+				return sweepstate.Archive, dlID, x.dropArchive(ctx, q.ID, outcome == sweepstate.Imported)
 			}
 		}
-		if outcome != "" {
+		if outcome != sweepstate.ItemNone {
 			return outcome, dlID, nil
 		}
 	}
-	return resultDownloading, dlID, nil
+	return sweepstate.Downloading, dlID, nil
 }
 
 func (x *run) dropArchive(ctx context.Context, queueID int, imported bool) error {
@@ -878,7 +860,7 @@ func (x *run) refuse(ctx context.Context, itemID int64, rel client.Release, perr
 	if err != nil {
 		return err
 	}
-	return x.DB.UpdateSweepItem(ctx, itemID, resultRefused, "")
+	return x.DB.UpdateSweepItem(ctx, itemID, sweepstate.Grabbing, sweepstate.ItemRefused, "")
 }
 
 func (x *run) guard(ctx context.Context) error {
@@ -902,6 +884,12 @@ func (x *run) guard(ctx context.Context) error {
 }
 
 func (x *run) addItem(ctx context.Context, it *db.SweepItem) error {
+	ev := sweepstate.ItemEvent{
+		Kind: sweepstate.EvInserted, To: it.Result, Dry: x.dry, ReleaseTitle: it.ReleaseTitle, Episodes: it.Episodes,
+	}
+	if _, err := sweepstate.NextItem(sweepstate.ItemSnap{}, ev); err != nil {
+		return fmt.Errorf("sweep item %s: %w", it.Target, err)
+	}
 	it.At = x.Now()
 	return x.DB.AddSweepItem(ctx, it)
 }
@@ -988,4 +976,17 @@ func retryable(err error, release bool) bool {
 	}
 	var ne net.Error
 	return !release && errors.As(err, &ne) && ne.Timeout()
+}
+
+func (x *run) countGrab(result sweepstate.ItemResult, dlID string) {
+	if result == sweepstate.Imported {
+		x.c.Imported++
+		x.imported = append(x.imported, dlID)
+	}
+	if result == sweepstate.ItemFailed {
+		x.c.Failed++
+	}
+	if result == sweepstate.Downloading {
+		x.c.Downloading++
+	}
 }

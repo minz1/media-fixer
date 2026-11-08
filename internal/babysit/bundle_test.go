@@ -199,3 +199,11 @@ func TestBundleKeepsTitlesThatLookLikeHeaders(t *testing.T) {
 		t.Fatalf("title redacted:\n%s", facts)
 	}
 }
+
+func TestFingerprintPinnedAcrossTypedResult(t *testing.T) {
+	t.Parallel()
+	const want = "bd3c142feda24572be45d4a9d336b86b97fe6be2fb3deebfaca0c78846421b78"
+	if got := babysit.Fingerprint("m", babysit.BuildFacts(sampleInput(5))); got != want {
+		t.Errorf("fingerprint = %s, want %s", got, want)
+	}
+}

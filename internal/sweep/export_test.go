@@ -47,3 +47,7 @@ func (r *Runner) Run(ctx context.Context, trigger string, dry bool, s Settings) 
 func OutcomeForTest(err, ctxErr error) (sweepstate.Outcome, string) { return outcome(err, ctxErr) }
 
 func ErrRedownloadForTest() error { return errRedownload }
+
+func AddItemForTest(ctx context.Context, r *Runner, dry bool, it *db.SweepItem) error {
+	return (&run{Runner: r, dry: dry}).addItem(ctx, it)
+}

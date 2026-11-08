@@ -80,6 +80,7 @@ type fakeSonarr struct {
 	releaseDelay  map[string]time.Duration
 	commandPolls  map[int]int
 	commandNeeds  int
+	commandStatus int
 	commandTimes  []time.Time
 	completedAt   map[int]time.Time
 	deleteStatus  int
@@ -277,16 +278,7 @@ func (f *fakeSonarr) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "gone", status)
 		}
 	case r.Method == http.MethodPost && path == "/command":
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		b, _ := json.Marshal(body)
-		f.mu.Lock()
-		f.nextID++
-		id := f.nextID
-		f.writes = append(f.writes, "POST /command "+string(b))
-		f.commandTimes = append(f.commandTimes, f.clock.Now())
-		f.mu.Unlock()
-		writeJSON(w, map[string]int{"id": id})
+		f.serveCommand(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/command/"):
 		id, _ := strconv.Atoi(strings.TrimPrefix(path, "/command/"))
 		f.mu.Lock()
@@ -555,7 +547,7 @@ func (h *harness) setPaused(t *testing.T, paused bool) {
 func itemResults(run db.SweepRun) []string {
 	out := make([]string, 0, len(run.Items))
 	for _, it := range run.Items {
-		out = append(out, it.Result)
+		out = append(out, string(it.Result))
 	}
 	return out
 }
@@ -575,4 +567,22 @@ func (f *fakeSonarr) requestCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.requests
+}
+
+func (f *fakeSonarr) serveCommand(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	b, _ := json.Marshal(body)
+	f.mu.Lock()
+	f.nextID++
+	id := f.nextID
+	f.writes = append(f.writes, "POST /command "+string(b))
+	f.commandTimes = append(f.commandTimes, f.clock.Now())
+	status := f.commandStatus
+	f.mu.Unlock()
+	if status != 0 {
+		http.Error(w, "refused", status)
+		return
+	}
+	writeJSON(w, map[string]int{"id": id})
 }

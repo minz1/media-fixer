@@ -65,7 +65,7 @@ type SweepItem struct {
 	ReleaseTitle  string
 	Indexer       string
 	DownloadID    string
-	Result        string
+	Result        sweepstate.ItemResult
 	LookupResults *int
 	LookupMS      *int
 	At            time.Time
@@ -93,6 +93,7 @@ func (d *DB) CreateSweepRun(ctx context.Context, trigger string, dry bool, at ti
 var (
 	ErrSweepRunSettled    = errors.New("sweep run already settled")
 	ErrSweepFinishInvalid = errors.New("invalid sweep run finish")
+	ErrSweepItemMoved     = errors.New("sweep item already moved")
 )
 
 func (d *DB) FinishSweepRun(
@@ -341,11 +342,27 @@ func (d *DB) AddSweepItem(ctx context.Context, it *SweepItem) error {
 	return err
 }
 
-func (d *DB) UpdateSweepItem(ctx context.Context, id int64, result, downloadID string) error {
-	_, err := d.write.ExecContext(ctx,
-		`UPDATE sweep_items SET result = ?, download_id = COALESCE(NULLIF(?, ''), download_id) WHERE id = ?`,
-		result, downloadID, id)
-	return err
+func (d *DB) UpdateSweepItem(
+	ctx context.Context, id int64, from, to sweepstate.ItemResult, downloadID string,
+) error {
+	if err := sweepstate.Move(from, to); err != nil {
+		return err
+	}
+	res, err := d.write.ExecContext(ctx,
+		`UPDATE sweep_items SET result = ?, download_id = COALESCE(NULLIF(?, ''), download_id)
+		 WHERE id = ? AND result = ?`,
+		string(to), downloadID, id, string(from))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrSweepItemMoved
+	}
+	return nil
 }
 
 func (d *DB) AddSweepRefused(ctx context.Context, r *SweepRefused) error {
@@ -416,12 +433,17 @@ func (d *DB) RetryableSweepRunsSince(ctx context.Context, since time.Time) (int,
 }
 
 func (d *DB) LiveGrabsSince(ctx context.Context, since time.Time) (int, error) {
+	grabs := sweepstate.ItemsWhere(func(m sweepstate.ItemMeta) bool { return m.Grab })
+	list, err := json.Marshal(grabs)
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	err := d.read.QueryRowContext(ctx,
+	err = d.read.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sweep_items i JOIN sweep_runs r ON r.id = i.run_id
 		 WHERE r.dry = 0 AND i.at >= ? AND COALESCE(i.release_title, '') != ''
-		   AND i.result IN ('grabbing', 'imported', 'failed', 'refused', 'archive', 'downloading')`,
-		since).Scan(&n)
+		   AND i.result IN (SELECT value FROM json_each(?))`,
+		since, string(list)).Scan(&n)
 	return n, err
 }
 

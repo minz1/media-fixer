@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/sweep"
+	"github.com/minz1/mediafixer/internal/sweep/sweepstate"
 )
 
 var seasonOK = regexp.MustCompile(
@@ -231,18 +232,24 @@ func TestOutcome(t *testing.T) {
 	cases := []struct {
 		name string
 		hist []client.HistoryRecord
-		want string
+		want sweepstate.ItemResult
 	}{
-		{"imported", []client.HistoryRecord{ev("grabbed", "A"), ev("downloadFolderImported", "A")}, "imported"},
-		{"failed", []client.HistoryRecord{ev("grabbed", "A"), ev("downloadFailed", "A")}, "failed"},
+		{
+			"imported", []client.HistoryRecord{ev("grabbed", "A"), ev("downloadFolderImported", "A")},
+			sweepstate.Imported,
+		},
+		{"failed", []client.HistoryRecord{ev("grabbed", "A"), ev("downloadFailed", "A")}, sweepstate.ItemFailed},
 		{"imported wins", []client.HistoryRecord{
 			ev("grabbed", "A"), ev("downloadFailed", "A"), ev("downloadFolderImported", "A"),
-		}, "imported"},
+		}, sweepstate.Imported},
 		{"imported before failed", []client.HistoryRecord{
 			ev("downloadFolderImported", "A"), ev("downloadFailed", "A"),
-		}, "imported"},
-		{"only grabbed", []client.HistoryRecord{ev("grabbed", "A")}, ""},
-		{"other download", []client.HistoryRecord{ev("grabbed", "A"), ev("downloadFolderImported", "B")}, ""},
+		}, sweepstate.Imported},
+		{"only grabbed", []client.HistoryRecord{ev("grabbed", "A")}, sweepstate.ItemNone},
+		{
+			"other download", []client.HistoryRecord{ev("grabbed", "A"), ev("downloadFolderImported", "B")},
+			sweepstate.ItemNone,
+		},
 	}
 	for _, tc := range cases {
 		if got := sweep.Outcome(tc.hist, "A"); got != tc.want {
@@ -356,5 +363,21 @@ func TestBlocking(t *testing.T) {
 	}
 	if want := []string{"blocked-30d", "plain-6d"}; !slices.Equal(got, want) {
 		t.Errorf("blocking = %v, want %v", got, want)
+	}
+}
+
+func TestRules_OutcomeTyped(t *testing.T) {
+	t.Parallel()
+	imported := []client.HistoryRecord{{EventType: "downloadFolderImported", DownloadID: "A"}}
+	failed := []client.HistoryRecord{{EventType: client.FailedEventType, DownloadID: "A"}}
+	got := sweep.Outcome(imported, "A")
+	if got != sweepstate.Imported {
+		t.Errorf("imported = %q", got)
+	}
+	if got = sweep.Outcome(failed, "A"); got != sweepstate.ItemFailed {
+		t.Errorf("failed = %q", got)
+	}
+	if got = sweep.Outcome(nil, "A"); got != sweepstate.ItemNone {
+		t.Errorf("none = %q", got)
 	}
 }

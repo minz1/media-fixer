@@ -542,7 +542,7 @@ func TestScheduler_PruningDryRunsKeepsSlotRun(t *testing.T) {
 	}
 }
 
-func interruptedRun(t *testing.T, h *harness, at time.Time, results ...string) {
+func interruptedRun(t *testing.T, h *harness, at time.Time, results ...sweepstate.ItemResult) {
 	t.Helper()
 	ctx := context.Background()
 	id, err := h.db.CreateSweepRun(ctx, "schedule", false, at)
@@ -593,7 +593,7 @@ func TestScheduler_ZeroBudgetMakesNoGrab(t *testing.T) {
 	h, _ := scheduledAt(t, t0().Add(-7*time.Hour), settings())
 	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
 	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Comet", 10))
-	used := make([]string, settings().MaxGrabs)
+	used := make([]sweepstate.ItemResult, settings().MaxGrabs)
 	for i := range used {
 		used[i] = "imported"
 	}
@@ -609,7 +609,7 @@ func TestScheduler_ZeroBudgetMakesNoGrab(t *testing.T) {
 	}
 }
 
-func usageRun(t *testing.T, h *harness, at time.Time, dry bool, c db.SweepCounts, results ...string) {
+func usageRun(t *testing.T, h *harness, at time.Time, dry bool, c db.SweepCounts, results ...sweepstate.ItemResult) {
 	t.Helper()
 	ctx := context.Background()
 	id, err := h.db.CreateSweepRun(ctx, "schedule", dry, at)

@@ -47,10 +47,7 @@ func TestSweepRunLifecycle(t *testing.T) {
 	if it.ID == 0 {
 		t.Fatal("AddSweepItem did not set ID")
 	}
-	if err = d.UpdateSweepItem(ctx, it.ID, "downloading", "ABC123"); err != nil {
-		t.Fatal(err)
-	}
-	if err = d.UpdateSweepItem(ctx, it.ID, "imported", ""); err != nil {
+	if err = d.UpdateSweepItem(ctx, it.ID, sweepstate.Grabbing, sweepstate.Imported, "ABC123"); err != nil {
 		t.Fatal(err)
 	}
 	anime := &db.SweepItem{RunID: id, Target: "e:99", SeriesID: 8, SeriesTitle: "Frieren", Result: "no_pack",
@@ -272,12 +269,12 @@ func TestLiveGrabsSince(t *testing.T) {
 	for _, r := range []struct {
 		hours   int
 		dry     bool
-		results []string
+		results []sweepstate.ItemResult
 	}{
-		{-1, false, []string{"imported"}},
-		{1, false, []string{"imported", "no_pack", "failed", "searched"}},
-		{2, true, []string{"would_grab", "imported"}},
-		{3, false, []string{"refused", "grabbing"}},
+		{-1, false, []sweepstate.ItemResult{"imported"}},
+		{1, false, []sweepstate.ItemResult{"imported", "no_pack", "failed", "searched"}},
+		{2, true, []sweepstate.ItemResult{"would_grab", "imported"}},
+		{3, false, []sweepstate.ItemResult{"refused", "grabbing"}},
 	} {
 		at := sweepT0().Add(time.Duration(r.hours) * time.Hour)
 		id, err := d.CreateSweepRun(ctx, "schedule", r.dry, at)
@@ -501,7 +498,7 @@ func TestRetryableSweepRunsSinceIgnoresBabysit(t *testing.T) {
 	}
 }
 
-func addItem(t *testing.T, d *db.DB, runID int64, seriesID int, result string, at time.Time) {
+func addItem(t *testing.T, d *db.DB, runID int64, seriesID int, result sweepstate.ItemResult, at time.Time) {
 	t.Helper()
 	it := db.SweepItem{RunID: runID, Target: "t", SeriesID: seriesID, SeriesTitle: "S", Result: result, At: at}
 	if err := d.AddSweepItem(context.Background(), &it); err != nil {
@@ -567,4 +564,92 @@ func reasonFor(s sweepstate.RunStatus) string {
 		return ""
 	}
 	return "test"
+}
+
+func storedItem(t *testing.T, d *db.DB, id int64) db.SweepItem {
+	t.Helper()
+	runs, err := d.ListSweepRuns(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range runs[0].Items {
+		if got.ID == id {
+			return got
+		}
+	}
+	t.Fatalf("item %d not stored", id)
+	return db.SweepItem{}
+}
+
+func seedGrabbing(t *testing.T, d *db.DB, runID int64) int64 {
+	t.Helper()
+	it := &db.SweepItem{RunID: runID, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+		ReleaseTitle: "Show.S01", Result: sweepstate.Grabbing, At: sweepT0()}
+	if err := d.AddSweepItem(context.Background(), it); err != nil {
+		t.Fatal(err)
+	}
+	return it.ID
+}
+
+func TestS3_14_UpdateSweepItemChecksFromState(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	runID, err := d.CreateSweepRun(ctx, "schedule", false, sweepT0())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ok := seedGrabbing(t, d, runID)
+	if err = d.UpdateSweepItem(ctx, ok, sweepstate.Grabbing, sweepstate.Imported, "DL1"); err != nil {
+		t.Fatalf("grabbing to imported: %v", err)
+	}
+	if got := storedItem(t, d, ok); got.Result != sweepstate.Imported || got.DownloadID != "DL1" {
+		t.Errorf("item = %q %q, want imported DL1", got.Result, got.DownloadID)
+	}
+
+	err = d.UpdateSweepItem(ctx, ok, sweepstate.Imported, sweepstate.ItemFailed, "DL2")
+	if err == nil || errors.Is(err, db.ErrSweepItemMoved) {
+		t.Errorf("imported to failed = %v, want the machine's refusal", err)
+	}
+	if got := storedItem(t, d, ok); got.Result != sweepstate.Imported || got.DownloadID != "DL1" {
+		t.Errorf("refused move changed the row: %q %q", got.Result, got.DownloadID)
+	}
+
+	moved := seedGrabbing(t, d, runID)
+	if err = d.UpdateSweepItem(ctx, moved, sweepstate.Grabbing, sweepstate.ItemRefused, ""); err != nil {
+		t.Fatal(err)
+	}
+	err = d.UpdateSweepItem(ctx, moved, sweepstate.Grabbing, sweepstate.Imported, "DL3")
+	if !errors.Is(err, db.ErrSweepItemMoved) {
+		t.Errorf("a CAS miss = %v, want ErrSweepItemMoved", err)
+	}
+	if got := storedItem(t, d, moved); got.Result != sweepstate.ItemRefused || got.DownloadID != "" {
+		t.Errorf("CAS miss changed the row: %q %q", got.Result, got.DownloadID)
+	}
+}
+
+func TestS3_Copies_LiveGrabsSinceFromMeta(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	for _, dry := range []bool{false, true} {
+		id, err := d.CreateSweepRun(ctx, "schedule", dry, sweepT0())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, res := range sweepstate.ItemResults() {
+			for _, rel := range []string{"", "Show.S01"} {
+				it := &db.SweepItem{RunID: id, Target: "season", SeriesID: 1, SeriesTitle: "Show",
+					ReleaseTitle: rel, Result: res, At: sweepT0().Add(time.Hour)}
+				if err = d.AddSweepItem(ctx, it); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	want := len(sweepstate.ItemsWhere(func(m sweepstate.ItemMeta) bool { return m.Grab }))
+	if n, err := d.LiveGrabsSince(ctx, sweepT0()); err != nil || n != want || want != 6 {
+		t.Errorf("LiveGrabsSince = %d, %v; want %d (6 grab results with a release, live runs only)", n, err, want)
+	}
 }
