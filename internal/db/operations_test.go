@@ -206,6 +206,7 @@ func TestMigration22_SyntheticSnapshotShape(t *testing.T) {
 		t.Errorf("operations has %d rows", after["operations"])
 	}
 	delete(after, "operations")
+	delete(after, "stuck_downloads")
 	delete(after, "schema_version")
 	delete(before, "schema_version")
 	if !reflect.DeepEqual(before, after) {

@@ -305,6 +305,7 @@ const (
 	migDiscordCards                     = 18
 	migSweepTargets                     = 19
 	migBabysitExplanations              = 20
+	migStuckDownloads                   = 24
 )
 
 // utcTimestampColumns are every DATETIME column compared or ordered as text.
@@ -416,7 +417,7 @@ type migration struct {
 func migrations() []migration {
 	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations(),
 		sweepTargetsMigrations(), babysitMigrations(), lifecycleMigrations(),
-		operationsMigrations(), discordCardsRenderStateMigrations())
+		operationsMigrations(), discordCardsRenderStateMigrations(), stuckDownloadsMigrations())
 }
 
 func legacyMigrations() []migration {

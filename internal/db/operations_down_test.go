@@ -116,7 +116,7 @@ func TestMigrateDown22_RefusesUnless22IsNewest(t *testing.T) {
 	t.Parallel()
 	path := seededOps(t)
 	raw := rawOpen(t, path)
-	mustExec(t, raw, `INSERT INTO schema_version (version, name) VALUES (23, 'later')`)
+	mustExec(t, raw, `INSERT INTO schema_version (version, name) VALUES (99, 'later')`)
 	raw.Close()
 	_, err := down22(t, path)
 	if !errors.Is(err, db.ErrDownRefused) || !strings.Contains(err.Error(), "22 must be the newest") {
@@ -169,7 +169,7 @@ func TestMigrateDown22_RefusesWhileServiceHoldsTheDB(t *testing.T) {
 	if matches, _ := filepath.Glob(path + ".pre-down-22-*"); len(matches) != 0 {
 		t.Fatalf("a refused down wrote a backup: %v", matches)
 	}
-	if v := maxVersion(t, rawOpen(t, path)); v != 23 {
+	if v := maxVersion(t, rawOpen(t, path)); v != 24 {
 		t.Fatalf("version %d", v)
 	}
 }

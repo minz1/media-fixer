@@ -22,8 +22,8 @@ func TestMigration23_AddsRenderStateColumns(t *testing.T) {
 	d.Close()
 	raw := rawOpen(t, path)
 	defer raw.Close()
-	if v := countInt(t, raw, `SELECT MAX(version) FROM schema_version`); v != 23 {
-		t.Fatalf("schema version %d, want 23", v)
+	if v := countInt(t, raw, `SELECT MAX(version) FROM schema_version`); v < 23 {
+		t.Fatalf("schema version %d, want at least 23", v)
 	}
 	cols := map[string]string{}
 	rows, err := raw.QueryContext(context.Background(),
