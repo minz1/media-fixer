@@ -17,10 +17,14 @@ var errSearchFailed = errors.New("removed; search failed")
 func (s *Scheduler) Act(
 	ctx context.Context, app App, downloadID string, action Action, targetsFp string,
 ) (string, error) {
-	if err := s.lockAction(); err != nil {
+	release, err := s.claim(holderOwner, s.r.Now())
+	if err != nil {
 		return "", err
 	}
-	defer s.mu.Unlock()
+	var u update
+	var subject string
+	defer func() { s.refreshSubject(subject) }()
+	defer func() { release(u) }()
 	c := s.r.client(app)
 	if c == nil {
 		return "", refuse("%s is not configured", app.Name())
@@ -67,18 +71,17 @@ func (s *Scheduler) Act(
 	if err != nil && !res.Resumable {
 		return "", err
 	}
-	s.finish(ctx, d, action, res)
+	u, subject = s.finish(ctx, d, action, res), subjectOf(d)
 	return notice, err
 }
 
-func (s *Scheduler) finish(ctx context.Context, d Download, action Action, res RegrabResult) {
+func (s *Scheduler) finish(ctx context.Context, d Download, action Action, res RegrabResult) update {
 	s.r.logger().InfoContext(ctx, "stuck-queue: owner action",
 		"app", d.App, "download", d.DownloadID, "title", d.Title, "action", action, "unfinished", res.Resumable)
 	if !res.Resumable {
 		s.recordOutcome(subjectOf(d), action)
 	}
-	s.forget(d.App, d.DownloadID)
-	s.refresh(subjectOf(d))
+	return forgetDownload(d.App, d.DownloadID)
 }
 
 func (s *Scheduler) ImportMapped(
@@ -90,10 +93,14 @@ func (s *Scheduler) ImportMapped(
 	if len(rows) == 0 {
 		return "", refuse("Tick at least one file.")
 	}
-	if !s.mu.TryLock() {
-		return "", refuse("a run is active, try again in a moment")
+	release, err := s.claim(holderOwner, s.r.Now())
+	if err != nil {
+		return "", err
 	}
-	defer s.mu.Unlock()
+	var u update
+	var subject string
+	defer func() { s.refreshSubject(subject) }()
+	defer func() { release(u) }()
 	c := s.r.client(AppSonarr)
 	if c == nil {
 		return "", refuse("Sonarr is not configured")
@@ -137,9 +144,9 @@ func (s *Scheduler) ImportMapped(
 		"series", seriesID, "download", d.DownloadID, "files", labels.lines)
 	if len(files) == len(cands) {
 		s.recordOutcome(subjectOf(d), ActionImport)
-		s.forget(AppSonarr, d.DownloadID)
+		u = forgetDownload(AppSonarr, d.DownloadID)
 	}
-	s.refresh(subjectOf(d))
+	subject = subjectOf(d)
 	return fmt.Sprintf(
 		"Import started for %d files (%s). Sonarr moves them; the page shows them on disk once it is done.",
 		len(files),
@@ -259,10 +266,14 @@ func (s *Scheduler) apply(
 	return "", none, refuse("unknown action %q", action)
 }
 
-func (s *Scheduler) forget(app App, downloadID string) {
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	apps := slices.Clone(s.last.Apps)
+func forgetDownload(app App, downloadID string) update {
+	return func(sl *slot) {
+		sl.last.Apps = withoutDownload(sl.last.Apps, app, downloadID)
+	}
+}
+
+func withoutDownload(current []AppResult, app App, downloadID string) []AppResult {
+	apps := slices.Clone(current)
 	gone := func(it Item) bool { return strings.EqualFold(it.DownloadID, downloadID) }
 	for i := range apps {
 		if apps[i].App == app {
@@ -270,17 +281,13 @@ func (s *Scheduler) forget(app App, downloadID string) {
 			apps[i].Waiting = slices.DeleteFunc(slices.Clone(apps[i].Waiting), gone)
 		}
 	}
-	s.last.Apps = apps
+	return apps
 }
 
-func (s *Scheduler) lockAction() error {
-	if s.base.Err() != nil {
-		return card.ErrRestarting
+func (s *Scheduler) refreshSubject(subject string) {
+	if subject != "" {
+		s.refresh(subject)
 	}
-	if !s.mu.TryLock() {
-		return refuse("a run is active, try again in a moment")
-	}
-	return nil
 }
 
 func (s *Scheduler) regrab(ctx context.Context, c *client.ArrClient, d Download) (string, RegrabResult, error) {

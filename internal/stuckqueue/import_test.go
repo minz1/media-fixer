@@ -222,7 +222,7 @@ func TestImportMapped_Locked(t *testing.T) {
 	_, err := s.ImportMapped(context.Background(), 1, "D", "x", bothRows())
 	close(gate)
 	s.Wait()
-	refusedNoWrite(t, e.sonarr, err, "a run is active")
+	refusedNoWrite(t, e.sonarr, err, "a stuck-queue run is active, try again in a moment")
 }
 
 func TestImportMapped_CommandReadFails(t *testing.T) {

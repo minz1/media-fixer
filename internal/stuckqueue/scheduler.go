@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/db"
-	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/opexec"
 )
 
@@ -23,22 +22,14 @@ type Scheduler struct {
 	d    *db.DB
 	base context.Context
 
-	mu sync.Mutex
-	wg sync.WaitGroup
-
-	smu       sync.Mutex
-	lastStart time.Time
-	last      Result
-	hasLast   bool
-	running   bool
-	warned    string
-	outcomes  map[string]outcome
-	store     opexec.Store
-	failedOps map[string]operation.Op
+	mu    sync.Mutex
+	wg    sync.WaitGroup
+	slot  slot
+	store opexec.Store
 }
 
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
-	return &Scheduler{r: r, d: d, base: base, store: d}
+	return &Scheduler{r: r, d: d, base: base, store: d, slot: slot{holder: holderNone}}
 }
 
 func (s *Scheduler) Wait() { s.wg.Wait() }
@@ -64,9 +55,9 @@ func (s *Scheduler) Tick(now time.Time) {
 	if err != nil || !set.Enabled {
 		return
 	}
-	s.smu.Lock()
-	due := s.lastStart.IsZero() || now.Sub(s.lastStart) >= set.Interval()
-	s.smu.Unlock()
+	s.mu.Lock()
+	due := s.slot.lastStart.IsZero() || now.Sub(s.slot.lastStart) >= set.Interval()
+	s.mu.Unlock()
 	if due {
 		_ = s.start(now, set)
 	}
@@ -84,45 +75,42 @@ func (s *Scheduler) RunNow() error {
 }
 
 func (s *Scheduler) State() (Result, bool, bool) {
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	return s.last, s.hasLast, s.running
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.slot.last, s.slot.hasLast, s.slot.holder == holderRun
 }
 
 func (s *Scheduler) StartedAt() time.Time {
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	return s.lastStart
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.slot.lastStart
 }
 
 func (s *Scheduler) start(now time.Time, set Settings) error {
-	if !s.mu.TryLock() {
-		return ErrRunActive
+	release, err := s.claim(holderRun, now)
+	if err != nil {
+		return err
 	}
-	s.smu.Lock()
-	s.lastStart, s.running = now, true
-	s.smu.Unlock()
 	s.wg.Go(func() {
-		defer s.mu.Unlock()
 		res := s.r.Run(s.base, set)
-		s.smu.Lock()
-		s.last, s.hasLast, s.running = res, true, false
-		s.clearStuckOutcomes(res)
-		s.smu.Unlock()
+		release(func(sl *slot) {
+			sl.last, sl.hasLast = res, true
+			sl.clearStuckOutcomes(res)
+		})
 		s.refresh(cardPrefix)
 	})
 	return nil
 }
 
 func (s *Scheduler) warnOnce(err error) {
-	s.smu.Lock()
-	defer s.smu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	switch {
-	case err != nil && err.Error() != s.warned:
-		s.warned = err.Error()
+	case err != nil && err.Error() != s.slot.warned:
+		s.slot.warned = err.Error()
 		s.r.logger().WarnContext(s.base, "stuck-queue scheduler", "err", err)
-	case err == nil && s.warned != "":
-		s.warned = ""
+	case err == nil && s.slot.warned != "":
+		s.slot.warned = ""
 		s.r.logger().InfoContext(s.base, "stuck-queue scheduler error cleared")
 	}
 }

@@ -253,7 +253,7 @@ func TestAct_RefusesDuringRun(t *testing.T) {
 	_, err := act(e, s, stuckqueue.AppRadarr, "M", stuckqueue.ActionRemove)
 	close(gate)
 	s.Wait()
-	refusedNoWrite(t, e.radarr, err, "a run is active")
+	refusedNoWrite(t, e.radarr, err, "a stuck-queue run is active, try again in a moment")
 }
 
 func TestAct_RefusesRemappedTargets(t *testing.T) {

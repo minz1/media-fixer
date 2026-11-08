@@ -184,17 +184,19 @@ func refuseOp(err error) error {
 func (s *Scheduler) Resume(
 	ctx context.Context, app App, downloadID string, opID, opVersion int64,
 ) (string, error) {
-	if err := s.lockAction(); err != nil {
+	release, err := s.claim(holderOwner, s.r.Now())
+	if err != nil {
 		return "", err
 	}
-	defer s.mu.Unlock()
+	var subject string
+	defer func() { s.refreshSubject(subject) }()
+	defer func() { release(nil) }()
 	op, err := s.resumeOp(ctx, app, downloadID, opID, opVersion)
 	if err != nil {
 		return "", err
 	}
-	subject := card.StuckSubject(appCode(app), op.Steps[0].DownloadID)
+	subject = card.StuckSubject(appCode(app), op.Steps[0].DownloadID)
 	s.trackOp(op)
-	defer s.refresh(subject)
 	if err = opError(op); err != nil {
 		return "", err
 	}
@@ -204,16 +206,16 @@ func (s *Scheduler) Resume(
 }
 
 func (s *Scheduler) trackOp(op operation.Op) {
-	s.smu.Lock()
-	defer s.smu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if operation.Resumable(op) {
-		if s.failedOps == nil {
-			s.failedOps = map[string]operation.Op{}
+		if s.slot.failedOps == nil {
+			s.slot.failedOps = map[string]operation.Op{}
 		}
-		s.failedOps[op.Subject.ID] = op
+		s.slot.failedOps[op.Subject.ID] = op
 		return
 	}
-	delete(s.failedOps, op.Subject.ID)
+	delete(s.slot.failedOps, op.Subject.ID)
 }
 
 func (s *Scheduler) LoadOperations(ctx context.Context) error {
@@ -225,17 +227,17 @@ func (s *Scheduler) LoadOperations(ctx context.Context) error {
 	for _, op := range ops {
 		loaded[op.Subject.ID] = op
 	}
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	s.failedOps = loaded
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slot.failedOps = loaded
 	return nil
 }
 
 func (s *Scheduler) FailedOperations() []operation.Op {
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	out := make([]operation.Op, 0, len(s.failedOps))
-	for _, op := range s.failedOps {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]operation.Op, 0, len(s.slot.failedOps))
+	for _, op := range s.slot.failedOps {
 		out = append(out, op)
 	}
 	slices.SortFunc(out, func(a, b operation.Op) int { return cmp.Compare(a.ID, b.ID) })

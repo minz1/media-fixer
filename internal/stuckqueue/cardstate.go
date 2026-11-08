@@ -106,22 +106,22 @@ func (s *Scheduler) CardRenderer() card.Renderer {
 		if !ok {
 			return card.Rendering{Outcome: card.Gone}, nil
 		}
-		s.smu.Lock()
-		defer s.smu.Unlock()
-		if op, failed := s.failedOps[OpSubject(app, parts[2]).ID]; failed {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if op, failed := s.slot.failedOps[OpSubject(app, parts[2]).ID]; failed {
 			return card.Rendered(failedUpdate(app, op)), nil
 		}
-		if o, acted := s.outcomes[subject]; acted {
+		if o, acted := s.slot.outcomes[subject]; acted {
 			return card.Rendered(card.Update{Status: o.line()}), nil
 		}
-		if !s.hasLast {
+		if !s.slot.hasLast {
 			return card.Rendering{}, nil
 		}
-		i := slices.IndexFunc(s.last.Apps, func(ar AppResult) bool { return ar.App == app })
-		if i < 0 || !s.last.Apps[i].Configured || s.last.Apps[i].Unreachable {
+		i := slices.IndexFunc(s.slot.last.Apps, func(ar AppResult) bool { return ar.App == app })
+		if i < 0 || !s.slot.last.Apps[i].Configured || s.slot.last.Apps[i].Unreachable {
 			return card.Rendering{}, nil
 		}
-		ar := s.last.Apps[i]
+		ar := s.slot.last.Apps[i]
 		match := func(it Item) bool { return strings.EqualFold(it.DownloadID, parts[2]) }
 		if j := slices.IndexFunc(ar.Items, match); j >= 0 {
 			return card.Rendered(card.Update{Buttons: itemButtons(ar.Items[j].Download, ar.Items[j].Actions)}), nil
@@ -133,7 +133,7 @@ func (s *Scheduler) CardRenderer() card.Renderer {
 				Buttons: itemButtons(w.Download, w.Actions),
 			}), nil
 		}
-		if s.running {
+		if s.slot.holder == holderRun {
 			return card.Rendering{}, nil
 		}
 		return card.Rendered(card.Update{Status: goneLine}), nil
@@ -168,18 +168,18 @@ func (s *Scheduler) CardHandler() card.Handler {
 }
 
 func (s *Scheduler) recordOutcome(subject string, a Action) {
-	s.smu.Lock()
-	defer s.smu.Unlock()
-	if s.outcomes == nil {
-		s.outcomes = map[string]outcome{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.slot.outcomes == nil {
+		s.slot.outcomes = map[string]outcome{}
 	}
-	s.outcomes[subject] = outcome{action: a, at: s.r.Now()}
+	s.slot.outcomes[subject] = outcome{action: a, at: s.r.Now()}
 }
 
-func (s *Scheduler) clearStuckOutcomes(res Result) {
+func (sl *slot) clearStuckOutcomes(res Result) {
 	for _, ar := range res.Apps {
 		for _, it := range slices.Concat(ar.Items, ar.Waiting) {
-			delete(s.outcomes, subjectOf(it.Download))
+			delete(sl.outcomes, subjectOf(it.Download))
 		}
 	}
 }

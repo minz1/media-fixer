@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/client"
 )
@@ -23,23 +24,25 @@ type write struct {
 }
 
 type fakeArr struct {
-	mu          sync.Mutex
-	srv         *httptest.Server
-	records     []map[string]any
-	candidates  map[string]string
-	writes      []write
-	failQueue   bool
-	failCommand map[string]bool
-	nextID      int
-	gate        chan struct{}
-	commands    []map[string]any
-	commandsErr int
-	episodes    []map[string]any
-	reqs        int
-	deleteCode  int
-	deleteLands bool
-	history     []map[string]any
-	movies      []int
+	mu           sync.Mutex
+	srv          *httptest.Server
+	records      []map[string]any
+	candidates   map[string]string
+	writes       []write
+	failQueue    bool
+	failCommand  map[string]bool
+	nextID       int
+	gate         chan struct{}
+	commands     []map[string]any
+	commandsErr  int
+	episodes     []map[string]any
+	reqs         int
+	deleteCode   int
+	deleteLands  bool
+	history      []map[string]any
+	movies       []int
+	failEpisodes bool
+	arrived      int
 }
 
 func newFakeArr(t *testing.T) *fakeArr {
@@ -72,6 +75,7 @@ func (f *fakeArr) loadFixture(t *testing.T, path string) {
 func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	gate := f.gate
+	f.arrived++
 	f.mu.Unlock()
 	if gate != nil {
 		<-gate
@@ -96,6 +100,10 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(f.commands)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
+		if f.failEpisodes {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(f.episodes)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/queue/"):
 		f.serveDelete(w, r)
@@ -256,4 +264,25 @@ func (f *fakeArr) requests() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reqs
+}
+
+func (f *fakeArr) awaitArrived(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		got := f.arrived
+		f.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("no request reached the fake (want %d)", n)
+}
+
+func (f *fakeArr) setFailEpisodes() {
+	f.mu.Lock()
+	f.failEpisodes = true
+	f.mu.Unlock()
 }

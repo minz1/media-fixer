@@ -274,7 +274,8 @@ func TestStuckResume_RunActiveRefuses(t *testing.T) {
 	_, err := s.Resume(context.Background(), stuckqueue.AppSonarr, "D", op.ID, op.Version)
 	close(gate)
 	s.Wait()
-	if !errors.Is(err, stuckqueue.ErrRefused) || !strings.Contains(err.Error(), "a run is active") {
+	const want = "a stuck-queue run is active, try again in a moment"
+	if !errors.Is(err, stuckqueue.ErrRefused) || !strings.Contains(err.Error(), want) {
 		t.Fatalf("err = %v", err)
 	}
 	if latestOp(t, e).Version != op.Version {
