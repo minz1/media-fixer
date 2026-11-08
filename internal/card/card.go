@@ -91,9 +91,24 @@ type Action struct {
 	Args []string
 }
 
+type Outcome int
+
+const (
+	NotYet Outcome = iota
+	Render
+	Gone
+)
+
+type Rendering struct {
+	Outcome Outcome
+	Update  Update
+}
+
+func Rendered(u Update) Rendering { return Rendering{Outcome: Render, Update: u} }
+
 type (
 	Handler  func(ctx context.Context, a Action) (Result, error)
-	Renderer func(ctx context.Context, subject string) (Update, bool, error)
+	Renderer func(ctx context.Context, subject string) (Rendering, error)
 )
 
 // Components predicts the built component count: exact with a public URL, an upper bound without.

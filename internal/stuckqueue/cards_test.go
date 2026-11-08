@@ -169,11 +169,11 @@ func lastWith(apps ...stuckqueue.AppResult) stuckqueue.Result {
 
 func render(t *testing.T, s *stuckqueue.Scheduler, subject string) (card.Update, bool) {
 	t.Helper()
-	up, ok, err := s.CardRenderer()(context.Background(), subject)
+	r, err := s.CardRenderer()(context.Background(), subject)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return up, ok
+	return r.Update, r.Outcome == card.Render
 }
 
 func TestRenderer_StillStuck(t *testing.T) {
@@ -333,7 +333,8 @@ func TestAct_RecordsOutcomeThenRefreshesSubject(t *testing.T) {
 	var calls []string
 	var statuses []string
 	s.Refresh = func(subject string) {
-		up, _, _ := s.CardRenderer()(context.Background(), subject)
+		r, _ := s.CardRenderer()(context.Background(), subject)
+		up := r.Update
 		mu.Lock()
 		defer mu.Unlock()
 		calls = append(calls, subject)
@@ -420,4 +421,61 @@ func TestHandler_BadArgs(t *testing.T) {
 			t.Errorf("args %v: no error", args)
 		}
 	}
+}
+
+func TestStuckRenderer_Outcomes(t *testing.T) {
+	t.Parallel()
+	sonarr := func(it ...stuckqueue.Item) stuckqueue.AppResult {
+		return stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true, Items: it}
+	}
+	waiting := stuckItem(stuckqueue.AppSonarr, "W", stuckqueue.ActionRemove)
+	for _, tc := range []struct {
+		name    string
+		subject string
+		last    *stuckqueue.Result
+		running bool
+		want    card.Outcome
+	}{
+		{"malformed subject", "sq:s", nil, false, card.Gone},
+		{"wrong kind", "inc:1", nil, false, card.Gone},
+		{"unknown app code", "sq:x:abc", nil, false, card.Gone},
+		{"no run yet", card.StuckSubject("s", "abc"), nil, false, card.NotYet},
+		{"app absent from the last run", card.StuckSubject("r", "m1"), new(lastWith(sonarr())), false, card.NotYet},
+		{"app not configured", card.StuckSubject("r", "m1"),
+			new(lastWith(stuckqueue.AppResult{App: stuckqueue.AppRadarr})), false, card.NotYet},
+		{"app unreachable", card.StuckSubject("s", "abc"), new(lastWith(stuckqueue.AppResult{
+			App: stuckqueue.AppSonarr, Configured: true, Unreachable: true,
+		})), false, card.NotYet},
+		{"item found", card.StuckSubject("s", "abc"),
+			new(lastWith(sonarr(stuckItem(stuckqueue.AppSonarr, "ABC", stuckqueue.ActionRemove)))), false, card.Render},
+		{"waiting entry found", card.StuckSubject("s", "w"), new(lastWith(stuckqueue.AppResult{
+			App: stuckqueue.AppSonarr, Configured: true, Waiting: []stuckqueue.Item{waiting},
+		})), false, card.Render},
+		{"absent while a run is in progress", card.StuckSubject("s", "new"), new(lastWith(sonarr())), true, card.NotYet},
+		{"absent after a finished run", card.StuckSubject("s", "old"), new(lastWith(sonarr())), false, card.Render},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, s := newSched(t)
+			if tc.last != nil {
+				stuckqueue.SetLastForTest(s, *tc.last, tc.running)
+			}
+			r, err := s.CardRenderer()(context.Background(), tc.subject)
+			if err != nil || r.Outcome != tc.want {
+				t.Errorf("outcome = %v err = %v, want %v", r.Outcome, err, tc.want)
+			}
+		})
+	}
+	t.Run("owner outcome recorded", func(t *testing.T) {
+		t.Parallel()
+		e, s := newSched(t)
+		e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+		if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+		if err != nil || r.Outcome != card.Render || !strings.HasPrefix(r.Update.Status, "✅") {
+			t.Errorf("rendering = %+v err = %v, want Render with the outcome line", r, err)
+		}
+	})
 }

@@ -93,10 +93,10 @@ func runID(subject string) (int64, bool) {
 }
 
 func (r *Runner) CardRenderer() card.Renderer {
-	return func(ctx context.Context, subject string) (card.Update, bool, error) {
+	return func(ctx context.Context, subject string) (card.Rendering, error) {
 		id, ok := runID(subject)
 		if !ok {
-			return card.Update{}, false, nil
+			return card.Rendering{Outcome: card.Gone}, nil
 		}
 		if p, live := r.Progress(); live && p.RunID == id {
 			status := "Running: " + p.Phase
@@ -104,23 +104,25 @@ func (r *Runner) CardRenderer() card.Renderer {
 				status += " · " + p.Current
 			}
 			counts := countsText(p.Counts, p.Dry)
-			return card.Update{
+			return card.Rendered(card.Update{
 				Status: status, Sections: []card.Field{{Name: "Counts", Value: counts}}, Live: true,
-			}, true, nil
+			}), nil
 		}
 		sr, err := r.DB.GetSweepRun(ctx, id)
-		if errors.Is(err, db.ErrNotFound) || (err == nil && sr.Status == statusRunning) {
-			return card.Update{}, false, nil
-		}
-		if err != nil {
-			return card.Update{}, false, err
+		switch {
+		case errors.Is(err, db.ErrNotFound):
+			return card.Rendering{Outcome: card.Gone}, nil
+		case err != nil:
+			return card.Rendering{}, err
+		case sr.Status == statusRunning:
+			return card.Rendering{}, nil
 		}
 		tone := runTone(sr)
-		return card.Update{
+		return card.Rendered(card.Update{
 			Status:   statusText(sr) + took(sr),
 			Sections: []card.Field{{Name: "Counts", Value: countsText(sr.Counts, sr.Dry)}},
 			Tone:     &tone,
-		}, true, nil
+		}), nil
 	}
 }
 

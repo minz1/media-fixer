@@ -52,7 +52,8 @@ func captureRefresh(s *stuckqueue.Scheduler) func() []string {
 	var mu sync.Mutex
 	var got []string
 	s.Refresh = func(subject string) {
-		up, _, _ := s.CardRenderer()(context.Background(), subject)
+		r, _ := s.CardRenderer()(context.Background(), subject)
+		up := r.Update
 		mu.Lock()
 		defer mu.Unlock()
 		got = append(got, up.Status)

@@ -94,11 +94,11 @@ func TestTriggerLabel(t *testing.T) {
 
 func renderSweep(t *testing.T, r *sweep.Runner, id int64) (card.Update, bool) {
 	t.Helper()
-	up, ok, err := r.CardRenderer()(context.Background(), card.SweepSubject(id))
+	res, err := r.CardRenderer()(context.Background(), card.SweepSubject(id))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return up, ok
+	return res.Update, res.Outcome == card.Render
 }
 
 func sectionText(up card.Update) string {
@@ -144,8 +144,8 @@ func TestRenderer_RunningWithoutProgressUnknown(t *testing.T) {
 	if up, ok := renderSweep(t, h.runner, id); ok {
 		t.Errorf("running row with no progress rendered %+v", up)
 	}
-	if _, ok, rerr := h.runner.CardRenderer()(context.Background(), "sweep:x"); ok || rerr != nil {
-		t.Errorf("bad subject: ok=%v err=%v", ok, rerr)
+	if res, rerr := h.runner.CardRenderer()(context.Background(), "sweep:x"); res.Outcome != card.Gone || rerr != nil {
+		t.Errorf("bad subject: outcome=%v err=%v", res.Outcome, rerr)
 	}
 }
 
@@ -195,4 +195,86 @@ func TestRenderer_Interrupted(t *testing.T) {
 		strings.Contains(up.Status, "took") {
 		t.Errorf("update = %+v ok=%v", up, ok)
 	}
+}
+
+func TestD1_10_PrunedSweepRunIsGone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx := context.Background()
+	var ids []int64
+	for range 2 {
+		id, err := h.db.CreateSweepRun(ctx, "manual", false, t0())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = h.db.FinishSweepRun(ctx, id, "done", "", db.SweepCounts{}, t0().Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := h.db.PruneSweepRuns(ctx, 1, t0().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	r, err := h.runner.CardRenderer()(ctx, card.SweepSubject(ids[0]))
+	if err != nil || r.Outcome != card.Gone {
+		t.Errorf("pruned run: outcome = %v err = %v, want Gone", r.Outcome, err)
+	}
+}
+
+func TestSweepRenderer_Outcomes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, h *harness) (context.Context, string)
+		want    card.Outcome
+		wantErr bool
+	}{
+		{"subject not sweep:<int>", func(*testing.T, *harness) (context.Context, string) {
+			return ctx, "sweep:x"
+		}, card.Gone, false},
+		{"live progress", func(t *testing.T, h *harness) (context.Context, string) {
+			id := createRun(t, h)
+			sweep.SetProgressForTest(h.runner, &sweep.Progress{RunID: id, Phase: "season pass"})
+			return ctx, card.SweepSubject(id)
+		}, card.Render, false},
+		{"run not found", func(t *testing.T, h *harness) (context.Context, string) {
+			return ctx, card.SweepSubject(createRun(t, h) + 1)
+		}, card.Gone, false},
+		{"running without live progress", func(t *testing.T, h *harness) (context.Context, string) {
+			return ctx, card.SweepSubject(createRun(t, h))
+		}, card.NotYet, false},
+		{"db error", func(t *testing.T, h *harness) (context.Context, string) {
+			id := createRun(t, h)
+			cctx, cancel := context.WithCancel(ctx)
+			cancel()
+			return cctx, card.SweepSubject(id)
+		}, card.NotYet, true},
+		{"finished", func(t *testing.T, h *harness) (context.Context, string) {
+			id := createRun(t, h)
+			if err := h.db.FinishSweepRun(ctx, id, "done", "", db.SweepCounts{}, t0().Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			return ctx, card.SweepSubject(id)
+		}, card.Render, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			rctx, subject := tc.setup(t, h)
+			r, err := h.runner.CardRenderer()(rctx, subject)
+			if r.Outcome != tc.want || (err != nil) != tc.wantErr {
+				t.Errorf("outcome = %v err = %v, want %v (error %v)", r.Outcome, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
+func createRun(t *testing.T, h *harness) int64 {
+	t.Helper()
+	id, err := h.db.CreateSweepRun(context.Background(), "manual", false, t0())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

@@ -97,46 +97,46 @@ func buttonLook(a Action) (string, card.Style) {
 }
 
 func (s *Scheduler) CardRenderer() card.Renderer {
-	return func(_ context.Context, subject string) (card.Update, bool, error) {
+	return func(_ context.Context, subject string) (card.Rendering, error) {
 		parts := strings.SplitN(subject, ":", subjectParts)
 		if len(parts) != subjectParts || parts[0] != cardKind {
-			return card.Update{}, false, nil
+			return card.Rendering{Outcome: card.Gone}, nil
 		}
 		app, ok := appOf(parts[1])
 		if !ok {
-			return card.Update{}, false, nil
+			return card.Rendering{Outcome: card.Gone}, nil
 		}
 		s.smu.Lock()
 		defer s.smu.Unlock()
 		if op, failed := s.failedOps[OpSubject(app, parts[2]).ID]; failed {
-			return failedUpdate(app, op), true, nil
+			return card.Rendered(failedUpdate(app, op)), nil
 		}
 		if o, acted := s.outcomes[subject]; acted {
-			return card.Update{Status: o.line()}, true, nil
+			return card.Rendered(card.Update{Status: o.line()}), nil
 		}
 		if !s.hasLast {
-			return card.Update{}, false, nil
+			return card.Rendering{}, nil
 		}
 		i := slices.IndexFunc(s.last.Apps, func(ar AppResult) bool { return ar.App == app })
 		if i < 0 || !s.last.Apps[i].Configured || s.last.Apps[i].Unreachable {
-			return card.Update{}, false, nil
+			return card.Rendering{}, nil
 		}
 		ar := s.last.Apps[i]
 		match := func(it Item) bool { return strings.EqualFold(it.DownloadID, parts[2]) }
 		if j := slices.IndexFunc(ar.Items, match); j >= 0 {
-			return card.Update{Buttons: itemButtons(ar.Items[j].Download, ar.Items[j].Actions)}, true, nil
+			return card.Rendered(card.Update{Buttons: itemButtons(ar.Items[j].Download, ar.Items[j].Actions)}), nil
 		}
 		if j := slices.IndexFunc(ar.Waiting, match); j >= 0 {
 			w := ar.Waiting[j]
-			return card.Update{
+			return card.Rendered(card.Update{
 				Status:  fmt.Sprintf("⏳ Inside the wait until <t:%d:t>; only Remove until then", w.Due.Unix()),
 				Buttons: itemButtons(w.Download, w.Actions),
-			}, true, nil
+			}), nil
 		}
 		if s.running {
-			return card.Update{}, false, nil
+			return card.Rendering{}, nil
 		}
-		return card.Update{Status: goneLine}, true, nil
+		return card.Rendered(card.Update{Status: goneLine}), nil
 	}
 }
 

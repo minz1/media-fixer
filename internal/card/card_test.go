@@ -189,3 +189,15 @@ func TestComponents_Layout(t *testing.T) {
 		}
 	}
 }
+
+func TestRendering_ZeroIsNotYet(t *testing.T) {
+	t.Parallel()
+	var r card.Rendering
+	if r.Outcome != card.NotYet {
+		t.Errorf("zero Rendering outcome = %v, want NotYet", r.Outcome)
+	}
+	up := card.Update{Status: "x"}
+	if got := card.Rendered(up); got.Outcome != card.Render || got.Update.Status != "x" {
+		t.Errorf("Rendered = %+v", got)
+	}
+}

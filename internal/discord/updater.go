@@ -263,12 +263,12 @@ func (b *Bot) renderSubject(ctx context.Context, subject string) (card.Update, b
 	if !ok {
 		return card.Update{}, false
 	}
-	up, ok, err := r(ctx, subject)
+	res, err := r(ctx, subject)
 	if err != nil {
 		b.log.WarnContext(ctx, "discord cards: render", "subject", subject, "error", err)
 		return card.Update{}, false
 	}
-	return up, ok
+	return res.Update, res.Outcome == card.Render
 }
 
 func keepSentVerbs(c card.Card, subject string, up card.Update) card.Update {

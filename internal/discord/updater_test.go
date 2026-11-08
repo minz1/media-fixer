@@ -73,11 +73,14 @@ func newRenderer(ok bool) *fakeRenderer {
 	return &fakeRenderer{ups: map[string]card.Update{}, ok: ok, calls: map[string]int{}}
 }
 
-func (r *fakeRenderer) render(_ context.Context, subject string) (card.Update, bool, error) {
+func (r *fakeRenderer) render(_ context.Context, subject string) (card.Rendering, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls[subject]++
-	return r.ups[subject], r.ok, nil
+	if !r.ok {
+		return card.Rendering{}, nil
+	}
+	return card.Rendered(r.ups[subject]), nil
 }
 
 func (r *fakeRenderer) set(subject string, up card.Update) {
@@ -335,11 +338,11 @@ func TestUpdater_LivePolls(t *testing.T) {
 		mu sync.Mutex
 		n  int
 	)
-	live := func(context.Context, string) (card.Update, bool, error) {
+	live := func(context.Context, string) (card.Rendering, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
-		return card.Update{Status: fmt.Sprintf("probed %d", n), Live: true}, true, nil
+		return card.Rendered(card.Update{Status: fmt.Sprintf("probed %d", n), Live: true}), nil
 	}
 	discord.SetPollIntervalForTest(e.bot, 10*time.Millisecond)
 	e.track("sweep:1", "m1", card.Card{Subject: "sweep:1", Title: "Sweep"}, time.Now())

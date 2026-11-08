@@ -104,11 +104,11 @@ func agePlan(t *testing.T, d *db.DB, id string, age time.Duration) {
 
 func renderInc(t *testing.T, svc *incident.Service, id string) card.Update {
 	t.Helper()
-	up, ok, err := svc.CardRenderer()(context.Background(), card.IncidentSubject(id))
-	if err != nil || !ok {
-		t.Fatalf("render: ok=%v err=%v", ok, err)
+	r, err := svc.CardRenderer()(context.Background(), card.IncidentSubject(id))
+	if err != nil || r.Outcome != card.Render {
+		t.Fatalf("render: outcome=%v err=%v", r.Outcome, err)
 	}
-	return up
+	return r.Update
 }
 
 func buttonVerbsOf(t *testing.T, bs []card.Button) []string {
@@ -234,12 +234,24 @@ func TestRenderer_StatusLines(t *testing.T) {
 	}
 }
 
-func TestRenderer_UnknownIncidentIsNotOK(t *testing.T) {
+func TestCardRenderer_MissingIncidentIsGone(t *testing.T) {
 	t.Parallel()
 	svc, _, _ := newCardService(t, &cardNotifier{}, nil)
-	_, ok, err := svc.CardRenderer()(context.Background(), card.IncidentSubject("00000000-0000-0000-0000-000000000000"))
-	if ok || err != nil {
-		t.Errorf("ok=%v err=%v, want ok=false and no error", ok, err)
+	r, err := svc.CardRenderer()(context.Background(), card.IncidentSubject("00000000-0000-0000-0000-000000000000"))
+	if r.Outcome != card.Gone || err != nil {
+		t.Errorf("outcome=%v err=%v, want Gone and no error", r.Outcome, err)
+	}
+}
+
+func TestCardRenderer_IncidentDBErrorIsError(t *testing.T) {
+	t.Parallel()
+	svc, d, _ := newCardService(t, &cardNotifier{}, nil)
+	inc := cardIncident(t, d, db.StatusManualTestNeeded, agent.EscalateRemoveAndSearch)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r, err := svc.CardRenderer()(ctx, card.IncidentSubject(inc.ID))
+	if err == nil || r.Outcome != card.NotYet {
+		t.Errorf("outcome=%v err=%v, want NotYet with an error", r.Outcome, err)
 	}
 }
 

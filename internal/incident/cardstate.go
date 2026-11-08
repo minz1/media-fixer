@@ -39,17 +39,20 @@ type cardPlan struct {
 }
 
 func (s *Service) CardRenderer() card.Renderer {
-	return func(ctx context.Context, subject string) (card.Update, bool, error) {
+	return func(ctx context.Context, subject string) (card.Rendering, error) {
 		id := strings.TrimPrefix(subject, card.IncidentSubject(""))
 		inc, err := s.db.GetIncident(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return card.Update{}, false, nil
+			return card.Rendering{Outcome: card.Gone}, nil
 		}
 		if err != nil {
-			return card.Update{}, false, err
+			return card.Rendering{}, err
 		}
 		up, err := s.cardUpdate(ctx, inc)
-		return up, err == nil, err
+		if err != nil {
+			return card.Rendering{}, err
+		}
+		return card.Rendered(up), nil
 	}
 }
 

@@ -163,7 +163,8 @@ func TestScheduler_RefreshesAfterStoringLast(t *testing.T) {
 	var calls []string
 	var rendered []bool
 	s.Refresh = func(prefix string) {
-		_, ok, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+		r, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+		ok := r.Outcome == card.Render
 		mu.Lock()
 		defer mu.Unlock()
 		calls = append(calls, prefix)
@@ -179,7 +180,8 @@ func TestScheduler_RefreshesAfterStoringLast(t *testing.T) {
 	if !rendered[1] {
 		t.Fatal("the run's own item did not render in its post-run refresh")
 	}
-	up, ok, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+	r, _ := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+	up, ok := r.Update, r.Outcome == card.Render
 	if !ok || len(up.Buttons) == 0 || up.Status != "" {
 		t.Fatalf("update = %+v, %v; want still stuck with buttons", up, ok)
 	}

@@ -16,11 +16,11 @@ import (
 
 func (e *lcEnv) render(t *testing.T, id string) card.Update {
 	t.Helper()
-	up, ok, err := e.svc.CardRenderer()(context.Background(), card.IncidentSubject(id))
-	if err != nil || !ok {
-		t.Fatalf("render: ok=%v err=%v", ok, err)
+	r, err := e.svc.CardRenderer()(context.Background(), card.IncidentSubject(id))
+	if err != nil || r.Outcome != card.Render {
+		t.Fatalf("render: outcome=%v err=%v", r.Outcome, err)
 	}
-	return up
+	return r.Update
 }
 
 func (e *lcEnv) press(t *testing.T, verb, id, token string) card.Result {
