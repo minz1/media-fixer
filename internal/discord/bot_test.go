@@ -170,3 +170,109 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.buf.String()
 }
+
+func waitConn(t *testing.T, b *discord.Bot, want discord.ConnState) discord.Conn {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		c := b.Conn()
+		if c.State == want {
+			return c
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("conn state = %q, want %q", c.State, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func slowRetryBot(t *testing.T, connect func() error) *discord.Bot {
+	t.Helper()
+	b, err := discord.NewForTest(slog.New(slog.DiscardHandler), connect, time.Hour, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestConn_IdleBeforeStart(t *testing.T) {
+	t.Parallel()
+	b := testBot(t, func() error { return nil })
+	if c := b.Conn(); c.State != discord.ConnIdle || !c.DownSince.IsZero() || c.Attempt != 0 {
+		t.Errorf("conn = %+v, want idle", c)
+	}
+}
+
+func TestConn_FailingConnectShowsBackoff(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	b := slowRetryBot(t, failingConnect(&calls))
+	began := time.Now()
+	b.Start(t.Context())
+	defer func() { _ = b.Close() }()
+	c := waitConn(t, b, discord.ConnBackoff)
+	if c.Attempt != 1 || !strings.Contains(c.Err, "server misbehaving") {
+		t.Errorf("conn = %+v, want attempt 1 with the connect error", c)
+	}
+	if c.RetryAt.Before(began.Add(59*time.Minute)) || c.DownSince.IsZero() {
+		t.Errorf("conn = %+v, want RetryAt an hour out and DownSince set", c)
+	}
+}
+
+func TestConn_ConnectedAfterRetry(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	b := testBot(t, func() error {
+		if calls.Add(1) < 3 {
+			return errors.New("lookup discord.com: server misbehaving")
+		}
+		return nil
+	})
+	b.Start(t.Context())
+	defer func() { _ = b.Close() }()
+	c := waitConn(t, b, discord.ConnConnected)
+	if c.Attempt != 0 || c.Err != "" || !c.DownSince.IsZero() || !c.RetryAt.IsZero() {
+		t.Errorf("conn = %+v, want a clean connected state", c)
+	}
+}
+
+func TestConn_GatewayDropShowsReconnecting(t *testing.T) {
+	t.Parallel()
+	b := testBot(t, func() error { return nil })
+	b.Start(t.Context())
+	defer func() { _ = b.Close() }()
+	waitConn(t, b, discord.ConnConnected)
+	discord.GatewayForTest(b, false)
+	if c := waitConn(t, b, discord.ConnReconnecting); c.DownSince.IsZero() {
+		t.Errorf("conn = %+v, want DownSince set", c)
+	}
+	discord.GatewayForTest(b, true)
+	if c := waitConn(t, b, discord.ConnConnected); !c.DownSince.IsZero() {
+		t.Errorf("conn = %+v, want DownSince cleared", c)
+	}
+}
+
+func TestConn_StopIsClosed(t *testing.T) {
+	t.Parallel()
+	t.Run("stop intake from backoff", func(t *testing.T) {
+		t.Parallel()
+		var calls atomic.Int32
+		b := slowRetryBot(t, failingConnect(&calls))
+		b.Start(t.Context())
+		defer func() { _ = b.Close() }()
+		waitConn(t, b, discord.ConnBackoff)
+		b.StopIntake()
+		c := waitConn(t, b, discord.ConnClosed)
+		if !c.RetryAt.IsZero() || c.Err == "" {
+			t.Errorf("conn = %+v, want RetryAt cleared and the last error kept", c)
+		}
+	})
+	t.Run("close from connected", func(t *testing.T) {
+		t.Parallel()
+		b := testBot(t, func() error { return nil })
+		b.Start(t.Context())
+		waitConn(t, b, discord.ConnConnected)
+		_ = b.Close()
+		waitConn(t, b, discord.ConnClosed)
+	})
+}

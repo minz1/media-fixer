@@ -59,6 +59,14 @@ func SetPassDoneForTest(b *Bot, fn func()) { b.onPass = fn }
 
 func SetTimerFiredForTest(b *Bot, fn func()) { b.onTimer = fn }
 
+func GatewayForTest(b *Bot, up bool) {
+	if up {
+		b.onConnect(nil, &discordgo.Connect{})
+		return
+	}
+	b.onDisconnect(nil, &discordgo.Disconnect{})
+}
+
 func SetConfirmForTest(b *Bot, d time.Duration) { b.confirmFor = d }
 
 func CardsDoneForTest(b *Bot) <-chan struct{} { return b.cardsDone }

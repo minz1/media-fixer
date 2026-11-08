@@ -57,6 +57,7 @@ type Bot struct {
 	confirmFor     time.Duration
 	onPass         func()
 	onTimer        func()
+	conn           Conn
 }
 
 // New creates a Bot from a Discord bot token.
@@ -87,11 +88,46 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		cardRetryFirst: cardRetryFirstDefault,
 		cardRetryCap:   cardRetryCapDefault,
 		confirmFor:     confirmWindow,
+		conn:           Conn{State: ConnIdle},
 	}
 	b.connect = b.openAndRegister
 	b.closeConn = sess.Close
 	sess.AddHandler(b.onInteraction)
+	sess.AddHandler(b.onConnect)
+	sess.AddHandler(b.onDisconnect)
 	return b, nil
+}
+
+func (b *Bot) Conn() Conn {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.conn
+}
+
+func (b *Bot) onConnect(_ *discordgo.Session, _ *discordgo.Connect) {
+	b.stepConn(context.Background(), connEvent{Kind: connGatewayUp})
+}
+
+func (b *Bot) onDisconnect(_ *discordgo.Session, _ *discordgo.Disconnect) {
+	b.stepConn(context.Background(), connEvent{Kind: connGatewayDown})
+}
+
+func (b *Bot) stepConn(ctx context.Context, ev connEvent) {
+	ev.At = b.now()
+	b.mu.Lock()
+	prev := b.conn
+	next, err := nextConn(prev, ev)
+	if err == nil {
+		b.conn = next
+	}
+	b.mu.Unlock()
+	if err != nil {
+		b.log.DebugContext(ctx, "discord gateway event rejected", "error", err)
+		return
+	}
+	if next.State != prev.State || next.Attempt != prev.Attempt {
+		b.log.InfoContext(ctx, "discord gateway", "state", string(next.State), "attempt", next.Attempt)
+	}
 }
 
 // SetService wires the incident service after construction (breaks the
@@ -108,23 +144,29 @@ func (b *Bot) Start(ctx context.Context) {
 }
 
 func (b *Bot) connectLoop(ctx context.Context) {
+	b.stepConn(ctx, connEvent{Kind: connStart})
 	wait := b.retryFirst
 	for attempt := 1; ; attempt++ {
 		err := b.connect()
 		if err == nil {
 			if ctx.Err() != nil {
 				_ = b.session.Close()
+				b.stepConn(ctx, connEvent{Kind: connStop})
 				return
 			}
+			b.stepConn(ctx, connEvent{Kind: connOpenOK})
 			b.log.InfoContext(ctx, "discord bot started")
 			return
 		}
 		b.log.ErrorContext(ctx, "discord connect failed", "attempt", attempt, "error", err)
+		b.stepConn(ctx, connEvent{Kind: connOpenFailed, Err: err.Error(), Wait: wait})
 		select {
 		case <-ctx.Done():
+			b.stepConn(ctx, connEvent{Kind: connStop})
 			return
 		case <-time.After(wait):
 		}
+		b.stepConn(ctx, connEvent{Kind: connRetryDue})
 		wait = min(wait+wait, b.retryCap)
 	}
 }
@@ -181,6 +223,7 @@ func (b *Bot) openAndRegister() error {
 // handlers, then stops the card updater.
 func (b *Bot) Close() error {
 	b.StopIntake()
+	b.stepConn(context.Background(), connEvent{Kind: connStop})
 	err := b.session.Close()
 	b.mu.Lock()
 	b.closed = true
@@ -234,6 +277,7 @@ func (b *Bot) Disconnect(ctx context.Context) error {
 			err = errors.Join(err, ctx.Err())
 		}
 	}
+	b.stepConn(ctx, connEvent{Kind: connStop})
 	connClosed := make(chan error, 1)
 	go func() { connClosed <- b.closeConn() }()
 	select {
