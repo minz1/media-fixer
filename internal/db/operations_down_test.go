@@ -169,7 +169,7 @@ func TestMigrateDown22_RefusesWhileServiceHoldsTheDB(t *testing.T) {
 	if matches, _ := filepath.Glob(path + ".pre-down-22-*"); len(matches) != 0 {
 		t.Fatalf("a refused down wrote a backup: %v", matches)
 	}
-	if v := maxVersion(t, rawOpen(t, path)); v != 24 {
+	if v := maxVersion(t, rawOpen(t, path)); v != 25 {
 		t.Fatalf("version %d", v)
 	}
 }

@@ -351,11 +351,11 @@ func TestBlocking(t *testing.T) {
 	t.Parallel()
 	day := 24 * time.Hour
 	rows := []db.SweepRefused{
-		{TitleKey: "blocked-30d", RefusedAt: t0().Add(-30 * day), Reason: "500 x code=torrent_blocked"},
-		{TitleKey: "blocked-91d", RefusedAt: t0().Add(-91 * day), Reason: "500 x code=torrent_blocked"},
-		{TitleKey: "provider-1h", RefusedAt: t0().Add(-time.Hour), Reason: "500 x code=provider_error"},
-		{TitleKey: "plain-6d", RefusedAt: t0().Add(-6 * day), Reason: "500 refused"},
-		{TitleKey: "plain-8d", RefusedAt: t0().Add(-8 * day), Reason: "500 refused"},
+		{TitleKey: "blocked-30d", RefusedAt: t0().Add(-30 * day), Code: sweepstate.TorrentBlocked},
+		{TitleKey: "blocked-91d", RefusedAt: t0().Add(-91 * day), Code: sweepstate.TorrentBlocked},
+		{TitleKey: "provider-1h", RefusedAt: t0().Add(-time.Hour), Code: sweepstate.ProviderError},
+		{TitleKey: "plain-6d", RefusedAt: t0().Add(-6 * day), Code: sweepstate.OtherRefusal},
+		{TitleKey: "plain-8d", RefusedAt: t0().Add(-8 * day), Code: sweepstate.OtherRefusal},
 	}
 	var got []string
 	for _, r := range sweep.Blocking(rows, t0()) {
@@ -363,6 +363,26 @@ func TestBlocking(t *testing.T) {
 	}
 	if want := []string{"blocked-30d", "plain-6d"}; !slices.Equal(got, want) {
 		t.Errorf("blocking = %v, want %v", got, want)
+	}
+}
+
+func TestS5_Copies_BlockingReadsCode(t *testing.T) {
+	t.Parallel()
+	day := 24 * time.Hour
+	rows := []db.SweepRefused{
+		{TitleKey: "text-says-torrent-6d", RefusedAt: t0().Add(-6 * day), Code: sweepstate.OtherRefusal,
+			Reason: "500 x code=torrent_blocked"},
+		{TitleKey: "text-says-torrent-8d", RefusedAt: t0().Add(-8 * day), Code: sweepstate.OtherRefusal,
+			Reason: "500 x code=torrent_blocked"},
+		{TitleKey: "text-says-provider-1h", RefusedAt: t0().Add(-time.Hour), Code: sweepstate.TorrentBlocked,
+			Reason: "500 x code=provider_error"},
+	}
+	var got []string
+	for _, r := range sweep.Blocking(rows, t0()) {
+		got = append(got, r.TitleKey)
+	}
+	if want := []string{"text-says-torrent-6d", "text-says-provider-1h"}; !slices.Equal(got, want) {
+		t.Errorf("blocking = %v, want %v: the code wins over the reason text", got, want)
 	}
 }
 

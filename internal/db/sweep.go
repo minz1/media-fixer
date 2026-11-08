@@ -78,6 +78,7 @@ type SweepRefused struct {
 	Indexer      string
 	RefusedAt    time.Time
 	Reason       string
+	Code         sweepstate.RefusalCode
 }
 
 func (d *DB) CreateSweepRun(ctx context.Context, trigger string, dry bool, at time.Time) (int64, error) {
@@ -367,8 +368,9 @@ func (d *DB) UpdateSweepItem(
 
 func (d *DB) AddSweepRefused(ctx context.Context, r *SweepRefused) error {
 	res, err := d.write.ExecContext(ctx,
-		`INSERT INTO sweep_refused (title_key, release_title, indexer, refused_at, reason) VALUES (?, ?, ?, ?, ?)`,
-		r.TitleKey, r.ReleaseTitle, r.Indexer, r.RefusedAt, r.Reason)
+		`INSERT INTO sweep_refused (title_key, release_title, indexer, refused_at, reason, code)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		r.TitleKey, r.ReleaseTitle, r.Indexer, r.RefusedAt, r.Reason, nullableCode(r.Code))
 	if err != nil {
 		return err
 	}
@@ -378,8 +380,8 @@ func (d *DB) AddSweepRefused(ctx context.Context, r *SweepRefused) error {
 
 func (d *DB) ListSweepRefused(ctx context.Context, since time.Time) ([]SweepRefused, error) {
 	rows, err := d.read.QueryContext(ctx,
-		`SELECT id, title_key, release_title, indexer, refused_at, reason FROM sweep_refused
-		 WHERE refused_at >= ? ORDER BY refused_at DESC, id DESC`, since)
+		`SELECT id, title_key, release_title, indexer, refused_at, reason, COALESCE(code, `+refusalCodeSQL+`)
+		 FROM sweep_refused WHERE refused_at >= ? ORDER BY refused_at DESC, id DESC`, since)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +390,15 @@ func (d *DB) ListSweepRefused(ctx context.Context, since time.Time) ([]SweepRefu
 	var out []SweepRefused
 	for rows.Next() {
 		var r SweepRefused
-		if err = rows.Scan(&r.ID, &r.TitleKey, &r.ReleaseTitle, &r.Indexer, &r.RefusedAt, &r.Reason); err != nil {
+		if err = rows.Scan(
+			&r.ID,
+			&r.TitleKey,
+			&r.ReleaseTitle,
+			&r.Indexer,
+			&r.RefusedAt,
+			&r.Reason,
+			&r.Code,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -463,4 +473,56 @@ func (d *DB) LiveSearchesSince(ctx context.Context, since time.Time) (int, bool,
 		 FROM sweep_runs WHERE dry = 0 AND COALESCE(finished_at,
 		   (SELECT MAX(at) FROM sweep_items WHERE run_id = sweep_runs.id), started_at) >= ?`, since).Scan(&searched, &crashed)
 	return searched, crashed > 0, err
+}
+
+const migSweepRefusalCode = 25
+
+const sweepRefusalAlter = `ALTER TABLE sweep_refused ADD COLUMN code TEXT
+  CHECK (code IS NULL OR code IN ('torrent_blocked', 'provider_error', 'other'))`
+
+const sweepRefusalCaseFrozen = `CASE WHEN instr(reason, 'torrent_blocked') > 0 THEN 'torrent_blocked'
+       WHEN instr(reason, 'provider_error') > 0 THEN 'provider_error'
+       ELSE 'other' END`
+
+const sweepRefusalBackfill = `UPDATE sweep_refused SET code = ` + sweepRefusalCaseFrozen + ` WHERE code IS NULL`
+
+const refusalCodeSQL = `CASE WHEN instr(reason, 'torrent_blocked') > 0 THEN 'torrent_blocked'
+       WHEN instr(reason, 'provider_error') > 0 THEN 'provider_error'
+       ELSE 'other' END`
+
+func sweepMigrations() []migration {
+	return []migration{{
+		version: migSweepRefusalCode,
+		name:    "sweep_refused_code",
+		exec: func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, sweepRefusalAlter); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, sweepRefusalBackfill)
+			return err
+		},
+	}}
+}
+
+func (d *DB) PruneSweepRefused(ctx context.Context, now time.Time) error {
+	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE sweep_refused SET code = `+refusalCodeSQL+` WHERE code IS NULL`); err != nil {
+			return err
+		}
+		for _, code := range sweepstate.RefusalCodes() {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM sweep_refused WHERE code = ? AND refused_at < ?`,
+				string(code), now.Add(-code.Memory())); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func nullableCode(c sweepstate.RefusalCode) any {
+	if c == "" {
+		return nil
+	}
+	return string(c)
 }

@@ -33,8 +33,6 @@ const (
 	historySkew    = 5 * time.Minute
 	getRetryEvery  = 20 * time.Second
 	getRetryFor    = 10 * time.Minute
-	refusedMemory  = 7 * 24 * time.Hour
-	BlockedMemory  = 90 * 24 * time.Hour
 	searchGap      = 60 * time.Second
 	commandPoll    = 15 * time.Second
 	commandWait    = 15 * time.Minute
@@ -147,6 +145,9 @@ func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Sett
 	if err := r.DB.PruneSweepRuns(ctx, keepRuns, r.Now().AddDate(0, 0, -8)); err != nil {
 		return 0, err
 	}
+	if err := r.DB.PruneSweepRefused(ctx, r.Now()); err != nil {
+		return 0, err
+	}
 	start := r.Now()
 	id, err := r.DB.CreateSweepRun(ctx, trigger, dry, start)
 	if err != nil {
@@ -238,7 +239,7 @@ func (x *run) sweep(ctx context.Context) error {
 		return err
 	}
 	now := x.Now()
-	rows, err := x.DB.ListSweepRefused(ctx, now.Add(-BlockedMemory))
+	rows, err := x.DB.ListSweepRefused(ctx, now.Add(-sweepstate.MaxRefusalMemory()))
 	if err != nil {
 		return err
 	}
@@ -843,6 +844,18 @@ func (x *run) dropArchive(ctx context.Context, queueID int, imported bool) error
 	return err
 }
 
+func refusalCodeOf(perr error) sweepstate.RefusalCode {
+	if se, ok := errors.AsType[*client.HTTPStatusError](perr); ok {
+		switch se.Code {
+		case client.CodeTorrentBlocked:
+			return sweepstate.TorrentBlocked
+		case client.CodeProviderError:
+			return sweepstate.ProviderError
+		}
+	}
+	return sweepstate.OtherRefusal
+}
+
 func (x *run) refuse(ctx context.Context, itemID int64, rel client.Release, perr error) error {
 	reason := perr.Error()
 	if se, ok := errors.AsType[*client.HTTPStatusError](perr); ok {
@@ -855,7 +868,12 @@ func (x *run) refuse(ctx context.Context, itemID int64, rel client.Release, perr
 	x.refused[key] = true
 	x.c.Refused++
 	err := x.DB.AddSweepRefused(ctx, &db.SweepRefused{
-		TitleKey: key, ReleaseTitle: rel.Title, Indexer: rel.Indexer, RefusedAt: x.Now(), Reason: reason,
+		TitleKey:     key,
+		ReleaseTitle: rel.Title,
+		Indexer:      rel.Indexer,
+		RefusedAt:    x.Now(),
+		Reason:       reason,
+		Code:         refusalCodeOf(perr),
 	})
 	if err != nil {
 		return err

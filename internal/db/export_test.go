@@ -157,3 +157,19 @@ func MigrateTruncatedForTest(path string, maxVersion int) ([]int, error) {
 	}
 	return ran, nil
 }
+
+const (
+	MigrationRefusalCaseForTest = sweepRefusalCaseFrozen
+	RefusalCodeSQLForTest       = refusalCodeSQL
+)
+
+func (d *DB) BackfillRefusalCodesForTest(ctx context.Context) error {
+	_, err := d.write.ExecContext(ctx, sweepRefusalBackfill)
+	return err
+}
+
+func (d *DB) QueryIntForTest(ctx context.Context, query string) (int, error) {
+	var n int
+	err := d.write.QueryRowContext(ctx, query).Scan(&n)
+	return n, err
+}
