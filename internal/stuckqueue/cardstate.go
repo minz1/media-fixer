@@ -7,23 +7,30 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const (
-	cardKind     = "sq"
-	cardPrefix   = cardKind + ":"
-	cardArgs     = 3
-	subjectParts = 3
-	verbResume   = "resume"
-	refusedLine  = "Refused: "
-	goneLine     = "left the queue"
+	cardKind       = "sq"
+	cardPrefix     = cardKind + ":"
+	cardArgs       = 3
+	subjectParts   = 3
+	verbResume     = "resume"
+	refusedLine    = "Refused: "
+	goneLine       = "left the queue"
+	unfinishedLine = "⚠️ Re-grab didn't finish"
 )
 
 func actedLine(a Acted) string {
-	return fmt.Sprintf("✅ %s · <t:%d:t>", actionDone(a.Action), a.At.Unix())
+	name := actionDone(a.Action)
+	if a.Action == ActionImport && a.Files.M > 0 {
+		name = fmt.Sprintf("%s %d of %d files", name, a.Files.N, a.Files.M)
+	}
+	return fmt.Sprintf("✅ %s · <t:%d:t>", name, a.At.Unix())
 }
 
 func actionDone(a Action) string {
@@ -64,10 +71,14 @@ func subjectOf(d Download) string {
 }
 
 func itemButtons(d Download, actions []Action) []card.Button {
+	return buttonsFor(Key{App: d.App, DownloadID: d.DownloadID}, d.TargetsFP(), actions)
+}
+
+func buttonsFor(key Key, fp string, actions []Action) []card.Button {
 	var out []card.Button
 	for _, a := range actions {
 		id, ok := card.Encode(card.Action{
-			Kind: cardKind, Verb: string(a), Args: []string{appCode(d.App), d.DownloadID, d.TargetsFP()},
+			Kind: cardKind, Verb: string(a), Args: []string{appCode(key.App), key.DownloadID, fp},
 		})
 		if !ok {
 			continue
@@ -88,58 +99,6 @@ func buttonLook(a Action) (string, card.Style) {
 		return "Remove", card.Secondary
 	}
 	return string(a), card.Secondary
-}
-
-func (s *Scheduler) CardRenderer() card.Renderer {
-	return func(ctx context.Context, subject string) (card.Rendering, error) {
-		parts := strings.SplitN(subject, ":", subjectParts)
-		if len(parts) != subjectParts || parts[0] != cardKind {
-			return card.Rendering{Outcome: card.Gone}, nil
-		}
-		app, ok := appOf(parts[1])
-		if !ok {
-			return card.Rendering{Outcome: card.Gone}, nil
-		}
-		done, hasDone, err := s.actedRow(ctx, app, parts[2])
-		if err != nil {
-			return card.Rendering{}, err
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if op, failed := s.slot.failedOps[OpSubject(app, parts[2]).ID]; failed {
-			return card.Rendered(failedUpdate(app, op)), nil
-		}
-		if hasDone {
-			return card.Rendered(card.Update{Status: actedLine(done)}), nil
-		}
-		return s.renderLast(app, parts[2]), nil
-	}
-}
-
-func (s *Scheduler) renderLast(app App, downloadID string) card.Rendering {
-	if !s.slot.hasLast {
-		return card.Rendering{}
-	}
-	i := slices.IndexFunc(s.slot.last.Apps, func(ar AppResult) bool { return ar.App == app })
-	if i < 0 || !s.slot.last.Apps[i].Configured || s.slot.last.Apps[i].Unreachable {
-		return card.Rendering{}
-	}
-	ar := s.slot.last.Apps[i]
-	match := func(it Item) bool { return strings.EqualFold(it.DownloadID, downloadID) }
-	if j := slices.IndexFunc(ar.Items, match); j >= 0 {
-		return card.Rendered(card.Update{Buttons: itemButtons(ar.Items[j].Download, ar.Items[j].Actions)})
-	}
-	if j := slices.IndexFunc(ar.Waiting, match); j >= 0 {
-		w := ar.Waiting[j]
-		return card.Rendered(card.Update{
-			Status:  fmt.Sprintf("⏳ Inside the wait until <t:%d:t>; only Remove until then", w.Due.Unix()),
-			Buttons: itemButtons(w.Download, w.Actions),
-		})
-	}
-	if s.slot.holder == holderRun {
-		return card.Rendering{}
-	}
-	return card.Rendered(card.Update{Status: goneLine})
 }
 
 func (s *Scheduler) CardHandler() card.Handler {
@@ -169,46 +128,10 @@ func (s *Scheduler) CardHandler() card.Handler {
 	}
 }
 
-func (s *Scheduler) actedRow(ctx context.Context, app App, downloadID string) (Acted, bool, error) {
-	rows, err := s.d.ListStuckInState(ctx, string(StateActed))
-	if err != nil {
-		return Acted{}, false, err
-	}
-	for _, row := range rows {
-		if App(row.App) == app && strings.EqualFold(row.DownloadID, downloadID) && row.ActedResult == string(ResultOK) {
-			return *fromRow(row).Acted, true, nil
-		}
-	}
-	return Acted{}, false, nil
-}
-
 func (s *Scheduler) refresh(subject string) {
 	if s.Refresh != nil {
 		s.Refresh(subject)
 	}
-}
-
-func failedUpdate(app App, op operation.Op) card.Update {
-	up := card.Update{Status: "⚠️ " + operation.Line(op) + causeSuffix(op.Cause)}
-	id, ok := card.Encode(card.Action{
-		Kind: cardKind, Verb: verbResume,
-		Args: []string{appCode(app), op.Steps[0].DownloadID, fmt.Sprintf("o%d.%d", op.ID, op.Version)},
-	})
-	if ok {
-		up.Buttons = []card.Button{{Label: "Resume", Style: card.Secondary, ID: id}}
-	}
-	return up
-}
-
-func causeSuffix(c operation.Cause) string {
-	switch c {
-	case operation.CauseStore:
-		return " (database error)"
-	case operation.CauseRestart:
-		return " (restart)"
-	case operation.CauseNone, operation.CauseError:
-	}
-	return ""
 }
 
 func (s *Scheduler) resumeFrom(ctx context.Context, app App, downloadID, ref string) (string, error) {
@@ -219,4 +142,111 @@ func (s *Scheduler) resumeFrom(ctx context.Context, app App, downloadID, ref str
 		return "", fmt.Errorf("%w: operation %q", card.ErrUnknownID, ref)
 	}
 	return s.Resume(ctx, app, downloadID, opID, opVersion)
+}
+
+func (s *Scheduler) CardRenderer() card.Renderer {
+	return func(ctx context.Context, subject string) (card.Rendering, error) {
+		parts := strings.SplitN(subject, ":", subjectParts)
+		if len(parts) != subjectParts || parts[0] != cardKind {
+			return card.Rendering{Outcome: card.Gone}, nil
+		}
+		app, ok := appOf(parts[1])
+		if !ok {
+			return card.Rendering{Outcome: card.Gone}, nil
+		}
+		rows, err := s.d.ListStuck(ctx, string(app))
+		if err != nil {
+			return card.Rendering{}, err
+		}
+		i := slices.IndexFunc(rows, func(r db.StuckRow) bool { return strings.EqualFold(r.DownloadID, parts[2]) })
+		if i < 0 {
+			return card.Rendered(card.Update{Status: goneLine}), nil
+		}
+		return s.renderRow(ctx, fromRow(rows[i]))
+	}
+}
+
+func (s *Scheduler) renderRow(ctx context.Context, snap Snapshot) (card.Rendering, error) {
+	switch snap.State {
+	case StateUntracked, StateCleared:
+		return card.Rendered(card.Update{Status: goneLine}), nil
+	case StateImportInflight:
+		status := fmt.Sprintf("⏳ Importing since <t:%d:t>", snap.Import.StartedAt.Unix())
+		return card.Rendered(card.Update{Status: status}), nil
+	case StateActed:
+		return s.renderActed(ctx, snap)
+	case StateWaiting:
+		set, err := LoadSettings(ctx, s.d)
+		if err != nil {
+			return card.Rendering{}, err
+		}
+		return card.Rendered(storedUpdate(snap, waitLine(snap, s.r.Now(), set.MinAge()), s.r.Now(), set.MinAge())), nil
+	case StateDue, StateHeld, StateNotified:
+		return card.Rendered(storedUpdate(snap, noteLine(snap.Acted), s.r.Now(), 0)), nil
+	}
+	return card.Rendering{Outcome: card.Gone}, nil
+}
+
+func storedUpdate(snap Snapshot, status string, now time.Time, minAge time.Duration) card.Update {
+	return card.Update{
+		Status:  status,
+		Buttons: buttonsFor(snap.Key, snap.TargetsFP, Actions(snap, now, minAge)),
+	}
+}
+
+func waitLine(snap Snapshot, now time.Time, minAge time.Duration) string {
+	due := snap.FirstSeen.Add(minAge)
+	if !now.Before(due) {
+		return ""
+	}
+	return fmt.Sprintf("⏳ until <t:%d:t>", due.Unix())
+}
+
+func noteLine(a *Acted) string {
+	if a == nil {
+		return ""
+	}
+	switch a.Result {
+	case ResultImportFailed:
+		return "⚠️ Import failed"
+	case ResultImportTimeout:
+		return "⚠️ Import still running"
+	case ResultImportUnconfirmed:
+		return "⚠️ Import not confirmed"
+	case ResultPartial:
+		return fmt.Sprintf("⚠️ Imported %d of %d files", a.Files.N, a.Files.M)
+	case ResultOK, ResultUnfinished:
+	}
+	return ""
+}
+
+func (s *Scheduler) renderActed(ctx context.Context, snap Snapshot) (card.Rendering, error) {
+	a := *snap.Acted
+	if a.Result != ResultUnfinished {
+		return card.Rendered(card.Update{Status: actedLine(a)}), nil
+	}
+	op, err := s.d.Operation(ctx, a.OpID)
+	switch {
+	case errors.Is(err, db.ErrNotFound):
+		return card.Rendered(card.Update{Status: unfinishedLine}), nil
+	case err != nil:
+		return card.Rendering{}, err
+	case operation.Resumable(op):
+		return card.Rendered(resumeUpdate(snap.Key, op)), nil
+	case op.Status == operation.Done:
+		return card.Rendered(card.Update{Status: actedLine(Acted{Action: ActionRegrab, At: a.At})}), nil
+	}
+	return card.Rendered(card.Update{Status: unfinishedLine}), nil
+}
+
+func resumeUpdate(key Key, op operation.Op) card.Update {
+	up := card.Update{Status: "⚠️ " + operation.Line(op)}
+	id, ok := card.Encode(card.Action{
+		Kind: cardKind, Verb: verbResume,
+		Args: []string{appCode(key.App), key.DownloadID, fmt.Sprintf("o%d.%d", op.ID, op.Version)},
+	})
+	if ok {
+		up.Buttons = []card.Button{{Label: "Resume", Style: card.Secondary, ID: id}}
+	}
+	return up
 }

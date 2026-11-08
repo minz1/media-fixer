@@ -14,16 +14,6 @@ func StuckCardForTest(items []Item, capHit bool) card.Card {
 	return c
 }
 
-func SetLastForTest(s *Scheduler, res Result, running bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.slot.last, s.slot.hasLast = res, true
-	s.slot.holder = holderNone
-	if running {
-		s.slot.holder = holderRun
-	}
-}
-
 func SetOpStoreForTest(s *Scheduler, store opexec.Store) { s.store = store }
 
 func ApplyForTest(ctx context.Context, r *Runner, app App, events map[Key]Event) ([]Snapshot, []Effect, error) {

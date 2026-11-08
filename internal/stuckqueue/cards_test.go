@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
-	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -154,19 +154,6 @@ func TestStuckCard_TwentyItemsWithinComponents(t *testing.T) {
 	}
 }
 
-func stuckItem(app stuckqueue.App, dl string, actions ...stuckqueue.Action) stuckqueue.Item {
-	return stuckqueue.Item{
-		App: app, DownloadID: dl, Title: dl,
-		Records: []client.QueueEntry{{DownloadID: dl, SeasonNumber: 1, EpisodeNumber: 2}},
-		Verdict: stuckqueue.VerdictGap,
-		Actions: actions,
-	}
-}
-
-func lastWith(apps ...stuckqueue.AppResult) stuckqueue.Result {
-	return stuckqueue.Result{Apps: apps}
-}
-
 func render(t *testing.T, s *stuckqueue.Scheduler, subject string) (card.Update, bool) {
 	t.Helper()
 	r, err := s.CardRenderer()(context.Background(), subject)
@@ -176,13 +163,17 @@ func render(t *testing.T, s *stuckqueue.Scheduler, subject string) (card.Update,
 	return r.Update, r.Outcome == card.Render
 }
 
+func notifiedRow(e *runEnv, offer stuckqueue.Offer, fp string) stuckqueue.Snapshot {
+	return stuckqueue.Snapshot{
+		Key: sonarrKey("ABC"), State: stuckqueue.StateNotified, FirstSeen: e.clock.Now().Add(-8 * time.Hour),
+		NotifiedAt: e.clock.Now().Add(-time.Hour), TargetsFP: fp, Offered: offer,
+	}
+}
+
 func TestRenderer_StillStuck(t *testing.T) {
 	t.Parallel()
-	_, s := newSched(t)
-	it := stuckItem(stuckqueue.AppSonarr, "ABC", stuckqueue.ActionRegrab, stuckqueue.ActionRemove)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{
-		App: stuckqueue.AppSonarr, Configured: true, Items: []stuckqueue.Item{it},
-	}), false)
+	e, s := newSched(t)
+	seedSnap(t, e, notifiedRow(e, stuckqueue.OfferRegrabRemove, "fp1"))
 	up, ok := render(t, s, card.StuckSubject("s", "abc"))
 	if !ok || up.Status != "" {
 		t.Fatalf("update = %+v, %v", up, ok)
@@ -191,7 +182,7 @@ func TestRenderer_StillStuck(t *testing.T) {
 		t.Fatalf("verbs = %v", got)
 	}
 	a, _ := card.Decode(up.Buttons[0].ID)
-	if !slices.Equal(a.Args, []string{"s", "ABC", it.TargetsFP()}) {
+	if !slices.Equal(a.Args, []string{"s", "ABC", "fp1"}) {
 		t.Fatalf("args = %v", a.Args)
 	}
 }
@@ -203,10 +194,6 @@ func TestRenderer_Acted(t *testing.T) {
 	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
 		t.Fatal(err)
 	}
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{
-		App: stuckqueue.AppSonarr, Configured: true,
-		Items: []stuckqueue.Item{stuckItem(stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove)},
-	}), false)
 	up, ok := render(t, s, card.StuckSubject("s", "D"))
 	want := fmt.Sprintf("✅ Removed · <t:%d:t>", e.clock.Now().Unix())
 	if !ok || up.Status != want || len(up.Buttons) != 0 {
@@ -217,7 +204,6 @@ func TestRenderer_Acted(t *testing.T) {
 func TestRenderer_Gone(t *testing.T) {
 	t.Parallel()
 	_, s := newSched(t)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true}), false)
 	up, ok := render(t, s, card.StuckSubject("s", "abc"))
 	if !ok || up.Status != "left the queue" || len(up.Buttons) != 0 {
 		t.Fatalf("update = %+v, %v", up, ok)
@@ -226,76 +212,17 @@ func TestRenderer_Gone(t *testing.T) {
 
 func TestRenderer_WaitingKeepsRemove(t *testing.T) {
 	t.Parallel()
-	_, s := newSched(t)
-	w := stuckItem(stuckqueue.AppSonarr, "ABC", stuckqueue.ActionRemove)
-	w.Due = time.Date(2026, 10, 30, 5, 7, 0, 0, time.UTC)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{
-		App: stuckqueue.AppSonarr, Configured: true, Waiting: []stuckqueue.Item{w},
-	}), false)
+	e, s := newSched(t)
+	w := waitingAt(e, time.Hour)
+	w.Key = sonarrKey("ABC")
+	seedSnap(t, e, w)
+	due := w.FirstSeen.Add(6 * time.Hour)
 	up, ok := render(t, s, card.StuckSubject("s", "abc"))
-	if !ok || !strings.Contains(up.Status, fmt.Sprintf("<t:%d:t>", w.Due.Unix())) {
-		t.Fatalf("update = %+v, %v; want the due time", up, ok)
+	if want := fmt.Sprintf("⏳ until <t:%d:t>", due.Unix()); !ok || up.Status != want {
+		t.Fatalf("update = %+v, %v; want status %q", up, ok, want)
 	}
 	if got := buttonVerbs(t, up.Buttons); !slices.Equal(got, []string{"remove"}) {
 		t.Fatalf("verbs = %v, want only remove", got)
-	}
-}
-
-func TestRenderer_UnreachableAppUnknown(t *testing.T) {
-	t.Parallel()
-	_, s := newSched(t)
-	stuckqueue.SetLastForTest(s, lastWith(
-		stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true, Unreachable: true},
-		stuckqueue.AppResult{
-			App: stuckqueue.AppRadarr, Configured: true,
-			Items: []stuckqueue.Item{stuckItem(stuckqueue.AppRadarr, "M1", stuckqueue.ActionRemove)},
-		},
-	), false)
-	if up, ok := render(t, s, card.StuckSubject("s", "abc")); ok {
-		t.Fatalf("unreachable sonarr rendered %+v", up)
-	}
-	if _, ok := render(t, s, card.StuckSubject("r", "m1")); ok {
-		return
-	}
-	t.Fatal("radarr item did not render")
-}
-
-func TestRenderer_UnconfiguredAppUnknown(t *testing.T) {
-	t.Parallel()
-	_, s := newSched(t)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppRadarr}), false)
-	if up, ok := render(t, s, card.StuckSubject("r", "m1")); ok {
-		t.Fatalf("unconfigured radarr rendered %+v", up)
-	}
-}
-
-func TestRenderer_BeforeFirstRunUnknown(t *testing.T) {
-	t.Parallel()
-	_, s := newSched(t)
-	if up, ok := render(t, s, card.StuckSubject("s", "abc")); ok {
-		t.Fatalf("rendered %+v before any run", up)
-	}
-}
-
-func TestRenderer_RunActiveKeepsLast(t *testing.T) {
-	t.Parallel()
-	_, s := newSched(t)
-	it := stuckItem(stuckqueue.AppSonarr, "ABC", stuckqueue.ActionRegrab, stuckqueue.ActionRemove)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{
-		App: stuckqueue.AppSonarr, Configured: true, Items: []stuckqueue.Item{it},
-	}), true)
-	up, ok := render(t, s, card.StuckSubject("s", "abc"))
-	if got := buttonVerbs(t, up.Buttons); !ok || !slices.Equal(got, []string{"regrab", "remove"}) {
-		t.Fatalf("update during a run = %+v, %v; want the last result's buttons", up, ok)
-	}
-}
-
-func TestRenderer_RunActiveNewSubjectUnknown(t *testing.T) {
-	t.Parallel()
-	_, s := newSched(t)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true}), true)
-	if up, ok := render(t, s, card.StuckSubject("s", "new")); ok {
-		t.Fatalf("a subject only the active run knows rendered %+v", up)
 	}
 }
 
@@ -317,11 +244,165 @@ func TestRenderer_StuckAgainAfterActClearsOutcome(t *testing.T) {
 func TestRenderer_BadSubjectUnknown(t *testing.T) {
 	t.Parallel()
 	_, s := newSched(t)
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true}), false)
 	for _, subj := range []string{"sq:x:abc", "sq:s", "inc:1"} {
 		if up, ok := render(t, s, subj); ok {
 			t.Errorf("%q rendered %+v", subj, up)
 		}
+	}
+}
+
+func renderedFor(t *testing.T, s *stuckqueue.Scheduler) card.Update {
+	t.Helper()
+	r, err := s.CardRenderer()(context.Background(), card.StuckSubject("s", "D"))
+	if err != nil || r.Outcome != card.Render {
+		t.Fatalf("rendering = %+v, err = %v", r, err)
+	}
+	return r.Update
+}
+
+func TestQ2_3_CardShowsImportingWithoutButtons(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	row := inflightRow(e, 5)
+	seedSnap(t, e, row)
+	up := renderedFor(t, s)
+	want := fmt.Sprintf("⏳ Importing since <t:%d:t>", row.Import.StartedAt.Unix())
+	if up.Status != want || len(up.Buttons) != 0 {
+		t.Fatalf("update = %+v; want status %q and no buttons", up, want)
+	}
+}
+
+func TestQ2_10_ActedOutcomeSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
+	if _, err := act(e, s, stuckqueue.AppSonarr, "D", stuckqueue.ActionRemove); err != nil {
+		t.Fatal(err)
+	}
+	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
+	t.Cleanup(s2.Wait)
+	up := renderedFor(t, s2)
+	want := fmt.Sprintf("✅ Removed · <t:%d:t>", e.clock.Now().Unix())
+	if up.Status != want || len(up.Buttons) != 0 {
+		t.Fatalf("update = %+v; want status %q and no buttons", up, want)
+	}
+}
+
+func TestStartup_TrackedCardRendersBeforeFirstRun(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	row := notifiedRow(e, stuckqueue.OfferAll, "fp9")
+	row.Key = sonarrKey("D")
+	seedSnap(t, e, row)
+	up := renderedFor(t, s)
+	if got := buttonVerbs(t, up.Buttons); !slices.Equal(got, []string{"import", "regrab", "remove"}) {
+		t.Fatalf("verbs = %v", got)
+	}
+	for _, b := range up.Buttons {
+		if a, _ := card.Decode(b.ID); !slices.Equal(a.Args, []string{"s", "D", "fp9"}) {
+			t.Fatalf("args = %v, want the stored fingerprint", a.Args)
+		}
+	}
+}
+
+func TestStartup_MigratedRowDropsOldButtons(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	row := notifiedRow(e, stuckqueue.OfferNone, "")
+	row.Key = sonarrKey("D")
+	seedSnap(t, e, row)
+	up := renderedFor(t, s)
+	if len(up.Buttons) != 0 || up.Status != "" {
+		t.Fatalf("update = %+v, want no buttons and no status until the first run", up)
+	}
+}
+
+func TestCard_ImportNotesWithButtons(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		result stuckqueue.ActResult
+		files  stuckqueue.Files
+		want   string
+	}{
+		{stuckqueue.ResultImportFailed, stuckqueue.Files{N: 2, M: 2}, "⚠️ Import failed"},
+		{stuckqueue.ResultImportTimeout, stuckqueue.Files{N: 2, M: 2}, "⚠️ Import still running"},
+		{stuckqueue.ResultImportUnconfirmed, stuckqueue.Files{N: 2, M: 2}, "⚠️ Import not confirmed"},
+		{stuckqueue.ResultPartial, stuckqueue.Files{N: 1, M: 2}, "⚠️ Imported 1 of 2 files"},
+	} {
+		t.Run(string(tc.result), func(t *testing.T) {
+			t.Parallel()
+			e, s := newSched(t)
+			row := notifiedRow(e, stuckqueue.OfferAll, "fp")
+			row.Key = sonarrKey("D")
+			row.Acted = &stuckqueue.Acted{
+				Action: stuckqueue.ActionImport, At: e.clock.Now().Add(-time.Minute),
+				Result: tc.result, Files: tc.files,
+			}
+			seedSnap(t, e, row)
+			up := renderedFor(t, s)
+			if up.Status != tc.want {
+				t.Errorf("status = %q, want %q", up.Status, tc.want)
+			}
+			if got := buttonVerbs(t, up.Buttons); !slices.Equal(got, []string{"import", "regrab", "remove"}) {
+				t.Errorf("verbs = %v", got)
+			}
+		})
+	}
+}
+
+func TestCard_DueAndNotifiedHaveNoStatusLine(t *testing.T) {
+	t.Parallel()
+	for _, st := range []stuckqueue.State{stuckqueue.StateDue, stuckqueue.StateNotified} {
+		t.Run(string(st), func(t *testing.T) {
+			t.Parallel()
+			e, s := newSched(t)
+			row := notifiedRow(e, stuckqueue.OfferRegrabRemove, "fp")
+			row.Key, row.State = sonarrKey("D"), st
+			if st == stuckqueue.StateDue {
+				row.NotifiedAt = time.Time{}
+			}
+			seedSnap(t, e, row)
+			up := renderedFor(t, s)
+			if up.Status != "" || len(up.Buttons) != 2 {
+				t.Fatalf("update = %+v, want buttons and no status", up)
+			}
+		})
+	}
+}
+
+func TestCard_UnfinishedRegrabShowsLineAndResume(t *testing.T) {
+	t.Parallel()
+	e, _, op := failSearch(t)
+	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
+	t.Cleanup(s2.Wait)
+	up := renderedFor(t, s2)
+	if up.Status != "⚠️ "+operation.Line(op) {
+		t.Fatalf("status = %q", up.Status)
+	}
+	a := resumeButton(t, up)
+	want := []string{"s", "D", "o" + itoa(op.ID) + "." + itoa(op.Version)}
+	if !slices.Equal(a.Args, want) {
+		t.Fatalf("args = %v, want %v", a.Args, want)
+	}
+}
+
+func TestCard_UnfinishedRegrabOpDoneShowsRegrabbed(t *testing.T) {
+	t.Parallel()
+	e, s, op := failSearch(t)
+	e.rawExec(t, fmt.Sprintf("UPDATE operations SET status = 'done', cause = '' WHERE id = %d", op.ID))
+	up := renderedFor(t, s)
+	if !strings.HasPrefix(up.Status, "✅ Re-grabbed") || len(up.Buttons) != 0 {
+		t.Fatalf("update = %+v", up)
+	}
+}
+
+func TestCard_UnfinishedRegrabOpMissingHasNoButton(t *testing.T) {
+	t.Parallel()
+	e, s, _ := failSearch(t)
+	e.rawExec(t, "DELETE FROM operations")
+	up := renderedFor(t, s)
+	if up.Status != "⚠️ Re-grab didn't finish" || len(up.Buttons) != 0 {
+		t.Fatalf("update = %+v", up)
 	}
 }
 
@@ -355,13 +436,12 @@ func TestAct_RecordsOutcomeThenRefreshesSubject(t *testing.T) {
 
 func TestAct_RefusedRecordsNoOutcome(t *testing.T) {
 	t.Parallel()
-	e, s := newSched(t)
+	_, s := newSched(t)
 	called := false
 	s.Refresh = func(string) { called = true }
-	if _, err := act(e, s, stuckqueue.AppSonarr, "GONE", stuckqueue.ActionRemove); err == nil {
+	if _, err := s.Act(context.Background(), stuckqueue.AppSonarr, "GONE", stuckqueue.ActionRemove, ""); err == nil {
 		t.Fatal("acted on a download that is not queued")
 	}
-	stuckqueue.SetLastForTest(s, lastWith(stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true}), false)
 	if up, _ := render(t, s, card.StuckSubject("s", "gone")); up.Status != "left the queue" || called {
 		t.Fatalf("update = %+v, refreshed %v", up, called)
 	}
@@ -425,47 +505,38 @@ func TestHandler_BadArgs(t *testing.T) {
 
 func TestStuckRenderer_Outcomes(t *testing.T) {
 	t.Parallel()
-	sonarr := func(it ...stuckqueue.Item) stuckqueue.AppResult {
-		return stuckqueue.AppResult{App: stuckqueue.AppSonarr, Configured: true, Items: it}
-	}
-	waiting := stuckItem(stuckqueue.AppSonarr, "W", stuckqueue.ActionRemove)
 	for _, tc := range []struct {
 		name    string
 		subject string
-		last    *stuckqueue.Result
-		running bool
 		want    card.Outcome
 	}{
-		{"malformed subject", "sq:s", nil, false, card.Gone},
-		{"wrong kind", "inc:1", nil, false, card.Gone},
-		{"unknown app code", "sq:x:abc", nil, false, card.Gone},
-		{"no run yet", card.StuckSubject("s", "abc"), nil, false, card.NotYet},
-		{"app absent from the last run", card.StuckSubject("r", "m1"), new(lastWith(sonarr())), false, card.NotYet},
-		{"app not configured", card.StuckSubject("r", "m1"),
-			new(lastWith(stuckqueue.AppResult{App: stuckqueue.AppRadarr})), false, card.NotYet},
-		{"app unreachable", card.StuckSubject("s", "abc"), new(lastWith(stuckqueue.AppResult{
-			App: stuckqueue.AppSonarr, Configured: true, Unreachable: true,
-		})), false, card.NotYet},
-		{"item found", card.StuckSubject("s", "abc"),
-			new(lastWith(sonarr(stuckItem(stuckqueue.AppSonarr, "ABC", stuckqueue.ActionRemove)))), false, card.Render},
-		{"waiting entry found", card.StuckSubject("s", "w"), new(lastWith(stuckqueue.AppResult{
-			App: stuckqueue.AppSonarr, Configured: true, Waiting: []stuckqueue.Item{waiting},
-		})), false, card.Render},
-		{"absent while a run is in progress", card.StuckSubject("s", "new"), new(lastWith(sonarr())), true, card.NotYet},
-		{"absent after a finished run", card.StuckSubject("s", "old"), new(lastWith(sonarr())), false, card.Render},
+		{"malformed subject", "sq:s", card.Gone},
+		{"wrong kind", "inc:1", card.Gone},
+		{"unknown app code", "sq:x:abc", card.Gone},
+		{"no row", card.StuckSubject("s", "abc"), card.Render},
+		{"stored row, any case", card.StuckSubject("s", "d"), card.Render},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, s := newSched(t)
-			if tc.last != nil {
-				stuckqueue.SetLastForTest(s, *tc.last, tc.running)
-			}
+			e, s := newSched(t)
+			row := notifiedRow(e, stuckqueue.OfferRemove, "fp")
+			row.Key = sonarrKey("D")
+			seedSnap(t, e, row)
 			r, err := s.CardRenderer()(context.Background(), tc.subject)
 			if err != nil || r.Outcome != tc.want {
 				t.Errorf("outcome = %v err = %v, want %v", r.Outcome, err, tc.want)
 			}
 		})
 	}
+	t.Run("db read error", func(t *testing.T) {
+		t.Parallel()
+		e, s := newSched(t)
+		e.rawExec(t, "DROP TABLE stuck_downloads")
+		r, err := s.CardRenderer()(context.Background(), card.StuckSubject("s", "abc"))
+		if err == nil || r.Outcome == card.Render {
+			t.Errorf("rendering = %+v err = %v, want an error", r, err)
+		}
+	})
 	t.Run("owner outcome recorded", func(t *testing.T) {
 		t.Parallel()
 		e, s := newSched(t)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -194,7 +195,8 @@ func TestRegrab_RemovalDefinitiveFailureIsNotResumable(t *testing.T) {
 	if n := countWrites(e.sonarr, http.MethodPost, "/command"); n != 0 {
 		t.Fatalf("searches = %d, want none", n)
 	}
-	if _, ok := render(t, s, stuckSub()); ok {
+	up, _ := render(t, s, stuckSub())
+	if slices.Contains(buttonVerbs(t, up.Buttons), "resume") {
 		t.Fatal("the card must not offer Resume")
 	}
 }
@@ -229,8 +231,8 @@ func TestRegrab_StoreFailureInterruptsOp(t *testing.T) {
 		t.Fatalf("op = %+v, want failed_at_step by store with step 1 unknown", op)
 	}
 	up, _ := render(t, s, stuckSub())
-	if !strings.Contains(up.Status, "database error") {
-		t.Fatalf("status = %q", up.Status)
+	if want := "⚠️ " + operation.Line(op); up.Status != want {
+		t.Fatalf("status = %q, want %q", up.Status, want)
 	}
 	resumeButton(t, up)
 }
