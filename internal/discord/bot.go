@@ -48,10 +48,13 @@ type Bot struct {
 	active    int
 	drained   chan struct{}
 	now       func() time.Time
-	liveMsgs  map[string]bool
 	stopCards context.CancelFunc
 	cardsDone chan struct{}
 	closeConn func() error
+
+	cardRetryFirst time.Duration
+	cardRetryCap   time.Duration
+	onPass         func()
 }
 
 // New creates a Bot from a Discord bot token.
@@ -70,15 +73,17 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		retryFirst: connectRetryFirst,
 		retryCap:   connectRetryCap,
 		cards: cardState{
-			pending: map[string]bool{}, messages: map[string]bool{}, overlays: map[string]overlay{},
+			pending: map[string]bool{}, pressed: map[string]bool{}, overlays: map[string]overlay{},
 			warned: map[string]bool{},
 		},
 		wake:      make(chan struct{}, 1),
 		poll:      livePoll,
-		liveMsgs:  map[string]bool{},
 		inFlight:  map[string]bool{},
 		now:       time.Now,
 		cardsDone: make(chan struct{}),
+
+		cardRetryFirst: cardRetryFirstDefault,
+		cardRetryCap:   cardRetryCapDefault,
 	}
 	b.connect = b.openAndRegister
 	b.closeConn = sess.Close

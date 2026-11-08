@@ -31,7 +31,7 @@ const (
 
 type cardState struct {
 	pending  map[string]bool
-	messages map[string]bool
+	pressed  map[string]bool
 	overlays map[string]overlay
 	store    *db.DB
 	warned   map[string]bool
@@ -52,7 +52,7 @@ func (b *Bot) setOverlay(messageID string, ov overlay) {
 	} else {
 		b.cards.overlays[messageID] = ov
 	}
-	b.cards.messages[messageID] = true
+	b.cards.pressed[messageID] = true
 	b.mu.Unlock()
 	b.wakeCards()
 }
@@ -86,19 +86,28 @@ func (b *Bot) cardStore() *db.DB {
 
 func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 	defer close(b.cardsDone)
+	msgs := map[string]cardSnap{}
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
 	b.prune(ctx, d)
+	trig := map[string]cardKind{}
+	b.collect(ctx, d, trig)
 	if rows, err := d.ListDiscordCards(ctx, ""); err != nil {
 		b.log.WarnContext(ctx, "discord cards: startup refresh", "error", err)
 	} else {
-		b.refreshMessages(ctx, d, messageIDs(rows))
+		for _, id := range messageIDs(rows) {
+			addTrigger(trig, id, cardMark)
+		}
 	}
+	b.cardPass(ctx, d, msgs, trig, timer)
 	poll := time.NewTicker(b.poll)
 	defer poll.Stop()
 	prune := time.NewTicker(pruneEvery)
 	defer prune.Stop()
 	var last int64
 	for {
-		var extra []string
+		trig = map[string]cardKind{}
 		select {
 		case <-ctx.Done():
 			return
@@ -108,12 +117,129 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 			}
 			last = b.onEvent(ev, last)
 		case <-b.wake:
+		case <-timer.C:
 		case <-poll.C:
-			extra = slices.Collect(maps.Keys(b.liveMsgs))
+			for id, s := range msgs {
+				if s.Phase == cardLive {
+					addTrigger(trig, id, cardPoll)
+				}
+			}
 		case <-prune.C:
-			b.prune(ctx, d)
+			for _, id := range b.prune(ctx, d) {
+				delete(msgs, id)
+			}
 		}
-		b.refreshMessages(ctx, d, append(b.takePending(ctx, d), extra...))
+		b.collect(ctx, d, trig)
+		b.cardPass(ctx, d, msgs, trig, timer)
+	}
+}
+
+func addTrigger(trig map[string]cardKind, id string, k cardKind) {
+	rank := func(k cardKind) int { return slices.Index([]cardKind{cardPress, cardRetryDue, cardMark, cardPoll}, k) }
+	if cur, ok := trig[id]; !ok || rank(k) < rank(cur) {
+		trig[id] = k
+	}
+}
+
+func (b *Bot) collect(ctx context.Context, d *db.DB, trig map[string]cardKind) {
+	marks, pressed := b.takePending(ctx, d)
+	for _, id := range marks {
+		addTrigger(trig, id, cardMark)
+	}
+	for _, id := range pressed {
+		addTrigger(trig, id, cardPress)
+	}
+}
+
+func (b *Bot) cardPass(
+	ctx context.Context, d *db.DB, msgs map[string]cardSnap, trig map[string]cardKind, timer *time.Timer,
+) {
+	now := b.now()
+	for id, s := range msgs {
+		if s.Phase == cardFailing && !s.NextRetry.After(now) {
+			addTrigger(trig, id, cardRetryDue)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(trig)) {
+		if ctx.Err() != nil {
+			break
+		}
+		b.cardStep(ctx, d, msgs, id, trig[id])
+	}
+	timer.Stop()
+	var next time.Time
+	for _, s := range msgs {
+		if s.Phase == cardFailing && (next.IsZero() || s.NextRetry.Before(next)) {
+			next = s.NextRetry
+		}
+	}
+	if !next.IsZero() {
+		timer.Reset(max(next.Sub(b.now()), 0))
+	}
+	if b.onPass != nil {
+		b.onPass()
+	}
+}
+
+func (b *Bot) cardEventAt(kind cardKind) cardEvent {
+	return cardEvent{Kind: kind, At: b.now(), Retry: cardRetry{First: b.cardRetryFirst, Cap: b.cardRetryCap}}
+}
+
+func (b *Bot) applyCard(ctx context.Context, id string, s cardSnap, ev cardEvent) cardSnap {
+	next, err := nextCard(s, ev)
+	if err != nil {
+		b.log.DebugContext(ctx, "discord card event rejected", "message", id, "error", err)
+		return s
+	}
+	return next
+}
+
+func (b *Bot) cardStep(ctx context.Context, d *db.DB, msgs map[string]cardSnap, id string, kind cardKind) {
+	snap, ok := msgs[id]
+	if !ok {
+		snap = cardSnap{Phase: cardCurrent}
+	}
+	snap = b.applyCard(ctx, id, snap, b.cardEventAt(kind))
+	if snap.Phase != cardDirty {
+		msgs[id] = snap
+		return
+	}
+	res := b.refreshMessage(ctx, d, id)
+	if res.Kind == cardFailed && ctx.Err() != nil {
+		return
+	}
+	ev := b.cardEventAt(res.Kind)
+	ev.Live = res.Live
+	var limited *discordgo.RateLimitError
+	if errors.As(res.Err, &limited) && limited.RateLimit != nil && limited.TooManyRequests != nil {
+		ev.RetryAfter = limited.RetryAfter
+	}
+	next := b.applyCard(ctx, id, snap, ev)
+	b.cardEffects(ctx, d, id, snap, next, res)
+	if next.Phase == cardGone {
+		delete(msgs, id)
+		b.forget(id)
+		return
+	}
+	msgs[id] = next
+}
+
+func (b *Bot) cardEffects(
+	ctx context.Context, d *db.DB, id string, before, after cardSnap, res attemptResult,
+) {
+	switch {
+	case res.Kind == cardUndecodable && after.Phase == cardGone:
+		if err := d.DeleteDiscordMessage(ctx, id); err != nil {
+			b.log.WarnContext(ctx, "discord cards: drop undecodable message", "message", id, "error", err)
+		}
+		b.log.WarnContext(ctx, "discord card undecodable, dropped", "message", id, "error", res.Err)
+	case after.Phase == cardFailing && after.Failures == 1:
+		b.log.WarnContext(ctx, "discord card edit failed", "message", id, "error", res.Err)
+	case after.Phase == cardFailing:
+		b.log.InfoContext(ctx, "discord card edit failed", "message", id, "failures", after.Failures,
+			"error", res.Err)
+	case before.Failures > 0 && (after.Phase == cardCurrent || after.Phase == cardLive):
+		b.log.InfoContext(ctx, "discord card edit recovered", "message", id, "failures", before.Failures)
 	}
 }
 
@@ -130,11 +256,12 @@ func (b *Bot) onEvent(ev *db.Event, last int64) int64 {
 	return max(last, ev.Seq)
 }
 
-func (b *Bot) takePending(ctx context.Context, d *db.DB) []string {
+func (b *Bot) takePending(ctx context.Context, d *db.DB) ([]string, []string) {
 	b.mu.Lock()
-	subjects, ids := b.cards.pending, slices.Collect(maps.Keys(b.cards.messages))
-	b.cards.pending, b.cards.messages = map[string]bool{}, map[string]bool{}
+	subjects, pressed := b.cards.pending, slices.Collect(maps.Keys(b.cards.pressed))
+	b.cards.pending, b.cards.pressed = map[string]bool{}, map[string]bool{}
 	b.mu.Unlock()
+	var ids []string
 	for s := range subjects {
 		var (
 			rows []db.DiscordCard
@@ -151,7 +278,7 @@ func (b *Bot) takePending(ctx context.Context, d *db.DB) []string {
 		}
 		ids = append(ids, messageIDs(rows)...)
 	}
-	return ids
+	return ids, pressed
 }
 
 func messageIDs(rows []db.DiscordCard) []string {
@@ -176,20 +303,6 @@ type subjectPlan struct {
 	live  bool
 	shown *card.Update
 	store json.RawMessage
-}
-
-func (b *Bot) refreshMessages(ctx context.Context, d *db.DB, ids []string) {
-	slices.Sort(ids)
-	for _, id := range slices.Compact(ids) {
-		res := b.refreshMessage(ctx, d, id)
-		if slices.Contains([]cardKind{cardShown, cardHeld, cardFailed}, res.Kind) {
-			if res.Live {
-				b.liveMsgs[id] = true
-			} else {
-				delete(b.liveMsgs, id)
-			}
-		}
-	}
 }
 
 func (b *Bot) refreshMessage(ctx context.Context, d *db.DB, id string) attemptResult {
@@ -224,7 +337,9 @@ func (b *Bot) loadMessage(
 	var c card.Card
 	rows, err := d.ListDiscordMessage(ctx, id)
 	if err != nil {
-		b.log.WarnContext(ctx, "discord cards: load message", "message", id, "error", err)
+		if ctx.Err() == nil {
+			b.log.WarnContext(ctx, "discord cards: load message", "message", id, "error", err)
+		}
 		return nil, c, attemptResult{Kind: cardFailed, Err: err}, false
 	}
 	if len(rows) == 0 {
@@ -232,7 +347,6 @@ func (b *Bot) loadMessage(
 		return nil, c, attemptResult{Kind: cardMissing}, false
 	}
 	if err = json.Unmarshal(rows[0].Card, &c); err != nil {
-		b.log.WarnContext(ctx, "discord cards: decode card", "message", id, "error", err)
 		return nil, c, attemptResult{Kind: cardUndecodable, Err: err}, false
 	}
 	return rows, c, attemptResult{}, true
@@ -343,9 +457,12 @@ func (b *Bot) sendAndStore(
 ) attemptResult {
 	id := first.MessageID
 	if hash != first.Hash {
-		_, err := b.api.ChannelMessageEditComplex(&discordgo.MessageEdit{
-			ID: id, Channel: first.ChannelID, Components: &comps, Flags: discordgo.MessageFlagsIsComponentsV2,
-		})
+		_, err := b.api.ChannelMessageEditComplex(
+			&discordgo.MessageEdit{
+				ID: id, Channel: first.ChannelID, Components: &comps, Flags: discordgo.MessageFlagsIsComponentsV2,
+			},
+			discordgo.WithContext(ctx), discordgo.WithRetryOnRatelimit(false),
+		)
 		var rest *discordgo.RESTError
 		switch {
 		case errors.As(err, &rest) && rest.Response != nil && rest.Response.StatusCode == http.StatusNotFound:
@@ -355,7 +472,6 @@ func (b *Bot) sendAndStore(
 			b.forget(id)
 			return attemptResult{Kind: cardMissing}
 		case err != nil:
-			b.log.WarnContext(ctx, "discord card edit failed", "message", id, "error", err)
 			return attemptResult{Kind: cardFailed, Err: err}
 		}
 	} else if len(updates) == 0 {
@@ -405,6 +521,9 @@ func (b *Bot) renderSubject(ctx context.Context, subject string) card.Rendering 
 	}
 	res, err := r(ctx, subject)
 	if err != nil {
+		if ctx.Err() != nil {
+			return card.Rendering{}
+		}
 		b.log.WarnContext(ctx, "discord cards: render", "subject", subject, "error", err)
 		return card.Rendering{}
 	}
@@ -461,21 +580,21 @@ func (b *Bot) pinOverlay(id string, ups map[string]card.Update) overlay {
 }
 
 func (b *Bot) forget(id string) {
-	delete(b.liveMsgs, id)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.cards.overlays, id)
 }
 
-func (b *Bot) prune(ctx context.Context, d *db.DB) {
+func (b *Bot) prune(ctx context.Context, d *db.DB) []string {
 	ids, err := d.PruneDiscordCards(ctx, time.Now().Add(-cardKeep))
 	if err != nil {
 		b.log.WarnContext(ctx, "discord cards: prune", "error", err)
-		return
+		return nil
 	}
 	for _, id := range ids {
 		b.forget(id)
 	}
+	return ids
 }
 
 func renderHash(comps []discordgo.MessageComponent) (string, error) {

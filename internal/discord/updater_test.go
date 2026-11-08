@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +35,11 @@ type editSender struct {
 	edits   []*discordgo.MessageEdit
 	editErr error
 	block   chan struct{}
+
+	hold     func(ctx context.Context, id string) error
+	errQueue []error
+	errFor   map[string]error
+	retried  []bool
 }
 
 func (f *editSender) ChannelMessageSendComplex(
@@ -47,14 +55,35 @@ func (f *editSender) ChannelMessageSendComplex(
 }
 
 func (f *editSender) ChannelMessageEditComplex(
-	m *discordgo.MessageEdit, _ ...discordgo.RequestOption,
+	m *discordgo.MessageEdit, opts ...discordgo.RequestOption,
 ) (*discordgo.Message, error) {
+	cfg := discordgo.RequestConfig{
+		Request:                httptest.NewRequest(http.MethodPatch, "/", nil),
+		ShouldRetryOnRateLimit: true,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if f.hold != nil {
+		if err := f.hold(cfg.Request.Context(), m.ID); err != nil {
+			return nil, err
+		}
+	}
 	if f.block != nil {
 		<-f.block
 	}
 	f.emu.Lock()
 	defer f.emu.Unlock()
 	f.edits = append(f.edits, m)
+	f.retried = append(f.retried, cfg.ShouldRetryOnRateLimit)
+	if len(f.errQueue) > 0 {
+		err := f.errQueue[0]
+		f.errQueue = f.errQueue[1:]
+		return &discordgo.Message{}, err
+	}
+	if err, ok := f.errFor[m.ID]; ok {
+		return &discordgo.Message{}, err
+	}
 	return &discordgo.Message{}, f.editErr
 }
 
@@ -999,4 +1028,322 @@ func TestUpdater_StoresLastUpdateOnlyWhenChanged(t *testing.T) {
 	e.bot.Refresh("inc:1")
 	e.waitEdits(2)
 	e.waitLast(updateJSON(t, bb))
+}
+
+func logEnv(t *testing.T) (*cardEnv, *lockedBuf) {
+	t.Helper()
+	buf := &lockedBuf{}
+	return newCardEnvLog(t, "", slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))), buf
+}
+
+func serverError() error {
+	return &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusInternalServerError}}
+}
+
+func rateLimited(wait time.Duration) error {
+	return &discordgo.RateLimitError{
+		RateLimit: &discordgo.RateLimit{TooManyRequests: &discordgo.TooManyRequests{RetryAfter: wait}},
+	}
+}
+
+func (e *cardEnv) trackInc(messageID, subject string) {
+	e.t.Helper()
+	e.track(subject, messageID, incCard(strings.TrimPrefix(subject, "inc:")), time.Now())
+}
+
+func TestD1_9_UndecodableCardIsDropped(t *testing.T) {
+	t.Parallel()
+	e, buf := logEnv(t)
+	e.track("inc:1", "m1", incCard("1"), time.Now())
+	e.rawExec("UPDATE discord_cards SET card = ?", "[1]")
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitNoRows("m1")
+	e.bot.Refresh("inc:1")
+	time.Sleep(50 * time.Millisecond)
+	if n := buf.count("level=WARN"); n != 1 {
+		t.Errorf("warnings = %d, want 1", n)
+	}
+	if n := len(e.api.editList()); n != 0 {
+		t.Errorf("edits = %d, want 0", n)
+	}
+}
+
+func TestD1_13_FailedEditRetriesWithBackoff(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.api.errQueue = []error{serverError()}
+	discord.SetCardRetryForTest(e.bot, 200*time.Millisecond, time.Hour)
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	began := time.Now()
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	time.Sleep(100 * time.Millisecond)
+	if n := len(e.api.editList()); n != 1 {
+		t.Fatalf("edits before the retry window = %d, want 1", n)
+	}
+	e.waitEdits(2)
+	if took := time.Since(began); took < 200*time.Millisecond {
+		t.Errorf("retry after %v, want at least 200ms", took)
+	}
+	e.api.emu.Lock()
+	defer e.api.emu.Unlock()
+	if slices.Contains(e.api.retried, true) {
+		t.Errorf("edits left discordgo's own 429 retry on: %v", e.api.retried)
+	}
+}
+
+func TestD1_13_RateLimitWaitsRetryAfter(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.api.errQueue = []error{rateLimited(400 * time.Millisecond)}
+	discord.SetCardRetryForTest(e.bot, 50*time.Millisecond, time.Hour)
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	began := time.Now()
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	time.Sleep(100 * time.Millisecond)
+	discord.SetOverlayForTest(e.bot, "m1", "Pressed")
+	time.Sleep(100 * time.Millisecond)
+	if n := len(e.api.editList()); n != 1 {
+		t.Fatalf("edits inside Retry-After = %d, want 1", n)
+	}
+	e.waitEdits(2)
+	if took := time.Since(began); took < 400*time.Millisecond {
+		t.Errorf("second edit after %v, want at least 400ms", took)
+	}
+}
+
+func TestD1_13_SystemTriggerWaitsForRetry(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.api.errQueue = []error{serverError()}
+	discord.SetCardRetryForTest(e.bot, 400*time.Millisecond, time.Hour)
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	r.set("inc:1", card.Update{Status: "Resolved"})
+	e.bot.Refresh("inc:1")
+	time.Sleep(200 * time.Millisecond)
+	if n := len(e.api.editList()); n != 1 {
+		t.Fatalf("edits after a system trigger during backoff = %d, want 1", n)
+	}
+	e.waitEdits(2)
+}
+
+func TestD1_13_PressDuringBackoffEditsNow(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	e.api.errQueue = []error{serverError()}
+	discord.SetCardRetryForTest(e.bot, time.Hour, time.Hour)
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	discord.SetOverlayForTest(e.bot, "m1", "Pressed")
+	e.waitEdits(2)
+}
+
+func TestD1_13_OneWarnPerEpisode(t *testing.T) {
+	t.Parallel()
+	e, buf := logEnv(t)
+	e.api.errQueue = []error{serverError(), serverError(), serverError()}
+	discord.SetCardRetryForTest(e.bot, 50*time.Millisecond, 100*time.Millisecond)
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(4)
+	deadline := time.Now().Add(waitLimit)
+	for buf.count(`level=INFO msg="discord card edit recovered"`) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("no recovered log line")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := buf.count(`level=WARN msg="discord card edit failed"`); n != 1 {
+		t.Errorf("failed warnings = %d, want 1", n)
+	}
+	if n := buf.count(`level=INFO msg="discord card edit failed"`); n != 2 {
+		t.Errorf("failed infos = %d, want 2", n)
+	}
+	if n := buf.count("level=WARN"); n != 1 {
+		t.Errorf("warnings = %d, want 1", n)
+	}
+}
+
+func TestUpdater_PressAndRefreshAreOneAttempt(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	discord.SetOverlayForTest(e.bot, "m1", "Pressed")
+	e.bot.Refresh("inc:1")
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitEdits(1)
+	time.Sleep(100 * time.Millisecond)
+	if n := len(e.api.editList()); n != 1 {
+		t.Errorf("edits = %d, want 1", n)
+	}
+	if n := r.count("inc:1"); n != 1 {
+		t.Errorf("render calls = %d, want 1", n)
+	}
+}
+
+func TestUpdater_PollSetIsLiveMessages(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	counts := map[string]*atomic.Int32{"sweep:1": {}, "sweep:2": {}, "sweep:3": {}}
+	renderer := func(live bool) card.Renderer {
+		return func(_ context.Context, subject string) (card.Rendering, error) {
+			n := counts[subject].Add(1)
+			return card.Rendered(card.Update{Status: fmt.Sprintf("probe %d", n), Live: live}), nil
+		}
+	}
+	e.api.errFor = map[string]error{"m3": serverError()}
+	discord.SetPollIntervalForTest(e.bot, 10*time.Millisecond)
+	discord.SetCardRetryForTest(e.bot, time.Hour, time.Hour)
+	for i, subject := range []string{"sweep:1", "sweep:2", "sweep:3"} {
+		e.track(subject, fmt.Sprintf("m%d", i+1), card.Card{Subject: subject, Title: "Sweep"}, time.Now())
+	}
+	e.start(map[string]card.Renderer{"sweep": func(ctx context.Context, subject string) (card.Rendering, error) {
+		return renderer(subject != "sweep:2")(ctx, subject)
+	}})
+	deadline := time.Now().Add(waitLimit)
+	for counts["sweep:1"].Load() < 5 {
+		if time.Now().After(deadline) {
+			t.Fatal("the live message was not polled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := counts["sweep:2"].Load(); n != 1 {
+		t.Errorf("not-live message rendered %d times, want 1", n)
+	}
+	if n := counts["sweep:3"].Load(); n != 1 {
+		t.Errorf("failing message rendered %d times, want 1", n)
+	}
+}
+
+func TestUpdater_ShutdownMidPassStopsWithoutWarn(t *testing.T) {
+	t.Parallel()
+	e, buf := logEnv(t)
+	entered := make(chan struct{})
+	var calls atomic.Int32
+	e.api.hold = func(ctx context.Context, _ string) error {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(waitLimit):
+			return errors.New("edit context never cancelled")
+		}
+	}
+	r := newRenderer(true)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	r.set("inc:2", card.Update{Status: "Escalated"})
+	e.trackInc("m1", "inc:1")
+	e.trackInc("m2", "inc:2")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	e.bot.StartCards(ctx, e.db, e.events, e.handlers, map[string]card.Renderer{"inc": r.render})
+	select {
+	case <-entered:
+	case <-time.After(waitLimit):
+		t.Fatal("no edit started")
+	}
+	cancel()
+	select {
+	case <-discord.CardsDoneForTest(e.bot):
+	case <-time.After(waitLimit):
+		t.Fatal("cardsDone did not close")
+	}
+	if n := buf.count("level=WARN"); n != 0 {
+		t.Errorf("warnings = %d, want 0", n)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("edit attempts = %d, want 1", n)
+	}
+}
+
+func TestUpdater_RefreshNeverBlocksDuringPass(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	entered, release := make(chan struct{}), make(chan struct{})
+	closeRelease := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(closeRelease)
+	var once sync.Once
+	e.api.hold = func(context.Context, string) error {
+		once.Do(func() { close(entered) })
+		<-release
+		return nil
+	}
+	var calls atomic.Int32
+	changing := func(context.Context, string) (card.Rendering, error) {
+		return card.Rendered(card.Update{Status: fmt.Sprintf("status %d", calls.Add(1))}), nil
+	}
+	passes := make(chan struct{}, 1000)
+	discord.SetPollIntervalForTest(e.bot, time.Hour)
+	discord.SetPassDoneForTest(e.bot, func() { passes <- struct{}{} })
+	for i := 1; i <= 3; i++ {
+		e.trackInc(fmt.Sprintf("m%d", i), fmt.Sprintf("inc:%d", i))
+	}
+	e.start(map[string]card.Renderer{"inc": changing})
+	select {
+	case <-entered:
+	case <-time.After(waitLimit):
+		t.Fatal("no edit started")
+	}
+	returned := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for g := range 8 {
+			wg.Go(func() {
+				for i := range 125 {
+					e.bot.Refresh(fmt.Sprintf("inc:%d", (g+i)%3+1))
+				}
+			})
+		}
+		wg.Wait()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(waitLimit):
+		t.Fatal("Refresh blocked behind the pass")
+	}
+	closeRelease()
+	for range 2 {
+		select {
+		case <-passes:
+		case <-time.After(waitLimit):
+			t.Fatal("pass did not finish")
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("m%d", i)
+		if n := e.editsOf(id); n < 1 || n > 2 {
+			t.Errorf("%s edits = %d, want 1 or 2", id, n)
+		}
+	}
+}
+
+func (e *cardEnv) editsOf(messageID string) int {
+	n := 0
+	for _, ed := range e.api.editList() {
+		if ed.ID == messageID {
+			n++
+		}
+	}
+	return n
 }
