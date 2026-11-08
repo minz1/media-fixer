@@ -70,7 +70,7 @@ func cmdStatusOf(status string) CmdStatus {
 func (s *Scheduler) expireActed(ctx context.Context, now time.Time) []Effect {
 	rows, err := s.d.ListActedBefore(ctx, now.Add(-Keep))
 	if err != nil {
-		s.r.logger().WarnContext(ctx, "stuck-queue: listing old outcomes failed", "err", err)
+		s.r.logger().WarnContext(ctx, "stuck-queue: listing expired acted rows failed", "err", err)
 		return nil
 	}
 	var effs []Effect

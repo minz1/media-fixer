@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -133,7 +132,7 @@ func opError(op operation.Op) error {
 	case text == "":
 		return errOpStopped
 	case op.Kind == operation.KindRegrab && op.Index == 1:
-		return fmt.Errorf("%w: %s", errSearchFailed, text)
+		return fmt.Errorf("%w: %s", errRegrabSearch, text)
 	}
 	return errors.New(text)
 }
@@ -188,60 +187,27 @@ func (s *Scheduler) Resume(
 	if err != nil {
 		return "", err
 	}
+	var u update
 	var subject string
 	defer func() { s.refreshSubject(subject) }()
-	defer func() { release(nil) }()
+	defer func() { release(u) }()
+	key := Key{App: app, DownloadID: downloadID}
+	snap, minAge, err := s.guard(ctx, s.r.client(app), key, OwnerResume)
+	if err != nil {
+		return "", err
+	}
+	if snap.Acted == nil || snap.Acted.OpID != opID {
+		return "", refuse(changedRefusal)
+	}
 	op, err := s.resumeOp(ctx, app, downloadID, opID, opVersion)
 	if err != nil {
 		return "", err
 	}
+	u = s.record(ctx, key, Event{Kind: EvResumed, OpID: op.ID, Done: op.Status == operation.Done}, minAge)
 	subject = card.StuckSubject(appCode(app), op.Steps[0].DownloadID)
-	s.trackOp(op)
 	if err = opError(op); err != nil {
 		return "", err
 	}
-	s.record(ctx, Key{App: app, DownloadID: op.Steps[0].DownloadID}, Event{
-		Kind: EvResumed, OpID: op.ID, Done: op.Status == operation.Done,
-	}, 0)
 	s.r.logger().InfoContext(ctx, "stuck-queue: resumed re-grab", "app", app, "download", downloadID, "op", op.ID)
 	return "Search sent for " + op.Title + ".", nil
-}
-
-func (s *Scheduler) trackOp(op operation.Op) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if operation.Resumable(op) {
-		if s.slot.failedOps == nil {
-			s.slot.failedOps = map[string]operation.Op{}
-		}
-		s.slot.failedOps[op.Subject.ID] = op
-		return
-	}
-	delete(s.slot.failedOps, op.Subject.ID)
-}
-
-func (s *Scheduler) LoadOperations(ctx context.Context) error {
-	ops, err := s.d.ResumableDownloadOperations(ctx)
-	if err != nil {
-		return err
-	}
-	loaded := make(map[string]operation.Op, len(ops))
-	for _, op := range ops {
-		loaded[op.Subject.ID] = op
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.slot.failedOps = loaded
-	return nil
-}
-
-func (s *Scheduler) FailedOperations() []operation.Op {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]operation.Op, 0, len(s.slot.failedOps))
-	for _, op := range s.slot.failedOps {
-		out = append(out, op)
-	}
-	slices.SortFunc(out, func(a, b operation.Op) int { return cmp.Compare(a.ID, b.ID) })
-	return out
 }

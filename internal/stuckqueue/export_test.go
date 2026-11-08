@@ -6,6 +6,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/opexec"
 )
 
@@ -62,3 +63,5 @@ var (
 	ErrNotHeld     = errNotHeld
 	ErrWrongHolder = errWrongHolder
 )
+
+func RegrabSpecForTest(d Download) operation.Spec { return regrabSpec(d) }

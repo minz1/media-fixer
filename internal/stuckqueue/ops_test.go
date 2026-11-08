@@ -75,7 +75,7 @@ func TestQ2_8_RegrabSearchFailureSurvivesRestart(t *testing.T) {
 	e, _, op := failSearch(t)
 	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
 	t.Cleanup(s2.Wait)
-	if err := s2.LoadOperations(context.Background()); err != nil {
+	if err := s2.Adopt(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	up, ok := render(t, s2, stuckSub())
@@ -86,9 +86,6 @@ func TestQ2_8_RegrabSearchFailureSurvivesRestart(t *testing.T) {
 	want := []string{"s", "D", "o" + itoa(op.ID) + "." + itoa(op.Version)}
 	if a.Kind != "sq" || a.Verb != "resume" || strings.Join(a.Args, "|") != strings.Join(want, "|") {
 		t.Fatalf("action = %+v, want args %v", a, want)
-	}
-	if got := s2.FailedOperations(); len(got) != 1 || got[0].ID != op.ID {
-		t.Fatalf("FailedOperations = %+v", got)
 	}
 }
 
@@ -188,9 +185,6 @@ func TestRegrab_RemovalDefinitiveFailureIsNotResumable(t *testing.T) {
 	op := latestOp(t, e)
 	if op.Status != operation.FailedAtStep || operation.Resumable(op) || op.Results[0].State != operation.ResultFailed {
 		t.Fatalf("op = %+v", op)
-	}
-	if got := s.FailedOperations(); len(got) != 0 {
-		t.Fatalf("FailedOperations = %+v, want none", got)
 	}
 	if n := countWrites(e.sonarr, http.MethodPost, "/command"); n != 0 {
 		t.Fatalf("searches = %d, want none", n)

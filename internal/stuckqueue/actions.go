@@ -14,7 +14,7 @@ import (
 	"github.com/minz1/mediafixer/internal/db"
 )
 
-var errSearchFailed = errors.New("removed; search failed")
+var errRegrabSearch = errors.New("removed; search failed")
 
 func ownerOf(a Action) (OwnerAction, bool) {
 	switch a {
@@ -48,7 +48,7 @@ func (s *Scheduler) Act(
 		return "", refuse("%s is not offered for this download", action)
 	}
 	key := Key{App: app, DownloadID: downloadID}
-	minAge, err := s.guard(ctx, c, key, owner)
+	_, minAge, err := s.guard(ctx, c, key, owner)
 	if err != nil {
 		return "", err
 	}
@@ -147,26 +147,28 @@ func (s *Scheduler) refusePending(ctx context.Context, c *client.ArrClient, cand
 	return nil
 }
 
-func (s *Scheduler) guard(ctx context.Context, c *client.ArrClient, key Key, a OwnerAction) (time.Duration, error) {
+func (s *Scheduler) guard(
+	ctx context.Context, c *client.ArrClient, key Key, a OwnerAction,
+) (Snapshot, time.Duration, error) {
 	set, err := LoadSettings(ctx, s.d)
 	if err != nil {
-		return 0, err
+		return Snapshot{}, 0, err
 	}
 	row, stored, err := s.d.GetStuck(ctx, string(key.App), key.DownloadID)
 	if err != nil {
-		return 0, err
+		return Snapshot{}, 0, err
 	}
 	snap := Snapshot{Key: key, State: StateUntracked}
 	if stored {
 		snap = fromRow(row)
 	}
 	now := s.r.Now()
-	if snap.State == StateImportInflight {
+	if snap.State == StateImportInflight && c != nil {
 		if snap, err = s.observeInflight(ctx, c, row, set.ImportTimeout(), now); err != nil {
-			return 0, err
+			return Snapshot{}, 0, err
 		}
 	}
-	return set.MinAge(), Allowed(snap, a, now, set.MinAge())
+	return snap, set.MinAge(), Allowed(snap, a, now, set.MinAge())
 }
 
 func (s *Scheduler) observeInflight(
@@ -232,7 +234,7 @@ func (s *Scheduler) ImportMapped(
 		return "", refuse("Sonarr is not configured")
 	}
 	key := Key{App: AppSonarr, DownloadID: downloadID}
-	minAge, err := s.guard(ctx, c, key, OwnerMappedImport)
+	_, minAge, err := s.guard(ctx, c, key, OwnerMappedImport)
 	if err != nil {
 		return "", err
 	}
@@ -404,9 +406,6 @@ func (s *Scheduler) refreshSubject(subject string) {
 
 func (s *Scheduler) regrab(ctx context.Context, c *client.ArrClient, d Download) (string, RegrabResult, error) {
 	res, err := s.runRegrab(ctx, c, d)
-	if res.Op.ID != 0 {
-		s.trackOp(res.Op)
-	}
 	if err != nil {
 		return "", res, err
 	}

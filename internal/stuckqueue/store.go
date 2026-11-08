@@ -59,35 +59,45 @@ func (r *Runner) apply(ctx context.Context, app App, events map[Key]Event) ([]Sn
 	var snaps []Snapshot
 	var effs []Effect
 	err := r.DB.ApplyStuck(ctx, string(app), keys, func(cur map[string]*db.StuckRow) ([]db.StuckRow, []string, error) {
-		snaps, effs = nil, nil
 		var put []db.StuckRow
 		var del []string
-		for _, id := range keys {
-			k := Key{App: app, DownloadID: id}
-			before := Snapshot{Key: k, State: StateUntracked}
-			row, stored := cur[id]
-			if stored {
-				before = fromRow(*row)
-			}
-			after, e, ok := r.step(ctx, before, stored, events[k])
-			if !ok {
-				snaps = append(snaps, before)
-				continue
-			}
-			snaps, effs = append(snaps, after), append(effs, e...)
-			switch {
-			case after.State != StateUntracked:
-				put = append(put, toRow(after))
-			case stored:
-				del = append(del, id)
-			}
-		}
+		snaps, effs, put, del = r.stepRows(ctx, app, cur, keys, events)
 		return put, del, nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return snaps, effs, nil
+}
+
+func (r *Runner) stepRows(
+	ctx context.Context, app App, cur map[string]*db.StuckRow, keys []string, events map[Key]Event,
+) ([]Snapshot, []Effect, []db.StuckRow, []string) {
+	var snaps []Snapshot
+	var effs []Effect
+	var put []db.StuckRow
+	var del []string
+	for _, id := range keys {
+		k := Key{App: app, DownloadID: id}
+		before := Snapshot{Key: k, State: StateUntracked}
+		row, stored := cur[id]
+		if stored {
+			before = fromRow(*row)
+		}
+		after, e, ok := r.step(ctx, before, stored, events[k])
+		if !ok {
+			snaps = append(snaps, before)
+			continue
+		}
+		snaps, effs = append(snaps, after), append(effs, e...)
+		switch {
+		case after.State != StateUntracked:
+			put = append(put, toRow(after))
+		case stored:
+			del = append(del, id)
+		}
+	}
+	return snaps, effs, put, del
 }
 
 func (r *Runner) step(ctx context.Context, before Snapshot, stored bool, ev Event) (Snapshot, []Effect, bool) {

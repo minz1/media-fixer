@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
-	"github.com/minz1/mediafixer/internal/operation"
 )
 
 type Holder string
@@ -55,7 +54,6 @@ type slot struct {
 	last      Result
 	hasLast   bool
 	warned    string
-	failedOps map[string]operation.Op
 }
 
 func nextSlot(cur Holder, ev slotEvent) (Holder, error) {
