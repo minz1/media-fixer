@@ -90,6 +90,7 @@ func NewService(
 		wake:       make(chan struct{}, 1),
 		work:       work,
 	}
+	s.runs.wake = s.wakeReconciler
 	if paused, err := database.IsAutonomousPaused(base); err == nil {
 		s.paused.Store(paused)
 	}

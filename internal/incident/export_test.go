@@ -163,6 +163,15 @@ func (r *RunManagerForTest) Liveness() lifecycle.Liveness {
 	return lifecycle.Liveness{Runs: l.runs, Reserved: l.reserved, Plans: l.plans, Armed: l.armed}
 }
 
+func (r *RunManagerForTest) SetWake(wake func()) { r.m.wake = wake }
+
+func (r *RunManagerForTest) End(id string) func() {
+	_, tok, _ := r.m.supersede(id)
+	return func() { r.m.end(id, tok) }
+}
+
+func (r *RunManagerForTest) PlanStarted(id string) func() { return r.m.planStarted(id) }
+
 func (s *Service) ApplyForTest(ctx context.Context, id string, ev lifecycle.Event) (db.Applied, error) {
 	return s.apply(ctx, id, ev, nil)
 }

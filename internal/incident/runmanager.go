@@ -45,6 +45,8 @@ type runManager struct {
 	// interference class. A single-buffered channel holding one token acts as a
 	// context-cancellable mutex (sync.Mutex has no cancellable Lock).
 	globalSlot chan struct{}
+
+	wake func()
 }
 
 // runToken identifies a specific run so end() only clears the registration if a
@@ -103,6 +105,9 @@ func (m *runManager) end(id string, tok *runToken) {
 	defer m.mu.Unlock()
 	if cur, ok := m.active[id]; ok && cur == tok {
 		delete(m.active, id)
+		if m.wake != nil {
+			m.wake()
+		}
 	}
 	tok.cancel()
 }
@@ -290,6 +295,9 @@ func (m *runManager) planStarted(id string) func() {
 			defer m.mu.Unlock()
 			if m.plans[id]--; m.plans[id] <= 0 {
 				delete(m.plans, id)
+				if m.wake != nil {
+					m.wake()
+				}
 			}
 		})
 	}
