@@ -320,6 +320,8 @@ func TestRun_Prune(t *testing.T) {
 	e.sonarr.set()
 	e.clock.Add(time.Hour)
 	e.runner.Run(context.Background(), liveSettings())
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
 	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
 	e.clock.Add(5 * time.Hour)
 	res := e.runner.Run(context.Background(), liveSettings())
@@ -565,5 +567,310 @@ func TestQ1_8_OversizedSingleItemNotifiedOnce(t *testing.T) {
 	}
 	if n := len(e.cards[0].Plain()); n > card.MaxPlain {
 		t.Fatalf("card plain length = %d, want at most %d", n, card.MaxPlain)
+	}
+}
+
+func (e *runEnv) rawExec(t *testing.T, query string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", e.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err = raw.ExecContext(context.Background(), query); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *runEnv) rowOf(t *testing.T, id string) (db.StuckRow, bool) {
+	t.Helper()
+	row, ok, err := e.db.GetStuck(context.Background(), "sonarr", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row, ok
+}
+
+func (e *runEnv) sendCounter() *int {
+	n := new(int)
+	e.runner.Notify = func(context.Context, card.Card) error {
+		*n++
+		return nil
+	}
+	return n
+}
+
+func (e *runEnv) failingSends(sends *int, err error) {
+	e.runner.Notify = func(context.Context, card.Card) error {
+		*sends++
+		return err
+	}
+}
+
+const failReleases = `CREATE TRIGGER IF NOT EXISTS refuse_release BEFORE UPDATE ON stuck_downloads
+	WHEN NEW.state = 'due' BEGIN SELECT RAISE(ABORT, 'refused'); END`
+
+const failClaims = `CREATE TRIGGER refuse_claim BEFORE UPDATE ON stuck_downloads WHEN NEW.state = 'notified'
+	BEGIN SELECT RAISE(ABORT, 'refused'); END`
+
+func TestQ1_10_ClaimWriteFailureSendsNothing(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.runner.Run(context.Background(), liveSettings())
+	e.rawExec(t, failClaims)
+	e.clock.Add(6 * time.Hour)
+	res := e.runner.Run(context.Background(), liveSettings())
+	if dms := e.dmsCopy(); len(dms) != 0 {
+		t.Fatalf("dms = %q, want none when the claim could not be written", dms)
+	}
+	if row, _ := e.rowOf(t, "D2"); row.State != "due" {
+		t.Fatalf("row state = %q, want due", row.State)
+	}
+	if n := len(app(res, stuckqueue.AppSonarr).Items); n != 1 {
+		t.Fatalf("items = %d, want the download still listed", n)
+	}
+	e.rawExec(t, `DROP TRIGGER refuse_claim`)
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	if dms := e.dmsCopy(); len(dms) != 1 {
+		t.Fatalf("dms = %q, want one once the claim works", dms)
+	}
+}
+
+func TestQ1_10_SendFailureReleasesClaimAndRetriesOnce(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.runner.Run(context.Background(), liveSettings())
+	sends := 0
+	e.failingSends(&sends, errors.New("discord down"))
+	e.clock.Add(6 * time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	row, _ := e.rowOf(t, "D2")
+	if sends != 1 || row.State != "due" || !row.NotifiedAt.IsZero() {
+		t.Fatalf("sends = %d, row = %+v; want one failed send and the claim released", sends, row)
+	}
+	ok := e.sendCounter()
+	for range 3 {
+		e.clock.Add(time.Hour)
+		e.runner.Run(context.Background(), liveSettings())
+	}
+	if *ok != 1 {
+		t.Fatalf("retries = %d, want exactly one", *ok)
+	}
+}
+
+func TestQ1_10_FailedReleaseNeverDMsTwice(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.runner.Run(context.Background(), liveSettings())
+	sends := 0
+	e.runner.Notify = func(context.Context, card.Card) error {
+		sends++
+		e.rawExec(t, failReleases)
+		return errors.New("discord down")
+	}
+	e.clock.Add(6 * time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	for range 3 {
+		e.clock.Add(time.Hour)
+		e.runner.Run(context.Background(), liveSettings())
+	}
+	if sends != 1 {
+		t.Fatalf("sends = %d, want 1", sends)
+	}
+	if logs := e.logs.String(); !strings.Contains(logs, "level=ERROR") ||
+		!strings.Contains(logs, "stuck-queue: notification lost") || !strings.Contains(logs, "count=1") {
+		t.Fatalf("logs = %s", logs)
+	}
+}
+
+func TestQ1_10_UntrackedSendKeepsClaim(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	sends := 0
+	e.failingSends(&sends, fmt.Errorf("discord: %w", card.ErrUntracked))
+	e.agedRun(liveSettings())
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	row, _ := e.rowOf(t, "D2")
+	if sends != 1 || row.State != "notified" || row.NotifiedAt.IsZero() {
+		t.Fatalf("sends = %d, row = %+v; want the claim kept", sends, row)
+	}
+}
+
+func TestQ1_11_TransientNonStuckKeepsWaitAndNoSecondDM(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	rec := rawRec(2, "D2", "NOVA", 1, false, sample)
+	e.sonarr.set(rec)
+	e.runner.Run(context.Background(), liveSettings())
+	first, _ := e.rowOf(t, "D2")
+	e.sonarr.set()
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	e.sonarr.set(rec)
+	e.clock.Add(5 * time.Hour)
+	res := e.runner.Run(context.Background(), liveSettings())
+	if n := len(app(res, stuckqueue.AppSonarr).Items); n != 1 {
+		t.Fatalf("items = %d, want the download past its original wait", n)
+	}
+	row, _ := e.rowOf(t, "D2")
+	if !row.FirstSeen.Equal(first.FirstSeen) || row.Misses != 0 {
+		t.Fatalf("row = %+v, first seen was %v", row, first.FirstSeen)
+	}
+	e.sonarr.set()
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	e.sonarr.set(rec)
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	if dms := e.dmsCopy(); len(dms) != 1 {
+		t.Fatalf("dms = %q, want one", dms)
+	}
+}
+
+func TestQ1_11_TwoMissesPrune(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	rec := rawRec(2, "D2", "NOVA", 1, false, sample)
+	e.sonarr.set(rec)
+	e.runner.Run(context.Background(), liveSettings())
+	e.sonarr.set()
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	if row, ok := e.rowOf(t, "D2"); !ok || row.Misses != 1 {
+		t.Fatalf("after one miss: row = %+v, ok = %v", row, ok)
+	}
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	if _, ok := e.rowOf(t, "D2"); ok {
+		t.Fatal("two misses left the row")
+	}
+	e.sonarr.set(rec)
+	e.clock.Add(time.Hour)
+	res := e.runner.Run(context.Background(), liveSettings())
+	w := app(res, stuckqueue.AppSonarr).Waiting
+	if len(w) != 1 || !w[0].Due.Equal(e.clock.Now().Add(6*time.Hour)) {
+		t.Fatalf("waiting = %+v, want a fresh wait", w)
+	}
+}
+
+func TestQ2_7_FailedRowWriteKeepsListingAndCard(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.runner.Run(context.Background(), liveSettings())
+	before, _ := e.rowOf(t, "D2")
+	e.rawExec(t, `CREATE TRIGGER refuse_all BEFORE UPDATE ON stuck_downloads
+		BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	e.clock.Add(6 * time.Hour)
+	res := e.runner.Run(context.Background(), liveSettings())
+	items := app(res, stuckqueue.AppSonarr).Items
+	if len(items) != 1 || items[0].State != stuckqueue.StateDue ||
+		!slices.Equal(items[0].Actions, []stuckqueue.Action{stuckqueue.ActionRegrab, stuckqueue.ActionRemove}) {
+		t.Fatalf("items = %+v, want the download listed from the computed snapshot", items)
+	}
+	after, _ := e.rowOf(t, "D2")
+	if after != before {
+		t.Fatalf("row changed:\n got %+v\nwant %+v", after, before)
+	}
+	if dms := e.dmsCopy(); len(dms) != 0 {
+		t.Fatalf("dms = %q", dms)
+	}
+}
+
+func TestRun_ClearHonoursHoldAndCap(t *testing.T) {
+	t.Parallel()
+	hold := newRunEnv(t)
+	hold.sonarr.set(rawRec(1, "D1", "Flash", 19, true, notUpgrade))
+	dry := liveSettings()
+	dry.DryRun = true
+	res := hold.agedRun(dry)
+	items := app(res, stuckqueue.AppSonarr).Items
+	row, _ := hold.rowOf(t, "D1")
+	if row.State != "held" || len(items) != 1 || items[0].State != stuckqueue.StateHeld ||
+		len(deletes(hold.sonarr.writesCopy())) != 0 {
+		t.Fatalf("dry run: row = %+v, items = %+v", row, items)
+	}
+	capped := newRunEnv(t)
+	var recs []map[string]any
+	for i := range 21 {
+		recs = append(recs, rawRec(i+1, fmt.Sprintf("D%02d", i), fmt.Sprintf("Show %d", i), i+1, true, notUpgrade))
+	}
+	capped.sonarr.set(recs...)
+	res = capped.agedRun(liveSettings())
+	ar := app(res, stuckqueue.AppSonarr)
+	if ar.Cleared != 20 || ar.WouldClear != 1 || !res.CapHit || len(ar.Items) != 1 ||
+		ar.Items[0].State != stuckqueue.StateHeld {
+		t.Fatalf("capped: result = %+v", ar)
+	}
+	rows, err := capped.db.ListStuckInState(context.Background(), "cleared")
+	if err != nil || len(rows) != 20 {
+		t.Fatalf("cleared rows = %d, err = %v", len(rows), err)
+	}
+}
+
+func TestRun_ClearNotFoundCountsAsDone(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(1, "D1", "Flash", 19, true, notUpgrade))
+	e.sonarr.failDelete(http.StatusNotFound, false)
+	res := e.agedRun(liveSettings())
+	row, _ := e.rowOf(t, "D1")
+	if row.State != "cleared" || app(res, stuckqueue.AppSonarr).Cleared != 1 {
+		t.Fatalf("row = %+v, result = %+v", row, app(res, stuckqueue.AppSonarr))
+	}
+	if strings.Contains(e.logs.String(), "clear failed") {
+		t.Fatalf("logs = %s", e.logs.String())
+	}
+}
+
+func TestRun_ImportInflightNotCleared(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(1, "D1", "Flash", 19, true, notUpgrade))
+	now := e.clock.Now()
+	imp := &stuckqueue.ImportCmd{CommandID: 42, StartedAt: now.Add(-time.Minute), Files: stuckqueue.Files{N: 1, M: 1}}
+	seedRows(t, e.db, stuckqueue.ToRowForTest(stuckqueue.Snapshot{
+		Key: sonarrKey("D1"), State: stuckqueue.StateImportInflight, FirstSeen: now.Add(-7 * time.Hour),
+		NotifiedAt: now.Add(-time.Hour), Import: imp,
+	}))
+	res := e.runner.Run(context.Background(), liveSettings())
+	items := app(res, stuckqueue.AppSonarr).Items
+	if n := len(deletes(e.sonarr.writesCopy())); n != 0 {
+		t.Fatalf("deleted %d while an import ran", n)
+	}
+	if len(items) != 1 || items[0].State != stuckqueue.StateImportInflight || len(items[0].Actions) != 0 {
+		t.Fatalf("items = %+v", items)
+	}
+	if row, _ := e.rowOf(t, "D1"); row.State != "import_inflight" {
+		t.Fatalf("row = %+v", row)
+	}
+}
+
+func TestDeadColumns_OldTableNeverWritten(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.agedRun(liveSettings())
+	e.sonarr.set()
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	raw, err := sql.Open("sqlite", e.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	var n int
+	row := raw.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM stuck_queue_downloads`)
+	if err = row.Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("the old table has %d rows after runs", n)
 	}
 }

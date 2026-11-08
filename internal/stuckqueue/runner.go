@@ -1,10 +1,12 @@
 package stuckqueue
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
@@ -21,15 +23,18 @@ const (
 )
 
 const (
-	maxAutoClears = 20
-	dmHeader      = "Stuck downloads need you"
-	noReason      = "no reason given"
+	maxAutoClears  = 20
+	releaseTimeout = 5 * time.Second
+	dmHeader       = "Stuck downloads need you"
+	noReason       = "no reason given"
 )
 
 type Item struct {
 	Download
 
 	Verdict       Verdict
+	State         State
+	Acted         *Acted
 	Age           time.Duration
 	Due           time.Time
 	Actions       []Action
@@ -70,9 +75,10 @@ type sweepRun struct {
 	r      *Runner
 	set    Settings
 	hold   bool
+	now    time.Time
 	clears int
 	capHit bool
-	fresh  []Item
+	due    []Item
 }
 
 func (r *Runner) logger() *slog.Logger {
@@ -92,15 +98,17 @@ func (r *Runner) client(app App) *client.ArrClient {
 	return nil
 }
 
+func allApps() []App { return []App{AppSonarr, AppRadarr} }
+
 func (r *Runner) Run(ctx context.Context, set Settings) Result {
 	paused := !set.DryRun && r.paused(ctx)
-	x := &sweepRun{r: r, set: set, hold: set.DryRun || paused}
+	x := &sweepRun{r: r, set: set, hold: set.DryRun || paused, now: r.Now()}
 	res := Result{DryRun: set.DryRun, Paused: paused, MinAgeHours: set.MinAgeHours}
-	for _, a := range []App{AppSonarr, AppRadarr} {
+	for _, a := range allApps() {
 		res.Apps = append(res.Apps, x.app(ctx, a))
 	}
 	res.CapHit = x.capHit
-	r.notify(ctx, x.fresh, x.capHit)
+	r.notify(ctx, x.due, x.capHit)
 	res.FinishedAt = r.Now()
 	return res
 }
@@ -112,6 +120,16 @@ func (r *Runner) paused(ctx context.Context) bool {
 		return true
 	}
 	return p
+}
+
+type appRun struct {
+	app       App
+	c         *client.ArrClient
+	queue     []client.QueueEntry
+	stored    map[string]Snapshot
+	downloads []Download
+	observed  map[string]Item
+	events    map[Key]Event
 }
 
 func (x *sweepRun) app(ctx context.Context, a App) AppResult {
@@ -127,77 +145,178 @@ func (x *sweepRun) app(ctx context.Context, a App) AppResult {
 		x.r.logger().WarnContext(ctx, "stuck-queue: arr unreachable", "app", a, "err", err)
 		return ar
 	}
-	now := x.r.Now()
-	var keep []string
-	for _, d := range Group(a, entries) {
-		if !d.Stuck() {
-			continue
-		}
-		keep = append(keep, d.DownloadID)
-		v := Classify(d)
-		row, upErr := x.r.DB.UpsertStuckSeen(ctx, string(a), d.DownloadID, d.Title, string(v), now)
-		if upErr != nil {
-			x.r.logger().
-				WarnContext(ctx, "stuck-queue: record download", "app", a, "download", d.DownloadID, "err", upErr)
-			continue
-		}
-		age := now.Sub(row.FirstSeenAt)
-		if age < x.set.MinAge() {
-			ar.Waiting = append(ar.Waiting, Item{
-				Download: d, Verdict: v, Age: age, Due: row.FirstSeenAt.Add(x.set.MinAge()),
-				Actions: []Action{ActionRemove},
-			})
-			continue
-		}
-		x.handle(ctx, c, &ar, Item{Download: d, Verdict: v, Age: age}, entries, row.NotifiedAt == nil)
+	rows, err := x.r.DB.ListStuck(ctx, string(a))
+	if err != nil {
+		ar.Unreachable, ar.Err = true, err.Error()
+		x.r.logger().WarnContext(ctx, "stuck-queue: read rows", "app", a, "err", err)
+		return ar
 	}
-	if err = x.r.DB.PruneStuckGone(ctx, string(a), keep); err != nil {
-		x.r.logger().WarnContext(ctx, "stuck-queue: prune", "app", a, "err", err)
+	run := &appRun{
+		app: a, c: c, queue: entries, stored: make(map[string]Snapshot, len(rows)),
+		observed: map[string]Item{}, events: map[Key]Event{},
 	}
+	for _, row := range rows {
+		run.stored[row.DownloadID] = fromRow(row)
+	}
+	x.observe(ctx, run)
+	final, effs, committed := x.commit(ctx, run)
+	removed := map[string]bool{}
+	if committed {
+		x.clearAll(ctx, run, &ar, effs, final, removed)
+	}
+	x.list(&ar, run, final, removed, committed)
 	return ar
 }
 
-func (x *sweepRun) handle(
-	ctx context.Context, c *client.ArrClient, ar *AppResult, it Item, queue []client.QueueEntry, isNew bool,
-) {
-	var guardErr error
-	switch it.Verdict {
-	case VerdictClear:
-		if x.clear(ctx, c, ar, it) {
-			return
+func (x *sweepRun) observe(ctx context.Context, run *appRun) {
+	present := map[string]bool{}
+	for _, d := range Group(run.app, run.queue) {
+		if !d.Stuck() {
+			continue
 		}
-	case VerdictGap:
-		if !it.MaybeHasFile() {
-			guardErr = x.guard(ctx, c, &it, queue)
+		present[d.DownloadID] = true
+		run.downloads = append(run.downloads, d)
+		it, offer := x.inspect(ctx, run, d)
+		run.observed[d.DownloadID] = it
+		run.events[Key{App: run.app, DownloadID: d.DownloadID}] = Event{
+			Kind: EvSeen, At: x.now, MinAge: x.set.MinAge(), Hold: x.hold,
+			Obs: Observation{FP: d.TargetsFP(), Verdict: it.Verdict, Offered: offer},
 		}
-	case VerdictUnmapped:
 	}
-	it.Actions = offered(it.Download, it.Verdict, guardErr)
-	ar.Items = append(ar.Items, it)
-	if isNew && it.Verdict != VerdictClear {
-		x.fresh = append(x.fresh, it)
+	for id := range run.stored {
+		if !present[id] {
+			run.events[Key{App: run.app, DownloadID: id}] = Event{Kind: EvMissed, At: x.now}
+		}
 	}
 }
 
-func (x *sweepRun) clear(ctx context.Context, c *client.ArrClient, ar *AppResult, it Item) bool {
-	if x.hold {
-		ar.WouldClear++
+func (x *sweepRun) inspect(ctx context.Context, run *appRun, d Download) (Item, Offer) {
+	it := Item{Download: d, Verdict: Classify(d)}
+	var guardErr error
+	if it.Verdict == VerdictGap && !d.MaybeHasFile() {
+		guardErr = refuse("the import guard did not run for this download")
+		if cur, ok := run.stored[d.DownloadID]; ok && x.guardable(cur) {
+			guardErr = x.guard(ctx, run.c, &it, run.queue)
+		}
+	}
+	return it, offerOf(offered(d, it.Verdict, guardErr))
+}
+
+func (x *sweepRun) guardable(cur Snapshot) bool {
+	if cur.State == StateImportInflight || cur.State == StateActed {
 		return false
 	}
-	if x.clears >= maxAutoClears {
-		x.capHit = true
-		ar.WouldClear++
-		return false
+	return !x.now.Before(cur.FirstSeen.Add(x.set.MinAge()))
+}
+
+func offerOf(actions []Action) Offer {
+	parts := make([]string, 0, len(actions))
+	for _, a := range actions {
+		parts = append(parts, string(a))
 	}
-	if err := c.RemoveQueueItem(ctx, it.Records[0].ID, false, false, true); err != nil {
-		x.r.logger().WarnContext(ctx, "stuck-queue: clear failed", "app", it.App, "download", it.DownloadID, "err", err)
-		return false
+	return Offer(strings.Join(parts, " "))
+}
+
+func (x *sweepRun) commit(ctx context.Context, run *appRun) (map[string]Snapshot, []Effect, bool) {
+	final := map[string]Snapshot{}
+	if len(run.events) == 0 {
+		return final, nil, true
+	}
+	snaps, effs, err := x.r.apply(ctx, run.app, run.events)
+	if err != nil {
+		x.r.logger().WarnContext(ctx, "stuck-queue: record downloads", "app", run.app, "err", err)
+		for k, ev := range run.events {
+			before := Snapshot{Key: k, State: StateUntracked}
+			if cur, ok := run.stored[k.DownloadID]; ok {
+				before = cur
+			}
+			after, _, nextErr := Next(before, ev)
+			if nextErr != nil {
+				after = before
+			}
+			final[k.DownloadID] = after
+		}
+		return final, nil, false
+	}
+	for _, s := range snaps {
+		final[s.Key.DownloadID] = s
+	}
+	return final, effs, true
+}
+
+func (x *sweepRun) clearAll(
+	ctx context.Context, run *appRun, ar *AppResult, effs []Effect, final map[string]Snapshot, removed map[string]bool,
+) {
+	byID := map[string]Download{}
+	for _, d := range run.downloads {
+		byID[d.DownloadID] = d
+	}
+	results := map[Key]Event{}
+	for _, e := range effs {
+		ce, ok := e.(EffClearDownload)
+		if !ok {
+			continue
+		}
+		if x.clears >= maxAutoClears {
+			x.capHit = true
+			ar.WouldClear++
+			continue
+		}
+		ev := x.clearOne(ctx, run.c, byID[ce.Key.DownloadID])
+		results[ce.Key] = ev
+		if ev.Kind == EvClearDone {
+			removed[ce.Key.DownloadID] = true
+			ar.Cleared++
+		}
+	}
+	if len(results) == 0 {
+		return
+	}
+	snaps, _, err := x.r.apply(ctx, run.app, results)
+	if err != nil {
+		x.r.logger().WarnContext(ctx, "stuck-queue: record clears", "app", run.app, "err", err)
+		return
+	}
+	for _, s := range snaps {
+		final[s.Key.DownloadID] = s
+	}
+}
+
+func (x *sweepRun) clearOne(ctx context.Context, c *client.ArrClient, d Download) Event {
+	err := c.RemoveQueueItem(ctx, d.Records[0].ID, false, false, true)
+	if err != nil && !errors.Is(err, client.ErrNotFound) {
+		x.r.logger().WarnContext(ctx, "stuck-queue: clear failed", "app", d.App, "download", d.DownloadID, "err", err)
+		return Event{Kind: EvClearFailed, At: x.now}
 	}
 	x.clears++
-	ar.Cleared++
 	x.r.logger().InfoContext(ctx, "stuck-queue: cleared leftover download",
-		"app", it.App, "download", it.DownloadID, "title", it.Title)
-	return true
+		"app", d.App, "download", d.DownloadID, "title", d.Title)
+	return Event{Kind: EvClearDone, At: x.now}
+}
+
+func (x *sweepRun) list(
+	ar *AppResult, run *appRun, final map[string]Snapshot, removed map[string]bool, committed bool,
+) {
+	for _, d := range run.downloads {
+		s := final[d.DownloadID]
+		if s.State == StateUntracked || s.State == StateCleared || removed[d.DownloadID] {
+			continue
+		}
+		it := run.observed[d.DownloadID]
+		it.State, it.Acted, it.Age, it.Actions = s.State, s.Acted, x.now.Sub(s.FirstSeen), s.Offered.Actions()
+		if s.State == StateWaiting {
+			it.Due = s.FirstSeen.Add(x.set.MinAge())
+			ar.Waiting = append(ar.Waiting, it)
+			continue
+		}
+		if s.State == StateHeld && x.hold {
+			ar.WouldClear++
+		}
+		ar.Items = append(ar.Items, it)
+		if committed && s.State == StateDue {
+			x.due = append(x.due, it)
+		}
+	}
 }
 
 func (x *sweepRun) guard(ctx context.Context, c *client.ArrClient, it *Item, queue []client.QueueEntry) error {
@@ -236,23 +355,80 @@ func offered(d Download, v Verdict, guardErr error) []Action {
 	return nil
 }
 
-func (r *Runner) notify(ctx context.Context, items []Item, capHit bool) {
-	if len(items) == 0 && !capHit {
+func (r *Runner) notify(ctx context.Context, due []Item, capHit bool) {
+	if (len(due) == 0 && !capHit) || r.Notify == nil {
 		return
 	}
-	if r.Notify == nil {
+	slices.SortStableFunc(due, func(a, b Item) int { return cmp.Compare(b.Age, a.Age) })
+	c, shown := stuckCard(due, capHit)
+	claimAt := r.Now()
+	claimed := r.claim(ctx, due[:shown], claimAt)
+	if len(due) > 0 && len(claimed) == 0 {
 		return
 	}
-	c, shown := stuckCard(items, capHit)
+	if len(claimed) < shown {
+		var fit int
+		c, fit = stuckCard(claimed, capHit)
+		if fit < len(claimed) {
+			r.release(ctx, claimed[fit:], claimAt)
+			claimed = claimed[:fit]
+		}
+	}
 	if err := r.Notify(ctx, c); err != nil && !errors.Is(err, card.ErrUntracked) {
 		r.logger().WarnContext(ctx, "stuck-queue: owner DM failed; will retry next run", "err", err)
-		return
+		r.release(ctx, claimed, claimAt)
 	}
-	now := r.Now()
-	for _, it := range items[:shown] {
-		if err := r.DB.MarkStuckNotified(ctx, string(it.App), it.DownloadID, now); err != nil {
-			r.logger().WarnContext(ctx, "stuck-queue: mark notified", "download", it.DownloadID, "err", err)
+}
+
+func itemEvents(items []Item, app App, ev Event) map[Key]Event {
+	out := map[Key]Event{}
+	for _, it := range items {
+		if it.App == app {
+			out[Key{App: app, DownloadID: it.DownloadID}] = ev
 		}
+	}
+	return out
+}
+
+func (r *Runner) claim(ctx context.Context, items []Item, at time.Time) []Item {
+	won := map[Key]bool{}
+	for _, a := range allApps() {
+		events := itemEvents(items, a, Event{Kind: EvClaimed, At: at})
+		if len(events) == 0 {
+			continue
+		}
+		snaps, _, err := r.apply(ctx, a, events)
+		if err != nil {
+			r.logger().WarnContext(ctx, "stuck-queue: claim failed; sending nothing for this app", "app", a, "err", err)
+			continue
+		}
+		for _, s := range snaps {
+			if s.State == StateNotified && s.NotifiedAt.Equal(at) {
+				won[s.Key] = true
+			}
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(items), func(it Item) bool {
+		return !won[Key{App: it.App, DownloadID: it.DownloadID}]
+	})
+}
+
+func (r *Runner) release(ctx context.Context, items []Item, at time.Time) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	lost := 0
+	for _, a := range allApps() {
+		events := itemEvents(items, a, Event{Kind: EvNotifyFailed, At: at, ClaimAt: at})
+		if len(events) == 0 {
+			continue
+		}
+		if _, _, err := r.apply(rctx, a, events); err != nil {
+			lost += len(events)
+			r.logger().ErrorContext(rctx, "stuck-queue: release failed", "app", a, "err", err)
+		}
+	}
+	if lost > 0 {
+		r.logger().ErrorContext(rctx, "stuck-queue: notification lost", "count", lost)
 	}
 }
 

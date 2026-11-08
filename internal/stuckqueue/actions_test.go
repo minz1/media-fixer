@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -26,14 +27,7 @@ func act(e *runEnv, s *stuckqueue.Scheduler, a stuckqueue.App, dl string, action
 			}
 		}
 	}
-	if _, err := e.db.UpsertStuckSeen(
-		context.Background(),
-		string(a),
-		dl,
-		dl,
-		"",
-		e.clock.Now().Add(-7*time.Hour),
-	); err != nil {
+	if err := seedSeen(e, a, dl, e.clock.Now().Add(-7*time.Hour)); err != nil {
 		return "", err
 	}
 	return s.Act(context.Background(), a, dl, action, fp)
@@ -358,4 +352,17 @@ func TestQ2_8_Q5b_4_RegrabSearchFailsRecordsRemoved(t *testing.T) {
 	if !ok || !strings.Contains(up.Status, "Removed; the search may have been sent") || len(up.Buttons) != 1 {
 		t.Fatalf("update = %+v, %v; want the op line and Resume", up, ok)
 	}
+}
+
+func seedSeen(e *runEnv, a stuckqueue.App, dl string, first time.Time) error {
+	return e.db.ApplyStuck(context.Background(), string(a), []string{dl},
+		func(cur map[string]*db.StuckRow) ([]db.StuckRow, []string, error) {
+			if cur[dl] != nil {
+				return nil, nil, nil
+			}
+			return []db.StuckRow{stuckqueue.ToRowForTest(stuckqueue.Snapshot{
+				Key: stuckqueue.Key{App: a, DownloadID: dl}, State: stuckqueue.StateWaiting, FirstSeen: first,
+				Offered: stuckqueue.OfferRemove,
+			})}, nil, nil
+		})
 }

@@ -224,14 +224,14 @@ func (s *Scheduler) waitOver(ctx context.Context, app App, downloadID string) er
 	if err != nil {
 		return err
 	}
-	row, ok, err := s.d.GetStuckSeen(ctx, string(app), downloadID)
+	row, ok, err := s.d.GetStuck(ctx, string(app), downloadID)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return refuse("no run has checked this download yet; only Remove is allowed until one does")
 	}
-	if due := row.FirstSeenAt.Add(set.MinAge()); s.r.Now().Before(due) {
+	if due := row.FirstSeen.Add(set.MinAge()); s.r.Now().Before(due) {
 		return refuse("this download is inside the %d h wait until %s; only Remove is allowed",
 			set.MinAgeHours, due.UTC().Format("2006-01-02 15:04 UTC"))
 	}
