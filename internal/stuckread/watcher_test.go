@@ -704,7 +704,9 @@ func TestE2_UnknownNeverWakes(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.svc.SetStuckRead(h.w)
-	s := lifecycletest.Seed(t, h.db, lifecycletest.Spec{Title: "T", What: agent.WhatStuckRead, State: lifecycle.Verifying})
+	s := lifecycletest.Seed(t, h.db, lifecycletest.Spec{
+		Title: "T", What: agent.WhatStuckRead, State: lifecycle.Verifying,
+	})
 	lifecycletest.Force(t, h.db, s.ID, func(n *lifecycle.Snapshot) {
 		n.Verify.Spec.VerifyEnteredAt = time.Now().Add(-4 * time.Minute)
 	})

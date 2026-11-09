@@ -37,6 +37,7 @@ type callServer struct {
 	emptyMovies    bool
 	episodeHasFile bool
 	scanRunning    bool
+	scanStatusCode int
 	pingStatus     int
 	repairRunCode  int
 	onRepairRun    func()
@@ -92,6 +93,10 @@ func (s *callServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(s.pingStatus)
 		}
 	case "/ScheduledTasks":
+		if s.scanStatusCode != 0 {
+			w.WriteHeader(s.scanStatusCode)
+			return
+		}
 		state := "Idle"
 		if s.scanRunning {
 			state = "Running"

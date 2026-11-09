@@ -295,7 +295,8 @@ func TestE5_ActiveToActiveDoesNotClear(t *testing.T) {
 	if svc.LockAlertAtForTest() == 0 {
 		t.Fatal("the lock alert never fired for six open incidents")
 	}
-	if _, err := svc.ApplyForTest(ctx, first.ID, lifecycle.Event{Kind: lifecycle.RunClaimed, Gen: first.Generation}); err != nil {
+	claim := lifecycle.Event{Kind: lifecycle.RunClaimed, Gen: first.Generation}
+	if _, err := svc.ApplyForTest(ctx, first.ID, claim); err != nil {
 		t.Fatal(err)
 	}
 	if svc.LockAlertAtForTest() == 0 {

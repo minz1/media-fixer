@@ -124,7 +124,7 @@ func (w *WorkersForTest) Stop() { w.w.stop() }
 func (w *WorkersForTest) Wait(ctx context.Context) []string { return w.w.wait(ctx) }
 
 func (s *Service) SupersedeForTest(id string) context.Context {
-	ctx, _, _ := s.runs.supersede(id)
+	ctx, _ := s.runs.supersede(id)
 	return ctx
 }
 
@@ -166,7 +166,7 @@ func (r *RunManagerForTest) Liveness() lifecycle.Liveness {
 func (r *RunManagerForTest) SetWake(wake func()) { r.m.wake = wake }
 
 func (r *RunManagerForTest) End(id string) func() {
-	_, tok, _ := r.m.supersede(id)
+	_, tok := r.m.supersede(id)
 	return func() { r.m.end(id, tok) }
 }
 

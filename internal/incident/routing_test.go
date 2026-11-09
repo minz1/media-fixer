@@ -354,7 +354,11 @@ func TestRun_BudgetTripEscalatesBudgetSpent(t *testing.T) {
 
 func TestShutdownCancelledRun_QuietThenSystemRerun(t *testing.T) {
 	t.Parallel()
+	var runs atomic.Int32
 	ag := newGateAgent(func(ctx context.Context, gate agent.Gate) agent.RunExit {
+		if runs.Add(1) > 1 {
+			return blockOnCtx(ctx, gate)
+		}
 		for range 2 {
 			if v, err := gate.Act(ctx, "clear_jellyfin_cache", nil); err != nil || v != agent.GateAllowed {
 				return agent.RunExit{State: agent.RunBatchFailed, Err: err}

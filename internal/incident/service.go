@@ -101,7 +101,10 @@ func NewService(
 	return s
 }
 
-func (s *Service) Stop() { s.work.stop() }
+func (s *Service) Stop() {
+	s.work.stop()
+	s.stopReporterNotes()
+}
 
 func (s *Service) Shutdown(ctx context.Context) error {
 	s.Stop()

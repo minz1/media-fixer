@@ -558,7 +558,7 @@ func TestE3_RestartSettledGivesNoNote(t *testing.T) {
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
 		t.Fatal("expected a note before the restart settled")
 	}
-	if err := jrnl.SettleDisruption(ctx, "restart_jellyfin", incidentB); err != nil {
+	if err := jrnl.SettleDisruption(ctx, "restart_jellyfin", incidentB, 0); err != nil {
 		t.Fatal(err)
 	}
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
@@ -643,10 +643,10 @@ func TestE3_CapEndsNote(t *testing.T) {
 		})
 	}
 	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
-	if err := jrnl.LogAction(ctx, &db.ActionLog{
+	if logErr := jrnl.LogAction(ctx, &db.ActionLog{
 		IncidentID: incidentB, Action: "refresh_decypharr_links", TriggeredBy: "agent", Status: db.ActionApplied,
-	}, true); err != nil {
-		t.Fatal(err)
+	}, true); logErr != nil {
+		t.Fatal(logErr)
 	}
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
 		t.Fatal("expected a note inside the cap for a disruption with no settle signal")
@@ -823,5 +823,65 @@ func TestSystemPromptStuckReadSection(t *testing.T) {
 	}
 	if strings.Contains(section, "list_directory on its folder") {
 		t.Error("stuck_read section calls list_directory safe; it stats every file in the folder")
+	}
+}
+
+func TestE3_ScanStatusErrorKeepsNote(t *testing.T) {
+	t.Parallel()
+	database := newTestAgentDB(t)
+	jrnl := journal.New(database)
+	ctx := context.Background()
+	cs, srv := newCallServer(t)
+	cs.scanStatusCode = http.StatusInternalServerError
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	for _, id := range []string{incidentA, incidentB} {
+		lifecycletest.Incident(t, database, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		})
+	}
+	a := agent.New(nil, "", fullDispatcher(srv.URL), database, jrnl, slog.New(slog.DiscardHandler))
+	if err := jrnl.LogAction(ctx, &db.ActionLog{
+		IncidentID: incidentB, Action: "jellyfin_library_scan", TriggeredBy: "agent", Status: db.ActionApplied,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
+		t.Fatal("expected a note while the scan status can't be read")
+	}
+}
+
+func TestE3_OlderSettleKeepsNewerRestartNote(t *testing.T) {
+	t.Parallel()
+	database := newTestAgentDB(t)
+	jrnl := journal.New(database)
+	ctx := context.Background()
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	for _, id := range []string{incidentA, incidentB} {
+		lifecycletest.Incident(t, database, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		})
+	}
+	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
+	restart := func(gen int64) {
+		t.Helper()
+		if err := jrnl.LogActionGen(ctx, &db.ActionLog{
+			IncidentID: incidentB, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+		}, true, gen); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restart(1)
+	if err := jrnl.SettleDisruption(ctx, "restart_jellyfin", incidentB, 1); err != nil {
+		t.Fatal(err)
+	}
+	restart(2)
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
+		t.Fatal("an earlier restart's settle hid the newer unsettled restart")
 	}
 }

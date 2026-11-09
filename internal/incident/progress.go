@@ -70,7 +70,8 @@ func progressPhrases(actions []*db.ActionLog, since time.Time, po *db.PendingOut
 	return out
 }
 
-func (s *Service) armReporterNote(ctx context.Context, id string, now time.Time) {	inc, err := s.db.GetIncident(ctx, id)
+func (s *Service) armReporterNote(ctx context.Context, id string, now time.Time) {
+	inc, err := s.db.GetIncident(ctx, id)
 	if err != nil {
 		s.log.ErrorContext(ctx, "load incident for progress", "incident", id, "error", err)
 		return
@@ -92,33 +93,47 @@ func (s *Service) armReporterNote(ctx context.Context, id string, now time.Time)
 		s.log.ErrorContext(ctx, "list actions for progress", "incident", id, "error", err)
 		return
 	}
-	hasNew := false
-	for _, a := range actions {
-		if a.Status == db.ActionApplied && a.AppliedAt != nil && a.AppliedAt.After(since) &&
-			agent.UserPhrase(a.Action) != "" {
-			hasNew = true
-			break
-		}
+	po, err := s.db.GetPendingOutcome(ctx, id)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		s.log.ErrorContext(ctx, "get pending outcome for progress", "incident", id, "error", err)
 	}
-	if !hasNew {
+	if len(progressPhrases(actions, since, po)) == 0 {
 		return
 	}
-	gap := s.minutes(s.timers(ctx).ProgressNoteGapMinutes)
-	if !now.Before(last.Add(gap)) {
+	due := last.Add(s.minutes(s.timers(ctx).ProgressNoteGapMinutes))
+	if !now.Before(due) {
 		s.reportProgress(ctx, inc, now)
 		return
 	}
+	s.deferReporterNote(id, due)
+}
+
+func (s *Service) deferReporterNote(id string, due time.Time) {
 	s.progressTimersMu.Lock()
+	defer s.progressTimersMu.Unlock()
 	if prev, ok := s.progressTimers[id]; ok {
 		prev.Stop()
 	}
-	s.progressTimers[id] = time.AfterFunc(time.Until(last.Add(gap)), func() {
+	short := (&db.Incident{ID: id}).ShortID()
+	var t *time.Timer
+	t = time.AfterFunc(time.Until(due), func() {
 		s.progressTimersMu.Lock()
-		delete(s.progressTimers, id)
+		if s.progressTimers[id] == t {
+			delete(s.progressTimers, id)
+		}
 		s.progressTimersMu.Unlock()
-		s.armReporterNote(s.work.base, id, time.Now())
+		s.work.goNamed("progress:"+short, func(ctx context.Context) { s.armReporterNote(ctx, id, time.Now()) })
 	})
-	s.progressTimersMu.Unlock()
+	s.progressTimers[id] = t
+}
+
+func (s *Service) stopReporterNotes() {
+	s.progressTimersMu.Lock()
+	defer s.progressTimersMu.Unlock()
+	for id, t := range s.progressTimers {
+		t.Stop()
+		delete(s.progressTimers, id)
+	}
 }
 
 func (s *Service) rearmReporterNotes(ctx context.Context) {

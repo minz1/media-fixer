@@ -65,7 +65,7 @@ type VerifySpec struct {
 	Extensions int             `json:"extensions"`
 	ETANoted   bool            `json:"eta_noted"`
 
-	VerifyEnteredAt time.Time `json:"verify_entered_at,omitempty"`
+	VerifyEnteredAt time.Time `json:"verify_entered_at,omitzero"`
 }
 
 type Stage string

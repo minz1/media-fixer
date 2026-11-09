@@ -1233,7 +1233,11 @@ func (c *toolCall) settleRestart(ctx context.Context, action string) {
 	}
 	jctx, cancel := detached(ctx)
 	defer cancel()
-	_ = c.journal.SettleDisruption(jctx, action, c.scope.IncidentID)
+	var gen int64
+	if c.gate != nil {
+		gen = c.gate.Gen()
+	}
+	_ = c.journal.SettleDisruption(jctx, action, c.scope.IncidentID, gen)
 }
 
 func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {

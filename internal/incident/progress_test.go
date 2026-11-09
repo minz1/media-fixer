@@ -237,7 +237,9 @@ func TestE6_RestartRearmsUnsentAction(t *testing.T) {
 	logAppliedAt(t, database, inc.ID, "refresh_decypharr_links", base.Add(time.Minute))
 
 	notif2 := &captureNotifier{}
-	svc2 := incident.NewService(context.Background(), database, nil, nil, nil, nil, notif2, slog.New(slog.DiscardHandler))
+	svc2 := incident.NewService(
+		context.Background(), database, nil, nil, nil, nil, notif2, slog.New(slog.DiscardHandler),
+	)
 	t.Cleanup(func() { stopService(t, svc2) })
 
 	svc2.RearmReporterNotesForTest(ctx)
@@ -276,12 +278,66 @@ func TestE6_ActionPathTriggersNote(t *testing.T) {
 	}
 	logAppliedAt(t, database, inc.ID, "refresh_decypharr_links", base.Add(20*time.Minute))
 
-	if _, err := svc.ApplyForTest(ctx, inc.ID, lifecycle.Event{Kind: lifecycle.AttemptFinished, Gen: inc.Generation}); err != nil {
+	finished := lifecycle.Event{Kind: lifecycle.AttemptFinished, Gen: inc.Generation}
+	if _, err := svc.ApplyForTest(ctx, inc.ID, finished); err != nil {
 		t.Fatal(err)
 	}
 
 	want := []string{"⏳ Still working on **X**: fixing the media storage."}
 	if strings.Join(notif.msgs, "|") != strings.Join(want, "|") {
 		t.Fatalf("msgs = %q, want %q", notif.msgs, want)
+	}
+}
+
+func TestE6_DownloadProgressSendsNote(t *testing.T) {
+	t.Parallel()
+	svc, database, inc, notif := newProgressIncident(t, db.StatusAwaitingDownload)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.ProgressNoteGapMinutes = 15 })
+	ctx := context.Background()
+	if _, err := database.ClaimReporterNote(ctx, inc.ID, time.Now().Add(-time.Hour), 0); err != nil {
+		t.Fatal(err)
+	}
+	snap := lifecycletest.Force(t, database, inc.ID, func(n *lifecycle.Snapshot) {
+		n.Download.GrabNotified = true
+		n.Download.StartedAt = time.Now()
+		n.Download.LastProgressAt = time.Now().Add(-2 * time.Hour)
+		n.Download.LastProgressPct = 10
+	})
+
+	obs := &lifecycle.Observation{InQueue: true, QueueStatus: "downloading", ProgressPct: 40}
+	if _, err := svc.ApplyForTest(ctx, inc.ID, lifecycle.Event{
+		Kind: lifecycle.DownloadObserved, Gen: snap.Generation, Obs: obs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"⏳ Still working on **X**: downloading a new copy (40%)."}
+	if strings.Join(notif.msgs, "|") != strings.Join(want, "|") {
+		t.Fatalf("msgs = %q, want %q", notif.msgs, want)
+	}
+}
+
+func TestE6_ShutdownDropsDeferredNote(t *testing.T) {
+	t.Parallel()
+	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
+	saveTimers(t, database, func(tm *incident.Timers) { tm.ProgressNoteGapMinutes = 15 })
+	ctx := context.Background()
+	base := time.Now()
+	if _, err := database.ClaimReporterNote(ctx, inc.ID, base, 0); err != nil {
+		t.Fatal(err)
+	}
+	logAppliedAt(t, database, inc.ID, "refresh_decypharr_links", base.Add(time.Minute))
+	svc.ArmReporterNoteForTest(ctx, inc.ID, base.Add(time.Minute))
+	if !svc.HasProgressTimerForTest(inc.ID) {
+		t.Fatal("no deferred note was armed inside the gap")
+	}
+
+	stopService(t, svc)
+
+	if svc.HasProgressTimerForTest(inc.ID) {
+		t.Fatal("shutdown left the deferred progress note armed")
+	}
+	if len(notif.msgs) != 0 {
+		t.Fatalf("msgs = %q, want none", notif.msgs)
 	}
 }

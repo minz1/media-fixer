@@ -70,10 +70,14 @@ func (s *Service) apply(ctx context.Context, id string, ev lifecycle.Event, extr
 		return a, err
 	}
 	s.afterCommit(ctx, a, t, "")
-	if (ev.Kind == lifecycle.AttemptFinished || ev.Kind == lifecycle.RunFinished) && lifecycle.Meta(a.Snap.Status).Progress {
+	if armsReporterNote(ev.Kind) && lifecycle.Meta(a.Snap.Status).Progress {
 		s.armReporterNote(ctx, a.Snap.ID, time.Now())
 	}
 	return a, nil
+}
+
+func armsReporterNote(k lifecycle.EventKind) bool {
+	return k == lifecycle.AttemptFinished || k == lifecycle.RunFinished || k == lifecycle.DownloadObserved
 }
 
 func (s *Service) afterCommit(ctx context.Context, a db.Applied, t Timers, seerrIssue string) {
@@ -147,9 +151,17 @@ func (s *Service) launchRun(inc *db.Incident, e lifecycle.Effect) {
 }
 
 func (s *Service) scheduleCheck(id string, e lifecycle.Effect) {
+	s.runs.armCheck(id, e.Gen, e.At, s.checkFire(id, e))
+}
+
+func (s *Service) scheduleCheckEarlier(id string, e lifecycle.Effect) {
+	s.runs.armCheckEarlier(id, e.Gen, e.At, s.checkFire(id, e))
+}
+
+func (s *Service) checkFire(id string, e lifecycle.Effect) func(done func()) {
 	gen, kind := e.Gen, e.Check
 	short := (&db.Incident{ID: id}).ShortID()
-	s.runs.armCheck(id, gen, e.At, func(done func()) {
+	return func(done func()) {
 		if !s.work.goNamed("check:"+short, func(ctx context.Context) {
 			defer done()
 			s.runCheck(ctx, id, gen, kind)
@@ -157,7 +169,7 @@ func (s *Service) scheduleCheck(id string, e lifecycle.Effect) {
 			done()
 			s.log.Info("check not started, shutting down", "incident", id, "check", string(kind))
 		}
-	})
+	}
 }
 
 func (r *effectRun) notifyReporters(ctx context.Context, e lifecycle.Effect) {

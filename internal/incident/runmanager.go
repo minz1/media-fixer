@@ -86,17 +86,16 @@ func newRunManager(base context.Context) *runManager {
 // supersede cancels any in-flight run for id and registers a fresh cancellable
 // context — cancelled either by a later supersede() for the same id, or by
 // the manager's shutdown, whichever comes first.
-func (m *runManager) supersede(id string) (context.Context, *runToken, bool) {
+func (m *runManager) supersede(id string) (context.Context, *runToken) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	prev, replaced := m.active[id]
-	if replaced {
+	if prev, ok := m.active[id]; ok {
 		prev.cancel()
 	}
 	ctx, cancel := context.WithCancel(m.base)
 	tok := &runToken{cancel: cancel}
 	m.active[id] = tok
-	return ctx, tok, replaced
+	return ctx, tok
 }
 
 // end releases tok's context and clears the registration, but only if tok is still
@@ -204,6 +203,14 @@ func (m *runManager) reserve(id string) func() {
 }
 
 func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func(done func())) bool {
+	return m.arm(id, gen, at, false, fire)
+}
+
+func (m *runManager) armCheckEarlier(id string, gen int64, at time.Time, fire func(done func())) bool {
+	return m.arm(id, gen, at, true, fire)
+}
+
+func (m *runManager) arm(id string, gen int64, at time.Time, earlier bool, fire func(done func())) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if gen < m.current[id] {
@@ -211,10 +218,13 @@ func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func(done
 	}
 	m.current[id] = gen
 	if c, ok := m.checks[id]; ok {
-		if c.gen >= gen {
+		sooner := earlier && c.gen == gen && at.Before(c.at)
+		if c.gen > gen || (c.gen == gen && !sooner) {
 			return false
 		}
-		c.timer.Stop()
+		if !c.timer.Stop() && sooner {
+			return false
+		}
 	}
 	m.checks[id] = armedCheck{gen: gen, at: at, timer: time.AfterFunc(max(time.Until(at), 0), func() {
 		fire(m.claimCheck(id, gen))

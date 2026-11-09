@@ -169,19 +169,20 @@ func (s *Service) ArmStuckReadClear(ctx context.Context, title string) error {
 		if inc.Title != title {
 			continue
 		}
-		snap, err := s.db.GetIncidentSnapshot(ctx, inc.ID)
-		if err != nil {
-			s.log.ErrorContext(ctx, "arm stuck-read clear: load incident", "incident", inc.ID, "error", err)
+		snap, loadErr := s.db.GetIncidentSnapshot(ctx, inc.ID)
+		if loadErr != nil {
+			s.log.ErrorContext(ctx, "arm stuck-read clear: load incident", "incident", inc.ID, "error", loadErr)
 			continue
 		}
-		if snap.Verify == nil || snap.Verify.Spec.Kind != lifecycle.VerifyStuckRead {
+		if snap.Verify == nil || snap.Verify.Spec.Kind != lifecycle.VerifyStuckRead ||
+			snap.Verify.Spec.VerifyEnteredAt.IsZero() {
 			continue
 		}
 		at := snap.Verify.Spec.VerifyEnteredAt.Add(floor)
 		if at.Before(now) {
 			at = now
 		}
-		s.scheduleCheck(inc.ID, lifecycle.Effect{
+		s.scheduleCheckEarlier(inc.ID, lifecycle.Effect{
 			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: at, Check: lifecycle.CheckVerify,
 		})
 	}

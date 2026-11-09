@@ -1262,6 +1262,14 @@ func (a *Agent) ScanRunning(ctx context.Context) bool {
 	return err == nil && st.Running
 }
 
+func (a *Agent) scanSettled(ctx context.Context) bool {
+	if a.disp == nil || a.disp.Jellyfin == nil {
+		return false
+	}
+	st, err := a.disp.Jellyfin.ScanStatus(ctx)
+	return err == nil && !st.Running
+}
+
 func (a *Agent) buildUserMessage(ctx context.Context, inc *db.Incident) string {
 	return fmt.Sprintf(`New incident reported.
 Title: %s
@@ -1307,10 +1315,10 @@ func (a *Agent) disruptionNote(ctx context.Context, incidentID string) string {
 	if err != nil || disp.IncidentID == incidentID || time.Since(disp.At) > disruptionCap {
 		return ""
 	}
-	if _, settled := a.journal.DisruptionSettledAt(ctx, disp.Action, disp.IncidentID); settled {
+	if _, settled := a.journal.DisruptionSettledAt(ctx, disp.Action, disp.IncidentID, disp.Generation); settled {
 		return ""
 	}
-	if disp.Action == toolJellyfinLibraryScan && !a.ScanRunning(ctx) {
+	if disp.Action == toolJellyfinLibraryScan && a.scanSettled(ctx) {
 		return ""
 	}
 	return fmt.Sprintf(

@@ -56,8 +56,8 @@ func (e *lcEnv) verifying(t *testing.T, title, what string) lifecycle.Snapshot {
 	return s
 }
 
-func (e *lcEnv) waitStatus(t *testing.T, id string, want lifecycle.State) {
-	e.waitStatusWithin(t, id, want, notifyWaitTimeout)
+func (e *lcEnv) waitFixed(t *testing.T, id string) {
+	e.waitStatusWithin(t, id, lifecycle.AgentFixed, notifyWaitTimeout)
 }
 
 func (e *lcEnv) waitStatusWithin(
@@ -79,7 +79,7 @@ func TestI1_11_VerifyingSurvivesRestart(t *testing.T) {
 	env := newLifecycleEnv(t, ag)
 	s := env.verifying(t, "Survives restart", "cant_play")
 	env.svc.StartRecovery()
-	env.waitStatus(t, s.ID, lifecycle.AgentFixed)
+	env.waitFixed(t, s.ID)
 	eventually(t, "the fixed note", func() bool {
 		cards := env.notif.userCards()
 		return len(cards) == 1 && strings.Contains(cards[0].Plain(), "fixed automatically")
@@ -159,7 +159,7 @@ func TestVerify_StuckReadUsesClear(t *testing.T) {
 	env.svc.SetStuckRead(chk)
 	s := env.verifying(t, "Stuck clear", lifecycle.WhatStuckRead)
 	env.svc.StartRecovery()
-	env.waitStatus(t, s.ID, lifecycle.AgentFixed)
+	env.waitFixed(t, s.ID)
 	if chk.calls() != 1 || ag.verifies.Load() != 0 {
 		t.Fatalf("Clear calls %d, VerifyResolved calls %d", chk.calls(), ag.verifies.Load())
 	}
@@ -175,7 +175,7 @@ func TestChecks_ReadOnlyWhilePaused(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.svc.StartRecovery()
-	env.waitStatus(t, s.ID, lifecycle.AgentFixed)
+	env.waitFixed(t, s.ID)
 }
 
 type blockingObserver struct {
@@ -301,7 +301,7 @@ func TestE2_ClearAfterFloorConfirmsQuickly(t *testing.T) {
 	if err := env.svc.ArmStuckReadClear(t.Context(), "Quick show"); err != nil {
 		t.Fatal(err)
 	}
-	env.waitStatus(t, s.ID, lifecycle.AgentFixed)
+	env.waitFixed(t, s.ID)
 	if n := chk.calls(); n != 1 {
 		t.Fatalf("Clear calls = %d, want 1", n)
 	}
@@ -337,5 +337,43 @@ func TestE2_OtherTitlesAndKindsUntouched(t *testing.T) {
 	}
 	if _, ok := env.svc.ArmedAtForTest(sameTitleGeneric.ID); ok {
 		t.Fatal("a same-title generic verify was armed")
+	}
+}
+
+func TestE2_ClearArmsEarlierThanTheVerifyTimer(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	env.svc.SetStuckRead(&fakeStuckChecker{clear: func(int) bool { return true }})
+	s := env.verifying(t, "Timer show", lifecycle.WhatStuckRead)
+	s = lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.VerifyEnteredAt = time.Now().Add(-10 * time.Minute)
+	})
+	inc := &db.Incident{ID: s.ID}
+	env.svc.ScheduleCheckForTest(inc, s.Generation, time.Now().Add(time.Hour))
+
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Timer show"); err != nil {
+		t.Fatal(err)
+	}
+	at, ok := env.svc.ArmedAtForTest(s.ID)
+	if ok && at.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("the clear left the verify check armed at %v, want now", at)
+	}
+	env.waitFixed(t, s.ID)
+}
+
+func TestE2_NoEnteredTimeLeavesTheVerifyTimer(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	env.svc.SetStuckRead(&fakeStuckChecker{clear: func(int) bool { return true }})
+	s := env.verifying(t, "Old row", lifecycle.WhatStuckRead)
+	s = lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.VerifyEnteredAt = time.Time{}
+	})
+
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Old row"); err != nil {
+		t.Fatal(err)
+	}
+	if at, ok := env.svc.ArmedAtForTest(s.ID); ok {
+		t.Fatalf("a row with no verify entry time was armed at %v, want the timer left alone", at)
 	}
 }
