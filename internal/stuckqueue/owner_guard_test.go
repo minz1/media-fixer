@@ -251,8 +251,8 @@ func TestL8_OwnerGuardIgnoresDownloadIDCase(t *testing.T) {
 		}
 	}
 	lower := func() error {
-		_, err := s.Act(context.Background(), stuckqueue.AppSonarr, "d", stuckqueue.ActionRegrab, fp)
-		return err
+		_, actErr := s.Act(context.Background(), stuckqueue.AppSonarr, "d", stuckqueue.ActionRegrab, fp)
+		return actErr
 	}
 	seedSnap(t, e, waitingAt(e, time.Hour))
 	refusedNoWrite(t, e.sonarr, lower(), "inside the 6 h wait")
@@ -264,7 +264,8 @@ func TestL8_OwnerGuardIgnoresDownloadIDCase(t *testing.T) {
 	if row := storedRow(t, e); row.State != string(stuckqueue.StateActed) || row.ActedOpID <= 0 {
 		t.Fatalf("row = %+v, want the stored D row acted", row)
 	}
-	if rows, err := e.db.ListStuck(context.Background(), "sonarr"); err != nil || len(rows) != 1 {
+	rows, err := e.db.ListStuck(context.Background(), "sonarr")
+	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v (err %v), want only the stored D row", rows, err)
 	}
 }
