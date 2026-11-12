@@ -12,6 +12,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 )
 
@@ -383,7 +384,7 @@ func (b *Bot) onReport(ctx context.Context, i *discordgo.InteractionCreate) {
 		reporter = i.Member.Nick
 	}
 
-	inc, err := b.svc.Handle(ctx, &incident.Report{
+	inc, merged, err := b.svc.HandleReport(ctx, &incident.Report{
 		Source:            "discord",
 		ReportedBy:        reporter,
 		ReporterDiscordID: i.Member.User.ID,
@@ -404,16 +405,25 @@ func (b *Bot) onReport(ctx context.Context, i *discordgo.InteractionCreate) {
 		b.log.ErrorContext(ctx, "handle report", "error", err)
 		content = "❌ Failed to create incident. Please try again."
 	} else {
-		content = fmt.Sprintf(
-			"✅ Incident **#%s** created for **%s**. The agent is investigating. You'll get a DM when it's resolved.",
-			inc.ShortID(),
-			title,
-		)
+		content = reportReply(inc, merged, title)
 	}
 
 	_, _ = b.api.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content: &content,
 	})
+}
+
+func reportReply(inc *db.Incident, merged bool, title string) string {
+	switch {
+	case merged:
+		return fmt.Sprintf("✅ Added to **#%s** for **%s**, already being worked on.", inc.ShortID(), title)
+	case inc.Status == db.StatusBlocked:
+		return fmt.Sprintf("✅ Logged as **#%s** for **%s**. The owner will pick it up.", inc.ShortID(), title)
+	case inc.Parked:
+		return fmt.Sprintf("✅ Logged as **#%s** for **%s**. Automatic fixes are paused; the owner will pick it up.",
+			inc.ShortID(), title)
+	}
+	return fmt.Sprintf("✅ Logged as **#%s** for **%s**. Looking into it now.", inc.ShortID(), title)
 }
 
 func (b *Bot) isClosing() bool {

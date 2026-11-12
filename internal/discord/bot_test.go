@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/discord"
 )
 
@@ -275,4 +276,31 @@ func TestConn_StopIsClosed(t *testing.T) {
 		_ = b.Close()
 		waitConn(t, b, discord.ConnClosed)
 	})
+}
+
+func TestF14_ReportReplyFollowsStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		inc    db.Incident
+		merged bool
+		want   string
+	}{
+		{"launched", db.Incident{ID: "abcdef12-x", Status: db.StatusInvestigating},
+			false, "✅ Logged as **#abcdef12** for **Dune**. Looking into it now."},
+		{"open", db.Incident{ID: "abcdef12-x", Status: db.StatusOpen},
+			false, "✅ Logged as **#abcdef12** for **Dune**. Looking into it now."},
+		{"merged", db.Incident{ID: "abcdef12-x", Status: db.StatusInvestigating},
+			true, "✅ Added to **#abcdef12** for **Dune**, already being worked on."},
+		{"blocked", db.Incident{ID: "abcdef12-x", Status: db.StatusBlocked},
+			false, "✅ Logged as **#abcdef12** for **Dune**. The owner will pick it up."},
+		{"parked", db.Incident{ID: "abcdef12-x", Status: db.StatusOpen, Parked: true},
+			false, "✅ Logged as **#abcdef12** for **Dune**. Automatic fixes are paused; the owner will pick it up."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := discord.ReportReplyForTest(&c.inc, c.merged, "Dune"); got != c.want {
+				t.Errorf("got  %q\nwant %q", got, c.want)
+			}
+		})
+	}
 }

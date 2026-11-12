@@ -214,7 +214,7 @@ func TestBot_ReportWhileClosingIsStored(t *testing.T) {
 	api.rmu.Lock()
 	edits := append([]string(nil), api.followups...)
 	api.rmu.Unlock()
-	if len(edits) != 1 || !strings.Contains(edits[0], "created for **Severance**") {
+	if len(edits) != 1 || !strings.Contains(edits[0], "Logged as **#") {
 		t.Errorf("reply = %q, want the usual ack", edits)
 	}
 }

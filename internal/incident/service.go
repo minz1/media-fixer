@@ -208,6 +208,11 @@ type Report struct {
 // Handle processes a new report: deduplicates, creates/updates the incident,
 // and starts the agent in the background if this is a new incident.
 func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
+	inc, _, err := s.HandleReport(ctx, r)
+	return inc, err
+}
+
+func (s *Service) HandleReport(ctx context.Context, r *Report) (*db.Incident, bool, error) {
 	nr := &db.NewIncident{
 		ID:                uuid.New().String(),
 		Source:            r.Source,
@@ -227,7 +232,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	a, err := s.db.CreateFromReport(ctx, nr, s.decide(lifecycle.Event{Kind: lifecycle.Reported}, s.limits(t), nil, nil))
 	if err != nil {
 		unclaim()
-		return nil, fmt.Errorf("record report: %w", err)
+		return nil, false, fmt.Errorf("record report: %w", err)
 	}
 	if a.Merged {
 		s.log.InfoContext(ctx, "duplicate report collapsed", "incident", a.Snap.ID, "reporter", r.ReportedBy)
@@ -235,7 +240,8 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 		s.lockAlertAt.Store(0)
 	}
 	s.afterCommit(ctx, a)
-	return s.db.GetIncident(ctx, a.Snap.ID)
+	inc, err := s.db.GetIncident(ctx, a.Snap.ID)
+	return inc, a.Merged, err
 }
 
 // runDiagnosis executes one agent.Run call under the process-wide diagnostic

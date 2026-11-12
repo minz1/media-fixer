@@ -8,6 +8,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/db"
 )
 
 func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap time.Duration) (*Bot, error) {
@@ -22,6 +23,10 @@ func NewForTest(log *slog.Logger, connect func() error, retryFirst, retryCap tim
 func ReportCommandForTest() *discordgo.ApplicationCommand { return reportCommand() }
 
 func PlainTextForTest(c card.Card) string { return plainText(c) }
+
+func ReportReplyForTest(inc *db.Incident, merged bool, title string) string {
+	return reportReply(inc, merged, title)
+}
 
 func NewWithSenderForTest(log *slog.Logger, api sender, ownerID, publicURL string) *Bot {
 	b, err := New("x", "", ownerID, publicURL, log)
