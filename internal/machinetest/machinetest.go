@@ -25,6 +25,8 @@ type Machine[S comparable, K comparable, Snap any, Ev any] struct {
 	Check    func(Snap) error
 	Terminal func(S) bool
 	Extra    func(before Snap, ev Ev) error
+	Deliver  func(Snap, Ev) Ev
+	Exact    func(Snap) string
 }
 
 func Totality[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev]) {
@@ -109,17 +111,28 @@ func Idempotence[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev],
 	for _, key := range g.order {
 		for _, k := range kinds {
 			for _, ev := range m.Events(k) {
+				if m.Deliver != nil {
+					ev = m.Deliver(g.nodes[key], ev)
+				}
 				once, err := m.Next(g.nodes[key], ev)
 				if err != nil {
 					continue
 				}
 				twice, err := m.Next(once, ev)
-				if err == nil && m.Key(twice) != m.Key(once) {
-					t.Errorf("kind %v, event %+v from %s is not idempotent: %s then %s", k, ev, key, m.Key(once), m.Key(twice))
+				if err == nil && exact(m, twice) != exact(m, once) {
+					t.Errorf("kind %v, event %+v from %s is not idempotent: %s then %s",
+						k, ev, key, exact(m, once), exact(m, twice))
 				}
 			}
 		}
 	}
+}
+
+func exact[S, K comparable, Snap, Ev any](m Machine[S, K, Snap, Ev], s Snap) string {
+	if m.Exact != nil {
+		return m.Exact(s)
+	}
+	return m.Key(s)
 }
 
 func Commutes[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev], pairs [][2]K) {

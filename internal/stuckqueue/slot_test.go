@@ -557,3 +557,8 @@ func TestGuard_RestartingRefusedBeforeLock(t *testing.T) {
 		}
 	}
 }
+
+func TestSlotMachine_Idempotence(t *testing.T) {
+	t.Parallel()
+	machinetest.Idempotence(t, slotMachine(), []stuckqueue.SlotKind{stuckqueue.SlotRelease})
+}

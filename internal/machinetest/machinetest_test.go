@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -297,7 +298,7 @@ func cellMachine(step func(cell, string) (cell, error)) machinetest.Machine[stri
 		Kinds:    kinds,
 		Initial:  cell{},
 		State:    func(cell) string { return "on" },
-		Key:      func(c cell) string { return fmt.Sprint(c.V) },
+		Key:      func(c cell) string { return strconv.Itoa(c.V) },
 		Samples:  func(string) []cell { return []cell{{}} },
 		Events:   func(k string) []cellEv { return []cellEv{{Kind: k}} },
 		Matches:  func(cell, cellEv) int { return 1 },
@@ -347,5 +348,28 @@ func TestCommutes_FlagsOrder(t *testing.T) {
 	machinetest.Commutes(r, cellMachine(cellStep), [][2]string{{"set1", "set1"}})
 	if len(r.errs) != 0 {
 		t.Fatalf("set1/set1 flagged: %v", r.errs)
+	}
+}
+
+func TestIdempotence_DeliversOnceAndComparesExact(t *testing.T) {
+	t.Parallel()
+	m := cellMachine(func(c cell, kind string) (cell, error) {
+		if kind == "set1" && c.V == 1 {
+			return c, errors.New("stale")
+		}
+		return cellStep(c, kind)
+	})
+	m.Key = func(cell) string { return "one" }
+	r := &recorder{}
+	machinetest.Idempotence(r, m, []string{"set1"})
+	if len(r.errs) != 0 {
+		t.Fatalf("errors = %v, want none without Exact", r.errs)
+	}
+	m.Exact = func(c cell) string { return strconv.Itoa(c.V) }
+	m.Deliver = func(cell, cellEv) cellEv { return cellEv{Kind: "inc"} }
+	r = &recorder{}
+	machinetest.Idempotence(r, m, []string{"set1"})
+	if !r.has("not idempotent") {
+		t.Fatalf("errors = %v, want the delivered inc flagged by Exact", r.errs)
 	}
 }

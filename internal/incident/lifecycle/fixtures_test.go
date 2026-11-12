@@ -159,6 +159,7 @@ type tev struct {
 	badOp     bool
 	verdict   operation.Verdict
 	advance   string
+	pinned    bool
 }
 
 func (t tev) String() string {
@@ -186,6 +187,9 @@ func prepare(s lifecycle.Snapshot, t tev) (lifecycle.Snapshot, lifecycle.Event) 
 	if cur.Op != nil && t.advance != "" {
 		op := advanced(*cur.Op, t.advance)
 		cur.Op = &op
+	}
+	if t.pinned {
+		return cur, t.ev
 	}
 	ev := t.ev
 	ev.Gen = s.Generation
@@ -386,5 +390,13 @@ func incidentMachine() machinetest.Machine[lifecycle.State, lifecycle.EventKind,
 		Check:    lifecycle.Check,
 		Terminal: func(s lifecycle.State) bool { return s == lifecycle.Resolved },
 		Extra:    obligations,
+		Deliver: func(s lifecycle.Snapshot, t tev) tev {
+			_, t.ev = prepare(s, t)
+			t.pinned = true
+			return t
+		},
+		Exact: func(s lifecycle.Snapshot) string {
+			return fmt.Sprintf("%s|g%d|v%d", key(s), s.Generation, s.Version)
+		},
 	}
 }

@@ -360,3 +360,8 @@ func TestSlot_StoppedRefusesWithRestarting(t *testing.T) {
 		t.Errorf("second stop gave %v, want already_stopped", err)
 	}
 }
+
+func TestSlotMachine_Idempotence(t *testing.T) {
+	t.Parallel()
+	machinetest.Idempotence(t, slotMachine(), []sweep.SlotKind{sweep.SlotCancelLive, sweep.SlotReconcile})
+}

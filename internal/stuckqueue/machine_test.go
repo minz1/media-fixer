@@ -514,3 +514,11 @@ func smMappedActed(at time.Time, f stuckqueue.Files) stuckqueue.Event {
 	e.Mapped = true
 	return e
 }
+
+func TestStuckQueueMachine_Idempotence(t *testing.T) {
+	t.Parallel()
+	machinetest.Idempotence(t, smMachine(), []stuckqueue.EventKind{
+		stuckqueue.EvClaimed, stuckqueue.EvClearDone, stuckqueue.EvExpire, stuckqueue.EvAdopted,
+		stuckqueue.EvResumed, stuckqueue.EvCommandObserved,
+	})
+}

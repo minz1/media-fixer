@@ -236,3 +236,8 @@ func TestS1_Copies_SlotSetsUnchanged(t *testing.T) {
 		t.Errorf("retryable = %v, want %v", retry, want)
 	}
 }
+
+func TestRunMachine_Idempotence(t *testing.T) {
+	t.Parallel()
+	machinetest.Idempotence(t, runMachine(), []sweepstate.RunEventKind{sweepstate.EvFinished})
+}
