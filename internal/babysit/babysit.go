@@ -112,6 +112,7 @@ type Explanation struct {
 	Text      string
 	CreatedAt time.Time
 	FromCache bool
+	Show      *Show
 }
 
 func sonarrItems(res stuckqueue.Result) []stuckqueue.Item {
@@ -243,6 +244,20 @@ func (s *Service) facts(
 }
 
 func (s *Service) Show(ctx context.Context, seriesID int) (Show, error) {
+	sh, err := s.base(ctx, seriesID)
+	if err != nil {
+		return Show{}, err
+	}
+	switch _, err = s.fillSonarr(ctx, &sh, seriesID); {
+	case errors.Is(err, client.ErrNotFound):
+		return Show{}, err
+	case err != nil:
+		sh.SonarrErr = err.Error()
+	}
+	return sh, nil
+}
+
+func (s *Service) base(ctx context.Context, seriesID int) (Show, error) {
 	l, err := s.local(ctx, seriesID)
 	if err != nil {
 		return Show{}, err
@@ -264,31 +279,25 @@ func (s *Service) Show(ctx context.Context, seriesID int) (Show, error) {
 	} else if !errors.Is(getErr, db.ErrNotFound) {
 		return Show{}, getErr
 	}
-	switch err = s.fillSonarr(ctx, &sh, seriesID); {
-	case errors.Is(err, client.ErrNotFound):
-		return Show{}, err
-	case err != nil:
-		sh.SonarrErr = err.Error()
-	}
 	return sh, nil
 }
 
-func (s *Service) fillSonarr(ctx context.Context, sh *Show, seriesID int) error {
+func (s *Service) fillSonarr(ctx context.Context, sh *Show, seriesID int) (string, error) {
 	series, seasons, entries, err := s.readSonarr(ctx, seriesID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	sh.Series, sh.Seasons = &series, seasons
 	sh.Live = liveStuck(entries, seriesID, sh.Queue)
 	if !sh.Stuck && sh.Cached == nil {
-		return nil
+		return "", nil
 	}
 	facts, err := s.facts(ctx, series, seasons, sh.Targets, sh.Items)
 	if err != nil {
-		return err
+		return "", err
 	}
 	sh.CacheFresh = sh.Cached != nil && sh.Cached.Fingerprint == fingerprint(s.Model, facts)
-	return nil
+	return facts, nil
 }
 
 func liveStuck(entries []client.QueueEntry, seriesID int, last []stuckqueue.Item) []LiveStuck {

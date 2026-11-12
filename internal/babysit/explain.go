@@ -25,47 +25,34 @@ func (s *Service) Explain(ctx context.Context, seriesID int) (Explanation, error
 	}
 	defer release()
 
-	loc, err := s.local(ctx, seriesID)
+	sh, err := s.base(ctx, seriesID)
 	if err != nil {
 		return Explanation{}, err
 	}
-	if !loc.stuck {
+	if !sh.Stuck {
 		return Explanation{}, ErrNotStuck
 	}
-	items, err := s.DB.SeriesSweepItems(ctx, seriesID, maxItems)
+	facts, err := s.fillSonarr(ctx, &sh, seriesID)
 	if err != nil {
 		return Explanation{}, err
 	}
-	series, seasons, _, err := s.readSonarr(ctx, seriesID)
-	if err != nil {
-		return Explanation{}, err
-	}
-	facts, err := s.facts(ctx, series, seasons, loc.targets, items)
-	if err != nil {
-		return Explanation{}, err
-	}
-	fp := fingerprint(s.Model, facts)
-
-	cached, err := s.DB.GetBabysitExplanation(ctx, seriesID)
-	switch {
-	case err == nil && cached.Fingerprint == fp:
-		return Explanation{Text: cached.Text, CreatedAt: cached.CreatedAt, FromCache: true}, nil
-	case err != nil && !errors.Is(err, db.ErrNotFound):
-		return Explanation{}, err
+	if sh.CacheFresh {
+		return Explanation{Text: sh.Cached.Text, CreatedAt: sh.Cached.CreatedAt, FromCache: true, Show: &sh}, nil
 	}
 
 	timers, _ := incident.LoadTimers(ctx, s.DB)
 	detached := context.WithoutCancel(ctx)
 	llmCtx, cancel := context.WithTimeout(detached, time.Duration(timers.ExplainTimeoutSeconds)*time.Second)
 	defer cancel()
-	answer, err := s.LLM.Complete(llmCtx, systemPrompt, userMessage(facts, buildQueue(loc.queue)))
+	answer, err := s.LLM.Complete(llmCtx, systemPrompt, userMessage(facts, buildQueue(sh.Queue)))
 	if err != nil {
-		return Explanation{}, fmt.Errorf("explain: %w", err)
+		return Explanation{Show: &sh}, fmt.Errorf("explain: %w", err)
 	}
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		return Explanation{}, errors.New("explain: the model returned an empty answer")
+		return Explanation{Show: &sh}, errors.New("explain: the model returned an empty answer")
 	}
+	fp := fingerprint(s.Model, facts)
 	e := db.BabysitExplanation{
 		SeriesID:    seriesID,
 		Fingerprint: fp,
@@ -76,5 +63,6 @@ func (s *Service) Explain(ctx context.Context, seriesID int) (Explanation, error
 	if err = s.DB.PutBabysitExplanation(detached, e); err != nil {
 		return Explanation{}, err
 	}
-	return Explanation{Text: answer, CreatedAt: e.CreatedAt}, nil
+	sh.Cached, sh.CacheFresh = &e, true
+	return Explanation{Text: answer, CreatedAt: e.CreatedAt, Show: &sh}, nil
 }

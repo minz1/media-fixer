@@ -250,8 +250,14 @@ func (s *Server) monitorExplain(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	_, err := s.babysit.Explain(r.Context(), id)
-	sh, showErr := s.babysit.Show(r.Context(), id)
+	ex, err := s.babysit.Explain(r.Context(), id)
+	var sh babysit.Show
+	var showErr error
+	if ex.Show != nil {
+		sh = *ex.Show
+	} else {
+		sh, showErr = s.babysit.Show(r.Context(), id)
+	}
 	if errors.Is(err, client.ErrNotFound) || errors.Is(showErr, client.ErrNotFound) {
 		http.NotFound(w, r)
 		return

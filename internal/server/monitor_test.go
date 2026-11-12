@@ -38,6 +38,7 @@ type bSonarr struct {
 
 	releases   []map[string]any
 	relGets    int
+	seriesGets int
 	grabs      []string
 	grabStatus int
 	grabBody   string
@@ -121,6 +122,9 @@ func (f *bSonarr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	releases := f.releases
 	if r.URL.Path == "/api/v3/release" && r.Method == http.MethodGet {
 		f.relGets++
+	}
+	if r.URL.Path == "/api/v3/series/7" {
+		f.seriesGets++
 	}
 	if r.URL.Path == "/api/v3/release" && r.Method == http.MethodPost {
 		raw, _ := io.ReadAll(r.Body)
@@ -650,6 +654,23 @@ func TestMonitor_ExplainRendersEscapedAndCaches(t *testing.T) {
 	e.son.mu.Unlock()
 	stale := do(t, e.srv, http.MethodGet, "/media/monitoring/7", nil).Body.String()
 	mustContain(t, stale, "history changed since", `hx-post="/media/monitoring/7/explain"`, "&lt;script&gt;")
+}
+
+func TestL6_ExplainReadsSonarrOnce(t *testing.T) {
+	t.Parallel()
+	e := newMonitorTestServer(t)
+	e.stuckSeven(t)
+	e.llm.reply = "because"
+	e.son.mu.Lock()
+	e.son.seriesGets = 0
+	e.son.mu.Unlock()
+	rec := do(t, e.srv, http.MethodPost, "/media/monitoring/7/explain", url.Values{})
+	mustContain(t, rec.Body.String(), "because")
+	e.son.mu.Lock()
+	defer e.son.mu.Unlock()
+	if e.son.seriesGets != 1 {
+		t.Fatalf("series reads per explain POST = %d, want 1", e.son.seriesGets)
+	}
 }
 
 func TestMonitor_ExplainRefusedWhenNotStuck(t *testing.T) {
