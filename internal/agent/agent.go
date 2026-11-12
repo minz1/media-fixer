@@ -48,7 +48,7 @@ Library files under /data/library/{tv,anime,movies}/ are SYMLINKS into /mnt/decy
 list_directory reports each entry's is_symlink flag and its target — follow the target to find
 the real file on the FUSE mount.
 
---- Playback problems (what=cant_play, buffering, missing_media) ---
+--- Playback problems (what=cant_play, buffering, missing_media, subtitles) ---
 
 Run ALL five steps before calling complete_diagnosis. Never bail out early.
 
@@ -69,6 +69,10 @@ Step 1 — Jellyfin lookup (always required).
   c. If still no results after two attempts, skip jellyfin_playback_info and continue to step 2.
   Picking from search results: prefer an Episode whose season/episode matches the incident;
   if none, use the Series. Either way, always continue to step 2 — never stop here.
+  Landed on a Series (search or Seerr tv) and the incident names an episode: call
+  jellyfin_list_episodes on it and use the Episode whose ParentIndexNumber/IndexNumber match.
+  Still no episode item: use an id from loki_query's item_ids (step 5), confirmed with
+  jellyfin_playback_info.
 
 Step 2 — Disk check (always required).
   Call get_disk_info. Each path reports two independent booleans, accessible and is_mount_point:
@@ -127,10 +131,14 @@ Step 4 — File readability (always required).
 
 Step 5 — Log review (always required).
   Call loki_query with {unit=~"jellyfin.service|decypharr.service"} for the last 30 minutes, and
-  set filter to the title (or the filename from step 1/4) so you only see lines about THIS item.
-  Without a filter you get every line from both services in the window, including ones about a
+  set filters to the title, the file name from step 1/4 and the Jellyfin item id once known, so
+  you only see lines about THIS item.
+  Without filters you get every line from both services in the window, including ones about a
   completely different title — those are not evidence about this incident and must not be cited
   as the root cause, no matter how relevant-sounding the error looks.
+  When a returned line says subtitle extraction failed, ffmpeg exited, or transcoding failed,
+  call loki_query again with the same filters and context_after: 20: the ffmpeg error that
+  explains it follows that line and does not name the title.
 
 After all five steps, call complete_diagnosis.
 
@@ -161,6 +169,17 @@ by whether the read errored.
     escalate_action=manual_investigation rather than calling a decypharr action.
   - An EIO or not_found here is the same finding as for cant_play; follow those rules instead.
   - Never escalate remove_and_search for slowness alone: the file is fine, its link is slow.
+
+--- Subtitles (what=subtitles) ---
+
+Subtitles are missing, broken, or out of sync on a title that otherwise plays.
+  1. Resolve the Episode item (step 1); a subtitle problem is per-file, never per-Series.
+  2. loki_query with filters, then again with context_after: 20 on any extraction / ffmpeg /
+     transcoding failure line.
+  3. dd_readability_test on the file, so a broken link is not mistaken for a subtitle defect.
+  4. Escalate escalate_action=manual_investigation, quoting the ffmpeg lines that explain it.
+  The only autonomous action is clear_jellyfin_cache on the Episode, and only when the evidence
+  is stale metadata. restart_jellyfin and jellyfin_library_scan are refused on this incident.
 
 --- Jellyfin has the title but it is unplayable / a Series shows no episodes ---
 
@@ -258,6 +277,10 @@ Action priority (least destructive first):
 7. restart_decypharr        — if decypharr appears stuck or FUSE mount is down
 8. restart_jellyfin         — if Jellyfin logs show crashes or it is unresponsive
 9. sonarr_rescan / radarr_rescan — if Jellyfin sees no sources but file might be present
+
+A deterministic per-file error (one file's ffmpeg or subtitle failure that repeats on every
+attempt) never justifies restart_jellyfin, restart_decypharr, jellyfin_library_scan or
+decypharr_cache_cleanup: they act on every file and cannot change that one.
 
 You may call autonomous actions directly. Approval-required actions must only appear in
 complete_diagnosis.escalate_action, never called as a tool yourself.

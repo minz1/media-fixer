@@ -11,7 +11,7 @@ func TestSystemPrompt_BufferingSectionLeadsWithReadSpeed(t *testing.T) {
 	t.Parallel()
 	prompt := agent.SystemPromptForTest()
 
-	if !strings.Contains(prompt, "--- Playback problems (what=cant_play, buffering, missing_media) ---") {
+	if !strings.Contains(prompt, "--- Playback problems (what=cant_play, buffering, missing_media, subtitles) ---") {
 		t.Error("playback protocol does not cover what=buffering")
 	}
 	const header = "--- Buffering / low quality (what=buffering) ---"

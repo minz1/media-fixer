@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -40,5 +41,44 @@ func TestG6_SubtitlesRefusesServiceWideActions(t *testing.T) {
 	}
 	if hits.Load() == 0 {
 		t.Error("cant_play library scan never reached Jellyfin")
+	}
+}
+
+func promptBetween(t *testing.T, prompt, start, end string) string {
+	t.Helper()
+	_, after, found := strings.Cut(prompt, start)
+	if !found {
+		t.Fatalf("system prompt has no %q", start)
+	}
+	section, _, _ := strings.Cut(after, end)
+	return section
+}
+
+func TestG1_PromptHasSubtitleProtocol(t *testing.T) {
+	t.Parallel()
+	prompt := agent.SystemPromptForTest()
+	step1 := promptBetween(t, prompt, "Step 1 — Jellyfin lookup", "Step 2 —")
+	for _, want := range []string{"jellyfin_list_episodes", "ParentIndexNumber", "item_ids"} {
+		if !strings.Contains(step1, want) {
+			t.Errorf("step 1 missing %q", want)
+		}
+	}
+	step5 := promptBetween(t, prompt, "Step 5 — Log review", "After all five steps")
+	for _, want := range []string{"filters", "context_after: 20"} {
+		if !strings.Contains(step5, want) {
+			t.Errorf("step 5 missing %q", want)
+		}
+	}
+	sub := promptBetween(t, prompt, "--- Subtitles (what=subtitles) ---", "\n---")
+	for _, want := range []string{"context_after", "dd_readability_test", "manual_investigation", "clear_jellyfin_cache"} {
+		if !strings.Contains(sub, want) {
+			t.Errorf("subtitles section missing %q", want)
+		}
+	}
+	rule := promptBetween(t, prompt, "A deterministic per-file error", "\n\n")
+	for _, want := range []string{"restart_jellyfin", "restart_decypharr", "jellyfin_library_scan", "decypharr_cache_cleanup"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("per-file rule missing %q", want)
+		}
 	}
 }
