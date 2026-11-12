@@ -9,7 +9,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/client"
 )
@@ -360,5 +363,135 @@ func TestG7_DeleteCacheSendsQueryOptions(t *testing.T) {
 	}
 	if got, _ := url.ParseQuery(gotQuery); !reflect.DeepEqual(got, want) {
 		t.Errorf("query = %v, want %v", got, want)
+	}
+}
+
+func TestB3_PlaybackInfoStreamIdentity(t *testing.T) {
+	t.Parallel()
+	srv := jellyfinPlaybackTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"MediaSources":[{"Id":"src1","MediaStreams":[
+			{"Type":"Subtitle","Index":5,"Language":"eng","Title":"English","DisplayTitle":"English - SRT","IsForced":true,"IsDefault":true,"IsTextSubtitleStream":true,"IsExternal":true},
+			{"Type":"Subtitle","Index":7,"Language":"jpn","Title":"Japanese"}]}]}`)
+	})
+	defer srv.Close()
+
+	result, err := client.NewJellyfin(srv.URL, "key").PlaybackInfo(context.Background(), "item123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.MediaSources[0].MediaStreams
+	want := client.MediaStream{
+		Type: "Subtitle", Index: 5, Language: "eng", Title: "English", DisplayTitle: "English - SRT",
+		IsForced: true, IsDefault: true, IsTextSubtitleStream: true, IsExternal: true,
+	}
+	if len(got) != 2 || got[0] != want || got[1].Index != 7 || got[1].Language != "jpn" || got[1].Title != "Japanese" {
+		t.Fatalf("streams = %+v", got)
+	}
+}
+
+func TestB3_SubtitleTextFetch(t *testing.T) {
+	t.Parallel()
+	const body = "1\n00:00:01,000 --> 00:00:02,000\nhello\n"
+	var mode atomic.Value
+	mode.Store("ok")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Videos/item1/src1/Subtitles/3/0/Stream.srt" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != `MediaBrowser Token="key"` {
+			t.Error("missing auth")
+		}
+		switch mode.Load() {
+		case "slow":
+			select {
+			case <-time.After(2 * time.Second):
+			case <-r.Context().Done():
+			}
+		case "500":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			_, _ = io.WriteString(w, body)
+		}
+	}))
+	defer srv.Close()
+	c := client.NewJellyfin(srv.URL, "key")
+
+	got, err := c.SubtitleText(context.Background(), "item1", "src1", 3)
+	if err != nil || got.Status != 200 || got.Bytes != len(body) || got.Text != body || got.TimedOut {
+		t.Fatalf("ok fetch = %+v, %v", got, err)
+	}
+
+	mode.Store("500")
+	got, err = c.SubtitleText(context.Background(), "item1", "src1", 3)
+	if err != nil || got.Status != 500 {
+		t.Fatalf("500 fetch = %+v, %v", got, err)
+	}
+
+	mode.Store("slow")
+	c.SetSubtitleTimeoutForTest(50 * time.Millisecond)
+	got, err = c.SubtitleText(context.Background(), "item1", "src1", 3)
+	if err != nil || !got.TimedOut {
+		t.Fatalf("slow fetch = %+v, %v", got, err)
+	}
+
+	c.SetSubtitleTimeoutForTest(time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	got, err = c.SubtitleText(ctx, "item1", "src1", 3)
+	if err != nil || !got.TimedOut {
+		t.Fatalf("caller deadline fetch = %+v, %v", got, err)
+	}
+}
+
+func TestB3_SubtitleClientHasNoShortTimeout(t *testing.T) {
+	t.Parallel()
+	if got := client.NewJellyfin("http://x", "key").SubtitleHTTPClientForTest().Timeout; got != 0 {
+		t.Fatalf("subtitle client Timeout = %v, want 0", got)
+	}
+}
+
+func TestB3_ItemInfo(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Items" || r.URL.Query().Get("Recursive") != "true" {
+			t.Errorf("url = %s", r.URL)
+		}
+		switch r.URL.Query().Get("ids") {
+		case "ep1":
+			_, _ = io.WriteString(
+				w,
+				`{"Items":[{"Id":"ep1","Type":"Episode","Name":"Pilot","SeriesId":"s1","SeriesName":"Show","ParentIndexNumber":2,"IndexNumber":6}]}`,
+			)
+		case "none":
+			_, _ = io.WriteString(w, `{"Items":[]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := client.NewJellyfin(srv.URL, "key")
+
+	got, err := c.ItemInfo(context.Background(), "ep1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := client.ItemInfo{
+		ID:         "ep1",
+		Type:       "Episode",
+		Name:       "Pilot",
+		SeriesID:   "s1",
+		SeriesName: "Show",
+		Season:     2,
+		Episode:    6,
+	}
+	if *got != want {
+		t.Fatalf("ItemInfo = %+v", got)
+	}
+	_, err = c.ItemInfo(context.Background(), "none")
+	if err == nil || !strings.Contains(err.Error(), "none") {
+		t.Errorf("empty list err = %v", err)
+	}
+	if _, err = c.ItemInfo(context.Background(), "missing"); err == nil {
+		t.Error("404 gave no error")
 	}
 }

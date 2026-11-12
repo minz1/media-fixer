@@ -6,17 +6,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type JellyfinClient struct {
 	base   string
 	apiKey string
 	http   *http.Client
+
+	subtitleHTTP    *http.Client
+	subtitleTimeout time.Duration
 
 	// userID caches the resolved user ID used for user-scoped calls like
 	// PlaybackInfo (see resolveUserID). Guarded by userIDMu since the client
@@ -30,6 +35,9 @@ func NewJellyfin(base, apiKey string) *JellyfinClient {
 		base:   base,
 		apiKey: apiKey,
 		http:   newHTTPClient(defaultHTTPTimeout),
+
+		subtitleHTTP:    newHTTPClient(0),
+		subtitleTimeout: subtitleTimeout,
 	}
 }
 
@@ -107,6 +115,14 @@ type MediaStream struct {
 	Height     int    `json:"Height"`
 	BitRate    int    `json:"BitRate"`
 	IsExternal bool   `json:"IsExternal"`
+
+	Index                int    `json:"Index"`
+	Language             string `json:"Language,omitempty"`
+	Title                string `json:"Title,omitempty"`
+	DisplayTitle         string `json:"DisplayTitle,omitempty"`
+	IsForced             bool   `json:"IsForced,omitempty"`
+	IsDefault            bool   `json:"IsDefault,omitempty"`
+	IsTextSubtitleStream bool   `json:"IsTextSubtitleStream,omitempty"`
 }
 
 // maxStreamingBitrate is the DeviceProfile bitrate ceiling advertised in
@@ -368,4 +384,88 @@ func (c *JellyfinClient) DeleteCache(ctx context.Context, itemID string) error {
 		return fmt.Errorf("close response body: %w", closeErr)
 	}
 	return nil
+}
+
+const (
+	subtitleTimeout  = 90 * time.Second
+	subtitleMaxBytes = 512 << 10
+)
+
+type SubtitleFetch struct {
+	Status   int    `json:"status"`
+	Bytes    int    `json:"bytes"`
+	Text     string `json:"-"`
+	TimedOut bool   `json:"timed_out,omitempty"`
+}
+
+func (c *JellyfinClient) SubtitleText(ctx context.Context, itemID, sourceID string, index int) (*SubtitleFetch, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.subtitleTimeout)
+	defer cancel()
+	u := fmt.Sprintf("%s/Videos/%s/%s/Subtitles/%d/0/Stream.srt",
+		c.base, url.PathEscape(itemID), url.PathEscape(sourceID), index)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authorize(req)
+
+	resp, err := c.subtitleHTTP.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return &SubtitleFetch{TimedOut: true}, nil
+		}
+		return nil, fmt.Errorf("jellyfin subtitle: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, subtitleMaxBytes))
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return &SubtitleFetch{Status: resp.StatusCode, TimedOut: true}, nil
+		}
+		return nil, fmt.Errorf("jellyfin subtitle: %w", err)
+	}
+	return &SubtitleFetch{Status: resp.StatusCode, Bytes: len(body), Text: string(body)}, nil
+}
+
+type ItemInfo struct {
+	ID         string `json:"Id"`
+	Type       string `json:"Type"`
+	Name       string `json:"Name"`
+	SeriesID   string `json:"SeriesId,omitempty"`
+	SeriesName string `json:"SeriesName,omitempty"`
+	Season     int    `json:"ParentIndexNumber"`
+	Episode    int    `json:"IndexNumber"`
+}
+
+func (c *JellyfinClient) ItemInfo(ctx context.Context, itemID string) (*ItemInfo, error) {
+	u, _ := url.Parse(c.base + "/Items")
+	q := u.Query()
+	q.Set("ids", itemID)
+	q.Set("Recursive", "true")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authorize(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("jellyfin item: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("jellyfin item %s: status %d", itemID, resp.StatusCode)
+	}
+	var result struct {
+		Items []ItemInfo `json:"Items"`
+	}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("jellyfin item decode: %w", decodeErr)
+	}
+	if len(result.Items) == 0 {
+		return nil, fmt.Errorf("jellyfin item %s: not found", itemID)
+	}
+	return &result.Items[0], nil
 }
