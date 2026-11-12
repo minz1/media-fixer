@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -155,5 +156,50 @@ func TestD9_8_TranscriptMarksTheRunsStepCount(t *testing.T) {
 	}
 	if body := page(); !strings.Contains(body, `id="incident-transcript" data-turns="2"`) {
 		t.Errorf("rerun: transcript step count didn't drop to the new run's")
+	}
+}
+
+func TestL7_HighlightResetsOnNewRunWithoutLowRender(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	ctx := context.Background()
+	inc := &db.Incident{
+		Status: db.StatusInvestigating, Source: "discord", ReportedBy: "t", What: "cant_play", Title: "T",
+	}
+	lifecycletest.Incident(t, database, inc)
+	j := journal.New(database)
+	seed := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "sys"},
+		{Role: openai.ChatMessageRoleUser, Content: "report"},
+	}
+	runOf := func() string {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/media/incidents/"+inc.ID, nil))
+		m := regexp.MustCompile(`id="incident-transcript" data-turns="(\d+)" data-run="(\d+)"`).
+			FindStringSubmatch(rec.Body.String())
+		if m == nil {
+			t.Fatal("transcript carries no run id")
+		}
+		return m[2]
+	}
+	round := func(n int) {
+		msg := openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant, Content: "thinking"}
+		if err := j.LLMRound(ctx, inc.ID, n, msg, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := j.RunStarted(ctx, inc.ID, seed); err != nil {
+		t.Fatal(err)
+	}
+	round(1)
+	first := runOf()
+	if err := j.RunStarted(ctx, inc.ID, seed); err != nil {
+		t.Fatal(err)
+	}
+	round(1)
+	round(2)
+	if runOf() == first {
+		t.Error("a new run keeps the old run id, so the highlight never resets")
 	}
 }

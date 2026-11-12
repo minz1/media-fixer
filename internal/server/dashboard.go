@@ -229,9 +229,10 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 	pendingOutcome, _ := s.db.GetPendingOutcome(ctx, id)
 
 	var turns []transcriptTurn
+	var run int64
 	if s.journal != nil {
-		if conv, convErr := s.journal.Conversation(ctx, id); convErr == nil {
-			turns = buildTranscriptTurns(conv, incidentLive(inc.Status))
+		if conv, seq, convErr := s.journal.ConversationRun(ctx, id); convErr == nil {
+			turns, run = buildTranscriptTurns(conv, incidentLive(inc.Status)), seq
 		}
 	}
 
@@ -260,6 +261,7 @@ func (s *Server) buildIncidentPageData(ctx context.Context, id string, full bool
 		"Transcript":        shown,
 		"EarlierSteps":      hidden,
 		"Turns":             len(turns),
+		"Run":               run,
 		"NextStep":          nextStep,
 		"Live":              incidentLive(inc.Status) && !paused,
 		"Full":              full,

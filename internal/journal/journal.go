@@ -437,17 +437,25 @@ type conversationImportedPayload struct {
 // LoadConversation's contract, since this has the same one caller
 // (Service.buildReinvestigateSeed) expecting it.
 func (j *Journal) Conversation(ctx context.Context, incidentID string) ([]openai.ChatCompletionMessage, error) {
+	out, _, err := j.ConversationRun(ctx, incidentID)
+	return out, err
+}
+
+func (j *Journal) ConversationRun(
+	ctx context.Context, incidentID string,
+) ([]openai.ChatCompletionMessage, int64, error) {
 	events, err := j.db.EventsSince(ctx, incidentID, 0)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var out []openai.ChatCompletionMessage
+	var run int64
 	for _, e := range events {
 		switch e.Kind {
 		case string(KindRunStarted):
 			var p runStartedPayload
 			if json.Unmarshal(e.Payload, &p) == nil {
-				out = p.Seed // reset: only the latest run's conversation matters
+				out, run = p.Seed, e.Seq // reset: only the latest run's conversation matters
 			}
 		case string(KindLLMRound):
 			var p llmRoundPayload
@@ -458,14 +466,14 @@ func (j *Journal) Conversation(ctx context.Context, incidentID string) ([]openai
 		case string(KindConversationImported):
 			var p conversationImportedPayload
 			if json.Unmarshal(e.Payload, &p) == nil {
-				out = p.Messages // also a reset, same "latest wins" semantics
+				out, run = p.Messages, e.Seq // also a reset, same "latest wins" semantics
 			}
 		}
 	}
 	if len(out) == 0 {
-		return nil, db.ErrNotFound
+		return nil, 0, db.ErrNotFound
 	}
-	return out, nil
+	return out, run, nil
 }
 
 // --- diagnosis_completed / run_finished ---
