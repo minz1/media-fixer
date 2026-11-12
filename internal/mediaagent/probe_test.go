@@ -98,7 +98,7 @@ func TestB1_ProbeRunsSandboxedAsUser(t *testing.T) {
 		t.Fatalf("argv[0] = %q, want systemd-run", argv[0])
 	}
 	for _, want := range []string{
-		"--wait", "--pipe", "--collect",
+		"--wait", "--pipe", "--collect", "--expand-environment=no",
 		"User=jellyfin", "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes",
 		"PrivateTmp=yes", "PrivateNetwork=yes", "PrivateDevices=yes", "CapabilityBoundingSet=", "RuntimeMaxSec=30",
 	} {

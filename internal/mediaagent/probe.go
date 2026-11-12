@@ -19,6 +19,7 @@ import (
 const (
 	probeTimeout   = 30 * time.Second
 	probeStderrCap = 256 * 1024
+	probeWaitDelay = 2 * time.Second
 )
 
 var unknownCodecRE = regexp.MustCompile(`Unknown/unsupported AVCodecID (\S+?)\.?\s*$`)
@@ -76,7 +77,7 @@ func parseProbe(stdout, stderr []byte) (*mediaagentapi.ProbeResult, error) {
 }
 
 func probeArgv(ffprobe, user, path string) []string {
-	argv := []string{"systemd-run", "--quiet", "--wait", "--pipe", "--collect"}
+	argv := []string{"systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--expand-environment=no"}
 	for _, p := range []string{
 		"User=" + user, "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
 		"PrivateNetwork=yes", "PrivateDevices=yes", "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX",
@@ -112,6 +113,7 @@ func (o *RealOps) ProbeStreams(ctx context.Context, path string) (*mediaagentapi
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = probeWaitDelay
 	if runErr := cmd.Run(); runErr != nil {
 		if errors.Is(runErr, exec.ErrNotFound) {
 			return nil, errors.New("systemd-run not on media-agent's PATH")
