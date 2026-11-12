@@ -27,5 +27,9 @@ func reporterCard(tone card.Tone, text string) card.Card {
 }
 
 func escalationVerbs() []string {
-	return []string{verbResolve, verbRerun, verbKeep, verbUnlock, verbPreview, verbRefresh, verbApprove}
+	var verbs []string
+	for _, sp := range cardSpecs(cardPlan{}, nil) {
+		verbs = append(verbs, sp.verb)
+	}
+	return verbs
 }

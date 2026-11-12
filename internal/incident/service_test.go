@@ -1566,7 +1566,7 @@ func TestEscalateToOwner_Cards(t *testing.T) {
 		t.Fatalf("owner cards %d, reporter cards %d, want 1 each", len(notif.cards), len(notif.users))
 	}
 	owner := notif.cards[0]
-	want := []string{"resolve", "rerun", "keep", "unlock", "preview", "refresh", "approve"}
+	want := []string{"preview", "approve", "resume", "refresh", "rerun", "resolve", "keep", "unlock"}
 	if owner.Plain() != "owner: look at House" || owner.Tone != card.Warn ||
 		owner.Path != "/incidents/"+inc.ID || !slices.Equal(owner.Verbs, want) {
 		t.Errorf("owner card = %+v", owner)
