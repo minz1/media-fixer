@@ -39,6 +39,37 @@ func TestF9_EscalationDMSurvivesDiscordOutage(t *testing.T) {
 	}
 }
 
+func TestF9_OneDecisionReachesEachRecipientOnce(t *testing.T) {
+	t.Parallel()
+	svc, database, notif := newTestService(t)
+	seerr := &fakeSeerr{}
+	svc.SetSeerr(seerr)
+	ctx := context.Background()
+	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "fixture", What: "cant_play", Title: "Lost"}
+	lifecycletest.Incident(t, database, inc)
+	for _, who := range []string{"alice", "bob"} {
+		if err := database.AddReporter(ctx, inc.ID, who, "discord", "discord-"+who); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lifecycletest.MoveTo(t, database, inc.ID, db.StatusInvestigating)
+	if _, err := database.AddSeerrIssue(ctx, inc.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	svc.EscalateToOwnerForTest(ctx, inc, "owner: look at Lost")
+	for range 2 {
+		svc.FlushOutboxForTest(ctx, time.Now().Add(time.Hour))
+	}
+	if n := countMsgs(notif.msgs, escalationNote); n != 2 {
+		t.Errorf("reporter DMs = %d, want one each for alice and bob; msgs %q", n, notif.msgs)
+	}
+	seerr.mu.Lock()
+	defer seerr.mu.Unlock()
+	if got := seerr.comments["7"]; len(got) != 1 {
+		t.Errorf("Seerr comments on 7 = %q, want one", got)
+	}
+}
+
 func TestF16_SeerrCommentKeepsDiscordWindow(t *testing.T) {
 	t.Parallel()
 	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
