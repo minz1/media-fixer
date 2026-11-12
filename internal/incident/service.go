@@ -20,6 +20,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/opexec"
+	"github.com/minz1/mediafixer/internal/outbox"
 )
 
 const SystematicIncidentThreshold = 5
@@ -34,6 +35,7 @@ type Service struct {
 	summarizer  *agent.Summarizer
 	notif       Notifier
 	seerr       SeerrIssues
+	outbox      *outbox.Dispatcher
 	stuckRead   StuckReadChecker
 	log         *slog.Logger
 	runs        *runManager
@@ -96,6 +98,8 @@ func NewService(
 		work:       work,
 	}
 	s.applyFn = s.apply
+	s.outbox = outbox.New(database, outboxSender{s}, log)
+	s.outbox.OnFailed(s.outboxFailed)
 	s.runs.wake = s.wakeReconciler
 	s.progressTimers = make(map[string]*time.Timer)
 	if paused, err := database.IsAutonomousPaused(base); err == nil {
@@ -218,7 +222,8 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	release := s.runs.reserve(nr.ID)
 	defer release()
 	t := s.timers(ctx)
-	a, err := s.db.CreateFromReport(ctx, nr, s.decide(lifecycle.Event{Kind: lifecycle.Reported}, s.limits(t), nil))
+	nr.Render = s.render(t, r.SeerrIssueID)
+	a, err := s.db.CreateFromReport(ctx, nr, s.decide(lifecycle.Event{Kind: lifecycle.Reported}, s.limits(t), nil, nil))
 	if err != nil {
 		return nil, fmt.Errorf("record report: %w", err)
 	}
@@ -227,7 +232,7 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	} else if a.Snap.Status != lifecycle.Blocked {
 		s.lockAlertAt.Store(0)
 	}
-	s.afterCommit(ctx, a, t, r.SeerrIssueID)
+	s.afterCommit(ctx, a)
 	return s.db.GetIncident(ctx, a.Snap.ID)
 }
 
@@ -495,124 +500,6 @@ func needsOwner(k agent.DiagnosisKind) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("%w: kind %q", errUnclassified, k)
-}
-
-func (s *Service) notifyReporters(ctx context.Context, inc *db.Incident, c card.Card) {
-	s.claimReporterNote(ctx, inc.ID, time.Now(), 0)
-	s.deliverToReporters(ctx, inc, c)
-}
-
-func (s *Service) noteReporters(
-	ctx context.Context,
-	inc *db.Incident,
-	c card.Card,
-	now time.Time,
-	minGap time.Duration,
-) {
-	if s.claimReporterNote(ctx, inc.ID, now, minGap) {
-		s.deliverToReporters(ctx, inc, c)
-	}
-}
-
-func (s *Service) claimReporterNote(ctx context.Context, id string, now time.Time, minGap time.Duration) bool {
-	claimed, err := s.db.ClaimReporterNote(ctx, id, now, minGap)
-	if err != nil {
-		s.log.ErrorContext(ctx, "claim reporter note", "incident", id, "error", err)
-	}
-	return claimed
-}
-
-func (s *Service) deliverToReporters(ctx context.Context, inc *db.Incident, c card.Card) {
-	s.notifyDiscordReporters(ctx, inc, c)
-	s.notifySeerrIssues(ctx, inc, "comment on", func(id string) error { return s.seerr.Comment(ctx, id, c.Plain()) })
-}
-
-func (s *Service) notifyDiscordReporters(ctx context.Context, inc *db.Incident, c card.Card) {
-	ids, err := s.db.ListDiscordReporterIDs(ctx, inc.ID)
-	if err != nil {
-		s.log.ErrorContext(ctx, "list discord reporter IDs", "incident", inc.ID, "error", err)
-		return
-	}
-	for _, id := range ids {
-		if notifyErr := s.notif.NotifyUser(ctx, id, c); notifyErr != nil {
-			s.log.ErrorContext(ctx, "notify reporter", "user", id, "incident", inc.ID, "error", notifyErr)
-			// A failed reporter DM (e.g. "no mutual guilds" — the reporter DM'd the
-			// bot from a server it isn't in) used to just vanish into an ERROR log
-			// line: the reporter was never told anything, and no one else was
-			// either. Fall back to the owner so a silently-undeliverable DM is at
-			// least visible somewhere.
-			_ = s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
-				"⚠️ Could not DM reporter %s for **%s** (#%s): %v",
-				id, inc.Title, inc.ShortID(), notifyErr,
-			), "", card.Field{Name: "Message was", Value: c.Plain()}))
-		}
-	}
-}
-
-func (s *Service) notifySeerrIssues(ctx context.Context, inc *db.Incident, verb string, call func(string) error) {
-	if s.seerr == nil {
-		return
-	}
-	ids, err := s.db.ListSeerrIssueIDs(ctx, inc.ID)
-	if err != nil {
-		s.log.ErrorContext(ctx, "list seerr issue IDs", "incident", inc.ID, "error", err)
-		return
-	}
-	for _, id := range ids {
-		s.callSeerrIssue(ctx, inc, verb, id, call)
-	}
-}
-
-func (s *Service) callSeerrIssue(ctx context.Context, inc *db.Incident, verb, id string, call func(string) error) {
-	if err := call(id); err != nil {
-		s.log.ErrorContext(ctx, "seerr "+verb, "issue", id, "incident", inc.ID, "error", err)
-		now := time.Now()
-		t := s.timers(ctx)
-		prev, ok := s.claimSeerrAlert(now, s.minutes(t.SeerrAlertGapMinutes))
-		if !ok {
-			return
-		}
-		if derr := s.notif.NotifyOwner(ctx, ownerCard(inc, card.Warn, fmt.Sprintf(
-			"⚠️ Could not %s Seerr issue %s for **%s** (#%s): %v",
-			verb, id, inc.Title, inc.ShortID(), err,
-		), "Further Seerr failures in the next "+gapText(t.SeerrAlertGapMinutes)+" are only logged.")); derr != nil {
-			s.log.ErrorContext(ctx, "seerr alert DM failed", "incident", inc.ID, "error", derr)
-			s.releaseSeerrAlert(now, prev)
-		}
-	}
-}
-
-func gapText(minutes int) string {
-	if minutes%minutesPerHour != 0 {
-		return fmt.Sprintf("%d minutes", minutes)
-	}
-	if h := minutes / minutesPerHour; h != 1 {
-		return fmt.Sprintf("%d hours", h)
-	}
-	return "hour"
-}
-
-func (s *Service) claimSeerrAlert(now time.Time, gap time.Duration) (time.Time, bool) {
-	s.seerrAlertMu.Lock()
-	defer s.seerrAlertMu.Unlock()
-	prev := s.seerrAlertAt
-	if now.Sub(prev) < gap {
-		return prev, false
-	}
-	s.seerrAlertAt = now
-	return prev, true
-}
-
-func (s *Service) releaseSeerrAlert(claimed, prev time.Time) {
-	s.seerrAlertMu.Lock()
-	defer s.seerrAlertMu.Unlock()
-	if s.seerrAlertAt.Equal(claimed) {
-		s.seerrAlertAt = prev
-	}
-}
-
-func (s *Service) resolveSeerrIssues(ctx context.Context, inc *db.Incident) {
-	s.notifySeerrIssues(ctx, inc, "resolve", func(id string) error { return s.seerr.Resolve(ctx, id) })
 }
 
 // endLockEpisode re-arms the lock alert once under the threshold, since reopen and rerun raise the count without Handle.

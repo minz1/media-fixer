@@ -873,14 +873,22 @@ type Incident struct {
 
 // GetIncident retrieves an incident by ID.
 func (d *DB) GetIncident(ctx context.Context, id string) (*Incident, error) {
-	row := d.read.QueryRowContext(ctx, `
+	return scanIncident(d.read.QueryRowContext(ctx, incidentQuery, id))
+}
+
+const incidentQuery = `
 		SELECT id, created_at, updated_at, status, source, reported_by, what, title,
 		       COALESCE(jellyfin_item_id,''), COALESCE(details,''),
 		       COALESCE(finding,''), COALESCE(recommended_actions,''),
 		       action_count, autonomous_locked, version, generation, parked, COALESCE(reason, ''), stuck_read_reran
-		FROM incidents WHERE id = ?`, id)
-	return scanIncident(row)
-}
+		FROM incidents WHERE id = ?`
+
+const discordReportersQuery = `SELECT discord_user_id FROM incident_reporters
+		 WHERE incident_id = ? AND discord_user_id IS NOT NULL AND discord_user_id != ''
+		 GROUP BY discord_user_id
+		 ORDER BY MIN(reported_at)`
+
+const seerrIssuesQuery = `SELECT issue_id FROM incident_seerr_issues WHERE incident_id = ? ORDER BY added_at, rowid`
 
 // ActiveIncidentStatuses are the statuses in which an incident is still being
 // worked on by the system itself. Deliberately excludes manual_test_needed and
@@ -1059,12 +1067,7 @@ func (d *DB) ListReporters(ctx context.Context, incidentID string) ([]string, er
 // interaction), so this groups by discord_user_id to guarantee each person
 // is notified exactly once.
 func (d *DB) ListDiscordReporterIDs(ctx context.Context, incidentID string) ([]string, error) {
-	rows, err := d.read.QueryContext(ctx,
-		`SELECT discord_user_id FROM incident_reporters
-		 WHERE incident_id = ? AND discord_user_id IS NOT NULL AND discord_user_id != ''
-		 GROUP BY discord_user_id
-		 ORDER BY MIN(reported_at)`,
-		incidentID)
+	rows, err := d.read.QueryContext(ctx, discordReportersQuery, incidentID)
 	if err != nil {
 		return nil, err
 	}
@@ -1106,9 +1109,7 @@ func rowChanged(res sql.Result, err error) (bool, error) {
 }
 
 func (d *DB) ListSeerrIssueIDs(ctx context.Context, incidentID string) ([]string, error) {
-	rows, err := d.read.QueryContext(ctx,
-		`SELECT issue_id FROM incident_seerr_issues WHERE incident_id = ? ORDER BY added_at, rowid`,
-		incidentID)
+	rows, err := d.read.QueryContext(ctx, seerrIssuesQuery, incidentID)
 	if err != nil {
 		return nil, err
 	}

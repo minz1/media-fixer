@@ -297,6 +297,7 @@ func TestSeerrAlert_FailedDMRetriesNext(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	svc.FlushOutboxForTest(context.Background(), time.Now().Add(2*time.Minute))
 	n := 0
 	for _, m := range notif.msgs {
 		if strings.Contains(m, "Could not") {
@@ -304,7 +305,7 @@ func TestSeerrAlert_FailedDMRetriesNext(t *testing.T) {
 		}
 	}
 	if n != 1 || len(notif.msgs) != 1 {
-		t.Errorf("owner Seerr alerts delivered = %d, want 1 (the first DM failed, the next retries); msgs %q",
+		t.Errorf("owner Seerr alerts delivered = %d, want 1 (the first DM failed, the outbox retried it); msgs %q",
 			n, notif.msgs)
 	}
 }
@@ -348,22 +349,5 @@ func TestRerunNote_SavedGap(t *testing.T) {
 
 	if n := countMsgs(notif.msgs, "🔁 Taking another look at **X**."); n != 1 {
 		t.Errorf("rerun notes = %d, want 1 with a saved 5 minute gap; msgs %q", n, notif.msgs)
-	}
-}
-
-func TestSeerrAlert_ReleaseKeepsNewerClaim(t *testing.T) {
-	t.Parallel()
-	svc, _, _ := newTestService(t)
-	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	prev, ok := svc.ClaimSeerrAlertForTest(at, time.Hour)
-	if !ok {
-		t.Fatal("first claim refused")
-	}
-	if _, ok = svc.ClaimSeerrAlertForTest(at.Add(2*time.Hour), time.Hour); !ok {
-		t.Fatal("claim two hours later refused")
-	}
-	svc.ReleaseSeerrAlertForTest(at, prev)
-	if got := svc.SeerrAlertAtForTest(); !got.Equal(at.Add(2 * time.Hour)) {
-		t.Errorf("stamp after releasing the older claim = %v, want %v", got, at.Add(2*time.Hour))
 	}
 }

@@ -347,6 +347,9 @@ func (s *Server) dashboardIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("done") == doneRestarting {
 		data["Done"] = card.RestartingNotice
 	}
+	if n, nerr := s.db.StuckOutboxCount(r.Context(), time.Now()); nerr == nil {
+		data["Undelivered"] = n
+	}
 	_ = s.tmpl.t.Execute(w, data)
 }
 

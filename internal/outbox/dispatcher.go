@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/card"
@@ -34,11 +35,27 @@ func backoff(attempts int) time.Duration {
 }
 
 type Dispatcher struct {
-	db   *db.DB
-	s    Sender
-	log  *slog.Logger
-	wake chan struct{}
-	now  func() time.Time
+	db     *db.DB
+	s      Sender
+	log    *slog.Logger
+	wake   chan struct{}
+	now    func() time.Time
+	mu     sync.Mutex
+	failed func(ctx context.Context, r db.OutboxRow, now time.Time, err error) bool
+}
+
+func (d *Dispatcher) OnFailed(f func(ctx context.Context, r db.OutboxRow, now time.Time, err error) bool) {
+	d.failed = f
+}
+
+func (d *Dispatcher) Flush(ctx context.Context, now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for range 3 {
+		if !d.drainAt(ctx, now) {
+			return
+		}
+	}
 }
 
 func New(d *db.DB, s Sender, log *slog.Logger) *Dispatcher {
@@ -56,7 +73,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	for {
-		d.drain(ctx)
+		d.Flush(ctx, d.now())
 		select {
 		case <-ctx.Done():
 			return
@@ -66,12 +83,12 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
-func (d *Dispatcher) drain(ctx context.Context) {
-	now := d.now()
+func (d *Dispatcher) drainAt(ctx context.Context, now time.Time) bool {
+	again := false
 	rows, err := d.db.DueOutbox(ctx, now, batch)
 	if err != nil {
 		d.log.WarnContext(ctx, "outbox read", "error", err)
-		return
+		return false
 	}
 	blocked := map[string]bool{}
 	for _, r := range rows {
@@ -86,11 +103,16 @@ func (d *Dispatcher) drain(ctx context.Context) {
 		switch {
 		case errors.Is(err, errUndeliverable):
 			d.giveUp(ctx, r, now, err.Error())
-		case err != nil:
+		case err != nil && !errors.Is(err, card.ErrUntracked):
 			blocked[r.Target] = true
+			d.log.WarnContext(ctx, "outbox send failed", "id", r.ID, "target", r.Target, "kind", r.Kind,
+				"attempts", r.Attempts+1, "error", err)
 			next := now.Add(min(backoff(r.Attempts), r.CreatedAt.Add(giveUpAfter).Sub(now)))
 			if merr := d.db.MarkOutboxFailed(ctx, r.ID, next, err.Error()); merr != nil {
 				d.log.WarnContext(ctx, "outbox mark failed", "id", r.ID, "error", merr)
+			}
+			if d.failed != nil && d.failed(ctx, r, now, err) {
+				again = true
 			}
 		default:
 			if merr := d.db.MarkOutboxSent(ctx, r.ID, now); merr != nil {
@@ -99,6 +121,7 @@ func (d *Dispatcher) drain(ctx context.Context) {
 			}
 		}
 	}
+	return again
 }
 
 func (d *Dispatcher) giveUp(ctx context.Context, r db.OutboxRow, now time.Time, why string) {

@@ -34,6 +34,7 @@ type captureNotifier struct {
 	cards      []card.Card
 	users      []card.Card
 	ownerFails int
+	userErr    error
 }
 
 func (c *captureNotifier) NotifyOwner(_ context.Context, msg card.Card) error {
@@ -47,6 +48,9 @@ func (c *captureNotifier) NotifyOwner(_ context.Context, msg card.Card) error {
 }
 
 func (c *captureNotifier) NotifyUser(_ context.Context, _ string, msg card.Card) error {
+	if c.userErr != nil {
+		return c.userErr
+	}
 	c.msgs = append(c.msgs, msg.Plain())
 	c.users = append(c.users, msg)
 	return nil
@@ -315,8 +319,9 @@ func TestHandle_SystemicLockRetriesFailedAlert(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	svc.FlushOutboxForTest(ctx, time.Now().Add(2*time.Minute))
 	if len(notif.cards) != 1 {
-		t.Fatalf("owner cards = %d, want 1 (the failed alert retried on the next locked incident)", len(notif.cards))
+		t.Fatalf("owner cards = %d, want 1 (the outbox retried the failed alert)", len(notif.cards))
 	}
 }
 

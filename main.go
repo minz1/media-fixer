@@ -193,26 +193,6 @@ type app struct {
 	outbox   *outbox.Dispatcher
 }
 
-type outboxSender struct {
-	*discord.Bot
-
-	seerr *client.SeerrClient
-}
-
-func (s outboxSender) SeerrComment(ctx context.Context, issueID, text string) error {
-	if !s.seerr.Configured() {
-		return errors.New("seerr not configured")
-	}
-	return s.seerr.Comment(ctx, issueID, text)
-}
-
-func (s outboxSender) SeerrResolve(ctx context.Context, issueID string) error {
-	if !s.seerr.Configured() {
-		return errors.New("seerr not configured")
-	}
-	return s.seerr.Resolve(ctx, issueID)
-}
-
 func run() error {
 	cfgPath := flag.String("config", "/etc/media-fixer/config.toml", "path to TOML config file")
 	migrateDown := flag.Int("migrate-down", 0, "roll back this schema migration, print the counts and exit")
@@ -269,9 +249,9 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 		log.ErrorContext(ctx, "init discord bot", "error", err)
 		return nil, err
 	}
-	a.outbox = outbox.New(database, outboxSender{a.bot, bundle.clients.Seerr}, log)
 
 	a.svc = incident.NewService(ctx, database, a.jrnl, bundle.ag, bundle.ctrl, bundle.summary, a.bot, log)
+	a.outbox = a.svc.Outbox()
 	if bundle.clients.Seerr.Configured() {
 		a.svc.SetSeerr(bundle.clients.Seerr)
 	} else {

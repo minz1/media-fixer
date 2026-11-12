@@ -543,3 +543,26 @@ func TestD4_11_IncidentPagesHaveNoSSEClose(t *testing.T) {
 		}
 	}
 }
+
+func TestF9_DashboardCountsUndeliveredMessages(t *testing.T) {
+	t.Parallel()
+	srv, database := newDashboardTestServer(t)
+	ctx := context.Background()
+	now := time.Now()
+	if err := database.EnqueueOutbox(ctx, db.OutboxRow{Key: "k", Target: "owner", Kind: "card", Body: "{}",
+		CreatedAt: now, NextAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.DueOutbox(ctx, now, 1)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("due rows %v %v", rows, err)
+	}
+	if err = database.GiveUpOutbox(ctx, rows[0].ID, now); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/media/", nil))
+	if body := rec.Body.String(); !strings.Contains(body, "1 message could not be delivered") {
+		t.Fatalf("index lacks the undelivered line; body:\n%s", body)
+	}
+}

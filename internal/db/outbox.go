@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 const migNotifyOutbox = 26
@@ -148,4 +150,115 @@ func migrateDown26On(ctx context.Context, conn *sql.Conn, path string, out io.Wr
 	_, _ = fmt.Fprintf(out, "outbox rows dropped: %d (undelivered %d)\nschema_version max: 25\nbackup: %s\n",
 		total, pending, backup)
 	return nil
+}
+
+type Note struct {
+	Key     string
+	Seerr   bool
+	To      string
+	MinGap  time.Duration
+	Body    string
+	Resolve bool
+}
+
+type Outgoing struct {
+	Rows  []OutboxRow
+	Notes []Note
+}
+
+type Render func(inc *Incident, snap lifecycle.Snapshot, effects []lifecycle.Effect) Outgoing
+
+func (d *DB) QueueOutgoing(ctx context.Context, id string, claimAt time.Time, o Outgoing) error {
+	return runTx(
+		ctx,
+		d.write,
+		func(ctx context.Context, tx *sql.Tx) error { return queueOutgoing(ctx, tx, id, claimAt, o) },
+	)
+}
+
+func renderInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	snap lifecycle.Snapshot,
+	render Render,
+	effects []lifecycle.Effect,
+) error {
+	if render == nil || len(effects) == 0 {
+		return nil
+	}
+	inc, err := scanIncident(tx.QueryRowContext(ctx, incidentQuery, snap.ID))
+	if err != nil {
+		return err
+	}
+	return queueOutgoing(ctx, tx, snap.ID, time.Now(), render(inc, snap, effects))
+}
+
+func queueOutgoing(ctx context.Context, tx *sql.Tx, id string, claimAt time.Time, o Outgoing) error {
+	now := time.Now()
+	for _, r := range o.Rows {
+		r.IncidentID, r.CreatedAt, r.NextAt = id, now, now
+		if err := enqueueOutbox(ctx, tx, r); err != nil {
+			return err
+		}
+	}
+	for _, n := range o.Notes {
+		if err := queueNote(ctx, tx, id, claimAt, now, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func queueNote(ctx context.Context, tx *sql.Tx, id string, claimAt, now time.Time, n Note) error {
+	col, scheme, kind, list := "last_reporter_note_at", "discord:", "card", discordReportersQuery
+	if n.Seerr {
+		col, scheme, kind, list = "last_seerr_note_at", "seerr:", "seerr_comment", seerrIssuesQuery
+	}
+	if n.Resolve {
+		kind = "seerr_resolve"
+	} else {
+		claimed, err := rowChanged(tx.ExecContext(ctx, `UPDATE incidents SET `+col+` = ?
+			WHERE id = ? AND (`+col+` IS NULL OR `+col+` <= ?)`, claimAt, id, claimAt.Add(-n.MinGap)))
+		if err != nil || !claimed {
+			return err
+		}
+	}
+	to := []string{n.To}
+	if n.To == "" {
+		var err error
+		if to, err = listStrings(ctx, tx, list, id); err != nil {
+			return err
+		}
+	}
+	for _, t := range to {
+		r := OutboxRow{Key: n.Key + ":" + scheme + t, IncidentID: id, Target: scheme + t, Kind: kind, Body: n.Body,
+			CreatedAt: now, NextAt: now}
+		if err := enqueueOutbox(ctx, tx, r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func listStrings(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err = rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) LastSeerrNoteAt(ctx context.Context, id string) (time.Time, error) {
+	var t sql.NullTime
+	err := d.read.QueryRowContext(ctx, `SELECT last_seerr_note_at FROM incidents WHERE id = ?`, id).Scan(&t)
+	return t.Time, err
 }

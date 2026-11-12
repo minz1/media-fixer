@@ -61,22 +61,8 @@ func (s *Service) BackdateSeerrAlertForTest(d time.Duration) {
 	s.seerrAlertAt = s.seerrAlertAt.Add(-d)
 }
 
-func (s *Service) ClaimSeerrAlertForTest(now time.Time, gap time.Duration) (time.Time, bool) {
-	return s.claimSeerrAlert(now, gap)
-}
-
 func (s *Service) BackgroundSweepLoopForTest(ctx context.Context) {
 	s.reconcileLoop(ctx)
-}
-
-func (s *Service) ReleaseSeerrAlertForTest(claimed, prev time.Time) {
-	s.releaseSeerrAlert(claimed, prev)
-}
-
-func (s *Service) SeerrAlertAtForTest() time.Time {
-	s.seerrAlertMu.Lock()
-	defer s.seerrAlertMu.Unlock()
-	return s.seerrAlertAt
 }
 
 func (s *Service) SetSeedTimeoutForTest(d time.Duration) {
@@ -306,3 +292,5 @@ func (s *Service) SetApplyForTest(f func(ctx context.Context, id string, ev life
 }
 
 func (s *Service) PausedForTest() bool { return s.paused.Load() }
+
+func (s *Service) FlushOutboxForTest(ctx context.Context, now time.Time) { s.outbox.Flush(ctx, now) }

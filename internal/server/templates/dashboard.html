@@ -338,6 +338,7 @@
       <!-- Connects but never itself swaps (hx-swap="none"); incoming
            <hx-partial> elements target #incidents-list by id instead. -->
       <div hx-sse:connect="{{.BaseURL}}/events" hx-swap="none"></div>
+      {{with .Undelivered}}<p class="mb-3 flex items-center gap-1.5 text-sm text-gray-600">{{.}} {{if eq . 1}}message{{else}}messages{{end}} could not be delivered{{template "info" "Discord DMs and Seerr calls given up after 24 hours of retries in the last 7 days; see the media-fixer log."}}</p>{{end}}
       {{template "incidents_list" .}}
 {{template "page_bottom"}}
 

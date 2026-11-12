@@ -108,6 +108,7 @@ type Decision struct {
 	lifecycle.Decision
 
 	Events []*Event
+	Render Render
 }
 
 type Decide func(cur lifecycle.Snapshot) (Decision, error)
@@ -132,6 +133,7 @@ type NewIncident struct {
 	Title             string
 	JellyfinItemID    string
 	Details           string
+	Render            Render
 }
 
 const kindStatusChanged = "status_changed"
@@ -184,6 +186,9 @@ func commitDecision(ctx context.Context, tx *sql.Tx, cur lifecycle.Snapshot, dec
 	}
 	seqs, err := appendAll(ctx, tx, events)
 	if err != nil {
+		return Applied{}, err
+	}
+	if err = renderInTx(ctx, tx, next, dec.Render, effects); err != nil {
 		return Applied{}, err
 	}
 	out := Applied{Snap: next, PrevStatus: cur.Status, Effects: effects, Events: events, seqs: seqs}
@@ -356,6 +361,9 @@ func mergeReport(ctx context.Context, tx *sql.Tx, id string, r *NewIncident) (Ap
 	if err != nil {
 		return Applied{}, err
 	}
+	if err = renderInTx(ctx, tx, s, r.Render, effects); err != nil {
+		return Applied{}, err
+	}
 	return Applied{Snap: s, Effects: effects, Events: events, Merged: true, seqs: seqs}, nil
 }
 
@@ -429,7 +437,11 @@ func insertReport(ctx context.Context, tx *sql.Tx, r *NewIncident, decide Decide
 	if err != nil {
 		return Applied{}, err
 	}
-	return Applied{Snap: next, Effects: append(dec.Effects, effects...), Events: events, seqs: seqs}, nil
+	effects = append(dec.Effects, effects...)
+	if err = renderInTx(ctx, tx, next, r.Render, effects); err != nil {
+		return Applied{}, err
+	}
+	return Applied{Snap: next, Effects: effects, Events: events, seqs: seqs}, nil
 }
 
 func insertIncident(ctx context.Context, tx *sql.Tx, s lifecycle.Snapshot, r *NewIncident) error {

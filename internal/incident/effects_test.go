@@ -135,7 +135,7 @@ func TestEffects_FailureLoggedRestStillRun(t *testing.T) {
 	if _, err := env.svc.ApplyForTest(ctx, s.ID, ev); err != nil {
 		t.Fatal(err)
 	}
-	if !env.logged("msg=\"notify owner\"") {
+	if !env.logged("msg=\"outbox send failed\"") {
 		t.Fatalf("owner DM failure not logged: %s", env.logs.String())
 	}
 	if got := env.notif.userCards(); len(got) != 1 || !strings.Contains(got[0].Plain(), "Handed") {

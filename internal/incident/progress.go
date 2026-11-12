@@ -15,14 +15,6 @@ import (
 )
 
 func (s *Service) reportProgress(ctx context.Context, inc *db.Incident, now time.Time) {
-	since, err := s.db.LastReporterNoteAt(ctx, inc.ID)
-	if err != nil {
-		s.log.ErrorContext(ctx, "read last reporter note", "incident", inc.ID, "error", err)
-		return
-	}
-	if since.IsZero() {
-		since = inc.CreatedAt
-	}
 	actions, err := s.db.ListActions(ctx, inc.ID)
 	if err != nil {
 		s.log.ErrorContext(ctx, "list actions for progress", "incident", inc.ID, "error", err)
@@ -32,13 +24,42 @@ func (s *Service) reportProgress(ctx context.Context, inc *db.Incident, now time
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
 		s.log.ErrorContext(ctx, "get pending outcome for progress", "incident", inc.ID, "error", err)
 	}
-	phrases := progressPhrases(actions, since, po)
-	if len(phrases) == 0 {
-		return
+	gap := s.minutes(s.timers(ctx).ProgressNoteGapMinutes)
+	key := fmt.Sprintf("progress:%s:%d", inc.ID, now.UnixNano())
+	var o db.Outgoing
+	for _, seerr := range []bool{false, true} {
+		last := s.db.LastReporterNoteAt
+		if seerr {
+			if s.seerr == nil {
+				continue
+			}
+			last = s.db.LastSeerrNoteAt
+		}
+		since, lerr := last(ctx, inc.ID)
+		if lerr != nil {
+			s.log.ErrorContext(ctx, "read last reporter note", "incident", inc.ID, "error", lerr)
+			continue
+		}
+		if since.IsZero() {
+			since = inc.CreatedAt
+		}
+		phrases := progressPhrases(actions, since, po)
+		if len(phrases) == 0 {
+			continue
+		}
+		c := reporterCard(
+			card.Info,
+			fmt.Sprintf("⏳ Still working on **%s**: %s.", inc.Title, strings.Join(phrases, ", ")),
+		)
+		body := cardJSON(c)
+		if seerr {
+			body = c.Plain()
+		}
+		o.Notes = append(o.Notes, db.Note{Key: key, Seerr: seerr, MinGap: gap, Body: body})
 	}
-	s.noteReporters(ctx, inc,
-		reporterCard(card.Info, fmt.Sprintf("⏳ Still working on **%s**: %s.", inc.Title, strings.Join(phrases, ", "))),
-		now, s.minutes(s.timers(ctx).ProgressNoteGapMinutes))
+	if len(o.Notes) > 0 {
+		s.queueNotes(ctx, inc.ID, now, o)
+	}
 }
 
 func progressPhrases(actions []*db.ActionLog, since time.Time, po *db.PendingOutcome) []string {

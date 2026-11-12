@@ -201,3 +201,49 @@ func TestF9_OutboxRoutesEveryKind(t *testing.T) {
 		t.Fatalf("an unknown target is given up at once: %d %v", n, err)
 	}
 }
+
+type untrackedSender struct{ fakeSender }
+
+func (u *untrackedSender) NotifyOwner(_ context.Context, c card.Card) error {
+	_ = u.record("owner:" + c.Title)
+	return card.ErrUntracked
+}
+
+func TestF9_UntrackedCardCountsAsSent(t *testing.T) {
+	t.Parallel()
+	d := openDB(t)
+	ownerCard(t, d, "k1", "plain", t0())
+	s := &untrackedSender{}
+	disp := outbox.New(d, s, slog.New(slog.DiscardHandler))
+	disp.Flush(context.Background(), t0())
+	disp.Flush(context.Background(), t0().Add(time.Hour))
+	if got := s.got(); !slices.Equal(got, []string{"owner:plain"}) {
+		t.Fatalf("sent %v, want the row once (an untracked card was delivered)", got)
+	}
+}
+
+func TestF17_FailureHookQueuesAndIsDrained(t *testing.T) {
+	t.Parallel()
+	d := openDB(t)
+	ctx := context.Background()
+	body, _ := json.Marshal(card.Card{Title: "note"})
+	if err := d.EnqueueOutbox(ctx, db.OutboxRow{Key: "u", Target: "discord:42", Kind: "card", Body: string(body),
+		CreatedAt: t0(), NextAt: t0()}); err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeSender{fails: 1}
+	disp := outbox.New(d, s, slog.New(slog.DiscardHandler))
+	var failed []string
+	disp.OnFailed(func(_ context.Context, r db.OutboxRow, _ time.Time, err error) bool {
+		failed = append(failed, r.Target+": "+err.Error())
+		ownerCard(t, d, "fallback", "could not DM 42", t0())
+		return true
+	})
+	disp.Flush(ctx, t0())
+	if !slices.Equal(failed, []string{"discord:42: discord down"}) {
+		t.Fatalf("hook saw %v", failed)
+	}
+	if got := s.got(); !slices.Equal(got, []string{"owner:could not DM 42"}) {
+		t.Fatalf("sent %v, want the hook's row in the same flush", got)
+	}
+}
