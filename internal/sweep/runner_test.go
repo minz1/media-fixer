@@ -205,6 +205,36 @@ func TestRun_PostTimeoutButGrabbed_NoSecondCandidate(t *testing.T) {
 	}
 }
 
+func TestF23_GrabAccepted502NotResent(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01 A", "Zilean", 10))
+	h.fake.plan("g1", grabPlan{status: http.StatusBadGateway, grabbed: true})
+	run := h.run(t, false, settings())
+	if !slices.Equal(h.fake.writeLog(), []string{"POST /release g1"}) {
+		t.Errorf("writes = %v", h.fake.writeLog())
+	}
+	if got := itemResults(run); !slices.Equal(got, []string{"downloading"}) {
+		t.Errorf("results = %v", got)
+	}
+}
+
+func TestF23_GrabRejected503NotResent(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01 A", "Zilean", 10))
+	h.fake.plan("g1", grabPlan{status: http.StatusServiceUnavailable, body: "unavailable"})
+	run := h.run(t, false, settings())
+	if !slices.Equal(h.fake.writeLog(), []string{"POST /release g1"}) {
+		t.Errorf("writes = %v", h.fake.writeLog())
+	}
+	if got := itemResults(run); !slices.Equal(got, []string{"refused"}) {
+		t.Errorf("results = %v", got)
+	}
+}
+
 func TestRun_ArchiveNoImport(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
