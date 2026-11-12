@@ -114,16 +114,13 @@ func TestQ1_18_UnreadablePastTimeoutSaysUnconfirmed(t *testing.T) {
 	wantInflight(t, e, "E")
 }
 
-func TestQ1_18_CommandGoneCountsAsFinished(t *testing.T) {
+func TestQ1_18_CommandGoneIsUnconfirmed(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
 	disableSweep(t, e)
 	seedInflight(t, e, "D", 7, 10*time.Minute)
 	e.tickAt(s, time.Minute)
-	got, ok := rowOf(t, e, "D")
-	if !ok || got.State != stuckqueue.StateActed || got.Acted == nil || got.Acted.Result != stuckqueue.ResultOK {
-		t.Fatalf("row = %+v (stored %v), want acted ok", got, ok)
-	}
+	wantNoted(t, e, "D", stuckqueue.ResultImportUnconfirmed)
 }
 
 func TestQ1_18_UnknownStatusIsRunning(t *testing.T) {

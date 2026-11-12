@@ -209,7 +209,8 @@ func rowsInflight() []row {
 	return []row{
 		{"23", inflight, kinds(EvSeen), nil, stepInflightSeen},
 		{"24", inflight, kinds(EvMissed), nil, unchanged},
-		{"25", inflight, kinds(EvCommandObserved), cmdIs(CmdCompleted, CmdGone), stepImportLanded},
+		{"25", inflight, kinds(EvCommandObserved), cmdIs(CmdCompleted), stepImportLanded},
+		{"25a", inflight, kinds(EvCommandObserved), cmdIs(CmdGone), noted(ResultImportUnconfirmed)},
 		{"26", inflight, kinds(EvCommandObserved), cmdIs(CmdFailed), noted(ResultImportFailed)},
 		{
 			"27", inflight, kinds(EvCommandObserved), all(cmdIs(CmdRunning), timedOut),

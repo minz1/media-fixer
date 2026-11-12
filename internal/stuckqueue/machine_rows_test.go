@@ -281,8 +281,15 @@ func smRowsInflight() []smRow {
 				}
 			},
 		},
-		{id: "25", name: "gone", from: smInflight(), ev: smObserved(tg, stuckqueue.CmdGone), to: stuckqueue.StateActed,
-			effects: smRefresh()},
+		{
+			id:      "25a",
+			name:    "gone",
+			from:    smInflight(),
+			ev:      smObserved(tg, stuckqueue.CmdGone),
+			to:      stuckqueue.StateNotified,
+			effects: smRefresh(),
+			assert:  smActedIs(stuckqueue.ActionImport, stuckqueue.ResultImportUnconfirmed, tg, 0),
+		},
 		{
 			id:      "26",
 			from:    smInflight(),
@@ -599,6 +606,15 @@ func TestQ1_11_SecondMissPrunes(t *testing.T) {
 		if err != nil || next.State != stuckqueue.StateUntracked || !slices.Equal(effs, smRefresh()) {
 			t.Errorf("%s: second miss gave %s %v %v", smKeyOf(s), next.State, effs, err)
 		}
+	}
+}
+
+func TestF24_GoneCommandIsUnconfirmed(t *testing.T) {
+	t.Parallel()
+	next, _, err := stuckqueue.Next(smInflight(), smObserved(smAt(11*time.Minute), stuckqueue.CmdGone))
+	if err != nil || next.State != stuckqueue.StateNotified || next.Acted == nil ||
+		next.Acted.Result != stuckqueue.ResultImportUnconfirmed {
+		t.Errorf("gone gave %+v, %v", next, err)
 	}
 }
 
