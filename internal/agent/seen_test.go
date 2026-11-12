@@ -2,12 +2,15 @@ package agent_test
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
+	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 )
 
 const searchEpisode7 = `{"media_type":"tv","title":"Rick and Morty","season":9,"episode":7}`
@@ -261,5 +264,51 @@ func TestSeen_InterruptedRepeatBlocked(t *testing.T) {
 	replies := toolReplies(exit.Conversation)
 	if len(replies) < 2 || !strings.Contains(replies[1], "its outcome is unknown (interrupted)") {
 		t.Errorf("replies = %v, want the repeat to say the outcome is unknown (interrupted)", replies)
+	}
+}
+
+func TestL12_SeasonSearchNotBlockedByEpisodeSearch(t *testing.T) {
+	t.Parallel()
+	const season1 = `{"media_type":"tv","title":"Rick and Morty","season":1}`
+	const episode3 = `{"media_type":"tv","title":"Rick and Morty","season":1,"episode":3}`
+	logged := func(episode float64) map[string]any {
+		return map[string]any{"media_type": "tv", "title": "Rick and Morty", "season": float64(1), "episode": episode}
+	}
+	cases := []struct {
+		name     string
+		applied  map[string]any
+		proposed string
+		want     bool
+	}{
+		{"episode applied, season proposed", logged(3), season1, false},
+		{"season applied, episode proposed", logged(-1), episode3, true},
+		{"season applied, season proposed", logged(-1), season1, true},
+		{"episode applied, same episode proposed", logged(3), episode3, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			database := newTestAgentDB(t)
+			ctx := context.Background()
+			inc := &db.Incident{
+				Status:     db.StatusReopened,
+				Source:     "discord",
+				ReportedBy: "x",
+				What:       "cant_play",
+				Title:      "Rick and Morty",
+			}
+			lifecycletest.Incident(t, database, inc)
+			err := database.LogAction(ctx, &db.ActionLog{
+				IncidentID: inc.ID, Action: "arr_search_missing", Params: tc.applied,
+				TriggeredBy: "agent", Status: db.ActionApplied,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := agent.New(nil, "", nil, database, nil, slog.New(slog.DiscardHandler))
+			if got := a.ActionAlreadyAppliedForTest(ctx, inc.ID, "arr_search_missing", tc.proposed); got != tc.want {
+				t.Errorf("already applied = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

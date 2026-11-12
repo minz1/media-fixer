@@ -1494,11 +1494,21 @@ func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID, action, ar
 	}
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
+	search := action == toolArrSearchMissing
+	if search {
+		args = resolveSearchScope(args)
+	}
 	for _, act := range actions {
 		if act.Action != action || act.Status != db.ActionApplied {
 			continue
 		}
 		params, _ := act.Params.(map[string]any)
+		if search {
+			params = resolveSearchScope(params)
+			if params[paramEpisode] == noArgValue {
+				delete(params, paramEpisode)
+			}
+		}
 		if identityParamsMatch(args, params) {
 			return true
 		}
@@ -1598,15 +1608,19 @@ func (a *Agent) BuildSummarySeed(ctx context.Context, inc *db.Incident, summary 
 	}
 }
 
+func resolveSearchScope(args map[string]any) map[string]any {
+	sentinels := []string{paramSeason, paramEpisode}
+	resolved := make(map[string]any, len(args)+len(sentinels))
+	maps.Copy(resolved, args)
+	for _, k := range sentinels {
+		resolved[k] = intArgOrSentinel(args, k)
+	}
+	return resolved
+}
+
 func (v *invocation) earlierCall(args map[string]any) (CallRecord, bool) {
 	if v.fn == toolArrSearchMissing {
-		sentinels := []string{paramSeason, paramEpisode}
-		resolved := make(map[string]any, len(args)+len(sentinels))
-		maps.Copy(resolved, args)
-		for _, k := range sentinels {
-			resolved[k] = intArgOrSentinel(args, k)
-		}
-		args = resolved
+		args = resolveSearchScope(args)
 	}
 	calls := v.c.gate.Calls()
 	for _, rec := range slices.Backward(calls) {
