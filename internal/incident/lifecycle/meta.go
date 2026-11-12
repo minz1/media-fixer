@@ -79,7 +79,7 @@ func metas() map[State]StateMeta {
 		},
 		ExecutingPlan: {
 			Label: "running plan", Line: "🚀 Running the approved plan", Tone: ToneBlue,
-			Info:   "Your approved plan is running; Rerun is available when it finishes.",
+			Info:   "Your approved plan is running; Rerun and Resolve are available when it finishes.",
 			Active: true, Driver: DriverPlan,
 		},
 		AgentFixed: {

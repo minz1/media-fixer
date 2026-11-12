@@ -125,7 +125,7 @@ var (
 	ErrDiagnosisOnly       = errors.New("budget spent, diagnosis only")
 	ErrNotNew              = errors.New("not a new incident")
 	ErrUnclaimed           = errors.New("the run has not claimed the incident")
-	ErrPlanRunning         = errors.New("the approved plan is running")
+	ErrPlanRunning         = errors.New("a plan is running; wait for it, or Resume after")
 	ErrAlreadyResolved     = errors.New("incident already resolved")
 	ErrNotLocked           = errors.New("this incident is not locked")
 	ErrResolved            = errors.New("this incident is resolved")

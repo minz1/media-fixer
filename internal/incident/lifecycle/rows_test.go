@@ -406,3 +406,11 @@ func TestF1_SecondDownloadObservationAtSameSeqIsStale(t *testing.T) {
 		t.Fatalf("second observation at the same seq: err %v", err)
 	}
 }
+
+func TestF20_ResolveRefusedWhilePlanExecutes(t *testing.T) {
+	t.Parallel()
+	if _, err := lifecycle.Next(snap(lifecycle.ExecutingPlan), lifecycle.Event{Kind: lifecycle.OwnerResolve},
+		base()); !errors.Is(err, lifecycle.ErrPlanRunning) {
+		t.Fatalf("resolve during a plan: err %v", err)
+	}
+}

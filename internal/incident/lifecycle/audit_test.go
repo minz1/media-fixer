@@ -48,23 +48,11 @@ func TestI3_8_OwnerActionsDuringPlanAreRefusedOrSafe(t *testing.T) {
 	x := snap(lifecycle.ExecutingPlan)
 	for _, k := range []lifecycle.EventKind{
 		lifecycle.OwnerKeepSearching, lifecycle.OwnerPreview, lifecycle.OwnerApprove, lifecycle.OwnerRerun,
+		lifecycle.OwnerResolve,
 	} {
 		if _, err := apply(x, ev(k)); err == nil {
 			t.Errorf("%s accepted during the plan", k)
 		}
-	}
-	d := mustApply(t, x, ev(lifecycle.OwnerResolve))
-	if d.Next.Status != lifecycle.Resolved || d.Next.Plan != nil || hasEffect(d, lifecycle.ScheduleCheck) {
-		t.Fatalf("resolve during plan: %+v", d)
-	}
-	if _, err := apply(d.Next, tev{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted}, stale: false}); err == nil {
-		t.Fatal("a late plan result was accepted after resolve")
-	}
-	late := tev{ev: lifecycle.Event{Kind: lifecycle.PlanExecuted, Gen: x.Generation}}
-	cur, e := prepare(d.Next, late)
-	e.Gen = x.Generation
-	if _, err := lifecycle.Next(cur, e, base()); !errors.Is(err, lifecycle.ErrStale) {
-		t.Fatalf("late plan result: %v", err)
 	}
 	u := mustApply(t, with(x, locked), ev(lifecycle.OwnerUnlock))
 	if u.Next.Status != lifecycle.ExecutingPlan || u.Next.Locked || len(u.Effects) != 0 {

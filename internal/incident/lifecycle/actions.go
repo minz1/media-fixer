@@ -81,7 +81,7 @@ func Actions(s Snapshot, now time.Time) []Action {
 	add(ActResume, s.resumable())
 	add(ActKeepSearching, s.Status == ManualTestNeeded && s.Reason == ReasonNoRelease)
 	add(ActRerun, s.Status != ExecutingPlan)
-	add(ActResolve, s.Status != Resolved)
+	add(ActResolve, s.Status != Resolved && s.Status != ExecutingPlan)
 	add(ActUnlock, s.Locked && s.Status != Resolved)
 	return out
 }

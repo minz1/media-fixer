@@ -115,3 +115,11 @@ func TestDashboard_RefusalRedirectsWithNotice(t *testing.T) {
 		t.Error("the refusal notice is missing or not in the warning tone")
 	}
 }
+
+func TestF20_DashboardHidesResolveDuringPlan(t *testing.T) {
+	t.Parallel()
+	body, id := pageOf(t, lifecycletest.Spec{Title: "Running", State: lifecycle.ExecutingPlan})
+	if strings.Contains(body, `/incidents/`+id+`/resolve"`) {
+		t.Error("a running plan offers Resolve")
+	}
+}

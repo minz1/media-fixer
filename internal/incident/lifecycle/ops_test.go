@@ -361,9 +361,8 @@ func TestIncidentMachine_LeavingPlanStatesIsAccepted(t *testing.T) {
 		}
 	}
 	for _, op := range []operation.Op{runningOp(), doneOp(), failedSecondOp()} {
-		d := decide(t, execOp(op), ev(lifecycle.OwnerResolve))
-		if d.Next.Status != lifecycle.Resolved || d.Next.Op != nil {
-			t.Errorf("resolve from executing_plan: %s op %v", d.Next.Status, d.Next.Op)
+		if err := rejected(t, execOp(op), ev(lifecycle.OwnerResolve)); !errors.Is(err, lifecycle.ErrPlanRunning) {
+			t.Errorf("resolve from executing_plan: err %v", err)
 		}
 	}
 }

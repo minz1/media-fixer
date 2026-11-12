@@ -79,7 +79,8 @@ func transitions() []row {
 		{except(ExecutingPlan), OwnerRerun, stepOwnerRerun},
 		{[]State{ExecutingPlan}, OwnerRerun, rejectWith(ErrPlanRunning)},
 
-		{except(Resolved), OwnerResolve, stepOwnerResolve},
+		{except(Resolved, ExecutingPlan), OwnerResolve, stepOwnerResolve},
+		{[]State{ExecutingPlan}, OwnerResolve, rejectWith(ErrPlanRunning)},
 		{[]State{Resolved}, OwnerResolve, rejectWith(ErrAlreadyResolved)},
 
 		{[]State{Blocked}, OwnerUnlock, stepUnlockBlocked},

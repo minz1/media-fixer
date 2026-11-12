@@ -85,7 +85,7 @@ func TestI1_19_ServiceRerunRefusedDuringPlan(t *testing.T) {
 	}
 }
 
-func TestI3_8_ResolveDuringPlanNoVerify(t *testing.T) {
+func TestI3_8_ResolveRefusedDuringPlan(t *testing.T) {
 	t.Parallel()
 	ag := newEscalationAgent()
 	ag.execGate = make(chan struct{})
@@ -95,16 +95,11 @@ func TestI3_8_ResolveDuringPlanNoVerify(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- fx.approveNow(inc.ID, fp) }()
 	<-ag.execStart
-	if err := fx.svc.Resolve(context.Background(), inc.ID, incident.Version{}); err != nil {
-		t.Fatal(err)
-	}
+	err := fx.svc.Resolve(context.Background(), inc.ID, incident.Version{})
 	close(ag.execGate)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	s := fx.snap(t, inc.ID)
-	if s.Status != lifecycle.Resolved || s.Verify != nil || fx.svc.ArmedForTest(inc.ID) != 0 {
-		t.Fatalf("after a resolve during the plan: %s verify=%v", s.Status, s.Verify != nil)
+	<-done
+	if !errors.Is(err, lifecycle.ErrPlanRunning) {
+		t.Fatalf("resolve during the plan: %v", err)
 	}
 }
 
@@ -146,8 +141,8 @@ func TestI6_10_ButtonsDuringPlanExecution(t *testing.T) {
 	for _, a := range lifecycle.Actions(s, time.Now()) {
 		kinds = append(kinds, a.Kind)
 	}
-	if len(kinds) != 1 || kinds[0] != lifecycle.ActResolve {
-		t.Fatalf("actions during the plan %v, want Resolve only", kinds)
+	if len(kinds) != 0 {
+		t.Fatalf("actions during the plan %v, want none", kinds)
 	}
 }
 
