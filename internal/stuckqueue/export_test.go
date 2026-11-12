@@ -65,3 +65,11 @@ var (
 )
 
 func RegrabSpecForTest(d Download) operation.Spec { return regrabSpec(d) }
+
+func TransitionIDsForTest() []string {
+	var ids []string
+	for _, r := range transitions() {
+		ids = append(ids, r.id)
+	}
+	return ids
+}

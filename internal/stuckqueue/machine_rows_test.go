@@ -422,21 +422,21 @@ func smRowsActed() []smRow {
 		},
 		{id: "39", from: smActedRemove(), ev: smKind(stuckqueue.EvClaimed, tg), code: stuckqueue.CodeAlreadyDone},
 		{
-			id:   "39",
+			id:   "39a",
 			name: "plain import",
 			from: smActedImport(1, 2),
 			ev:   smPosted(tg, 9, false, files),
 			code: stuckqueue.CodeAlreadyDone,
 		},
 		{
-			id:   "39",
+			id:   "39a",
 			name: "mapped on remove",
 			from: smActedRemove(),
 			ev:   smPosted(tg, 9, true, files),
 			code: stuckqueue.CodeAlreadyDone,
 		},
 		{
-			id:   "39",
+			id:   "39a",
 			name: "no command",
 			from: smActedImport(1, 2),
 			ev:   smPosted(tg, 0, true, files),
@@ -806,5 +806,16 @@ func smResumeOutcome(t *testing.T, s stuckqueue.Snapshot, op int64) {
 		if !errors.As(err, &rej) || rej.Code != stuckqueue.CodeNotResumable {
 			t.Errorf("%s op 4: %v", smKeyOf(s), err)
 		}
+	}
+}
+
+func TestF26_RowIDsAreUnique(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	for _, id := range stuckqueue.TransitionIDsForTest() {
+		if seen[id] {
+			t.Errorf("row id %q is used twice", id)
+		}
+		seen[id] = true
 	}
 }

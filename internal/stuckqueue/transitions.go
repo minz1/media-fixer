@@ -249,7 +249,7 @@ func rowsActed() []row {
 			"39", acted, kinds(EvClaimed, EvNotifyFailed, EvClearDone, EvClearFailed, EvActed, EvCommandObserved),
 			not(restWithoutCommand), rejecting(CodeAlreadyDone),
 		},
-		{"39", acted, kinds(EvImportPosted), not(mappedRest), rejecting(CodeAlreadyDone)},
+		{"39a", acted, kinds(EvImportPosted), not(mappedRest), rejecting(CodeAlreadyDone)},
 		{"40", acted, kinds(EvSeen), all(graceOver, unfinished), stepUnfinishedSeen},
 	}
 }
