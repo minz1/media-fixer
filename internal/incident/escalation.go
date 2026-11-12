@@ -238,9 +238,7 @@ func partialOf(action string, execResult any) string {
 
 // logEscalation records an owner-approved escalation to the event log,
 // mirroring Agent.recordCall but attributed to the owner rather than the
-// agent. Not tagged disruptive — remove_and_search (currently the only
-// automated escalation) is item-scoped, not service-wide, so it's outside
-// what Agent.disruptionNote warns concurrent runs about.
+// agent.
 func (s *Service) logEscalation(
 	ctx context.Context, incidentID string, result *agent.DiagnosticResult, op operation.Op,
 ) {
@@ -261,7 +259,7 @@ func (s *Service) logEscalation(
 		Status:      status,
 		Result:      opResultJSON(result.EscalateAction, op),
 		Error:       errMsg,
-	}, false); logErr != nil {
+	}, agent.Disruptive(result.EscalateAction)); logErr != nil {
 		s.log.ErrorContext(ctx, "log escalation action", "incident", incidentID, "error", logErr)
 	}
 }

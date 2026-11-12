@@ -770,6 +770,11 @@ const (
 
 func (s toolSpec) disruptive() bool { return s.Impact >= impactShared }
 
+func Disruptive(action string) bool {
+	spec, ok := specByName(action)
+	return ok && spec.disruptive()
+}
+
 const (
 	restartBound   = 35 * time.Second
 	writeToolBound = 35 * time.Second

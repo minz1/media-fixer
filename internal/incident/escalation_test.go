@@ -450,3 +450,18 @@ func (a *escalationAgent) OperationFor(
 ) (operation.Spec, error) {
 	return searchSpec(subject, planJSON), nil
 }
+
+func TestF25_EscalationActionsTakeRegistryFlag(t *testing.T) {
+	t.Parallel()
+	for _, a := range []string{agent.EscalateRemoveAndSearch, agent.EscalateDeleteTorrentReadd} {
+		if agent.Disruptive(a) {
+			t.Errorf("escalation action %q is disruptive in the registry; logEscalation must tag it", a)
+		}
+	}
+	if !agent.Disruptive("refresh_decypharr_links") {
+		t.Error("refresh_decypharr_links must be disruptive")
+	}
+	if agent.Disruptive("no_such_tool") {
+		t.Error("unknown action must not be disruptive")
+	}
+}
