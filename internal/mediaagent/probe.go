@@ -75,6 +75,18 @@ func parseProbe(stdout, stderr []byte) (*mediaagentapi.ProbeResult, error) {
 	return res, nil
 }
 
+func probeArgv(ffprobe, user, path string) []string {
+	argv := []string{"systemd-run", "--quiet", "--wait", "--pipe", "--collect"}
+	for _, p := range []string{
+		"User=" + user, "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes",
+		"PrivateNetwork=yes", "PrivateDevices=yes", "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_UNIX",
+		"SystemCallFilter=@system-service", fmt.Sprintf("RuntimeMaxSec=%d", int(probeTimeout.Seconds())),
+	} {
+		argv = append(argv, "-p", p)
+	}
+	return append(argv, "--", ffprobe, "-v", "info", "-show_streams", "-of", "json", path)
+}
+
 func (o *RealOps) ProbeStreams(ctx context.Context, path string) (*mediaagentapi.ProbeResult, error) {
 	path, mountErr := o.resolveUnderMounts(path)
 	if mountErr != nil {
@@ -92,12 +104,17 @@ func (o *RealOps) ProbeStreams(ctx context.Context, path string) (*mediaagentapi
 	defer cancel()
 	var stdout bytes.Buffer
 	var stderr tailBuffer
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "debug", "-show_streams", "-of", "json", path)
+	ffprobe, lookErr := exec.LookPath("ffprobe")
+	if lookErr != nil {
+		return nil, errors.New("ffprobe not on media-agent's PATH")
+	}
+	argv := probeArgv(ffprobe, o.ProbeUser, path)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if runErr := cmd.Run(); runErr != nil {
 		if errors.Is(runErr, exec.ErrNotFound) {
-			return nil, errors.New("ffprobe not on media-agent's PATH")
+			return nil, errors.New("systemd-run not on media-agent's PATH")
 		}
 		lines := strings.Split(strings.TrimSpace(string(stderr.buf)), "\n")
 		return &mediaagentapi.ProbeResult{Error: fmt.Sprintf("ffprobe: %v: %s", runErr, lines[len(lines)-1])}, nil

@@ -142,8 +142,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // RealOps executes actual OS operations.
 type RealOps struct {
-	mounts   []string
-	procRoot string
+	mounts    []string
+	procRoot  string
+	ProbeUser string
 }
 
 // defaultMounts are the paths checked when no explicit mounts are provided.
@@ -157,7 +158,7 @@ func NewRealOps(mounts []string) *RealOps {
 	if len(mounts) == 0 {
 		mounts = defaultMounts()
 	}
-	return &RealOps{mounts: mounts, procRoot: "/proc"}
+	return &RealOps{mounts: mounts, procRoot: "/proc", ProbeUser: "jellyfin"}
 }
 
 // ddBlockSize × ddCount = ~100 MiB read.

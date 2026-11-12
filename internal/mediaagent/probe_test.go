@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -87,6 +88,57 @@ func TestB1_ProbeRoute(t *testing.T) {
 	}
 	if bad := do(`{}`); bad.Code != http.StatusBadRequest {
 		t.Errorf("missing path: status = %d, want 400", bad.Code)
+	}
+}
+
+func TestB1_ProbeRunsSandboxedAsUser(t *testing.T) {
+	t.Parallel()
+	argv := mediaagent.ProbeArgv("/nix/store/x/bin/ffprobe", "jellyfin", "/mnt/x.mkv")
+	if argv[0] != "systemd-run" {
+		t.Fatalf("argv[0] = %q, want systemd-run", argv[0])
+	}
+	for _, want := range []string{
+		"--wait", "--pipe", "--collect",
+		"User=jellyfin", "NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=yes",
+		"PrivateTmp=yes", "PrivateNetwork=yes", "PrivateDevices=yes", "CapabilityBoundingSet=", "RuntimeMaxSec=30",
+	} {
+		if !slices.Contains(argv, want) {
+			t.Errorf("argv lacks %q: %v", want, argv)
+		}
+	}
+	sep := slices.Index(argv, "--")
+	if sep < 0 {
+		t.Fatalf("no -- before the command: %v", argv)
+	}
+	if got, want := argv[sep+1:], []string{
+		"/nix/store/x/bin/ffprobe", "-v", "info", "-show_streams", "-of", "json", "/mnt/x.mkv",
+	}; !slices.Equal(got, want) {
+		t.Errorf("command = %v, want %v", got, want)
+	}
+}
+
+func TestB1_ProbeFailureKeepsStderrTail(t *testing.T) {
+	bin := t.TempDir()
+	for name, body := range map[string]string{
+		"ffprobe":     "#!/bin/sh\nexit 0\n",
+		"systemd-run": "#!/bin/sh\necho 'noise' >&2\necho 'x.mkv: Invalid data found when processing input' >&2\nexit 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	root := t.TempDir()
+	file := filepath.Join(root, "x.mkv")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := mediaagent.NewRealOps([]string{root}).ProbeStreams(t.Context(), file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.Error, "x.mkv: Invalid data found when processing input") {
+		t.Errorf("error = %q", res.Error)
 	}
 }
 

@@ -35,6 +35,7 @@ func main() {
 func run() error {
 	addr := flag.String("addr", ":9191", "listen address")
 	apiKey := flag.String("api-key", "", "bearer token clients must present")
+	probeUser := flag.String("probe-user", "jellyfin", "unprivileged user that runs ffprobe for POST /probe")
 	var mounts mountsFlag
 	flag.Var(
 		&mounts,
@@ -55,6 +56,7 @@ func run() error {
 	}
 
 	ops := mediaagent.NewRealOps([]string(mounts))
+	ops.ProbeUser = *probeUser
 	h := mediaagent.NewHandler(ops, *apiKey, log)
 
 	srv := &http.Server{
