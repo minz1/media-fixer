@@ -1005,7 +1005,7 @@ func TestG3_LokiQueryFilterBecomesLineRegex(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := `{unit=~"jellyfin.service"} |~ "(?i)(Abc[^[:alnum:]]*Def|xy[^[:alnum:]]*z1|Ghi)"`
+	want := `{unit=~"jellyfin.service"} |~ "(?i)(Ghi|Abc[^[:alnum:]]*Def|xy[^[:alnum:]]*z1)"`
 	if q := got.Get("query"); q != want {
 		t.Errorf("query = %q, want %q", q, want)
 	}

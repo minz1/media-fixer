@@ -573,8 +573,8 @@ func arrActionToolSpecs() []toolSpec {
 			Name: toolClearJellyfinCache,
 			Def: &openai.FunctionDefinition{
 				Name: toolClearJellyfinCache,
-				Description: "Full metadata refresh of a Jellyfin item: replaces its provider metadata (locked " +
-					"fields and images kept). On a Series it reaches every episode; use the Episode id for one episode.",
+				Description: "Full refresh and re-probe of a Jellyfin item; provider metadata and images are not " +
+					"replaced. On a Series it reaches every episode; use the Episode id for one episode.",
 				Parameters: jsonSchema(map[string]any{
 					paramItemID: param("string", "Jellyfin item ID"),
 				}, []string{paramItemID}),
@@ -948,15 +948,15 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, c *toolCall, args map[st
 	units, _ := args["units"].(string)
 	units = FixLokiUnitSelector(units)
 	var terms []string
+	if filter, ok := args["filter"].(string); ok && filter != "" {
+		terms = append(terms, filter)
+	}
 	if raw, ok := args["filters"].([]any); ok {
 		for _, v := range raw {
 			if s, isStr := v.(string); isStr {
 				terms = append(terms, s)
 			}
 		}
-	}
-	if filter, ok := args["filter"].(string); ok && filter != "" {
-		terms = append(terms, filter)
 	}
 	if len(terms) > 0 {
 		re := lokiFilterRegex(terms)

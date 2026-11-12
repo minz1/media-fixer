@@ -10,6 +10,7 @@ import (
 
 const (
 	queryTrue           = "true"
+	queryFalse          = "false"
 	paramIncludeEpisode = "includeEpisode"
 )
 
@@ -171,7 +172,7 @@ type candidateJSON struct {
 }
 
 func (c *ArrClient) ManualImportCandidates(ctx context.Context, downloadID string) ([]ImportCandidate, error) {
-	q := url.Values{"downloadId": {downloadID}, "filterExistingFiles": {"false"}}
+	q := url.Values{"downloadId": {downloadID}, "filterExistingFiles": {queryFalse}}
 	var raw []candidateJSON
 	if err := c.get(ctx, "/api/v3/manualimport", q, &raw); err != nil {
 		return nil, err

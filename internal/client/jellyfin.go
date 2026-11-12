@@ -341,14 +341,14 @@ func (c *JellyfinClient) ScanStatus(ctx context.Context) (*ScanStatus, error) {
 	return &ScanStatus{Running: false}, nil
 }
 
-// DeleteCache runs a full metadata refresh of an item, replacing its provider metadata (images kept).
+// DeleteCache runs a full refresh and re-probe of an item; provider metadata and images are not replaced.
 func (c *JellyfinClient) DeleteCache(ctx context.Context, itemID string) error {
 	p := fmt.Sprintf("/Items/%s/Refresh", url.PathEscape(itemID))
 	q := url.Values{
 		"metadataRefreshMode": {"FullRefresh"},
 		"imageRefreshMode":    {"FullRefresh"},
-		"replaceAllMetadata":  {"true"},
-		"replaceAllImages":    {"false"},
+		"replaceAllMetadata":  {queryFalse},
+		"replaceAllImages":    {queryFalse},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+p+"?"+q.Encode(), nil)
 	if err != nil {

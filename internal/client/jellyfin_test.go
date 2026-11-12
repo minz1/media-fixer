@@ -355,7 +355,7 @@ func TestG7_DeleteCacheSendsQueryOptions(t *testing.T) {
 	want := url.Values{
 		"metadataRefreshMode": {"FullRefresh"},
 		"imageRefreshMode":    {"FullRefresh"},
-		"replaceAllMetadata":  {"true"},
+		"replaceAllMetadata":  {"false"},
 		"replaceAllImages":    {"false"},
 	}
 	if got, _ := url.ParseQuery(gotQuery); !reflect.DeepEqual(got, want) {
