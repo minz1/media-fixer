@@ -209,6 +209,8 @@ func TestA6_ThreeListsOneRegistry(t *testing.T) {
 		"jellyfin_scan_status":    agent.LiveTierRead,
 		"dd_readability_test":     agent.LiveTierRead,
 		"probe_streams":           agent.LiveTierRead,
+		"stream_alignment":        agent.LiveTierRead,
+		"subtitle_extract_test":   agent.LiveTierRead,
 		"get_torrent_state":       agent.LiveTierRead,
 		"loki_query":              agent.LiveTierRead,
 		"list_directory":          agent.LiveTierRead,

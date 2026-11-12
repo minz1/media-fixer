@@ -61,6 +61,8 @@ func readCheckSpecs() []checkSpec {
 		{Tool: "jellyfin_scan_status", Run: checkJellyfinScanStatus},
 		{Tool: "dd_readability_test", Run: checkDDReadability},
 		{Tool: "probe_streams", Run: checkProbeStreams},
+		{Tool: "stream_alignment", Run: checkStreamAlignment},
+		{Tool: "subtitle_extract_test", Run: checkSubtitleExtractTest},
 		{Tool: "get_torrent_state", Run: checkGetTorrentState},
 		{Tool: "loki_query", Run: checkLokiQuery},
 		{Tool: "list_directory", Run: checkListDirectory},
@@ -145,6 +147,34 @@ func checkProbeStreams(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures
 	}
 	result, err := disp.Call(ctx, "probe_streams", map[string]any{argFilePath: fx.SamplePath})
 	return classify(result, err)
+}
+
+func checkStreamAlignment(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.JellyfinPlaybackItemID == "" {
+		return degraded("no fixture: no playback-safe Jellyfin item discovered")
+	}
+	result, err := disp.Call(ctx, "stream_alignment",
+		map[string]any{argItemID: fx.JellyfinPlaybackItemID, "language": "en"})
+	return classify(result, err)
+}
+
+func checkSubtitleExtractTest(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.JellyfinPlaybackItemID == "" {
+		return degraded("no fixture: no playback-safe Jellyfin item discovered")
+	}
+	raw, err := disp.Call(ctx, "jellyfin_playback_info", map[string]any{argItemID: fx.JellyfinPlaybackItemID})
+	info, ok := raw.(*client.PlaybackInfoResult)
+	if err != nil || !ok || len(info.MediaSources) == 0 {
+		return classify(raw, err)
+	}
+	for _, s := range info.MediaSources[0].MediaStreams {
+		if s.Type == "Subtitle" {
+			extract, extractErr := disp.Call(ctx, "subtitle_extract_test",
+				map[string]any{argItemID: fx.JellyfinPlaybackItemID, "stream_index": s.Index})
+			return classify(extract, extractErr)
+		}
+	}
+	return degraded("no fixture: the playback item has no subtitle stream")
 }
 
 func checkGetTorrentState(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {

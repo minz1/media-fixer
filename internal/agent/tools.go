@@ -36,6 +36,8 @@ const (
 	toolJellyfinLibraryScan  = "jellyfin_library_scan"
 	toolDDReadability        = "dd_readability_test"
 	toolProbeStreams         = "probe_streams"
+	toolStreamAlignment      = "stream_alignment"
+	toolSubtitleExtractTest  = "subtitle_extract_test"
 	toolGetTorrentState      = "get_torrent_state"
 	toolLokiQuery            = "loki_query"
 	toolRefreshLinks         = "refresh_decypharr_links"
@@ -97,13 +99,15 @@ const diskInfoDesc = "Get disk usage for the media host paths: /mnt/decypharr (F
 	"normal (cloud-backed). For /data and /var/cache/decypharr, is_mount_point=false is normal."
 
 const (
-	paramTitle    = "title"
-	paramItemID   = "item_id"
-	paramFilePath = "file_path"
-	paramName     = "name"
-	paramReason   = "reason"
-	paramSeriesID = "series_id"
-	paramMovieID  = "movie_id"
+	paramTitle     = "title"
+	paramItemID    = "item_id"
+	paramFilePath  = "file_path"
+	paramLanguage  = "language"
+	paramStreamIdx = "stream_index"
+	paramName      = "name"
+	paramReason    = "reason"
+	paramSeriesID  = "series_id"
+	paramMovieID   = "movie_id"
 )
 
 // Escalation action names the agent may set in complete_diagnosis.escalate_action.
@@ -192,6 +196,7 @@ func toolRegistry() []toolSpec {
 	specs := slices.Concat(
 		jellyfinReadToolSpecs(),
 		hostReadToolSpecs(),
+		subtitleReadToolSpecs(),
 		arrReadToolSpecs(),
 		repairReadToolSpecs(),
 		decypharrActionToolSpecs(),
@@ -939,6 +944,12 @@ var (
 	errStuckReadNoStreamProbe = errors.New(
 		"probe_streams is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
 			"use get_torrent_state and get_repair_status instead")
+	errStuckReadNoAlignment = errors.New(
+		"stream_alignment is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
+			"use get_torrent_state and get_repair_status instead")
+	errStuckReadNoExtract = errors.New(
+		"subtitle_extract_test is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
+			"use get_torrent_state and get_repair_status instead")
 	errStuckReadNoList = errors.New(
 		"list_directory is disabled for stuck_read incidents: it stats every file in the folder, " +
 			"and a stat of the stuck file would wedge too; use get_torrent_state and get_repair_status instead")
@@ -961,6 +972,51 @@ func (d *Dispatcher) readProbeStreams(ctx context.Context, c *toolCall, args map
 		return nil, errStuckReadNoStreamProbe
 	}
 	return d.MediaAgent.ProbeStreams(ctx, filePath)
+}
+
+func (d *Dispatcher) readStreamAlignment(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
+	if c.scope.What == WhatStuckRead {
+		return nil, errStuckReadNoAlignment
+	}
+	itemID, _ := args[paramItemID].(string)
+	language, _ := args[paramLanguage].(string)
+	if _, _, ok := langCodes(language); !ok {
+		return nil, fmt.Errorf("unknown language %q", language)
+	}
+	info, err := d.Jellyfin.PlaybackInfo(ctx, itemID)
+	if err != nil {
+		return nil, err
+	}
+	if len(info.MediaSources) == 0 {
+		return nil, fmt.Errorf("item %s has no media source", itemID)
+	}
+	src := info.MediaSources[0]
+	probe, err := d.MediaAgent.ProbeStreams(ctx, src.Path)
+	if err != nil {
+		return nil, err
+	}
+	if probe.Error != "" || probe.NotFound {
+		return nil, fmt.Errorf("probe of %s failed: %s", src.Path, probe.Error)
+	}
+	al := alignStreams(probe.Streams, src.MediaStreams, language)
+	al.Path = src.Path
+	al.UnknownCodecIDs = probe.UnknownCodecIDs
+	return al, nil
+}
+
+func (d *Dispatcher) readSubtitleExtractTest(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
+	if c.scope.What == WhatStuckRead {
+		return nil, errStuckReadNoExtract
+	}
+	itemID, _ := args[paramItemID].(string)
+	index, err := intArg(args, paramStreamIdx)
+	if err != nil {
+		return nil, err
+	}
+	if index < 0 {
+		return nil, fmt.Errorf("%s is required", paramStreamIdx)
+	}
+	return d.extractTest(ctx, itemID, index)
 }
 
 func (d *Dispatcher) readTorrentState(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {

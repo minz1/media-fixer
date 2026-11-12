@@ -34,6 +34,8 @@ func TestD11_3_UnconfiguredServicesShowUnconfigured(t *testing.T) {
 		"jellyfin_search":         "jellyfin not configured",
 		"jellyfin_playback_info":  "jellyfin not configured",
 		"jellyfin_list_episodes":  "jellyfin not configured",
+		"stream_alignment":        "jellyfin not configured",
+		"subtitle_extract_test":   "jellyfin not configured",
 		"jellyfin_scan_status":    "jellyfin not configured",
 		"jellyfin_library_scan":   "jellyfin not configured",
 		"clear_jellyfin_cache":    "jellyfin not configured",

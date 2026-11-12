@@ -51,6 +51,13 @@ func needMediaAgent(d *Dispatcher) (string, bool) {
 	return errMediaAgentNotConfigured.Error(), false
 }
 
+func needJellyfinAndMediaAgent(d *Dispatcher) (string, bool) {
+	if detail, ok := needJellyfin(d); !ok {
+		return detail, false
+	}
+	return needMediaAgent(d)
+}
+
 func needLoki(d *Dispatcher) (string, bool) {
 	if err := d.Loki.Err(); err != nil {
 		return err.Error(), false
@@ -85,6 +92,8 @@ func toolNeeds() map[string]toolNeed {
 		toolRadarrRescan:         needRadarr,
 		toolDDReadability:        needMediaAgent,
 		toolProbeStreams:         needMediaAgent,
+		toolStreamAlignment:      needJellyfinAndMediaAgent,
+		toolSubtitleExtractTest:  needJellyfin,
 		toolListDirectory:        needMediaAgent,
 		toolGetDiskInfo:          needMediaAgent,
 		toolRestartDecypharr:     needMediaAgent,

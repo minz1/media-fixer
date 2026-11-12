@@ -8,6 +8,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
 // Exported for internal/agent/registry_test.go (package agent_test).
@@ -249,3 +250,13 @@ func ManualFindingForTest(s RunState, err error) *DiagnosticResult { return manu
 func (a *Agent) FetchQueueForTest(ctx context.Context, mediaType string) ([]client.QueueRecord, error) {
 	return a.fetchQueue(ctx, mediaType)
 }
+
+func AlignStreamsForTest(file []mediaagentapi.ProbeStream, jf []client.MediaStream, wantISO2 string) Alignment {
+	return alignStreams(file, jf, wantISO2)
+}
+
+func LangCodesForTest(s string) (string, string, bool) { return langCodes(s) }
+
+func DetectLanguageForTest(text string) string { return detectLanguage(text) }
+
+func CueLinesForTest(srt string, n int) []string { return cueLines(srt, n) }
