@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/client"
@@ -709,6 +710,7 @@ func (a *Agent) invoke(
 		snap: callSnap{State: callProposed, Impact: spec.Impact},
 		c: &toolCall{
 			scope:         Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
+			callID:        uuid.NewString(),
 			gate:          gate,
 			journal:       a.journal,
 			readyTimeout:  a.readyTimeout,
@@ -788,7 +790,8 @@ func (v *invocation) step(kind callKind, in stepInfo) {
 			v.ev = verdictEvent(in.verdict)
 		case effLog:
 			v.a.recordCall(v.ctx, v.c.scope.IncidentID, v.fn, in.params,
-				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive, v.c.gate.Gen())
+				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive,
+				v.c.gate.Gen(), v.c.callID)
 		case effRemember:
 			v.c.gate.Record(CallRecord{
 				Tool:    v.fn,
@@ -952,7 +955,7 @@ func identitySubset(args map[string]any) map[string]any {
 
 func (a *Agent) recordCall(
 	ctx context.Context, incidentID, tool string, params map[string]any, status db.ActionStatus,
-	errText string, disruptive bool, generation int64,
+	errText string, disruptive bool, generation int64, callID string,
 ) {
 	if a.journal == nil {
 		return
@@ -966,7 +969,7 @@ func (a *Agent) recordCall(
 		TriggeredBy: triggeredByAgent,
 		Status:      status,
 		Error:       client.RedactCredentials(errText),
-	}, disruptive, generation)
+	}, disruptive, generation, callID)
 	if err != nil {
 		a.log.ErrorContext(ctx, "action record lost", "tool", tool, "outcome", status, "error", err)
 	}
@@ -1299,6 +1302,11 @@ Call complete_diagnosis when done.`,
 // sooner (a restart's readiness probe, or a scan that finished).
 const disruptionCap = 30 * time.Minute
 
+const (
+	scanStartGrace     = time.Minute
+	disruptionBriefCap = 2 * time.Minute
+)
+
 // disruptionNote returns a warning for a run starting shortly after a
 // service-wide action (restart, scan, cleanup, sweep) was applied — possibly
 // by a different, concurrently-running incident (see runManager.globalSlot,
@@ -1312,13 +1320,20 @@ func (a *Agent) disruptionNote(ctx context.Context, incidentID string) string {
 		return ""
 	}
 	disp, err := a.journal.LastDisruption(ctx)
-	if err != nil || disp.IncidentID == incidentID || time.Since(disp.At) > disruptionCap {
+	if err != nil || disp.IncidentID == incidentID {
 		return ""
 	}
-	if _, settled := a.journal.DisruptionSettledAt(ctx, disp.Action, disp.IncidentID, disp.Generation); settled {
+	limit := disruptionCap
+	if spec, ok := specByName(disp.Action); ok && spec.settleCap > 0 {
+		limit = spec.settleCap
+	}
+	if time.Since(disp.At) > limit {
 		return ""
 	}
-	if disp.Action == toolJellyfinLibraryScan && a.scanSettled(ctx) {
+	if _, settled := a.journal.DisruptionSettledAt(ctx, disp.CallID); settled {
+		return ""
+	}
+	if disp.Action == toolJellyfinLibraryScan && time.Since(disp.At) >= scanStartGrace && a.scanSettled(ctx) {
 		return ""
 	}
 	return fmt.Sprintf(

@@ -48,7 +48,7 @@ func seedApplied(t *testing.T, d *db.DB, id string, gen int64, tool string, para
 	t.Helper()
 	err := journal.New(d).LogActionGen(context.Background(), &db.ActionLog{
 		IncidentID: id, Action: tool, Params: params, TriggeredBy: "agent", Status: db.ActionApplied,
-	}, false, gen)
+	}, false, gen, "")
 	if err != nil {
 		t.Fatal(err)
 	}

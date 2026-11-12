@@ -246,7 +246,7 @@ func TestA7_7_AwaitDownloadTargetFromThisRun(t *testing.T) {
 		IncidentID: inc.ID, Action: agent.ToolArrSearchMissing, TriggeredBy: "agent", Status: db.ActionApplied,
 		Params: map[string]any{"media_type": "tv", "title": "Rick and Morty", "season": 9, "episode": 7},
 	}
-	if err := journal.New(database).LogActionGen(context.Background(), old, false, inc.Generation-1); err != nil {
+	if err := journal.New(database).LogActionGen(context.Background(), old, false, inc.Generation-1, ""); err != nil {
 		t.Fatal(err)
 	}
 	exit := runGated(context.Background(), t, ag, database, inc, newRecGate(database, inc))

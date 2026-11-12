@@ -19,6 +19,7 @@ type toolCall struct {
 	gate          Gate
 	journal       *journal.Journal
 	tool          string
+	callID        string
 	readyTimeout  time.Duration
 	readyInterval time.Duration
 

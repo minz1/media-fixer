@@ -257,6 +257,7 @@ type actionAppliedPayload struct {
 	Result      string `json:"result,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Generation  int64  `json:"generation,omitempty"`
+	CallID      string `json:"call_id,omitempty"`
 	// Disruptive marks a service-wide action (restart, scan, cleanup, sweep)
 	// rather than an item-scoped one. LastDisruption
 	// scans for the most recent event with this set, replacing the old
@@ -273,10 +274,12 @@ type actionAppliedPayload struct {
 // to generate its own — the event and its projection must share one ID so an
 // export or a future cross-reference can tie them together).
 func (j *Journal) LogAction(ctx context.Context, a *db.ActionLog, disruptive bool) error {
-	return j.LogActionGen(ctx, a, disruptive, 0)
+	return j.LogActionGen(ctx, a, disruptive, 0, "")
 }
 
-func (j *Journal) LogActionGen(ctx context.Context, a *db.ActionLog, disruptive bool, generation int64) error {
+func (j *Journal) LogActionGen(
+	ctx context.Context, a *db.ActionLog, disruptive bool, generation int64, callID string,
+) error {
 	if a.ID == "" {
 		a.ID = uuid.New().String()
 	}
@@ -287,7 +290,7 @@ func (j *Journal) LogActionGen(ctx context.Context, a *db.ActionLog, disruptive 
 	payload, err := json.Marshal(actionAppliedPayload{
 		ID: a.ID, Action: a.Action, Params: a.Params, TriggeredBy: a.TriggeredBy,
 		Status: string(a.Status), Result: a.Result, Error: a.Error, Disruptive: disruptive,
-		Generation: generation,
+		Generation: generation, CallID: callID,
 	})
 	if err != nil {
 		return err
@@ -306,6 +309,7 @@ type Disruption struct {
 	IncidentID string
 	At         time.Time
 	Generation int64
+	CallID     string
 }
 
 // lastDisruptionScanLimit bounds LastDisruption's scan over the most recent
@@ -330,7 +334,9 @@ func (j *Journal) LastDisruption(ctx context.Context) (*Disruption, error) {
 		if unmarshalErr := json.Unmarshal(e.Payload, &p); unmarshalErr != nil || !p.Disruptive {
 			continue
 		}
-		return &Disruption{Action: p.Action, IncidentID: e.IncidentID, At: e.At, Generation: p.Generation}, nil
+		return &Disruption{
+			Action: p.Action, IncidentID: e.IncidentID, At: e.At, Generation: p.Generation, CallID: p.CallID,
+		}, nil
 	}
 	return nil, db.ErrNotFound
 }
@@ -339,24 +345,27 @@ type disruptionSettledPayload struct {
 	Action     string `json:"action"`
 	IncidentID string `json:"incident_id"`
 	Generation int64  `json:"generation"`
+	CallID     string `json:"call_id,omitempty"`
 }
 
-func (j *Journal) SettleDisruption(ctx context.Context, action, incidentID string, generation int64) error {
-	payload, _ := json.Marshal(disruptionSettledPayload{Action: action, IncidentID: incidentID, Generation: generation})
-	return j.Append(ctx, &db.Event{IncidentID: incidentID, Kind: string(KindDisruptionSettled), Payload: payload})
+func (j *Journal) SettleDisruption(ctx context.Context, d Disruption) error {
+	payload, _ := json.Marshal(disruptionSettledPayload{
+		Action: d.Action, IncidentID: d.IncidentID, Generation: d.Generation, CallID: d.CallID,
+	})
+	return j.Append(ctx, &db.Event{IncidentID: d.IncidentID, Kind: string(KindDisruptionSettled), Payload: payload})
 }
 
-func (j *Journal) DisruptionSettledAt(
-	ctx context.Context, action, incidentID string, generation int64,
-) (time.Time, bool) {
+func (j *Journal) DisruptionSettledAt(ctx context.Context, callID string) (time.Time, bool) {
+	if callID == "" {
+		return time.Time{}, false
+	}
 	events, err := j.db.EventsByKind(ctx, string(KindDisruptionSettled), lastDisruptionScanLimit)
 	if err != nil {
 		return time.Time{}, false
 	}
 	for _, e := range events {
 		var p disruptionSettledPayload
-		if json.Unmarshal(e.Payload, &p) != nil || p.Action != action || p.IncidentID != incidentID ||
-			p.Generation != generation {
+		if json.Unmarshal(e.Payload, &p) != nil || p.CallID != callID {
 			continue
 		}
 		return e.At, true

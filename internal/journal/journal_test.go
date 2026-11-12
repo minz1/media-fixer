@@ -386,7 +386,7 @@ func TestActionAttempts_ReadsAttemptsAppliedAndOwnerRerun(t *testing.T) {
 	if err = j.LogActionGen(ctx, &db.ActionLog{
 		IncidentID: inc.ID, Action: "restart_jellyfin", Params: map[string]any{"item_id": "a"},
 		TriggeredBy: "agent", Status: db.ActionApplied,
-	}, true, 3); err != nil {
+	}, true, 3, "c1"); err != nil {
 		t.Fatal(err)
 	}
 	if err = j.Append(ctx, second); err != nil {
@@ -453,28 +453,24 @@ func TestE3_SettleDisruptionRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	inc := mustCreateIncident(t, d, "T")
 
-	if _, ok := j.DisruptionSettledAt(ctx, "restart_jellyfin", inc.ID, 3); ok {
+	if _, ok := j.DisruptionSettledAt(ctx, "c1"); ok {
 		t.Fatal("a settle exists before any was recorded")
 	}
-	if err := j.SettleDisruption(ctx, "restart_jellyfin", inc.ID, 3); err != nil {
+	if err := j.SettleDisruption(ctx, journal.Disruption{IncidentID: inc.ID, CallID: "c1"}); err != nil {
 		t.Fatal(err)
 	}
-	at, ok := j.DisruptionSettledAt(ctx, "restart_jellyfin", inc.ID, 3)
+	at, ok := j.DisruptionSettledAt(ctx, "c1")
 	if !ok || at.IsZero() {
 		t.Fatalf("the settle was not recorded (at %v, ok %v)", at, ok)
 	}
-	misses := []struct {
-		name, action, incident string
-		gen                    int64
-	}{
-		{"a different action", "restart_decypharr", inc.ID, 3},
-		{"a different incident", "restart_jellyfin", "other-incident", 3},
-		{"a later generation", "restart_jellyfin", inc.ID, 4},
+	if _, hit := j.DisruptionSettledAt(ctx, "c2"); hit {
+		t.Fatal("a different call id matched the settle")
 	}
-	for _, m := range misses {
-		if _, hit := j.DisruptionSettledAt(ctx, m.action, m.incident, m.gen); hit {
-			t.Fatalf("%s matched the settle", m.name)
-		}
+	if err := j.SettleDisruption(ctx, journal.Disruption{IncidentID: inc.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, hit := j.DisruptionSettledAt(ctx, ""); hit {
+		t.Fatal("a disruption without a call id matched a settle")
 	}
 }
 
@@ -485,7 +481,7 @@ func TestE3_LastDisruptionCarriesGeneration(t *testing.T) {
 	inc := mustCreateIncident(t, d, "T")
 	if err := j.LogActionGen(ctx, &db.ActionLog{
 		IncidentID: inc.ID, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
-	}, true, 7); err != nil {
+	}, true, 7, ""); err != nil {
 		t.Fatal(err)
 	}
 	got, err := j.LastDisruption(ctx)

@@ -14,6 +14,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/opexec"
 )
@@ -169,6 +170,7 @@ type toolSpec struct {
 	Handler    func(*Dispatcher, context.Context, *toolCall, map[string]any) (any, error)
 	Needs      toolNeed
 	UserPhrase string
+	settleCap  time.Duration
 }
 
 // toolRegistry is the single source of truth for every tool the agent knows
@@ -435,6 +437,7 @@ func decypharrActionToolSpecs() []toolSpec {
 			Risk:       riskWrite,
 			Impact:     impactShared,
 			Handler:    (*Dispatcher).dispatchRefreshLinks,
+			settleCap:  disruptionBriefCap,
 			UserPhrase: phraseStorage,
 		},
 		{
@@ -447,6 +450,7 @@ func decypharrActionToolSpecs() []toolSpec {
 			Risk:       riskWrite,
 			Impact:     impactShared,
 			Handler:    (*Dispatcher).dispatchRepairSweep,
+			settleCap:  disruptionBriefCap,
 			UserPhrase: phraseStorage,
 		},
 		{
@@ -461,6 +465,7 @@ func decypharrActionToolSpecs() []toolSpec {
 			Risk:       riskWrite,
 			Impact:     impactShared,
 			Handler:    (*Dispatcher).dispatchCacheCleanup,
+			settleCap:  disruptionBriefCap,
 			UserPhrase: phraseStorage,
 		},
 		{
@@ -498,6 +503,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 			Risk:       riskWrite,
 			Impact:     impactHeavy,
 			Handler:    (*Dispatcher).dispatchLibraryScan,
+			settleCap:  disruptionCap,
 			UserPhrase: phraseLibrary,
 		},
 		{
@@ -510,6 +516,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 			Risk:       riskWrite,
 			Impact:     impactHeavy,
 			Handler:    (*Dispatcher).dispatchRestartDecypharr,
+			settleCap:  disruptionCap,
 			UserPhrase: phraseStorage,
 		},
 		{
@@ -522,6 +529,7 @@ func jellyfinAndArrActionToolSpecs() []toolSpec {
 			Risk:       riskWrite,
 			Impact:     impactHeavy,
 			Handler:    (*Dispatcher).dispatchRestartJellyfin,
+			settleCap:  disruptionCap,
 			UserPhrase: phraseReload,
 		},
 	}
@@ -1227,7 +1235,7 @@ func waitUntilReady(ctx context.Context, timeout, interval time.Duration, probe 
 	return lastErr
 }
 
-func (c *toolCall) settleRestart(ctx context.Context, action string) {
+func (c *toolCall) settleRestart(ctx context.Context) {
 	if c.journal == nil || c.scope.IncidentID == "" {
 		return
 	}
@@ -1237,7 +1245,9 @@ func (c *toolCall) settleRestart(ctx context.Context, action string) {
 	if c.gate != nil {
 		gen = c.gate.Gen()
 	}
-	_ = c.journal.SettleDisruption(jctx, action, c.scope.IncidentID, gen)
+	_ = c.journal.SettleDisruption(jctx, journal.Disruption{
+		Action: c.tool, IncidentID: c.scope.IncidentID, Generation: gen, CallID: c.callID,
+	})
 }
 
 func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
@@ -1256,7 +1266,7 @@ func (d *Dispatcher) dispatchRestartDecypharr(ctx context.Context, c *toolCall, 
 	if err := waitUntilReady(ctx, timeout, interval, probe); err != nil {
 		return nil, notReady(fmt.Errorf("decypharr restarted but did not become ready: %w", err))
 	}
-	c.settleRestart(ctx, toolRestartDecypharr)
+	c.settleRestart(ctx)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 
@@ -1294,7 +1304,7 @@ func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _
 	if err := waitUntilReady(ctx, timeout, interval, d.jellyfinServing); err != nil {
 		return nil, notReady(fmt.Errorf("jellyfin restarted but did not become ready: %w", err))
 	}
-	c.settleRestart(ctx, toolRestartJellyfin)
+	c.settleRestart(ctx)
 	return map[string]string{keyStatus: "restarted"}, nil
 }
 

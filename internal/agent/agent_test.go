@@ -550,15 +550,15 @@ func TestE3_RestartSettledGivesNoNote(t *testing.T) {
 	}
 	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
 
-	if err := jrnl.LogAction(ctx, &db.ActionLog{
+	if err := jrnl.LogActionGen(ctx, &db.ActionLog{
 		IncidentID: incidentB, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
-	}, true); err != nil {
+	}, true, 0, "call-1"); err != nil {
 		t.Fatal(err)
 	}
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
 		t.Fatal("expected a note before the restart settled")
 	}
-	if err := jrnl.SettleDisruption(ctx, "restart_jellyfin", incidentB, 0); err != nil {
+	if err := jrnl.SettleDisruption(ctx, journal.Disruption{IncidentID: incidentB, CallID: "call-1"}); err != nil {
 		t.Fatal(err)
 	}
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note != "" {
@@ -584,8 +584,10 @@ func TestE3_ScanStillRunningGivesNote(t *testing.T) {
 	}
 	a := agent.New(nil, "", fullDispatcher(srv.URL), database, jrnl, slog.New(slog.DiscardHandler))
 
+	started := time.Now().Add(-2 * time.Minute)
 	if err := jrnl.LogAction(ctx, &db.ActionLog{
 		IncidentID: incidentB, Action: "jellyfin_library_scan", TriggeredBy: "agent", Status: db.ActionApplied,
+		AppliedAt: &started,
 	}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -868,20 +870,99 @@ func TestE3_OlderSettleKeepsNewerRestartNote(t *testing.T) {
 		})
 	}
 	a := agent.New(nil, "", nil, database, jrnl, slog.New(slog.DiscardHandler))
-	restart := func(gen int64) {
+	restart := func(callID string) {
 		t.Helper()
 		if err := jrnl.LogActionGen(ctx, &db.ActionLog{
 			IncidentID: incidentB, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
-		}, true, gen); err != nil {
+		}, true, 1, callID); err != nil {
 			t.Fatal(err)
 		}
 	}
-	restart(1)
-	if err := jrnl.SettleDisruption(ctx, "restart_jellyfin", incidentB, 1); err != nil {
+	restart("call-1")
+	if err := jrnl.SettleDisruption(ctx, journal.Disruption{IncidentID: incidentB, CallID: "call-1"}); err != nil {
 		t.Fatal(err)
 	}
-	restart(2)
+	restart("call-2")
 	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
 		t.Fatal("an earlier restart's settle hid the newer unsettled restart")
+	}
+}
+
+func disruptionFixture(t *testing.T, srvURL string) (*agent.Agent, *journal.Journal, string, string) {
+	t.Helper()
+	database := newTestAgentDB(t)
+	jrnl := journal.New(database)
+	const (
+		incidentA = "11111111-1111-1111-1111-111111111111"
+		incidentB = "22222222-2222-2222-2222-222222222222"
+	)
+	for _, id := range []string{incidentA, incidentB} {
+		lifecycletest.Incident(t, database, &db.Incident{
+			ID: id, Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: id,
+		})
+	}
+	var disp *agent.Dispatcher
+	if srvURL != "" {
+		disp = fullDispatcher(srvURL)
+	}
+	return agent.New(nil, "", disp, database, jrnl, slog.New(slog.DiscardHandler)), jrnl, incidentA, incidentB
+}
+
+func logDisruptionAgo(t *testing.T, jrnl *journal.Journal, incident, action string, ago time.Duration) {
+	t.Helper()
+	at := time.Now().Add(-ago)
+	if err := jrnl.LogAction(context.Background(), &db.ActionLog{
+		IncidentID: incident, Action: action, TriggeredBy: "agent", Status: db.ActionApplied, AppliedAt: &at,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestF3_CleanupWarnsTwoMinutes(t *testing.T) {
+	t.Parallel()
+	a, jrnl, incidentA, incidentB := disruptionFixture(t, "")
+	logDisruptionAgo(t, jrnl, incidentB, "decypharr_cache_cleanup", 90*time.Second)
+	if note := a.DisruptionNoteForTest(context.Background(), incidentA); note == "" {
+		t.Fatal("expected a note 90s after a cache cleanup")
+	}
+	logDisruptionAgo(t, jrnl, incidentB, "decypharr_cache_cleanup", 3*time.Minute)
+	if note := a.DisruptionNoteForTest(context.Background(), incidentA); note != "" {
+		t.Fatalf("expected no note 3 minutes after a cache cleanup, got %q", note)
+	}
+}
+
+func TestF4_SecondRestartSameGenStillWarns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	a, jrnl, incidentA, incidentB := disruptionFixture(t, "")
+	for _, id := range []string{"call-1", "call-2"} {
+		if err := jrnl.LogActionGen(ctx, &db.ActionLog{
+			IncidentID: incidentB, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+		}, true, 1, id); err != nil {
+			t.Fatal(err)
+		}
+		if id == "call-1" {
+			if err := jrnl.SettleDisruption(ctx, journal.Disruption{IncidentID: incidentB, CallID: id}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if note := a.DisruptionNoteForTest(ctx, incidentA); note == "" {
+		t.Fatal("the first restart's settle hid the second restart in the same generation")
+	}
+}
+
+func TestF5_ScanJustTriggeredStillWarns(t *testing.T) {
+	t.Parallel()
+	cs, srv := newCallServer(t)
+	cs.scanRunning = false
+	a, jrnl, incidentA, incidentB := disruptionFixture(t, srv.URL)
+	logDisruptionAgo(t, jrnl, incidentB, "jellyfin_library_scan", 20*time.Second)
+	if note := a.DisruptionNoteForTest(context.Background(), incidentA); note == "" {
+		t.Fatal("expected a note 20s after a scan was triggered, before it could start")
+	}
+	logDisruptionAgo(t, jrnl, incidentB, "jellyfin_library_scan", 2*time.Minute)
+	if note := a.DisruptionNoteForTest(context.Background(), incidentA); note != "" {
+		t.Fatalf("expected no note 2 minutes after a scan that is no longer running, got %q", note)
 	}
 }
