@@ -97,7 +97,7 @@ func TestQ5b_4_ResumeSendsTheSearchOnce(t *testing.T) {
 	up, _ := render(t, s, stuckSub())
 	a := resumeButton(t, up)
 	res, err := s.CardHandler()(context.Background(), a)
-	if err != nil || res.Line != "Search sent for NOVA." {
+	if err != nil || res.Line != "Search sent for S01E01." {
 		t.Fatalf("result = %+v, err = %v", res, err)
 	}
 	if n := countWrites(e.sonarr, http.MethodDelete, "/1"); n != 1 {

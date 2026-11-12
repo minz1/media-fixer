@@ -22,7 +22,7 @@ func TestStuckResume_DoneRecordsOk(t *testing.T) {
 	e, s, op := failSearch(t)
 	e.clock.Add(time.Hour)
 	notice, err := resumeD(s, op)
-	if err != nil || notice != "Search sent for NOVA." {
+	if err != nil || notice != "Search sent for S01E01." {
 		t.Fatalf("notice = %q, err = %v", notice, err)
 	}
 	row, ok := e.rowOf(t, "D")
@@ -283,5 +283,14 @@ func TestStuckResume_StateAnswersDuringProbe(t *testing.T) {
 	close(gate)
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "left the queue") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestL9_ResumeDoneNamesTargets(t *testing.T) {
+	t.Parallel()
+	_, s, op := failSearch(t)
+	notice, err := resumeD(s, op)
+	if err != nil || notice != "Search sent for S01E01." {
+		t.Fatalf("notice = %q, err = %v", notice, err)
 	}
 }

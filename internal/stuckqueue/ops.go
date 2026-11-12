@@ -3,6 +3,7 @@ package stuckqueue
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -48,6 +49,18 @@ func (s *Scheduler) executor() *opexec.Executor {
 	}
 }
 
+type regrabSource struct {
+	Targets string `json:"targets,omitempty"`
+}
+
+func searchedFor(op operation.Op) string {
+	var src regrabSource
+	if json.Unmarshal(op.Source, &src) == nil && src.Targets != "" {
+		return src.Targets
+	}
+	return op.Title
+}
+
 func regrabSpec(d Download) operation.Spec {
 	mediaID, search := d.Records[0].SeriesID, operation.Step{
 		Kind: operation.StepSearch, App: string(d.App), Command: client.CommandEpisodeSearch, Season: noSeason,
@@ -60,8 +73,9 @@ func regrabSpec(d Download) operation.Spec {
 		}
 	}
 	search.MediaID = mediaID
+	source, _ := json.Marshal(regrabSource{Targets: d.Targets()})
 	return operation.Spec{
-		Subject: OpSubject(d.App, d.DownloadID), Kind: operation.KindRegrab, Title: d.Title, Source: []byte("{}"),
+		Subject: OpSubject(d.App, d.DownloadID), Kind: operation.KindRegrab, Title: d.Title, Source: source,
 		Steps: []operation.Step{{
 			Kind: operation.StepQueueRemove, App: string(d.App), QueueID: d.Records[0].ID,
 			DownloadID: d.DownloadID, MediaID: mediaID, Season: noSeason,
@@ -207,11 +221,11 @@ func (s *Scheduler) Resume(
 	if err != nil {
 		return "", err
 	}
-	u = s.record(ctx, key, Event{Kind: EvResumed, OpID: op.ID, Done: opSettled(op)}, minAge)
+	u = s.record(ctx, snap.Key, Event{Kind: EvResumed, OpID: op.ID, Done: opSettled(op)}, minAge)
 	subject = card.StuckSubject(appCode(app), op.Steps[0].DownloadID)
 	if err = opError(op); err != nil {
 		return "", err
 	}
 	s.r.logger().InfoContext(ctx, "stuck-queue: resumed re-grab", "app", app, "download", downloadID, "op", op.ID)
-	return "Search sent for " + op.Title + ".", nil
+	return "Search sent for " + searchedFor(op) + ".", nil
 }
