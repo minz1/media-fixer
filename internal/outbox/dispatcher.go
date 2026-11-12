@@ -92,6 +92,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 
 func (d *Dispatcher) drainAt(ctx context.Context, now time.Time) bool {
 	again := false
+	wctx := context.WithoutCancel(ctx)
 	rows, err := d.db.DueOutbox(ctx, now, batch)
 	if err != nil {
 		d.log.WarnContext(ctx, "outbox read", "error", err)
@@ -103,26 +104,26 @@ func (d *Dispatcher) drainAt(ctx context.Context, now time.Time) bool {
 			continue
 		}
 		if now.Sub(r.CreatedAt) >= giveUpAfter {
-			d.giveUp(ctx, r, now, "undelivered for 24 h")
+			d.giveUp(wctx, r, now, "undelivered for 24 h")
 			continue
 		}
 		err = d.send(ctx, r)
 		switch {
 		case errors.Is(err, errUndeliverable):
-			d.giveUp(ctx, r, now, err.Error())
+			d.giveUp(wctx, r, now, err.Error())
 		case err != nil && !errors.Is(err, card.ErrUntracked):
 			blocked[r.Target] = true
 			d.log.WarnContext(ctx, "outbox send failed", "id", r.ID, "target", r.Target, "kind", r.Kind,
 				"attempts", r.Attempts+1, "error", err)
 			next := now.Add(min(backoff(r.Attempts), r.CreatedAt.Add(giveUpAfter).Sub(now)))
-			if merr := d.db.MarkOutboxFailed(ctx, r.ID, next, err.Error()); merr != nil {
+			if merr := d.db.MarkOutboxFailed(wctx, r.ID, next, err.Error()); merr != nil {
 				d.log.WarnContext(ctx, "outbox mark failed", "id", r.ID, "error", merr)
 			}
-			if d.failed != nil && d.failed(ctx, r, now, err) {
+			if d.failed != nil && d.failed(wctx, r, now, err) {
 				again = true
 			}
 		default:
-			if merr := d.db.MarkOutboxSent(ctx, r.ID, now); merr != nil {
+			if merr := d.db.MarkOutboxSent(wctx, r.ID, now); merr != nil {
 				blocked[r.Target] = true
 				d.log.WarnContext(ctx, "outbox mark sent", "id", r.ID, "error", merr)
 			}

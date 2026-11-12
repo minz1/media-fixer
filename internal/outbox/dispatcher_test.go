@@ -19,9 +19,10 @@ import (
 func t0() time.Time { return time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC) }
 
 type fakeSender struct {
-	mu    sync.Mutex
-	fails int
-	sent  []string
+	mu     sync.Mutex
+	fails  int
+	sent   []string
+	onSend func()
 }
 
 func (f *fakeSender) record(s string) error {
@@ -32,6 +33,9 @@ func (f *fakeSender) record(s string) error {
 		return errors.New("discord down")
 	}
 	f.sent = append(f.sent, s)
+	if f.onSend != nil {
+		f.onSend()
+	}
 	return nil
 }
 
@@ -91,17 +95,9 @@ func TestF9_OutboxDrainsAfterRestart(t *testing.T) {
 	d := openDB(t)
 	ownerCard(t, d, "k1", "escalated", t0())
 	now := t0()
-	s := &fakeSender{}
-	disp := newAt(d, s, &now)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { disp.Run(ctx); close(done) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for len(s.got()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	<-done
+	s := &fakeSender{onSend: cancel}
+	newAt(d, s, &now).DrainForTest(ctx)
 	newAt(d, s, &now).DrainForTest(context.Background())
 	if got := s.got(); !slices.Equal(got, []string{"owner:escalated"}) {
 		t.Fatalf("sent %v, want the row once", got)
