@@ -96,6 +96,10 @@ func (c *ArrClient) SetSlowTimeout(d time.Duration) {
 	c.slow.Timeout = d
 }
 
+func (c *ArrClient) SetSlowTransport(rt http.RoundTripper) {
+	c.slow.Transport = rt
+}
+
 func (c *ArrClient) Releases(ctx context.Context, seriesID, season int) ([]Release, error) {
 	q := url.Values{paramSeriesID: {strconv.Itoa(seriesID)}, paramSeasonQuery: {strconv.Itoa(season)}}
 	var rels []Release
