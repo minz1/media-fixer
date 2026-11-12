@@ -38,6 +38,7 @@ const (
 	toolProbeStreams         = "probe_streams"
 	toolStreamAlignment      = "stream_alignment"
 	toolSubtitleExtractTest  = "subtitle_extract_test"
+	toolListAlternatives     = "list_alternatives"
 	toolGetTorrentState      = "get_torrent_state"
 	toolLokiQuery            = "loki_query"
 	toolRefreshLinks         = "refresh_decypharr_links"

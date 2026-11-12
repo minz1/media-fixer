@@ -62,6 +62,7 @@ func readCheckSpecs() []checkSpec {
 		{Tool: "dd_readability_test", Run: checkDDReadability},
 		{Tool: "probe_streams", Run: checkProbeStreams},
 		{Tool: "stream_alignment", Run: checkStreamAlignment},
+		{Tool: "list_alternatives", Run: checkListAlternatives},
 		{Tool: "subtitle_extract_test", Run: checkSubtitleExtractTest},
 		{Tool: "get_torrent_state", Run: checkGetTorrentState},
 		{Tool: "loki_query", Run: checkLokiQuery},
@@ -586,4 +587,13 @@ func sliceLen(v any) (int, bool) {
 func isEmptySlice(v any) bool {
 	n, ok := sliceLen(v)
 	return ok && n == 0
+}
+
+func checkListAlternatives(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.SeriesTitle == "" {
+		return degraded("no fixture: no series title discovered")
+	}
+	result, err := disp.Call(ctx, "list_alternatives",
+		map[string]any{argTitle: fx.SeriesTitle, "season": float64(1), "episode": float64(1)})
+	return classify(result, err)
 }

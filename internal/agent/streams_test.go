@@ -352,3 +352,71 @@ func TestB5_ExtractTestRefusesHugeFile(t *testing.T) {
 		t.Errorf("external requests = %d", ext.subs.Load())
 	}
 }
+
+func e06Events() []client.SeriesEvent {
+	at := func(h int) time.Time { return time.Date(2026, 11, 1, h, 0, 0, 0, time.UTC) }
+	ev := func(typ, title, id string, score, h int) client.SeriesEvent {
+		return client.SeriesEvent{
+			EventType: typ, SourceTitle: title, DownloadID: id, CustomFormatScore: score, Date: at(h),
+			Episode: &client.HistoryEpisode{SeasonNumber: 1, EpisodeNumber: 6}}
+	}
+	return []client.SeriesEvent{
+		ev("grabbed", "Show.S01E06.VARYG", strings.Repeat("A", 40), 407, 1),
+		ev("grabbed", "Show.S01E06.AnoZu", strings.Repeat("B", 40), 507, 2),
+		ev("grabbed", "Show.S01E06.BiOMA", "0b2f6c1e-1111-4222-8333-444455556666", 109, 3),
+		ev("downloadFolderImported", "Show.S01E06.BiOMA", "0b2f6c1e-1111-4222-8333-444455556666", 0, 4),
+		{
+			EventType: "grabbed", SourceTitle: "Other", DownloadID: strings.Repeat("C", 40),
+			Episode: &client.HistoryEpisode{SeasonNumber: 1, EpisodeNumber: 7}, Date: at(5)},
+	}
+}
+
+func altReleases(alts []agent.Alternative) string {
+	var out []string
+	for _, a := range alts {
+		out = append(out, a.Release+":"+a.Cached)
+	}
+	return strings.Join(out, ",")
+}
+
+func TestB7_Alternatives(t *testing.T) {
+	t.Parallel()
+	cached := map[string]bool{strings.Repeat("a", 40): true, strings.Repeat("b", 40): true}
+	events := e06Events()
+	got := agent.AlternativesForTest(events, 1, 6, cached)
+	if s := altReleases(got); s != "Show.S01E06.AnoZu:yes,Show.S01E06.VARYG:yes" {
+		t.Errorf("alternatives = %s", s)
+	}
+	if len(got) == 2 && (got[0].Score != 507 || got[0].DownloadID != strings.Repeat("B", 40)) {
+		t.Errorf("first = %+v", got[0])
+	}
+
+	reimport := append(slices.Clone(events), client.SeriesEvent{
+		EventType:   "downloadFolderImported",
+		SourceTitle: "Show.S01E06.AnoZu",
+		DownloadID:  strings.Repeat("B", 40),
+		Episode: &client.HistoryEpisode{
+			SeasonNumber:  1,
+			EpisodeNumber: 6,
+		},
+		Date: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if s := altReleases(
+		agent.AlternativesForTest(reimport, 1, 6, cached),
+	); s != "Show.S01E06.BiOMA:unknown,Show.S01E06.VARYG:yes" {
+		t.Errorf("after second import = %s", s)
+	}
+
+	manual := append(slices.Clone(events), client.SeriesEvent{
+		EventType:   "downloadFolderImported",
+		SourceTitle: "Show.S01E06.AnoZu",
+		Episode: &client.HistoryEpisode{
+			SeasonNumber:  1,
+			EpisodeNumber: 6,
+		},
+		Date: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if s := altReleases(agent.AlternativesForTest(manual, 1, 6, cached)); strings.Contains(s, "AnoZu") {
+		t.Errorf("manual import kept AnoZu: %s", s)
+	}
+}

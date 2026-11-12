@@ -267,3 +267,7 @@ func (a *Agent) ConcludeForTest(
 	ev, result := a.conclude(ctx, inc, nil, call, gate, messages)
 	return result, ev.err
 }
+
+func AlternativesForTest(events []client.SeriesEvent, season, episode int, cached map[string]bool) []Alternative {
+	return alternatives(events, season, episode, cached)
+}

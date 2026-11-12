@@ -84,14 +84,15 @@ type HistoryEpisode struct {
 
 // HistoryRecord is one grab/import/failure event from Sonarr/Radarr history.
 type HistoryRecord struct {
-	ID          int       `json:"id"`
-	EpisodeID   int       `json:"episodeId,omitempty"`
-	SeriesID    int       `json:"seriesId,omitempty"`
-	MovieID     int       `json:"movieId,omitempty"`
-	SourceTitle string    `json:"sourceTitle"`
-	DownloadID  string    `json:"downloadId"`
-	EventType   string    `json:"eventType"`
-	Date        time.Time `json:"date"`
+	ID                int       `json:"id"`
+	EpisodeID         int       `json:"episodeId,omitempty"`
+	SeriesID          int       `json:"seriesId,omitempty"`
+	MovieID           int       `json:"movieId,omitempty"`
+	SourceTitle       string    `json:"sourceTitle"`
+	DownloadID        string    `json:"downloadId"`
+	EventType         string    `json:"eventType"`
+	Date              time.Time `json:"date"`
+	CustomFormatScore int       `json:"customFormatScore"`
 
 	Episode *HistoryEpisode `json:"episode,omitempty"`
 }

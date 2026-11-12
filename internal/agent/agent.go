@@ -175,12 +175,18 @@ by whether the read errored.
 
 Subtitles are missing, broken, or out of sync on a title that otherwise plays.
   1. Resolve the Episode item (step 1); a subtitle problem is per-file, never per-Series.
-  2. loki_query with filters, then again with context_after: 20 on any extraction / ffmpeg /
-     transcoding failure line.
-  3. dd_readability_test on the file, so a broken link is not mistaken for a subtitle defect.
-     probe_streams shows the file's real stream table (codec, language, forced/default).
-     stream_alignment compares it with Jellyfin's table; subtitle_extract_test fetches one track.
-  4. Escalate escalate_action=manual_investigation, quoting the ffmpeg lines that explain it.
+     loki_query with filters, then again with context_after: 20 on any extraction / ffmpeg /
+     transcoding failure line. dd_readability_test on the file, so a broken link is not
+     mistaken for a subtitle defect.
+  2. stream_alignment on the Episode item with the wanted language: the reporter's language,
+     else en. (probe_streams shows the file's raw stream table.)
+  3. If index_drift is true, or the wanted track fails subtitle_extract_test, it is a per-file
+     defect. Run list_alternatives, then escalate escalate_action=manual_investigation. The
+     root cause quotes the alignment row (and the ffmpeg lines); the reason names any cached
+     alternative (score, release) for the owner to swap.
+  4. If the wanted language is absent from the file, say so in the root cause.
+  5. A fix is verified with verify_subtitle_language; set verify_item_id to the episode item
+     you ran stream_alignment on.
   The only autonomous action is clear_jellyfin_cache on the Episode, and only when the evidence
   is stale metadata. restart_jellyfin and jellyfin_library_scan are refused on this incident.
 

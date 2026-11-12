@@ -51,6 +51,13 @@ func needMediaAgent(d *Dispatcher) (string, bool) {
 	return errMediaAgentNotConfigured.Error(), false
 }
 
+func needArrAndDecypharr(d *Dispatcher) (string, bool) {
+	if detail, ok := needArr(d); !ok {
+		return detail, false
+	}
+	return needDecypharr(d)
+}
+
 func needJellyfinAndMediaAgent(d *Dispatcher) (string, bool) {
 	if detail, ok := needJellyfin(d); !ok {
 		return detail, false
@@ -94,6 +101,7 @@ func toolNeeds() map[string]toolNeed {
 		toolProbeStreams:         needMediaAgent,
 		toolStreamAlignment:      needJellyfinAndMediaAgent,
 		toolSubtitleExtractTest:  needJellyfin,
+		toolListAlternatives:     needArrAndDecypharr,
 		toolListDirectory:        needMediaAgent,
 		toolGetDiskInfo:          needMediaAgent,
 		toolRestartDecypharr:     needMediaAgent,

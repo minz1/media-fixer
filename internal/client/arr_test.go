@@ -541,3 +541,23 @@ func TestSeriesGrabHistoryUnchanged(t *testing.T) {
 		t.Errorf("marshalled record leaks data: %s", b)
 	}
 }
+
+func TestB7_HistoryDecodesScore(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":9,"episodeId":3,"seriesId":7,"sourceTitle":"Show.S01E06.AnoZu",
+"quality":{"quality":{"id":7,"name":"WEBDL-1080p"}},"customFormats":[{"id":1,"name":"x"}],
+"customFormatScore":507,"qualityCutoffNotMet":false,"date":"2026-11-01T10:00:00Z",
+"downloadId":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","eventType":"grabbed",
+"episode":{"seasonNumber":1,"episodeNumber":6},"data":{"indexer":"Nyaa"}}]`))
+	}))
+	defer srv.Close()
+
+	events, err := client.NewArr(srv.URL, "key").SeriesHistory(context.Background(), 7)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("events = %v, err = %v", events, err)
+	}
+	if events[0].CustomFormatScore != 507 {
+		t.Errorf("score = %d, want 507", events[0].CustomFormatScore)
+	}
+}

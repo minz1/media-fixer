@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 
@@ -266,6 +267,23 @@ func subtitleReadToolSpecs() []toolSpec {
 			Risk:    riskRead,
 			Handler: (*Dispatcher).readSubtitleExtractTest,
 		},
+		{
+			Name: toolListAlternatives,
+			Def: &openai.FunctionDefinition{
+				Name: toolListAlternatives,
+				Description: "Releases Sonarr grabbed for this episode other than the one in the library, with " +
+					"their custom format score and whether decypharr still has them cached (pruned about a week " +
+					"after they're superseded). Use it on subtitle and per-file defects: a cached alternative is " +
+					"the cleanest fix (the owner swaps it).",
+				Parameters: jsonSchema(map[string]any{
+					paramTitle:   param("string", "Series title"),
+					paramSeason:  param("integer", "Season number"),
+					paramEpisode: param("integer", "Episode number"),
+				}, []string{paramTitle, paramSeason, paramEpisode}),
+			},
+			Risk:    riskRead,
+			Handler: (*Dispatcher).readListAlternatives,
+		},
 	}
 }
 
@@ -381,4 +399,104 @@ func SubtitleLanguage(s string) string {
 		return iso3
 	}
 	return s
+}
+
+type Alternative struct {
+	Release    string    `json:"release"`
+	DownloadID string    `json:"download_id"`
+	Score      int       `json:"score"`
+	Grabbed    time.Time `json:"grabbed"`
+	Cached     string    `json:"cached"`
+}
+
+var hashRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+func lastImport(events []client.SeriesEvent, season, episode int) (*client.SeriesEvent, []client.SeriesEvent) {
+	var imported *client.SeriesEvent
+	var grabs []client.SeriesEvent
+	for i, e := range events {
+		if e.Episode == nil || e.Episode.SeasonNumber != season || e.Episode.EpisodeNumber != episode {
+			continue
+		}
+		switch e.EventType {
+		case "grabbed":
+			grabs = append(grabs, e)
+		case "downloadFolderImported":
+			if imported == nil || e.Date.After(imported.Date) {
+				imported = &events[i]
+			}
+		}
+	}
+	return imported, grabs
+}
+
+func isLibraryGrab(g client.SeriesEvent, imported *client.SeriesEvent) bool {
+	if imported == nil {
+		return false
+	}
+	if imported.DownloadID == "" {
+		return g.SourceTitle == imported.SourceTitle
+	}
+	return g.DownloadID == imported.DownloadID
+}
+
+func alternatives(events []client.SeriesEvent, season, episode int, cached map[string]bool) []Alternative {
+	imported, grabs := lastImport(events, season, episode)
+	slices.SortStableFunc(grabs, func(a, b client.SeriesEvent) int { return b.Date.Compare(a.Date) })
+	seen := map[string]bool{}
+	out := []Alternative{}
+	for _, g := range grabs {
+		if seen[g.DownloadID] || isLibraryGrab(g, imported) {
+			continue
+		}
+		seen[g.DownloadID] = true
+		state := "unknown"
+		if hashRE.MatchString(g.DownloadID) {
+			state = "no"
+			if cached[strings.ToLower(g.DownloadID)] {
+				state = "yes"
+			}
+		}
+		out = append(out, Alternative{
+			Release: g.SourceTitle, DownloadID: g.DownloadID, Score: g.CustomFormatScore,
+			Grabbed: g.Date, Cached: state,
+		})
+	}
+	return out
+}
+
+func (d *Dispatcher) readListAlternatives(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
+	title, _ := args[paramTitle].(string)
+	season, err := intArg(args, paramSeason)
+	if err != nil {
+		return nil, err
+	}
+	episode, err := intArg(args, paramEpisode)
+	if err != nil {
+		return nil, err
+	}
+	if season < 0 || episode < 0 {
+		return nil, fmt.Errorf("%s and %s are required", paramSeason, paramEpisode)
+	}
+	series, err := d.Sonarr.SearchSeries(ctx, title)
+	if err != nil {
+		return nil, err
+	}
+	events, err := d.Sonarr.SeriesHistory(ctx, series.ID)
+	if err != nil {
+		return nil, err
+	}
+	cached := map[string]bool{}
+	for _, a := range alternatives(events, season, episode, nil) {
+		if a.Cached != "no" {
+			continue
+		}
+		hash := strings.ToLower(a.DownloadID)
+		present, lookupErr := d.Decypharr.TorrentByHash(ctx, hash)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		cached[hash] = present
+	}
+	return alternatives(events, season, episode, cached), nil
 }

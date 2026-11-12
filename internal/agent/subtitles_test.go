@@ -375,3 +375,21 @@ func TestB6_FixNowSubtitleVerify(t *testing.T) {
 		})
 	}
 }
+
+func TestB8_PromptSubtitleProtocolB(t *testing.T) {
+	t.Parallel()
+	prompt := agent.SystemPromptForTest()
+	_, rest, ok := strings.Cut(prompt, "--- Subtitles (what=subtitles) ---")
+	if !ok {
+		t.Fatal("no subtitles section")
+	}
+	section, _, _ := strings.Cut(rest, "\n--- ")
+	for _, want := range []string{
+		"stream_alignment", "index_drift", "list_alternatives", "subtitle_extract_test",
+		"verify_subtitle_language", "verify_item_id",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("subtitles section lacks %q", want)
+		}
+	}
+}
