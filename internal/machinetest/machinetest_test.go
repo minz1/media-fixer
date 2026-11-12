@@ -281,3 +281,71 @@ func TestSequence_RejectLeavesSnapshotUnchanged(t *testing.T) {
 		t.Fatalf("errors = %v, want the changed reject flagged", r.errs)
 	}
 }
+
+type cell struct {
+	V int
+}
+
+type cellEv struct {
+	Kind string
+}
+
+func cellMachine(step func(cell, string) (cell, error)) machinetest.Machine[string, string, cell, cellEv] {
+	kinds := []string{"inc", "set1", "set2"}
+	return machinetest.Machine[string, string, cell, cellEv]{
+		States:   []string{"on"},
+		Kinds:    kinds,
+		Initial:  cell{},
+		State:    func(cell) string { return "on" },
+		Key:      func(c cell) string { return fmt.Sprint(c.V) },
+		Samples:  func(string) []cell { return []cell{{}} },
+		Events:   func(k string) []cellEv { return []cellEv{{Kind: k}} },
+		Matches:  func(cell, cellEv) int { return 1 },
+		Next:     func(c cell, ev cellEv) (cell, error) { return step(c, ev.Kind) },
+		Check:    func(cell) error { return nil },
+		Terminal: func(string) bool { return false },
+	}
+}
+
+func cellStep(c cell, kind string) (cell, error) {
+	switch kind {
+	case "inc":
+		if c.V >= 3 {
+			return c, errors.New("full")
+		}
+		return cell{V: c.V + 1}, nil
+	case "set1":
+		return cell{V: 1}, nil
+	case "set2":
+		return cell{V: 2}, nil
+	}
+	return c, errors.New("no row")
+}
+
+func TestIdempotence_FlagsCounter(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	machinetest.Idempotence(r, cellMachine(cellStep), []string{"inc"})
+	if !r.has("inc") || !r.has("not idempotent") {
+		t.Fatalf("errors = %v, want inc flagged", r.errs)
+	}
+	r = &recorder{}
+	machinetest.Idempotence(r, cellMachine(cellStep), []string{"set1", "set2"})
+	if len(r.errs) != 0 {
+		t.Fatalf("set events flagged: %v", r.errs)
+	}
+}
+
+func TestCommutes_FlagsOrder(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	machinetest.Commutes(r, cellMachine(cellStep), [][2]string{{"set1", "set2"}})
+	if !r.has("set1") || !r.has("do not commute") {
+		t.Fatalf("errors = %v, want set1/set2 flagged", r.errs)
+	}
+	r = &recorder{}
+	machinetest.Commutes(r, cellMachine(cellStep), [][2]string{{"set1", "set1"}})
+	if len(r.errs) != 0 {
+		t.Fatalf("set1/set1 flagged: %v", r.errs)
+	}
+}

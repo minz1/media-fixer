@@ -100,6 +100,62 @@ func Reachability[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev]
 	checkLeaves(t, m, g)
 }
 
+func Idempotence[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev], kinds []K) {
+	t.Helper()
+	g, complete := explore(m)
+	if !complete {
+		t.Errorf("more than %d snapshots reachable; the search stopped", maxSnapshots)
+	}
+	for _, key := range g.order {
+		for _, k := range kinds {
+			for _, ev := range m.Events(k) {
+				once, err := m.Next(g.nodes[key], ev)
+				if err != nil {
+					continue
+				}
+				twice, err := m.Next(once, ev)
+				if err == nil && m.Key(twice) != m.Key(once) {
+					t.Errorf("kind %v, event %+v from %s is not idempotent: %s then %s", k, ev, key, m.Key(once), m.Key(twice))
+				}
+			}
+		}
+	}
+}
+
+func Commutes[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev], pairs [][2]K) {
+	t.Helper()
+	g, complete := explore(m)
+	if !complete {
+		t.Errorf("more than %d snapshots reachable; the search stopped", maxSnapshots)
+	}
+	for _, key := range g.order {
+		for _, p := range pairs {
+			for _, a := range m.Events(p[0]) {
+				for _, b := range m.Events(p[1]) {
+					ab, okAB := apply(m, g.nodes[key], a, b)
+					ba, okBA := apply(m, g.nodes[key], b, a)
+					if okAB && okBA && ab != ba {
+						t.Errorf("kinds %v and %v, events %+v and %+v from %s do not commute: %s vs %s",
+							p[0], p[1], a, b, key, ab, ba)
+					}
+				}
+			}
+		}
+	}
+}
+
+func apply[S, K comparable, Snap, Ev any](m Machine[S, K, Snap, Ev], snap Snap, first, second Ev) (string, bool) {
+	mid, err := m.Next(snap, first)
+	if err != nil {
+		return "", false
+	}
+	end, err := m.Next(mid, second)
+	if err != nil {
+		return "", false
+	}
+	return m.Key(end), true
+}
+
 func checkExits[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev], g graph[Snap]) {
 	t.Helper()
 	exits := map[string]bool{}
