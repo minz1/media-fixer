@@ -172,6 +172,75 @@ func TestE4_ReconnectBackoff(t *testing.T) {
 	}
 }
 
+func TestE4_FlappingSocketKeepsBackingOff(t *testing.T) {
+	t.Parallel()
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var mu sync.Mutex
+	var waits []time.Duration
+	ws := client.NewJellyfinWS(srv.URL, "k")
+	ctx, cancel := context.WithCancel(t.Context())
+	ws.Sleep = func(ctx context.Context, d time.Duration) bool {
+		mu.Lock()
+		waits = append(waits, d)
+		n := len(waits)
+		mu.Unlock()
+		if n >= 4 {
+			cancel()
+			return false
+		}
+		return ctx.Err() == nil
+	}
+	ws.Start(ctx)
+	ws.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i < len(waits); i++ {
+		if waits[i] <= waits[i-1] {
+			t.Fatalf("backoff reset by a session that dropped at once: %v", waits)
+		}
+	}
+}
+
+func TestE4_SilentSocketIsDropped(t *testing.T) {
+	t.Parallel()
+	up := websocket.Upgrader{}
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	ws := client.NewJellyfinWS(srv.URL, "k")
+	ws.ReadWait = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	dropped := make(chan struct{})
+	ws.Sleep = func(context.Context, time.Duration) bool {
+		close(dropped)
+		cancel()
+		return false
+	}
+	ws.Start(ctx)
+	t.Cleanup(ws.Wait)
+	t.Cleanup(cancel)
+	select {
+	case <-dropped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a socket that sends nothing was never dropped")
+	}
+}
+
 func TestE4_ShutdownJoinsClient(t *testing.T) {
 	t.Parallel()
 	srv := jellyfinSocket(t, nil, nil)

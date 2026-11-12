@@ -20,6 +20,7 @@ const (
 	jellyfinWSKeepAlive     = 30 * time.Second
 	jellyfinWSWriteWait     = 10 * time.Second
 	jellyfinWSDialTimeout   = 15 * time.Second
+	jellyfinWSReadWait      = time.Minute
 	jellyfinTasksInterval   = "0,10000"
 )
 
@@ -35,6 +36,7 @@ type JellyfinWS struct {
 
 	OnScanFinished func(ctx context.Context, ended time.Time)
 	Sleep          func(ctx context.Context, d time.Duration) bool
+	ReadWait       time.Duration
 
 	mu    sync.Mutex
 	state JellyfinWSState
@@ -42,7 +44,7 @@ type JellyfinWS struct {
 }
 
 func NewJellyfinWS(base, apiKey string) *JellyfinWS {
-	return &JellyfinWS{base: base, apiKey: apiKey, Sleep: sleepCtx}
+	return &JellyfinWS{base: base, apiKey: apiKey, Sleep: sleepCtx, ReadWait: jellyfinWSReadWait}
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
@@ -82,11 +84,12 @@ func (c *JellyfinWS) Wait() { c.wg.Wait() }
 func (c *JellyfinWS) loop(ctx context.Context) {
 	backoff := jellyfinWSMinBackoff
 	for ctx.Err() == nil {
+		started := time.Now()
 		connected, err := c.session(ctx)
 		if ctx.Err() != nil {
 			break
 		}
-		if connected {
+		if connected && time.Since(started) >= jellyfinWSKeepAlive {
 			backoff = jellyfinWSMinBackoff
 		}
 		msg := "connection closed"
@@ -172,6 +175,7 @@ func (c *JellyfinWS) session(ctx context.Context) (bool, error) {
 
 	var p jellyfinScanParser
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(c.ReadWait))
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
 			return true, readErr

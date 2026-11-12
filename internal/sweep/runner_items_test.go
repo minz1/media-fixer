@@ -117,3 +117,28 @@ func TestS3_AddItemRefusesIllegalInsert(t *testing.T) {
 		}
 	}
 }
+
+func TestE1_SonarrWakesDoNotShortenTheGrabWait(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.fake.addSeries(1, "Show", missingEps(1, 1, 11, 12)...)
+	h.fake.setReleases(seasonKey(1, 1), seasonRel("g1", "Show S01", "Zilean", 10))
+	h.fake.plan("g1", grabPlan{grabbed: true, outcome: "downloadFolderImported", after: 20})
+	sleep := h.runner.Sleep
+	h.runner.Sleep = func(c context.Context, d time.Duration) error {
+		if d != 30*time.Second {
+			return sleep(c, d)
+		}
+		h.runner.WakeDownload()
+		select {
+		case <-c.Done():
+			return c.Err()
+		case <-time.After(5 * time.Second):
+			return sleep(c, d)
+		}
+	}
+	run := h.run(t, false, settings())
+	if len(run.Items) != 1 || run.Items[0].Result != sweepstate.Imported {
+		t.Errorf("items = %+v, want one imported item after woken polls", run.Items)
+	}
+}

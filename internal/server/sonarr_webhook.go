@@ -70,7 +70,9 @@ func parseSonarr(body []byte) (sonarrEvent, error) {
 
 func sonarrConsumers(k sonarrKind) []string {
 	switch k {
-	case sonarrGrab, sonarrImport:
+	case sonarrGrab:
+		return []string{wakeGrabWait}
+	case sonarrImport:
 		return []string{wakeDownload, wakeGrabWait}
 	case sonarrManual:
 		return []string{wakeDownload, wakeStuck}

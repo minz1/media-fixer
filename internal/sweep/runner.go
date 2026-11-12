@@ -817,7 +817,7 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 }
 
 func (x *run) wait(ctx context.Context, title, dlID string, since time.Time) (sweepstate.ItemResult, string, error) {
-	for range int(grabWait / grabPoll) {
+	for deadline := x.Now().Add(grabWait); x.Now().Before(deadline); {
 		if err := x.pause(ctx, grabPoll); err != nil {
 			return sweepstate.ItemNone, dlID, err
 		}

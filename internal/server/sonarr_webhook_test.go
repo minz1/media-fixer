@@ -118,7 +118,7 @@ func TestE1_ParsePayloadFromFixture(t *testing.T) {
 func TestE1_EachRoutingPathWakesItsConsumer(t *testing.T) {
 	t.Parallel()
 	want := map[string][]string{
-		"grab":               {"download", "grab-wait"},
+		"grab":               {"grab-wait"},
 		"import":             {"download", "grab-wait"},
 		"manual-interaction": {"download", "stuck-queue"},
 		"test":               nil,
