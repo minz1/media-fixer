@@ -685,6 +685,7 @@
       <div class="card">
         <h2 class="card-title mb-4">Live tool check {{template "info" "Drives every agent tool against the real configured services and reports whether each one works."}}</h2>
         {{with discordConn}}{{if .Word}}<p class="mb-4 flex items-center gap-1.5">{{template "badge" .}}{{with .Info}}{{template "info" .}}{{end}}</p>{{end}}{{end}}
+        {{with jellyfinConn}}{{if .Word}}<p class="mb-4 flex items-center gap-1.5">{{template "badge" .}}{{with .Info}}{{template "info" .}}{{end}}</p>{{end}}{{end}}
 
         {{if not .Configured}}
         <p class="notice notice-err">Live checks not configured.</p>

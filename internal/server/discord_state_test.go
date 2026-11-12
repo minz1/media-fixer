@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/server"
 )
@@ -92,5 +93,26 @@ func TestServer_SetDiscordAfterNewIsSeenByTemplates(t *testing.T) {
 	wg.Wait()
 	if !strings.Contains(getBody(srv, "/media/selftest"), "Discord connected") {
 		t.Errorf("late SetDiscord not seen")
+	}
+}
+
+func TestE4_SelftestShowsJellyfinEvents(t *testing.T) {
+	t.Parallel()
+	srv, _ := newTestServer(t)
+	if strings.Contains(getBody(srv, "/media/selftest"), "Jellyfin events") {
+		t.Errorf("Jellyfin events shown with nothing wired")
+	}
+	srv.SetJellyfinEvents(func() client.JellyfinWSState { return client.JellyfinWSState{Connected: true} })
+	if body := getBody(srv, "/media/selftest"); !strings.Contains(body, "Jellyfin events connected") {
+		t.Errorf("missing connected line")
+	}
+	srv.SetJellyfinEvents(func() client.JellyfinWSState {
+		return client.JellyfinWSState{Err: "dial tcp: refused", RetryAt: time.Date(2026, 11, 8, 12, 34, 0, 0, time.UTC)}
+	})
+	body := getBody(srv, "/media/selftest")
+	for _, want := range []string{"Jellyfin events offline", "tone-red", "12:34", "dial tcp: refused"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
 	}
 }

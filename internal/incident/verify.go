@@ -206,6 +206,50 @@ func (s *Service) ArmStuckReadClear(ctx context.Context, title string) error {
 	return nil
 }
 
+func (s *Service) ArmScanSettled(ctx context.Context, ended time.Time) error {
+	incs, err := s.db.FindByStatus(ctx, lifecycle.Verifying)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, inc := range incs {
+		snap, loadErr := s.db.GetIncidentSnapshot(ctx, inc.ID)
+		if loadErr != nil {
+			s.log.ErrorContext(ctx, "arm scan settled: load incident", "incident", inc.ID, "error", loadErr)
+			continue
+		}
+		if snap.Verify == nil || snap.Verify.Spec.Kind != lifecycle.VerifyGeneric || !snap.Verify.Spec.ETANoted {
+			continue
+		}
+		s.scheduleCheckEarlier(inc.ID, lifecycle.Effect{
+			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: now, Check: lifecycle.CheckVerify,
+		})
+	}
+	return s.settleScan(ctx, ended)
+}
+
+const scanAction = "jellyfin_library_scan"
+
+func (s *Service) settleScan(ctx context.Context, ended time.Time) error {
+	if s.journal == nil {
+		return nil
+	}
+	d, err := s.journal.LastDisruption(ctx)
+	if errors.Is(err, db.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if d.Action != scanAction || !ended.After(d.At) {
+		return nil
+	}
+	if _, settled := s.journal.DisruptionSettledAt(ctx, d.CallID); settled {
+		return nil
+	}
+	return s.journal.SettleDisruption(ctx, *d)
+}
+
 func (s *Service) notVerified(inc *db.Incident) lifecycle.Notice {
 	fields := []card.Field{}
 	if result, ok := agent.ParseDiagnosticResult(inc.Finding); ok {

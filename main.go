@@ -188,6 +188,7 @@ type app struct {
 	svc      *incident.Service
 	srv      *server.Server
 	sr       *stuckread.Watcher
+	jws      *client.JellyfinWS
 }
 
 func run() error {
@@ -266,6 +267,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 	a.srv.SetDiscord(a.bot.Conn)
 	a.srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 	a.srv.SetSonarrWebhookSecret(cfg.Sonarr.WebhookSecret)
+	a.jws = newJellyfinEvents(cfg, a.svc, a.srv, log)
 
 	if err = crashRunningSweeps(ctx, database, log); err != nil {
 		return nil, err
@@ -285,6 +287,7 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 		maintenance: func() {
 			maintenance = startMaintenance(
 				ctx, a.cfg, a.bundle, a.database, a.bot, a.srv, a.log, handlers, renderers, a.sr)
+			maintenance = append(maintenance, startJellyfinEvents(ctx, a.jws)...)
 		},
 		cards:    func() { unsub = startCards(ctx, a.bot, a.database, a.jrnl, handlers, renderers) },
 		bot:      func() { a.bot.Start(ctx) },
@@ -390,4 +393,28 @@ func enabledFeatures(clients *clientset.Set) []string {
 		features = append(features, "seerr")
 	}
 	return features
+}
+
+func newJellyfinEvents(
+	cfg *config.Config, svc *incident.Service, srv *server.Server, log *slog.Logger,
+) *client.JellyfinWS {
+	jws := client.NewJellyfinWS(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey)
+	if !jws.Configured() {
+		return nil
+	}
+	jws.OnScanFinished = func(ctx context.Context, ended time.Time) {
+		if err := svc.ArmScanSettled(ctx, ended); err != nil && ctx.Err() == nil {
+			log.ErrorContext(ctx, "jellyfin scan finished", "error", err)
+		}
+	}
+	srv.SetJellyfinEvents(jws.State)
+	return jws
+}
+
+func startJellyfinEvents(ctx context.Context, jws *client.JellyfinWS) []step {
+	if jws == nil {
+		return nil
+	}
+	jws.Start(ctx)
+	return []step{{name: "jellyfin events", run: within(jws.Wait)}}
 }

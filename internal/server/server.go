@@ -17,6 +17,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/babysit"
 	"github.com/minz1/mediafixer/internal/card"
+	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/discord"
 	"github.com/minz1/mediafixer/internal/incident"
@@ -78,7 +79,31 @@ type Server struct {
 
 	listener net.Listener
 
-	discord atomic.Pointer[func() discord.Conn]
+	discord  atomic.Pointer[func() discord.Conn]
+	jellyfin atomic.Pointer[func() client.JellyfinWSState]
+}
+
+func (s *Server) SetJellyfinEvents(state func() client.JellyfinWSState) {
+	s.jellyfin.Store(&state)
+}
+
+func (s *Server) jellyfinView() connView {
+	f := s.jellyfin.Load()
+	if f == nil {
+		return connView{}
+	}
+	st := (*f)()
+	if st.Connected {
+		return connView{Word: "Jellyfin events connected", Tone: toneGreen}
+	}
+	if st.Err == "" {
+		return connView{Word: "Jellyfin events connecting", Tone: toneYellow}
+	}
+	info := st.Err
+	if !st.RetryAt.IsZero() {
+		info = "Retrying at " + st.RetryAt.UTC().Format("15:04:05 MST") + ": " + st.Err
+	}
+	return connView{Word: "Jellyfin events offline", Tone: toneRed, Info: info}
 }
 
 func (s *Server) SetDiscord(conn func() discord.Conn) {
@@ -115,7 +140,7 @@ func New(
 		log:      log,
 		shutdown: make(chan struct{}),
 	}
-	tmpl, err := buildDashboardTemplate(s.discordView)
+	tmpl, err := buildDashboardTemplate(s.discordView, s.jellyfinView)
 	if err != nil {
 		return nil, fmt.Errorf("parse dashboard template: %w", err)
 	}

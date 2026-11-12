@@ -147,7 +147,7 @@ func retryInfo(c discord.Conn) string {
 	return info
 }
 
-func buildDashboardTemplate(discordConn func() connView) (*dashboardTemplates, error) {
+func buildDashboardTemplate(discordConn, jellyfinConn func() connView) (*dashboardTemplates, error) {
 	t, err := template.New("dashboard.html").Funcs(template.FuncMap{
 		"json": func(v any) string {
 			b, _ := json.MarshalIndent(v, "", "  ")
@@ -169,6 +169,7 @@ func buildDashboardTemplate(discordConn func() connView) (*dashboardTemplates, e
 		"actionTone":     actionTone,
 		"restarting":     func(s string) bool { return s == card.RestartingNotice || strings.HasPrefix(s, refusedPrefix) },
 		"discordConn":    discordConn,
+		"jellyfinConn":   jellyfinConn,
 		"restartingText": func() string { return card.RestartingNotice },
 	}).ParseFS(templateFS, "templates/dashboard.html")
 	if err != nil {
