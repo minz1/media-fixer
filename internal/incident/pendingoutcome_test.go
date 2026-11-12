@@ -755,7 +755,7 @@ func TestKeepSearching_NoDownloadingProgressNote(t *testing.T) {
 	if err := f.svc.KeepSearching(t.Context(), f.inc.ID, f.svc.CurrentVersion(t.Context(), f.inc.ID)); err != nil {
 		t.Fatal(err)
 	}
-	f.svc.AdvanceReporterProgress(t.Context(), time.Now().Add(61*time.Minute))
+	f.svc.ArmReporterNoteForTest(t.Context(), f.inc.ID, time.Now().Add(61*time.Minute))
 
 	f.notif.mu.Lock()
 	defer f.notif.mu.Unlock()

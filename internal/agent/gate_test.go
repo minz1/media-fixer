@@ -65,6 +65,8 @@ func (g *recGate) Act(ctx context.Context, tool string, _ map[string]any) (agent
 
 func (g *recGate) Gen() int64 { return g.gen }
 
+func (g *recGate) ActionLogged(context.Context) {}
+
 func (g *recGate) Live(context.Context) agent.Verdict {
 	switch {
 	case g.paused.Load():

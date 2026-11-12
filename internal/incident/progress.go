@@ -14,19 +14,6 @@ import (
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
-func (s *Service) AdvanceReporterProgress(ctx context.Context, now time.Time) {
-	for _, status := range lifecycle.StatesWhere(func(m lifecycle.StateMeta) bool { return m.Progress }) {
-		incs, err := s.db.FindByStatus(ctx, status)
-		if err != nil {
-			s.log.ErrorContext(ctx, "find incidents for progress", "status", status, "error", err)
-			continue
-		}
-		for _, inc := range incs {
-			s.reportProgress(ctx, inc, now)
-		}
-	}
-}
-
 func (s *Service) reportProgress(ctx context.Context, inc *db.Incident, now time.Time) {
 	since, err := s.db.LastReporterNoteAt(ctx, inc.ID)
 	if err != nil {

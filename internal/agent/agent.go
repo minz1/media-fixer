@@ -792,6 +792,9 @@ func (v *invocation) step(kind callKind, in stepInfo) {
 			v.a.recordCall(v.ctx, v.c.scope.IncidentID, v.fn, in.params,
 				db.ActionStatus(callMeta(next.State).LogStatus), in.errText, next.Disruptive,
 				v.c.gate.Gen(), v.c.callID)
+			if db.ActionStatus(callMeta(next.State).LogStatus) == db.ActionApplied {
+				v.c.gate.ActionLogged(v.ctx)
+			}
 		case effRemember:
 			v.c.gate.Record(CallRecord{
 				Tool:    v.fn,

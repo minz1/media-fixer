@@ -163,6 +163,8 @@ func (g seqGate) Act(context.Context, string, map[string]any) (agent.Verdict, er
 
 func (g seqGate) Gen() int64 { return 0 }
 
+func (g seqGate) ActionLogged(context.Context) {}
+
 func (g seqGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
 
 func (g seqGate) Calls() []agent.CallRecord { return nil }
@@ -183,6 +185,8 @@ func (g *fixedGate) Act(context.Context, string, map[string]any) (agent.Verdict,
 }
 
 func (g *fixedGate) Gen() int64 { return 0 }
+
+func (g *fixedGate) ActionLogged(context.Context) {}
 
 func (g *fixedGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
 

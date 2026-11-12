@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
@@ -92,12 +95,12 @@ func logAppliedAt(t *testing.T, database *db.DB, incID, name string, at time.Tim
 	}
 }
 
-func TestAdvanceReporterProgress_NothingNew(t *testing.T) {
+func TestF7_NothingNew(t *testing.T) {
 	t.Parallel()
 	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
 	ctx := context.Background()
 
-	svc.AdvanceReporterProgress(ctx, time.Now())
+	svc.ArmReporterNoteForTest(ctx, inc.ID, time.Now())
 
 	if len(notif.msgs) != 0 {
 		t.Errorf("msgs = %q, want none", notif.msgs)
@@ -108,23 +111,23 @@ func TestAdvanceReporterProgress_NothingNew(t *testing.T) {
 	}
 }
 
-func TestAdvanceReporterProgress_HourlyCap(t *testing.T) {
+func TestF7_HourlyCap(t *testing.T) {
 	t.Parallel()
 	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
 	ctx := context.Background()
 
 	logApplied(t, database, inc.ID, "refresh_decypharr_links")
 	start := time.Now()
-	svc.AdvanceReporterProgress(ctx, start)
+	svc.ArmReporterNoteForTest(ctx, inc.ID, start)
 	logApplied(t, database, inc.ID, "sonarr_rescan")
-	svc.AdvanceReporterProgress(ctx, start.Add(30*time.Minute))
+	svc.ArmReporterNoteForTest(ctx, inc.ID, start.Add(30*time.Minute))
 
 	want := []string{"⏳ Still working on **X**: fixing the media storage."}
 	if strings.Join(notif.msgs, "|") != strings.Join(want, "|") {
 		t.Fatalf("msgs = %q, want %q", notif.msgs, want)
 	}
 
-	svc.AdvanceReporterProgress(ctx, start.Add(61*time.Minute))
+	svc.ArmReporterNoteForTest(ctx, inc.ID, start.Add(61*time.Minute))
 
 	want = append(want, "⏳ Still working on **X**: updating the library.")
 	if strings.Join(notif.msgs, "|") != strings.Join(want, "|") {
@@ -132,13 +135,13 @@ func TestAdvanceReporterProgress_HourlyCap(t *testing.T) {
 	}
 }
 
-func TestAdvanceReporterProgress_OnlyActiveStatuses(t *testing.T) {
+func TestF7_OnlyActiveStatuses(t *testing.T) {
 	t.Parallel()
 	for _, status := range []db.IncidentStatus{db.StatusManualTestNeeded, db.StatusResolved} {
 		svc, database, inc, notif := newProgressIncident(t, status)
 		logApplied(t, database, inc.ID, "restart_jellyfin")
 
-		svc.AdvanceReporterProgress(context.Background(), time.Now())
+		svc.ArmReporterNoteForTest(context.Background(), inc.ID, time.Now())
 
 		if len(notif.msgs) != 0 {
 			t.Errorf("%s: msgs = %q, want none", status, notif.msgs)
@@ -146,7 +149,7 @@ func TestAdvanceReporterProgress_OnlyActiveStatuses(t *testing.T) {
 	}
 }
 
-func TestAdvanceReporterProgress_SavedGap(t *testing.T) {
+func TestF7_SavedGap(t *testing.T) {
 	t.Parallel()
 	svc, database, inc, notif := newProgressIncident(t, db.StatusInvestigating)
 	saveTimers(t, database, func(tm *incident.Timers) { tm.ProgressNoteGapMinutes = 15 })
@@ -157,7 +160,7 @@ func TestAdvanceReporterProgress_SavedGap(t *testing.T) {
 	}
 	logApplied(t, database, inc.ID, "refresh_decypharr_links")
 
-	svc.AdvanceReporterProgress(ctx, now)
+	svc.ArmReporterNoteForTest(ctx, inc.ID, now)
 
 	want := []string{"⏳ Still working on **X**: fixing the media storage."}
 	if strings.Join(notif.msgs, "|") != strings.Join(want, "|") {
@@ -340,4 +343,73 @@ func TestE6_ShutdownDropsDeferredNote(t *testing.T) {
 	if len(notif.msgs) != 0 {
 		t.Fatalf("msgs = %q, want none", notif.msgs)
 	}
+}
+
+type midRunActionAgent struct {
+	*escalationAgent
+
+	db      *db.DB
+	logged  chan struct{}
+	release chan struct{}
+}
+
+func (a *midRunActionAgent) Run(
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
+) agent.RunExit {
+	if err := gate.Claim(ctx); err != nil {
+		return agent.RunExit{State: agent.RunNotClaimed}
+	}
+	err := a.db.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "refresh_decypharr_links", TriggeredBy: "agent", Status: db.ActionApplied,
+	})
+	if err != nil {
+		return agent.RunExit{State: agent.RunNotClaimed}
+	}
+	gate.ActionLogged(ctx)
+	close(a.logged)
+	<-a.release
+	return gatedExit(ctx, gate, nil, nil, ctx.Err())
+}
+
+func TestF2_MidRunActionSendsNote(t *testing.T) {
+	t.Parallel()
+	_, database, _ := newTestService(t)
+	ag := &midRunActionAgent{
+		escalationAgent: newEscalationAgent(), db: database,
+		logged: make(chan struct{}), release: make(chan struct{}),
+	}
+	notif := newSyncNotifier()
+	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			close(ag.release)
+		}
+	}
+	t.Cleanup(release)
+
+	if _, err := svc.Handle(context.Background(), &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "X",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ag.logged:
+	case <-time.After(notifyWaitTimeout):
+		t.Fatal("the run never logged its action")
+	}
+
+	want := "⏳ Still working on **X**: fixing the media storage."
+	select {
+	case got := <-notif.userMsgs:
+		if got != want {
+			t.Errorf("note = %q, want %q", got, want)
+		}
+	case <-time.After(notifyWaitTimeout):
+		t.Error("no progress note arrived while the run was still going")
+	}
+	release()
 }

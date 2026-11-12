@@ -70,6 +70,10 @@ func (g *runGate) Act(ctx context.Context, tool string, params map[string]any) (
 
 func (g *runGate) Gen() int64 { return g.gen }
 
+func (g *runGate) ActionLogged(ctx context.Context) {
+	g.s.armReporterNote(ctx, g.id, time.Now())
+}
+
 func (g *runGate) Live(context.Context) agent.Verdict {
 	switch {
 	case g.s.paused.Load():
