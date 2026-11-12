@@ -24,6 +24,7 @@ import (
 	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/journal"
 	"github.com/minz1/mediafixer/internal/opexec"
+	"github.com/minz1/mediafixer/internal/outbox"
 	"github.com/minz1/mediafixer/internal/server"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 	"github.com/minz1/mediafixer/internal/stuckread"
@@ -189,6 +190,27 @@ type app struct {
 	srv      *server.Server
 	sr       *stuckread.Watcher
 	jws      *client.JellyfinWS
+	outbox   *outbox.Dispatcher
+}
+
+type outboxSender struct {
+	*discord.Bot
+
+	seerr *client.SeerrClient
+}
+
+func (s outboxSender) SeerrComment(ctx context.Context, issueID, text string) error {
+	if !s.seerr.Configured() {
+		return errors.New("seerr not configured")
+	}
+	return s.seerr.Comment(ctx, issueID, text)
+}
+
+func (s outboxSender) SeerrResolve(ctx context.Context, issueID string) error {
+	if !s.seerr.Configured() {
+		return errors.New("seerr not configured")
+	}
+	return s.seerr.Resolve(ctx, issueID)
 }
 
 func run() error {
@@ -247,6 +269,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 		log.ErrorContext(ctx, "init discord bot", "error", err)
 		return nil, err
 	}
+	a.outbox = outbox.New(database, outboxSender{a.bot, bundle.clients.Seerr}, log)
 
 	a.svc = incident.NewService(ctx, database, a.jrnl, bundle.ag, bundle.ctrl, bundle.summary, a.bot, log)
 	if bundle.clients.Seerr.Configured() {
@@ -280,6 +303,7 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 	renderers := map[string]card.Renderer{"inc": a.svc.CardRenderer()}
 	var maintenance []step
 	var unsub func()
+	outboxDone := make(chan struct{})
 	signalled := make(chan time.Time, 1)
 	context.AfterFunc(ctx, func() { signalled <- time.Now() })
 	startErr := startup(startSteps{
@@ -289,8 +313,11 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 				ctx, a.cfg, a.bundle, a.database, a.bot, a.srv, a.log, handlers, renderers, a.sr)
 			maintenance = append(maintenance, startJellyfinEvents(ctx, a.jws)...)
 		},
-		cards:    func() { unsub = startCards(ctx, a.bot, a.database, a.jrnl, handlers, renderers) },
-		bot:      func() { a.bot.Start(ctx) },
+		cards: func() { unsub = startCards(ctx, a.bot, a.database, a.jrnl, handlers, renderers) },
+		bot: func() {
+			a.bot.Start(ctx)
+			go func() { a.outbox.Run(ctx); close(outboxDone) }()
+		},
 		intake:   func() { context.AfterFunc(ctx, a.bot.StopIntake) },
 		service:  a.svc.Start,
 		recovery: a.svc.StartRecovery,
@@ -319,6 +346,7 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 		waits: append([]step{
 			{name: "discord", run: a.bot.WaitHandlers},
 			{name: "incident", run: a.svc.Shutdown},
+			{name: "outbox", run: within(func() { <-outboxDone })},
 		}, maintenance...),
 		subs: []step{
 			{name: "discord session", run: a.bot.Disconnect},

@@ -59,8 +59,11 @@ func (d *DB) EnqueueOutbox(ctx context.Context, r OutboxRow) error {
 
 func (d *DB) DueOutbox(ctx context.Context, now time.Time, limit int) ([]OutboxRow, error) {
 	rows, err := d.read.QueryContext(ctx, `SELECT id, key, COALESCE(incident_id, ''), target, kind, body,
-		created_at, next_at, attempts FROM notify_outbox
-		WHERE sent_at IS NULL AND gave_up_at IS NULL AND next_at <= ? ORDER BY id LIMIT ?`, now, limit)
+		created_at, next_at, attempts FROM notify_outbox o
+		WHERE sent_at IS NULL AND gave_up_at IS NULL AND next_at <= :now
+		  AND NOT EXISTS (SELECT 1 FROM notify_outbox p WHERE p.target = o.target AND p.id < o.id
+		    AND p.sent_at IS NULL AND p.gave_up_at IS NULL AND p.next_at > :now)
+		ORDER BY id LIMIT :limit`, sql.Named("now", now), sql.Named("limit", limit))
 	if err != nil {
 		return nil, err
 	}
