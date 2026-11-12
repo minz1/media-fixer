@@ -365,3 +365,8 @@ func TestSlotMachine_Idempotence(t *testing.T) {
 	t.Parallel()
 	machinetest.Idempotence(t, slotMachine(), []sweep.SlotKind{sweep.SlotCancelLive, sweep.SlotReconcile})
 }
+
+func TestMachineDiagram_Slot(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, slotMachine(), "testdata/slot.md")
+}

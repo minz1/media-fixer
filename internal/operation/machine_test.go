@@ -77,3 +77,8 @@ func TestOperationMachine_RejectionsLeaveTheOpUntouched(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineDiagram_Operation(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, opMachine(), "testdata/operation.md")
+}

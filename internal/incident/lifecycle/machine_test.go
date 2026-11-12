@@ -294,3 +294,8 @@ func TestDownload_StageNeverFromQueueStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineDiagram_Incident(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, incidentMachine(), "testdata/incident.md")
+}

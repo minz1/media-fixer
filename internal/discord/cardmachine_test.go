@@ -284,3 +284,8 @@ func TestCardMachine_RetryDueClearsNextRetry(t *testing.T) {
 		t.Errorf("recovery = %+v, want live with failures 0", shown)
 	}
 }
+
+func TestMachineDiagram_Card(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, cardMachine(), "testdata/card.md")
+}

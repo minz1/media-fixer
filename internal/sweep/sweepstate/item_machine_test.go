@@ -237,3 +237,8 @@ func TestCheckItem_Table(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineDiagram_Item(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, itemMachine(), "testdata/item.md")
+}

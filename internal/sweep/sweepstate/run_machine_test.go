@@ -241,3 +241,8 @@ func TestRunMachine_Idempotence(t *testing.T) {
 	t.Parallel()
 	machinetest.Idempotence(t, runMachine(), []sweepstate.RunEventKind{sweepstate.EvFinished})
 }
+
+func TestMachineDiagram_Run(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, runMachine(), "testdata/run.md")
+}

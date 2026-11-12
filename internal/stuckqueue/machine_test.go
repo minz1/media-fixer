@@ -522,3 +522,8 @@ func TestStuckQueueMachine_Idempotence(t *testing.T) {
 		stuckqueue.EvResumed, stuckqueue.EvCommandObserved,
 	})
 }
+
+func TestMachineDiagram_Download(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, smMachine(), "testdata/download.md")
+}

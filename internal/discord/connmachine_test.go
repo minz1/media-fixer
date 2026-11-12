@@ -183,3 +183,8 @@ func TestConnMachine_DownSinceKeptAcrossRetries(t *testing.T) {
 		t.Errorf("gateway drop = %+v, want reconnecting since %v", c, drop)
 	}
 }
+
+func TestMachineDiagram_Conn(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, connMachine(), "testdata/conn.md")
+}

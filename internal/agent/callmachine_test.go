@@ -268,3 +268,8 @@ func TestCallMachine_CountedAndDisruptive(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineDiagram_Call(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, callMachine(), "testdata/call.md")
+}

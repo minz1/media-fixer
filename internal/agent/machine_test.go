@@ -394,3 +394,8 @@ func TestRunMeta_EveryStateHasMeta(t *testing.T) {
 		}
 	}
 }
+
+func TestMachineDiagram_Run(t *testing.T) {
+	t.Parallel()
+	machinetest.GoldenMermaid(t, runMachine(), "testdata/run.md")
+}
