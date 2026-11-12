@@ -47,6 +47,9 @@
     seerr = {
       url = cfg.seerr.url;
     };
+    bazarr = {
+      url = cfg.bazarr.url;
+    };
   } // lib.optionalAttrs (cfg.controlLlm.model != "") {
     control_llm = {
       base_url = cfg.controlLlm.baseURL;
@@ -93,6 +96,8 @@ in {
           MEDIA_FIXER_CONTROL_LLM_API_KEY  # optional
           MEDIA_FIXER_SEERR_API_KEY  # optional, with seerr.url
           MEDIA_FIXER_SEERR_WEBHOOK_SECRET  # /ingest/seerr returns 503 without it
+          MEDIA_FIXER_BAZARR_API_KEY  # optional, with bazarr.url
+          MEDIA_FIXER_BAZARR_WEBHOOK_SECRET  # /ingest/bazarr returns 503 without it
 
         With sops-nix, set this to config.sops.secrets."media-fixer-env".path.
       '';
@@ -203,6 +208,15 @@ in {
         default = "";
         description = "Base URL of Seerr, for commenting on and resolving reported issues. Empty disables it.";
         example = "https://10.10.0.7:5055";
+      };
+    };
+
+    bazarr = {
+      url = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Base URL of Bazarr, ending in its base path, for subtitle searches. Empty disables it.";
+        example = "https://10.10.0.2/bazarr";
       };
     };
   };
