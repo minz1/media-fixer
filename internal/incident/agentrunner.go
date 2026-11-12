@@ -24,6 +24,7 @@ type AgentRunner interface {
 	// state captured before the fix ran; nil disables the "is this a strict
 	// improvement" check).
 	VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool
+	VerifySubtitle(ctx context.Context, itemID, lang string) bool
 	// ScanRunning reports whether a Jellyfin library scan is currently in progress.
 	ScanRunning(ctx context.Context) bool
 	// BuildSummarySeed constructs seed messages for a resumed run from a summary.

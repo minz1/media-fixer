@@ -741,6 +741,11 @@ func completionSpec() toolSpec {
 					"string",
 					"Jellyfin item ID to re-check during verification (optional; defaults to the incident item)",
 				),
+				"verify_subtitle_language": param(
+					"string",
+					"Subtitle incidents: the language the fix must make work (e.g. en). "+
+						"Verification then extracts that track instead of checking playback.",
+				),
 				"user_eta_minutes": param(
 					"integer",
 					"Friendly estimate in minutes for when the reporter should try again, used in the "+

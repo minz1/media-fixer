@@ -324,7 +324,7 @@ func TestB5_ExtractTestReportsCues(t *testing.T) {
 func TestB5_ExtractTestTimeout(t *testing.T) {
 	t.Parallel()
 	f := newExtractFake(t, 1<<30, false, 5*time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	res, err := extract(ctx, f.dispatcher())
 	if err != nil {

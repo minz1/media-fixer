@@ -589,3 +589,7 @@ func TestTimers_CorruptRowWarnsOncePerBadSpell(t *testing.T) {
 		t.Errorf("warnings after a good read and a new corrupt row = %d, want 2", n)
 	}
 }
+
+func (a *countingVerifyAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *verifyPingAgent) VerifySubtitle(context.Context, string, string) bool { return true }

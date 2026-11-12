@@ -1,15 +1,20 @@
 package agent
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
@@ -19,6 +24,10 @@ const (
 	cueScanLines       = 50
 	cueSampleLines     = 3
 	minDetectLines     = 3
+	minVerifyCues      = 3
+	itemEpisode        = "Episode"
+	itemMovie          = "Movie"
+	itemSeries         = "Series"
 )
 
 // shortcut: a fixed table of the languages seen here, add a row when an incident needs one
@@ -201,10 +210,16 @@ func (d *Dispatcher) extractTest(ctx context.Context, itemID string, index int) 
 	if stream == nil {
 		return nil, fmt.Errorf("item %s has no subtitle stream %d", itemID, index)
 	}
+	return d.extractStream(ctx, itemID, src, stream)
+}
+
+func (d *Dispatcher) extractStream(
+	ctx context.Context, itemID string, src client.MediaSource, stream *client.MediaStream,
+) (*ExtractTest, error) {
 	if !stream.IsExternal && src.Size > subtitleExtractMaxBytes {
 		return nil, ErrSubtitleFileTooLarge
 	}
-	fetch, err := d.Jellyfin.SubtitleText(ctx, itemID, src.ID, index)
+	fetch, err := d.Jellyfin.SubtitleText(ctx, itemID, src.ID, stream.Index)
 	if err != nil {
 		return nil, err
 	}
@@ -252,4 +267,118 @@ func subtitleReadToolSpecs() []toolSpec {
 			Handler: (*Dispatcher).readSubtitleExtractTest,
 		},
 	}
+}
+
+const verifySubtitleMaxStreams = 2
+
+func (a *Agent) VerifySubtitle(ctx context.Context, itemID, lang string) bool {
+	_, want, ok := langCodes(lang)
+	if !ok || a.disp == nil || a.disp.Jellyfin == nil {
+		return false
+	}
+	info, err := a.disp.Jellyfin.PlaybackInfo(ctx, itemID)
+	if err != nil || len(info.MediaSources) == 0 {
+		return false
+	}
+	src := info.MediaSources[0]
+	var tagged []*client.MediaStream
+	for i := range src.MediaStreams {
+		s := &src.MediaStreams[i]
+		if _, iso3, known := langCodes(s.Language); s.Type == streamTypeSubtitle && known && iso3 == want {
+			tagged = append(tagged, s)
+		}
+	}
+	slices.SortStableFunc(tagged, func(x, y *client.MediaStream) int {
+		return cmp.Compare(boolInt(y.IsExternal), boolInt(x.IsExternal))
+	})
+	tried := 0
+	for _, s := range tagged {
+		if tried == verifySubtitleMaxStreams {
+			break
+		}
+		res, extractErr := a.disp.extractStream(ctx, itemID, src, s)
+		if errors.Is(extractErr, ErrSubtitleFileTooLarge) {
+			continue
+		}
+		tried++
+		if extractErr == nil && res.Status == http.StatusOK && res.Cues >= minVerifyCues &&
+			(want != langEnglish || res.DetectedLanguage == langEnglish) {
+			return true
+		}
+	}
+	return false
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func alignedItems(messages []openai.ChatCompletionMessage) []string {
+	items := map[string]string{}
+	var out []string
+	for _, m := range messages {
+		for _, tc := range m.ToolCalls {
+			if tc.Function.Name != toolStreamAlignment {
+				continue
+			}
+			var args map[string]any
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			if id, _ := args[paramItemID].(string); id != "" {
+				items[tc.ID] = id
+			}
+		}
+		if m.Role != openai.ChatMessageRoleTool || items[m.ToolCallID] == "" {
+			continue
+		}
+		var reply map[string]any
+		if json.Unmarshal([]byte(m.Content), &reply) == nil && reply[keyError] == nil {
+			out = append(out, items[m.ToolCallID])
+		}
+	}
+	return out
+}
+
+func (a *Agent) resolveSubtitleItem(ctx context.Context, inc *db.Incident, verifyItem string, aligned []string) string {
+	if a.disp == nil || a.disp.Jellyfin == nil {
+		return ""
+	}
+	if inc.JellyfinItemID != "" {
+		info, err := a.disp.Jellyfin.ItemInfo(ctx, inc.JellyfinItemID)
+		if err != nil {
+			return ""
+		}
+		if info.Type == itemEpisode || info.Type == itemMovie {
+			return inc.JellyfinItemID
+		}
+		if info.Type != itemSeries {
+			return ""
+		}
+	}
+	if verifyItem == "" || !slices.Contains(aligned, verifyItem) {
+		return ""
+	}
+	info, err := a.disp.Jellyfin.ItemInfo(ctx, verifyItem)
+	if err != nil {
+		return ""
+	}
+	switch {
+	case info.Type == itemEpisode && (inc.JellyfinItemID == "" || info.SeriesID == inc.JellyfinItemID):
+		return verifyItem
+	case info.Type == itemMovie && inc.JellyfinItemID == "":
+		return verifyItem
+	}
+	return ""
+}
+
+func SubtitleLanguage(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return langEnglish
+	}
+	if _, iso3, ok := langCodes(s); ok {
+		return iso3
+	}
+	return s
 }

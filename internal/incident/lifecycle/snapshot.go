@@ -49,6 +49,7 @@ type VerifyKind string
 const (
 	VerifyGeneric   VerifyKind = "generic"
 	VerifyStuckRead VerifyKind = "stuck_read"
+	VerifySubtitles VerifyKind = "subtitles"
 )
 
 type Verify struct {
@@ -57,14 +58,16 @@ type Verify struct {
 }
 
 type VerifySpec struct {
-	Kind       VerifyKind      `json:"kind"`
-	ItemID     string          `json:"item_id"`
-	PreFix     json.RawMessage `json:"pre,omitempty"`
-	Action     string          `json:"action,omitempty"`
-	ETAMinutes int             `json:"eta_minutes,omitempty"`
-	Extensions int             `json:"extensions"`
-	CheckSeq   int             `json:"check_seq,omitempty"`
-	ETANoted   bool            `json:"eta_noted"`
+	Kind           VerifyKind      `json:"kind"`
+	ItemID         string          `json:"item_id"`
+	PreFix         json.RawMessage `json:"pre,omitempty"`
+	Language       string          `json:"language,omitempty"`
+	SubtitleItemID string          `json:"subtitle_item_id,omitempty"`
+	Action         string          `json:"action,omitempty"`
+	ETAMinutes     int             `json:"eta_minutes,omitempty"`
+	Extensions     int             `json:"extensions"`
+	CheckSeq       int             `json:"check_seq,omitempty"`
+	ETANoted       bool            `json:"eta_noted"`
 
 	VerifyEnteredAt time.Time `json:"verify_entered_at,omitzero"`
 }

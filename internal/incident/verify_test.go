@@ -377,3 +377,89 @@ func TestE2_NoEnteredTimeLeavesTheVerifyTimer(t *testing.T) {
 		t.Fatalf("a row with no verify entry time was armed at %v, want the timer left alone", at)
 	}
 }
+
+func (a *observingAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *blockingObserver) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *cancelingObserver) VerifySubtitle(context.Context, string, string) bool { return true }
+
+type subtitleAgent struct {
+	*observingAgent
+
+	result agent.DiagnosticResult
+	subs   atomic.Int32
+	item   atomic.Value
+	lang   atomic.Value
+}
+
+func (a *subtitleAgent) Run(
+	ctx context.Context, _ *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
+) agent.RunExit {
+	r := a.result
+	return gatedExit(ctx, gate, &r, nil, nil)
+}
+
+func (a *subtitleAgent) VerifySubtitle(_ context.Context, itemID, lang string) bool {
+	a.subs.Add(1)
+	a.item.Store(itemID)
+	a.lang.Store(lang)
+	return true
+}
+
+func subtitleResult(subtitleItem string) agent.DiagnosticResult {
+	return agent.DiagnosticResult{
+		RootCause: "test", Confidence: "high", PrimaryAction: "run-a", PrimaryReason: "test",
+		VerifyAfterSeconds: 3600, VerifyItemID: "ep1",
+		VerifySubtitleLanguage: "en", SubtitleItemID: subtitleItem,
+	}
+}
+
+func TestB6_RunVerificationUsesSubtitleKind(t *testing.T) {
+	t.Parallel()
+	report := func(what string) *incident.Report {
+		return &incident.Report{Source: "discord", ReportedBy: "alice", What: what, Title: "Show"}
+	}
+	ag := &subtitleAgent{observingAgent: newObservingAgent(), result: subtitleResult("ep1")}
+	env := newLifecycleEnv(t, ag)
+	inc, err := env.svc.Handle(t.Context(), report(agent.WhatSubtitles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := env.waitStatusWithin(t, inc.ID, lifecycle.Verifying, loadedWaitTimeout)
+	if sp := got.Verify.Spec; sp.Kind != lifecycle.VerifySubtitles || sp.Language != "eng" ||
+		sp.SubtitleItemID != "ep1" || sp.ItemID != "ep1" {
+		t.Fatalf("spec = %+v", sp)
+	}
+	env = newLifecycleEnv(t, ag)
+	s := env.verifying(t, "Show", agent.WhatSubtitles)
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) { n.Verify.Spec = got.Verify.Spec })
+	env.svc.StartRecovery()
+	env.waitFixed(t, s.ID)
+	if ag.subs.Load() != 1 || ag.verifies.Load() != 0 || ag.item.Load() != "ep1" || ag.lang.Load() != "eng" {
+		t.Fatalf("VerifySubtitle %d (%v %v), VerifyResolved %d", ag.subs.Load(), ag.item.Load(), ag.lang.Load(),
+			ag.verifies.Load())
+	}
+
+	empty := &subtitleAgent{observingAgent: newObservingAgent(), result: subtitleResult("")}
+	env = newLifecycleEnv(t, empty)
+	inc, err = env.svc.Handle(t.Context(), report(agent.WhatSubtitles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = env.waitStatusWithin(t, inc.ID, lifecycle.ManualTestNeeded, loadedWaitTimeout)
+	if got.Verify != nil && got.Verify.Spec.Kind == lifecycle.VerifySubtitles {
+		t.Fatalf("a subtitle verify was armed with no item: %+v", got.Verify)
+	}
+
+	generic := &subtitleAgent{observingAgent: newObservingAgent(), result: subtitleResult("ep1")}
+	env = newLifecycleEnv(t, generic)
+	inc, err = env.svc.Handle(t.Context(), report("cant_play"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = env.waitStatusWithin(t, inc.ID, lifecycle.Verifying, loadedWaitTimeout)
+	if got.Verify.Spec.Kind != lifecycle.VerifyGeneric {
+		t.Fatalf("cant_play kind = %q", got.Verify.Spec.Kind)
+	}
+}

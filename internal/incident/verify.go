@@ -15,6 +15,7 @@ import (
 
 type Observer interface {
 	VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool
+	VerifySubtitle(ctx context.Context, itemID, lang string) bool
 	ScanRunning(ctx context.Context) bool
 	CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)
 }
@@ -34,8 +35,17 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, gen int
 	spec := lifecycle.VerifySpec{
 		Kind: lifecycle.VerifyGeneric, ItemID: itemID, Action: result.PrimaryAction, ETAMinutes: result.UserETAMinutes,
 	}
-	if inc.What == agent.WhatStuckRead {
+	switch inc.What {
+	case agent.WhatStuckRead:
 		spec.Kind = lifecycle.VerifyStuckRead
+	case agent.WhatSubtitles:
+		if result.SubtitleItemID == "" {
+			s.surfaceToOwner(ctx, inc, gen, result, "")
+			return
+		}
+		spec.Kind = lifecycle.VerifySubtitles
+		spec.Language = agent.SubtitleLanguage(result.VerifySubtitleLanguage)
+		spec.SubtitleItemID = result.SubtitleItemID
 	}
 	if result.PreFix != nil {
 		spec.PreFix, _ = json.Marshal(result.PreFix)
@@ -168,6 +178,15 @@ func (s *Service) observeVerify(ctx context.Context, inc *db.Incident, snap life
 	obs := s.observer()
 	if obs == nil {
 		return lifecycle.VerifyUnknown, false
+	}
+	if spec.Kind == lifecycle.VerifySubtitles {
+		if obs.VerifySubtitle(ctx, spec.SubtitleItemID, agent.SubtitleLanguage(spec.Language)) {
+			return lifecycle.VerifyFixed, false
+		}
+		if snap.Verify.ChecksLeft > 1 {
+			return lifecycle.VerifyNotYet, false
+		}
+		return lifecycle.VerifyNotYet, obs.ScanRunning(ctx)
 	}
 	var pre *agent.FixSignature
 	if len(spec.PreFix) > 0 {

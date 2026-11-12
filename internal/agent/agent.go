@@ -383,6 +383,9 @@ type DiagnosticResult struct {
 	// actually changed, not just that the item currently looks healthy.
 	PreFix *FixSignature `json:"pre_fix,omitempty"`
 
+	VerifySubtitleLanguage string `json:"verify_subtitle_language,omitempty"`
+	SubtitleItemID         string `json:"subtitle_item_id,omitempty"`
+
 	Outcome DiagnosisOutcome `json:"outcome,omitzero"`
 }
 
@@ -647,6 +650,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	preFix *FixSignature,
 	argsJSON string,
 	gate Gate,
+	aligned []string,
 ) (*DiagnosticResult, error) {
 	result, err := parseDiagnosis(argsJSON, gate.Calls())
 	if rejected, ok := errors.AsType[*diagnosisRejectedError](err); ok {
@@ -661,6 +665,10 @@ func (a *Agent) handleCompleteDiagnosis(
 	// no pre_fix parameter — but assign it unconditionally regardless, so a
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
+	result.SubtitleItemID = ""
+	if inc.What == WhatSubtitles {
+		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned)
+	}
 
 	// Deliberately ignores result.VerifyItemID when it names a different item
 	// than the one preFix was captured against: improved() compares the two
@@ -682,11 +690,20 @@ func (a *Agent) handleCompleteDiagnosis(
 	// a missing-media report with no deferred verification was returned as a
 	// clean success with nothing checked at all.
 	if result.Outcome.Kind == DiagnosisFixNow && inc.What != WhatStuckRead {
-		if !a.VerifyResolved(ctx, itemID, inc.Title, preFix) {
+		what := "playback"
+		var verified bool
+		if inc.What == WhatSubtitles {
+			what = "subtitle"
+			verified = result.SubtitleItemID != "" &&
+				a.VerifySubtitle(ctx, result.SubtitleItemID, SubtitleLanguage(result.VerifySubtitleLanguage))
+		} else {
+			verified = a.VerifyResolved(ctx, itemID, inc.Title, preFix)
+		}
+		if !verified {
 			a.log.WarnContext(ctx, "post-fix verification failed, escalating", "incident", inc.ID)
 			result.RequiresApproval = true
 			result.EscalateAction = EscalateManualInvestigation
-			result.PrimaryReason = "autonomous fix applied but playback verification failed; " + result.PrimaryReason
+			result.PrimaryReason = "autonomous fix applied but " + what + " verification failed; " + result.PrimaryReason
 			result.Outcome = DiagnosisOutcome{Kind: DiagnosisManual, Reason: result.PrimaryReason}
 		}
 	}

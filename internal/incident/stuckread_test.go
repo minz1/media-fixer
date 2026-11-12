@@ -249,3 +249,5 @@ func TestCantPlayStillImmediate(t *testing.T) {
 		t.Fatalf("Clear calls = %d, want 0", n)
 	}
 }
+
+func (a *stuckReadAgent) VerifySubtitle(context.Context, string, string) bool { return true }

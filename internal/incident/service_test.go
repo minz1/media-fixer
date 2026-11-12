@@ -1685,3 +1685,15 @@ func TestF22_BootReadErrorHealsOnTick(t *testing.T) {
 		t.Fatal("the stored pause never reached the gate")
 	}
 }
+
+func (a *blockingAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *sequencedAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *alwaysFixedAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *concurrencyTrackingAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *lowConfidenceOnceAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *verifyingAgent) VerifySubtitle(context.Context, string, string) bool { return true }

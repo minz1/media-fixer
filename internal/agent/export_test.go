@@ -260,3 +260,10 @@ func LangCodesForTest(s string) (string, string, bool) { return langCodes(s) }
 func DetectLanguageForTest(text string) string { return detectLanguage(text) }
 
 func CueLinesForTest(srt string, n int) []string { return cueLines(srt, n) }
+
+func (a *Agent) ConcludeForTest(
+	ctx context.Context, inc *db.Incident, call openai.ToolCall, gate Gate, messages *[]openai.ChatCompletionMessage,
+) (*DiagnosticResult, error) {
+	ev, result := a.conclude(ctx, inc, nil, call, gate, messages)
+	return result, ev.err
+}

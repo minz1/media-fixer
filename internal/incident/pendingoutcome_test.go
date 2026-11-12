@@ -853,3 +853,7 @@ func (a *scriptedPendingOutcomeAgent) OperationFor(
 ) (operation.Spec, error) {
 	return operation.Spec{}, nil
 }
+
+func (a *scriptedPendingOutcomeAgent) VerifySubtitle(context.Context, string, string) bool {
+	return true
+}

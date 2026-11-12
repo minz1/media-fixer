@@ -465,3 +465,5 @@ func TestF25_EscalationActionsTakeRegistryFlag(t *testing.T) {
 		t.Error("unknown action must not be disruptive")
 	}
 }
+
+func (a *escalationAgent) VerifySubtitle(context.Context, string, string) bool { return true }

@@ -670,3 +670,5 @@ func (a stubArr) Search(ctx context.Context, _ string, _, _ int, _ []int) error 
 	}
 	return nil
 }
+
+func (a *stubEscalationAgent) VerifySubtitle(context.Context, string, string) bool { return true }
