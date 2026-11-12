@@ -304,3 +304,5 @@ func (s *Service) SetApplyForTest(f func(ctx context.Context, id string, ev life
 		return f(ctx, id, ev)
 	}
 }
+
+func (s *Service) PausedForTest() bool { return s.paused.Load() }

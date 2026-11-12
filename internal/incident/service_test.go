@@ -1614,3 +1614,38 @@ func rerunCurrent(ctx context.Context, svc *incident.Service, id string) error {
 		}
 	}
 }
+
+func TestF22_ConcurrentTogglesAgree(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	var wg sync.WaitGroup
+	for range 100 {
+		for _, p := range []bool{true, false} {
+			wg.Go(func() {
+				if err := env.svc.SetAutonomousPaused(t.Context(), p); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+	}
+	wg.Wait()
+	stored, err := env.db.IsAutonomousPaused(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != env.svc.PausedForTest() {
+		t.Fatalf("stored paused=%v, gate paused=%v", stored, env.svc.PausedForTest())
+	}
+}
+
+func TestF22_BootReadErrorHealsOnTick(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	if err := env.db.SetSetting(t.Context(), "autonomous_paused", "true"); err != nil {
+		t.Fatal(err)
+	}
+	env.svc.ReconcileForTest(t.Context())
+	if !env.svc.PausedForTest() {
+		t.Fatal("the stored pause never reached the gate")
+	}
+}

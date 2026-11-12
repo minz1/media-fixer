@@ -44,6 +44,7 @@ type Service struct {
 	// shortcut: in memory, so a restart during a lock sends one more alert; persist it if that turns out noisy.
 	lockAlertAt atomic.Int64
 	paused      atomic.Bool
+	pauseMu     sync.Mutex
 	wake        chan struct{}
 
 	beforePlanLost func(id string)
@@ -641,10 +642,15 @@ func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
 	if paused {
 		v = "true"
 	}
-	if err = s.db.SetSetting(ctx, "autonomous_paused", v); err != nil {
+	s.pauseMu.Lock()
+	err = s.db.SetSetting(ctx, "autonomous_paused", v)
+	if err == nil {
+		s.paused.Store(paused)
+	}
+	s.pauseMu.Unlock()
+	if err != nil {
 		return err
 	}
-	s.paused.Store(paused)
 	if !paused {
 		s.wakeReconciler()
 	}
@@ -653,6 +659,15 @@ func (s *Service) SetAutonomousPaused(ctx context.Context, paused bool) error {
 	}
 	return nil
 }
+
+func (s *Service) refreshPaused(ctx context.Context) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	if paused, err := s.db.IsAutonomousPaused(ctx); err == nil {
+		s.paused.Store(paused)
+	}
+}
+
 func (s *Service) buildReinvestigateSeed(
 	ctx context.Context,
 	id string,

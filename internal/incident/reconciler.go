@@ -77,6 +77,7 @@ func (s *Service) reconcile(ctx context.Context) lifecycle.Counts {
 	for id, m := range live.floors {
 		floors[id] = s.minutes(m)
 	}
+	s.refreshPaused(ctx)
 	paused := s.paused.Load()
 	intents := lifecycle.Reconcile(rows, lifecycle.Liveness{
 		Runs: live.runs, Reserved: live.reserved, Plans: live.plans, Armed: live.armed, Floors: floors,
