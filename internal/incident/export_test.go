@@ -287,3 +287,13 @@ func (s *Service) ApplyBareApproveForTest(ctx context.Context, id, planFP string
 	_, err := s.apply(ctx, id, ev, nil)
 	return err
 }
+
+func EscalationVerbsForTest() []string { return escalationVerbs() }
+
+func CardButtonVerbsForTest() []string {
+	var out []string
+	for _, sp := range cardSpecs(cardPlan{}, nil) {
+		out = append(out, sp.verb)
+	}
+	return out
+}
