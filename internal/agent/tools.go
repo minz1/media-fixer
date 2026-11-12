@@ -353,12 +353,13 @@ func hostReadToolSpecs() []toolSpec {
 				Parameters: jsonSchema(map[string]any{
 					"units":        param("string", lokiUnitParamDesc),
 					"minutes_back": param("number", "How many minutes before now to search (max 120)"),
-					"filter": param("string",
-						"Substring the log line must contain — the title, filename, or item ID you're "+
-							"investigating. Strongly recommended for media incidents: without it you get every "+
-							"line from both services in the window, including ones about a completely "+
-							"different title, which are not evidence about this incident. Omit only for a "+
-							"general infrastructure/connectivity incident with no specific item to filter on."),
+					"filters": stringArrayParam(
+						"Terms; a line matching any one is kept (case and punctuation ignored): " +
+							"pass the title, the release or file name, and the Jellyfin item id once known. " +
+							"Strongly recommended for media incidents: without it you get every line from both " +
+							"services in the window, including ones about a completely different title. Omit " +
+							"only for a general infrastructure/connectivity incident with no specific item."),
+					"filter": param("string", "Deprecated alias for one entry of filters."),
 					"around_incident": param("boolean",
 						"Center the window on when the incident was reported instead of the current time "+
 							"(default true). Leave true unless you deliberately want to see what's happening "+
@@ -939,8 +940,23 @@ func (d *Dispatcher) readRepairHealth(ctx context.Context, _ *toolCall, _ map[st
 func (d *Dispatcher) readLokiQuery(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
 	units, _ := args["units"].(string)
 	units = FixLokiUnitSelector(units)
+	var terms []string
+	if raw, ok := args["filters"].([]any); ok {
+		for _, v := range raw {
+			if s, isStr := v.(string); isStr {
+				terms = append(terms, s)
+			}
+		}
+	}
 	if filter, ok := args["filter"].(string); ok && filter != "" {
-		units += ` |= "` + escapeLogQLString(filter) + `"`
+		terms = append(terms, filter)
+	}
+	if len(terms) > 0 {
+		re := lokiFilterRegex(terms)
+		if re == "" {
+			return nil, errors.New("no usable filter terms: use the release/file name or item id")
+		}
+		units += ` |~ "` + escapeLogQLString(re) + `"`
 	}
 
 	minutes, _ := args["minutes_back"].(float64)
@@ -973,6 +989,34 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, c *toolCall, args map[st
 		to = now
 	}
 	return d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
+}
+
+var lokiAlnumRun = regexp.MustCompile(`[A-Za-z0-9]+`)
+
+const (
+	maxLokiFilterTerms = 5
+	minLokiTermAlnum   = 3
+)
+
+func lokiFilterRegex(terms []string) string {
+	var alts []string
+	for _, t := range terms {
+		runs := lokiAlnumRun.FindAllString(t, -1)
+		if len(strings.Join(runs, "")) < minLokiTermAlnum {
+			continue
+		}
+		for i, r := range runs {
+			runs[i] = regexp.QuoteMeta(r)
+		}
+		alts = append(alts, strings.Join(runs, "[^[:alnum:]]*"))
+		if len(alts) == maxLokiFilterTerms {
+			break
+		}
+	}
+	if len(alts) == 0 {
+		return ""
+	}
+	return "(?i)(" + strings.Join(alts, "|") + ")"
 }
 
 // escapeLogQLString escapes backslashes and double quotes so a filter string
@@ -1815,4 +1859,10 @@ func enumParam(typ, desc string, enum []string) map[string]any {
 // objectParam describes an optional nested object parameter with its own properties.
 func objectParam(desc string, props map[string]any) map[string]any {
 	return map[string]any{jsonSchemaTypeKey: jsonSchemaTypeObject, "description": desc, "properties": props}
+}
+
+func stringArrayParam(desc string) map[string]any {
+	p := param("array", desc)
+	p["items"] = map[string]any{jsonSchemaTypeKey: "string"}
+	return p
 }

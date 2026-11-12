@@ -21,6 +21,8 @@ func ToolDefsForTest() []openai.Tool      { return toolDefs() }
 func SystemPromptForTest() string         { return systemPrompt }
 func EscalateActionEnumForTest() []string { return escalateActionEnum() }
 
+func LokiFilterRegexForTest(terms []string) string { return lokiFilterRegex(terms) }
+
 func SpecByNameForTest(name string) (ToolSpec, bool) { return specByName(name) }
 
 // Risk classification constants, re-exported for assertions in package agent_test.

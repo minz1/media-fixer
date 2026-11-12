@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -672,13 +673,15 @@ func TestE3_CapEndsNote(t *testing.T) {
 }
 
 // lokiCapturingServer starts a fake Loki that records the query params of the
-// last query_range request it received.
-func lokiCapturingServer(t *testing.T) (*client.LokiClient, *url.Values) {
+// every query_range request it received; got is the last one.
+func lokiCapturingServer(t *testing.T) (*client.LokiClient, *url.Values, *[]url.Values) {
 	t.Helper()
 	var got url.Values
+	var all []url.Values
 	mux := http.NewServeMux()
 	mux.HandleFunc("/loki/api/v1/query_range", func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Query()
+		all = append(all, got)
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"result": []any{}}})
 	})
 	srv := httptest.NewServer(mux)
@@ -688,7 +691,7 @@ func lokiCapturingServer(t *testing.T) (*client.LokiClient, *url.Values) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return loki, &got
+	return loki, &got, &all
 }
 
 // TestScope_LokiAnchorsOnReportedAt is the regression test for "loki
@@ -699,7 +702,7 @@ func lokiCapturingServer(t *testing.T) (*client.LokiClient, *url.Values) {
 // relationship to when it actually failed.
 func TestScope_LokiAnchorsOnReportedAt(t *testing.T) {
 	t.Parallel()
-	loki, got := lokiCapturingServer(t)
+	loki, got, _ := lokiCapturingServer(t)
 
 	incidentTime := time.Date(2026, 8, 26, 3, 11, 0, 0, time.UTC)
 	disp := &agent.Dispatcher{Loki: loki}
@@ -717,7 +720,7 @@ func TestScope_LokiAnchorsOnReportedAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if q := got.Get("query"); !strings.Contains(q, `|= "Backrooms"`) {
+	if q := got.Get("query"); !strings.Contains(q, `|~ "(?i)(Backrooms)"`) {
 		t.Errorf("query missing line filter: %q", q)
 	}
 
@@ -735,7 +738,7 @@ func TestScope_LokiAnchorsOnReportedAt(t *testing.T) {
 // deliberately overrides the incident-anchored default.
 func TestLokiQuery_AroundIncidentFalse_UsesNow(t *testing.T) {
 	t.Parallel()
-	loki, got := lokiCapturingServer(t)
+	loki, got, _ := lokiCapturingServer(t)
 
 	disp := &agent.Dispatcher{Loki: loki}
 
@@ -965,4 +968,95 @@ func TestF5_ScanJustTriggeredStillWarns(t *testing.T) {
 	if note := a.DisruptionNoteForTest(context.Background(), incidentA); note != "" {
 		t.Fatalf("expected no note 2 minutes after a scan that is no longer running, got %q", note)
 	}
+}
+
+func TestG3_LokiFiltersBuildLooseRegex(t *testing.T) {
+	t.Parallel()
+	got := agent.LokiFilterRegexForTest([]string{"Frieren: Beyond Journey's End", "57ea761f"})
+	want := `(?i)(Frieren[^[:alnum:]]*Beyond[^[:alnum:]]*Journey[^[:alnum:]]*s[^[:alnum:]]*End|57ea761f)`
+	if got != want {
+		t.Fatalf("regex = %q, want %q", got, want)
+	}
+	if !regexp.MustCompile(got).MatchString("frieren.beyond.journeys.end.s01e01.mkv") {
+		t.Errorf("regex %q does not match the release name", got)
+	}
+	if r := agent.LokiFilterRegexForTest([]string{"...", "A.B", "ab"}); r != "" {
+		t.Errorf("unusable terms gave %q, want empty", r)
+	}
+	if r := agent.LokiFilterRegexForTest(nil); r != "" {
+		t.Errorf("nil gave %q, want empty", r)
+	}
+	r := agent.LokiFilterRegexForTest([]string{"aaa", "bbb", "ccc", "ddd", "eee", "fff"})
+	if r != "(?i)(aaa|bbb|ccc|ddd|eee)" {
+		t.Errorf("cap of 5 terms: got %q", r)
+	}
+}
+
+func TestG3_LokiQueryFilterBecomesLineRegex(t *testing.T) {
+	t.Parallel()
+	loki, got, all := lokiCapturingServer(t)
+	disp := &agent.Dispatcher{Loki: loki}
+
+	if _, err := disp.CallScoped(context.Background(), agent.Scope{}, "loki_query", map[string]any{
+		"units":        `{unit=~"jellyfin.service"}`,
+		"minutes_back": float64(30),
+		"filters":      []any{"Abc.Def", `xy"z1`},
+		"filter":       "Ghi",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := `{unit=~"jellyfin.service"} |~ "(?i)(Abc[^[:alnum:]]*Def|xy[^[:alnum:]]*z1|Ghi)"`
+	if q := got.Get("query"); q != want {
+		t.Errorf("query = %q, want %q", q, want)
+	}
+	if len(*all) != 1 {
+		t.Errorf("queries run = %d, want 1", len(*all))
+	}
+
+	loki2, got2, _ := lokiCapturingServer(t)
+	disp2 := &agent.Dispatcher{Loki: loki2}
+	_, err := disp2.CallScoped(context.Background(), agent.Scope{}, "loki_query", map[string]any{
+		"units":        `{unit=~"jellyfin.service"}`,
+		"minutes_back": float64(30),
+		"filters":      []any{"葬送のフリーレン"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no usable filter terms: use the release/file name or item id") {
+		t.Errorf("err = %v, want no usable filter terms", err)
+	}
+	if got2.Get("query") != "" {
+		t.Errorf("an unfiltered query ran: %q", got2.Get("query"))
+	}
+}
+
+func TestG3_LokiSchemaDeclaresFilters(t *testing.T) {
+	t.Parallel()
+	for _, d := range agent.ToolDefsForTest() {
+		if d.Function.Name != "loki_query" {
+			continue
+		}
+		raw, err := json.Marshal(d.Function.Parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err = json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		var f struct {
+			Type  string `json:"type"`
+			Items struct {
+				Type string `json:"type"`
+			} `json:"items"`
+		}
+		if err = json.Unmarshal(schema.Properties["filters"], &f); err != nil {
+			t.Fatal(err)
+		}
+		if f.Type != "array" || f.Items.Type != "string" {
+			t.Errorf("filters schema = %s, want array of string", schema.Properties["filters"])
+		}
+		return
+	}
+	t.Fatal("loki_query tool not found")
 }
