@@ -352,3 +352,38 @@ func TestStuckQueue_NeverMovesAnOp(t *testing.T) {
 }
 
 func stuckSubFor(downloadID string) string { return card.StuckSubject("s", downloadID) }
+
+func TestL10_UnknownAppOpIsWarnedOnce(t *testing.T) {
+	t.Parallel()
+	e, s := regrabEnv(t)
+	ctx := context.Background()
+	spec := stuckqueue.RegrabSpecForTest(queuedDownload(t, e, stuckqueue.AppSonarr, "D"))
+	spec.Subject.ID = "s:x"
+	for i := range spec.Steps {
+		spec.Steps[i].DownloadID = "X"
+	}
+	odd := createdOp(t, e, spec)
+	if _, err := e.db.ApplyOperation(ctx, odd.ID, func(cur operation.Op) (operation.Op, error) {
+		return operation.Next(cur, operation.Event{Kind: operation.StepStarted, At: e.clock.Now(), Index: 0})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	op := crashedOp(t, e, "D")
+	e.rawExec(t, `UPDATE operations SET steps = replace(steps, '"sonarr"', '"lidarr"') WHERE subject_id = 's:x'`)
+	from := len(e.logs.String())
+	adoptNow(t, s)
+
+	if n := strings.Count(e.logs.String()[from:], "names an unknown app"); n != 1 {
+		t.Fatalf("unknown-app WARNs = %d, want 1:\n%s", n, e.logs.String()[from:])
+	}
+	if line := logLineWith(e, from, "names an unknown app"); !strings.Contains(line, "level=WARN") ||
+		!strings.Contains(line, "app=lidarr") {
+		t.Fatalf("line = %q", line)
+	}
+	if rows, err := e.db.ListStuck(ctx, "lidarr"); err != nil || len(rows) != 0 {
+		t.Fatalf("lidarr rows = %+v (err %v), want none", rows, err)
+	}
+	if row, ok := e.rowOf(t, "D"); !ok || row.ActedOpID != op.ID {
+		t.Fatalf("row = %+v, %v; want D adopted with op %d", row, ok, op.ID)
+	}
+}
