@@ -184,3 +184,5 @@ func Sleep(ctx context.Context, d time.Duration) error {
 		return nil
 	}
 }
+
+func (s *Scheduler) WakeDownload() { s.r.WakeDownload() }

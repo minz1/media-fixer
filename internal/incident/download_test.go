@@ -212,3 +212,56 @@ func setResolvedTrack(ctx context.Context, d *db.DB, id string) error {
 	})
 	return err
 }
+
+func TestE1_SonarrWakeArmsMatchingDownload(t *testing.T) {
+	t.Parallel()
+	f := newDLFixture(t, statusAwaiting, freshTrack())
+	for _, miss := range []struct {
+		media, title string
+		season, ep   int
+	}{{"tv", "Nobody", 1, 1}, {"tv", "Tracked", 1, 2}, {"tv", "Tracked", 2, 1}, {"movie", "Tracked", 1, 1}} {
+		if err := f.svc.ArmSonarrDownloadWake(t.Context(), miss.media, miss.title, miss.season, miss.ep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := f.svc.ArmedAtForTest(f.inc.ID); ok {
+		t.Fatal("a wake for another download armed the check")
+	}
+	if err := f.svc.ArmSonarrDownloadWake(t.Context(), "tv", "tracked", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the woken download check", func() bool { return f.checks.Load() >= 1 })
+}
+
+func TestE1_SeasonDownloadWakesOnAnyEpisode(t *testing.T) {
+	t.Parallel()
+	po := freshTrack()
+	po.Episode = -1
+	f := newDLFixture(t, statusAwaiting, po)
+	if err := f.svc.ArmSonarrDownloadWake(t.Context(), "tv", "Tracked", 1, 7); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the woken download check", func() bool { return f.checks.Load() >= 1 })
+}
+
+func TestE1_StaleGenerationWakeNoop(t *testing.T) {
+	t.Parallel()
+	f := newDLFixture(t, statusAwaiting, freshTrack())
+	f.svc.DownloadCheckForTest(t.Context(), f.inc.ID, f.snap(t).Generation-1)
+	if n := f.checks.Load(); n != 0 {
+		t.Fatalf("a stale wake ran %d checks, want 0", n)
+	}
+}
+
+func TestE1_FallbackPollStillFires(t *testing.T) {
+	t.Parallel()
+	f := newDLFixture(t, statusAwaiting, freshTrack())
+	if err := f.svc.ArmSonarrDownloadWake(t.Context(), "tv", "Tracked", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the woken download check", func() bool { return f.checks.Load() >= 1 })
+	eventually(t, "the next poll armed", func() bool {
+		_, ok := f.svc.ArmedAtForTest(f.inc.ID)
+		return ok
+	})
+}

@@ -69,7 +69,8 @@ type Server struct {
 	// once, by Start.
 	shutdown chan struct{}
 
-	seerrWebhookSecret string
+	seerrWebhookSecret  string
+	sonarrWebhookSecret string
 
 	sweep   *sweep.Scheduler
 	stuck   *stuckqueue.Scheduler
@@ -124,6 +125,7 @@ func New(
 	r.Use(middleware.Recoverer)
 
 	r.Post("/ingest/seerr", s.handleSeerrWebhook)
+	r.Post("/ingest/sonarr", s.handleSonarrWebhook)
 
 	r.Route(baseURL, func(r chi.Router) {
 		// Every mutating route below is an unauthenticated-from-this-service's

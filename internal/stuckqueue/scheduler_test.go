@@ -223,3 +223,44 @@ func TestSchedulerStartedAt(t *testing.T) {
 		t.Errorf("StartedAt = %v, want %v", got, at)
 	}
 }
+
+func TestE1_StuckQueueWakeRespectsSettings(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	if err := s.RunNowIfDue(); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	first := s.StartedAt()
+	if first.IsZero() {
+		t.Fatal("the first wake did not run")
+	}
+	e.clock.Add(time.Minute)
+	if err := s.RunNowIfDue(); err != nil {
+		t.Fatalf("a wake inside the interval = %v, want a silent no-op", err)
+	}
+	s.Wait()
+	if !s.StartedAt().Equal(first) {
+		t.Fatal("a wake ran inside the interval")
+	}
+	e.clock.Add(time.Hour)
+	release, err := stuckqueue.ClaimForTest(s, stuckqueue.HolderOwner, e.clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RunNowIfDue(); !errors.Is(err, stuckqueue.ErrOwnerActing) {
+		t.Fatalf("a wake during an owner action = %v, want ErrOwnerActing", err)
+	}
+	release()
+	set := stuckqueue.DefaultSettings()
+	set.Enabled = false
+	if err = stuckqueue.SaveSettings(context.Background(), e.db, set); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RunNowIfDue(); !errors.Is(err, stuckqueue.ErrDisabled) {
+		t.Fatalf("a wake while disabled = %v, want ErrDisabled", err)
+	}
+	if !s.StartedAt().Equal(first) {
+		t.Fatal("a refused wake ran")
+	}
+}

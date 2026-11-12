@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,6 +61,16 @@ type Runner struct {
 
 	mu       sync.Mutex
 	progress *Progress
+	wake     atomic.Pointer[chan struct{}]
+}
+
+func (r *Runner) WakeDownload() {
+	if ch := r.wake.Load(); ch != nil {
+		select {
+		case *ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 type Progress struct {
@@ -101,6 +112,7 @@ type run struct {
 	lastGrab   time.Time
 	lastSearch time.Time
 	refreshed  time.Time
+	wake       chan struct{}
 }
 
 type Pass string
@@ -158,9 +170,11 @@ func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Sett
 	x := &run{
 		Runner: r, id: id, dry: dry, s: s, sc: sc, tried: map[string]bool{}, handled: map[int]bool{}, start: start,
 		burst: map[string]bool{}, attempted: map[string]bool{}, looked: map[string]bool{},
-		seasonMiss: map[int]map[int]int{}, refreshed: start,
+		seasonMiss: map[int]map[int]int{}, refreshed: start, wake: make(chan struct{}, 1),
 		c: db.SweepCounts{MaxGrabs: s.MaxGrabs, MaxLookups: s.MaxLookups, MaxSearches: s.MaxSearches},
 	}
+	r.wake.Store(&x.wake)
+	defer r.wake.CompareAndSwap(&x.wake, nil)
 	x.report("preflight", "")
 	tracked := r.notifyStart(ctx, startCard(id, trigger, dry, s))
 	err = x.sweep(ctx)
@@ -804,7 +818,7 @@ func (x *run) grab(ctx context.Context, item db.SweepItem, rel client.Release) (
 
 func (x *run) wait(ctx context.Context, title, dlID string, since time.Time) (sweepstate.ItemResult, string, error) {
 	for range int(grabWait / grabPoll) {
-		if err := x.Sleep(ctx, grabPoll); err != nil {
+		if err := x.pause(ctx, grabPoll); err != nil {
 			return sweepstate.ItemNone, dlID, err
 		}
 		hist, err := retry(ctx, x, false, func() ([]client.HistoryRecord, error) {
@@ -1013,4 +1027,23 @@ func (x *run) countGrab(result sweepstate.ItemResult, dlID string) {
 	if result == sweepstate.Downloading {
 		x.c.Downloading++
 	}
+}
+
+func (x *run) pause(ctx context.Context, d time.Duration) error {
+	if x.wake == nil {
+		return x.Sleep(ctx, d)
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-x.wake:
+			cancel()
+		case <-sctx.Done():
+		}
+	}()
+	if err := x.Sleep(sctx, d); err != nil && ctx.Err() != nil {
+		return err
+	}
+	return nil
 }

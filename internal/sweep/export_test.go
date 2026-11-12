@@ -100,3 +100,10 @@ var ErrNotStartedForTest = errNotStarted
 func ReportForTest(r *Runner, id int64, start time.Time) func(phase, current string) {
 	return (&run{Runner: r, id: id, start: start, refreshed: start}).report
 }
+
+func PauseForTest(ctx context.Context, r *Runner, d time.Duration) error {
+	wake := make(chan struct{}, 1)
+	r.wake.Store(&wake)
+	defer r.wake.Store(nil)
+	return (&run{Runner: r, wake: wake}).pause(ctx, d)
+}

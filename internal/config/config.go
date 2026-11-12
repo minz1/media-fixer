@@ -59,8 +59,9 @@ type JellyfinConfig struct {
 }
 
 type ArrConfig struct {
-	URL    string `toml:"url"`
-	APIKey string `toml:"api_key"`
+	URL           string `toml:"url"`
+	APIKey        string `toml:"api_key"`
+	WebhookSecret string `toml:"webhook_secret"`
 }
 
 type LokiConfig struct {
@@ -153,6 +154,7 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("MEDIA_FIXER_LOKI_TLS_KEY", &cfg.Loki.TLSKey)
 	envOverride("MEDIA_FIXER_SEERR_API_KEY", &cfg.Seerr.APIKey)
 	envOverride("MEDIA_FIXER_SEERR_WEBHOOK_SECRET", &cfg.Seerr.WebhookSecret)
+	envOverride("MEDIA_FIXER_SONARR_WEBHOOK_SECRET", &cfg.Sonarr.WebhookSecret)
 
 	if v := os.Getenv("MEDIA_FIXER_CONTROL_LLM_API_KEY"); v != "" {
 		if cfg.ControlLLM == nil {

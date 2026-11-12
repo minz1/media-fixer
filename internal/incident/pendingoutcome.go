@@ -3,6 +3,8 @@ package incident
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
@@ -54,4 +56,27 @@ func KeepSearchingSpan(days int) string {
 		return "a day"
 	}
 	return fmt.Sprintf("%d days", days)
+}
+
+func (s *Service) ArmSonarrDownloadWake(ctx context.Context, mediaType, title string, season, episode int) error {
+	incs, err := s.db.FindByStatus(ctx, lifecycle.AwaitingDownload)
+	if err != nil {
+		return err
+	}
+	for _, inc := range incs {
+		snap, loadErr := s.db.GetIncidentSnapshot(ctx, inc.ID)
+		if loadErr != nil {
+			s.log.ErrorContext(ctx, "sonarr wake: load incident", "incident", inc.ID, "error", loadErr)
+			continue
+		}
+		d := snap.Download
+		if d == nil || d.MediaType != mediaType || !strings.EqualFold(d.Title, title) ||
+			(d.Season >= 0 && d.Season != season) || (d.Episode >= 0 && d.Episode != episode) {
+			continue
+		}
+		s.scheduleCheckEarlier(inc.ID, lifecycle.Effect{
+			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: time.Now(), Check: lifecycle.CheckDownload,
+		})
+	}
+	return nil
 }

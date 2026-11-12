@@ -73,3 +73,22 @@ func LiveTurnsForTest(msgs []openai.ChatCompletionMessage) []transcriptTurn {
 func (s *Server) SetSelftestTimeoutForTest(d time.Duration) { s.selftestTimeout = d }
 
 func (s *Server) BeginShutdownForTest() { close(s.shutdown) }
+
+func ParseSonarrForTest(body []byte) (SonarrEventForTest, error) {
+	ev, err := parseSonarr(body)
+	eps := make([][2]int, 0, len(ev.episodes))
+	for _, e := range ev.episodes {
+		eps = append(eps, [2]int{e.season, e.episode})
+	}
+	if len(eps) == 0 {
+		eps = nil
+	}
+	return SonarrEventForTest{Kind: string(ev.kind), Title: ev.title, Episodes: eps, DownloadID: ev.downloadID}, err
+}
+
+type SonarrEventForTest struct {
+	Kind, Title, DownloadID string
+	Episodes                [][2]int
+}
+
+func SonarrConsumersForTest(kind string) []string { return sonarrConsumers(sonarrKind(kind)) }

@@ -898,3 +898,51 @@ func TestS3_11_FailedTargetUpsertCountsNoSearch(t *testing.T) {
 		t.Errorf("LiveSearchesSince = %d, %v; want 0", used, err)
 	}
 }
+
+func blockingSleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+func TestE1_WakeDownloadEndsTheGrabPollEarly(t *testing.T) {
+	t.Parallel()
+	r := &sweep.Runner{Sleep: blockingSleep}
+	done := make(chan error, 1)
+	go func() { done <- sweep.PauseForTest(t.Context(), r, time.Hour) }()
+	deadline := time.After(5 * time.Second)
+	for {
+		sweep.NewScheduler(t.Context(), r, nil).WakeDownload()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("a woken pause = %v, want nil", err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("the wake did not end the poll")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestE1_PauseStillStopsOnCancel(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err := sweep.PauseForTest(ctx, &sweep.Runner{Sleep: blockingSleep}, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled pause = %v, want context.Canceled", err)
+	}
+}
+
+func TestE1_WakeWithNoRunIsANoop(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.run(t, false, settings())
+	h.runner.WakeDownload()
+	h.runner.WakeDownload()
+}

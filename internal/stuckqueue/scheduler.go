@@ -56,10 +56,7 @@ func (s *Scheduler) Tick(now time.Time) {
 	if err != nil || !set.Enabled {
 		return
 	}
-	s.mu.Lock()
-	due := s.slot.lastStart.IsZero() || now.Sub(s.slot.lastStart) >= set.Interval()
-	s.mu.Unlock()
-	if due {
+	if s.due(now, set) {
 		_ = s.start(now, set)
 	}
 }
@@ -73,6 +70,21 @@ func (s *Scheduler) RunNow() error {
 		return ErrDisabled
 	}
 	return s.start(s.r.Now(), set)
+}
+
+func (s *Scheduler) RunNowIfDue() error {
+	set, err := LoadSettings(s.base, s.d)
+	if err != nil {
+		return err
+	}
+	if !set.Enabled {
+		return ErrDisabled
+	}
+	now := s.r.Now()
+	if !s.due(now, set) {
+		return nil
+	}
+	return s.start(now, set)
 }
 
 func (s *Scheduler) State() (Result, bool, bool) {
@@ -113,4 +125,10 @@ func (s *Scheduler) warnOnce(err error) {
 		s.slot.warned = ""
 		s.r.logger().InfoContext(s.base, "stuck-queue scheduler error cleared")
 	}
+}
+
+func (s *Scheduler) due(now time.Time, set Settings) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.slot.lastStart.IsZero() || now.Sub(s.slot.lastStart) >= set.Interval()
 }
