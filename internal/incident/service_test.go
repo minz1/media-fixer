@@ -572,7 +572,10 @@ func (a *blockingAgent) Run(
 ) agent.RunExit {
 	a.started <- struct{}{}
 	<-ctx.Done()
-	a.done <- ctx.Err()
+	select {
+	case a.done <- ctx.Err():
+	default:
+	}
 	return gatedExit(ctx, gate, nil, nil, ctx.Err())
 }
 
