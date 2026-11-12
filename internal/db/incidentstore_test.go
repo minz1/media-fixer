@@ -416,3 +416,36 @@ func TestListDriven_ReturnsDrivenRowsWithActivity(t *testing.T) {
 		t.Fatalf("driven rows %+v", rows)
 	}
 }
+
+func TestF18_CardViewIsOneSnapshot(t *testing.T) {
+	t.Parallel()
+	d := openTestDB(t)
+	ctx := context.Background()
+	s := claimed(t, d, "One read")
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if _, err := d.ApplyIncident(ctx, s.ID, force(func(n *lifecycle.Snapshot) { n.ActionCount = i % 2 })); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	})
+	defer wg.Wait()
+	defer close(done)
+	for range 200 {
+		inc, sn, err := d.IncidentCardView(ctx, s.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inc.Version != sn.Version {
+			t.Fatalf("incident version %d, snapshot version %d", inc.Version, sn.Version)
+		}
+	}
+}

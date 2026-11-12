@@ -41,14 +41,14 @@ type cardPlan struct {
 func (s *Service) CardRenderer() card.Renderer {
 	return func(ctx context.Context, subject string) (card.Rendering, error) {
 		id := strings.TrimPrefix(subject, card.IncidentSubject(""))
-		inc, err := s.db.GetIncident(ctx, id)
+		inc, snap, err := s.db.IncidentCardView(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return card.Rendering{Outcome: card.Gone}, nil
 		}
 		if err != nil {
 			return card.Rendering{}, err
 		}
-		up, err := s.cardUpdate(ctx, inc)
+		up, err := s.cardUpdate(ctx, inc, snap)
 		if err != nil {
 			return card.Rendering{}, err
 		}
@@ -64,11 +64,8 @@ type buttonSpec struct {
 	kind  lifecycle.ActionKind
 }
 
-func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident) (card.Update, error) {
-	snap, err := s.db.GetIncidentSnapshotWithOp(ctx, inc.ID)
-	if err != nil {
-		return card.Update{}, err
-	}
+func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident, snap lifecycle.Snapshot) (card.Update, error) {
+	var err error
 	snap.In.Limits = s.limits(s.timers(ctx))
 	up := card.Update{Status: statusLine(inc.Status) + statusNotes(snap)}
 	var plan cardPlan

@@ -108,6 +108,23 @@ func storeIncidentOp(ctx context.Context, tx *sql.Tx, dec Decision) (operation.O
 	return writeOperation(ctx, tx, stored, *dec.OpWrite)
 }
 
+func (d *DB) IncidentCardView(ctx context.Context, id string) (*Incident, lifecycle.Snapshot, error) {
+	tx, err := d.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, lifecycle.Snapshot{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	inc, err := scanIncident(tx.QueryRowContext(ctx, incidentQuery, id))
+	if err != nil {
+		return nil, lifecycle.Snapshot{}, err
+	}
+	s, err := loadSnapshot(ctx, tx, id)
+	if err != nil {
+		return nil, s, err
+	}
+	return inc, s, d.loadIncidentOp(ctx, tx, &s)
+}
+
 func (d *DB) GetIncidentSnapshotWithOp(ctx context.Context, id string) (lifecycle.Snapshot, error) {
 	s, err := loadSnapshot(ctx, d.read, id)
 	if err != nil {
