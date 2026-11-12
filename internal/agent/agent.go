@@ -672,7 +672,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
 	result.SubtitleItemID = ""
-	if inc.What == WhatSubtitles {
+	if _, _, known := langCodes(result.VerifySubtitleLanguage); inc.What == WhatSubtitles && known {
 		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned)
 	}
 

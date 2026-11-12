@@ -172,6 +172,9 @@ func checkSubtitleExtractTest(ctx context.Context, disp *agent.Dispatcher, fx *F
 		if s.Type == "Subtitle" {
 			extract, extractErr := disp.Call(ctx, "subtitle_extract_test",
 				map[string]any{argItemID: fx.JellyfinPlaybackItemID, "stream_index": s.Index})
+			if errors.Is(extractErr, agent.ErrSubtitleFileTooLarge) {
+				return degraded("no fixture: the playback item is too large to extract an embedded subtitle")
+			}
 			return classify(extract, extractErr)
 		}
 	}

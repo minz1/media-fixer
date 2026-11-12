@@ -40,7 +40,7 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, gen int
 		spec.Kind = lifecycle.VerifyStuckRead
 	case agent.WhatSubtitles:
 		if result.SubtitleItemID == "" {
-			s.surfaceToOwner(ctx, inc, gen, result, "")
+			s.surfaceToOwner(ctx, inc, gen, result, " (no episode and language to verify the subtitle fix on)")
 			return
 		}
 		spec.Kind = lifecycle.VerifySubtitles

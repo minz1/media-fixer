@@ -309,6 +309,30 @@ func TestB6_SubtitleItemResolution(t *testing.T) {
 	}
 }
 
+func TestB6_NoUsableLanguageResolvesNoItem(t *testing.T) {
+	t.Parallel()
+	ag := newItemJellyfin(t, map[string]client.ItemInfo{"ep1": {ID: "ep1", Type: "Episode"}})
+	for _, lang := range []string{"", "korean"} {
+		inc := &db.Incident{ID: "inc", What: agent.WhatSubtitles, JellyfinItemID: "ep1", Title: "Show"}
+		args, _ := json.Marshal(map[string]any{
+			"root_cause": "x", "confidence": "high", "primary_action": "bazarr", "primary_reason": "x",
+			"verify_after_seconds": 60, "verify_subtitle_language": lang,
+		})
+		call := openai.ToolCall{
+			ID:       "cd",
+			Function: openai.FunctionCall{Name: "complete_diagnosis", Arguments: string(args)},
+		}
+		var msgs []openai.ChatCompletionMessage
+		res, err := ag.ConcludeForTest(t.Context(), inc, call, &stubGate{}, &msgs)
+		if err != nil || res == nil {
+			t.Fatalf("conclude %q: %v %v", lang, res, err)
+		}
+		if res.SubtitleItemID != "" {
+			t.Errorf("language %q: SubtitleItemID = %q, want none", lang, res.SubtitleItemID)
+		}
+	}
+}
+
 type stubGate struct{}
 
 func (*stubGate) Claim(context.Context) error { return nil }
