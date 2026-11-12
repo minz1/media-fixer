@@ -85,6 +85,7 @@ func writeCheckSpecs() []checkSpec {
 		{Tool: "radarr_rescan", Run: checkRadarrRescan},
 		{Tool: "clear_jellyfin_cache", Run: checkClearJellyfinCache},
 		{Tool: "arr_search_missing", Run: checkArrSearchMissing},
+		{Tool: "bazarr_search_subtitles", Run: checkBazarrSearch},
 	}
 }
 
@@ -355,6 +356,16 @@ func checkArrSearchMissing(ctx context.Context, disp *agent.Dispatcher, fx *Fixt
 		return Result{Status: StatusOK, Detail: "refused as expected: target already has a file"}
 	}
 	return classify(result, err)
+}
+
+func checkBazarrSearch(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
+	_, err := disp.Call(ctx, "bazarr_search_subtitles", map[string]any{
+		argMediaType: "tv", argTitle: "livecheck", "language": "zz",
+	})
+	if errors.Is(err, agent.ErrUnknownLanguage) {
+		return Result{Status: StatusOK, Detail: "refused as expected: unknown language, nothing sent"}
+	}
+	return classify(nil, err)
 }
 
 // --- disruptive checks ---

@@ -44,6 +44,20 @@ func needArr(d *Dispatcher) (string, bool) {
 	return "sonarr and radarr not configured", false
 }
 
+func needBazarr(d *Dispatcher) (string, bool) {
+	if d.Bazarr.Configured() {
+		return "", true
+	}
+	return "bazarr not configured", false
+}
+
+func needBazarrAndArr(d *Dispatcher) (string, bool) {
+	if detail, ok := needBazarr(d); !ok {
+		return detail, false
+	}
+	return needArr(d)
+}
+
 func needMediaAgent(d *Dispatcher) (string, bool) {
 	if d.MediaAgent.Configured() {
 		return "", true
@@ -83,6 +97,7 @@ func toolNeeds() map[string]toolNeed {
 		toolJellyfinScanStatus:   needJellyfin,
 		toolJellyfinLibraryScan:  needJellyfin,
 		toolClearJellyfinCache:   needJellyfin,
+		toolBazarrSearch:         needBazarrAndArr,
 		toolGetTorrentState:      needDecypharr,
 		toolRepairStatus:         needDecypharr,
 		toolRepairHealth:         needDecypharr,

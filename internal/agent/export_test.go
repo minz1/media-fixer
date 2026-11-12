@@ -271,3 +271,11 @@ func (a *Agent) ConcludeForTest(
 func AlternativesForTest(events []client.SeriesEvent, season, episode int, cached map[string]bool) []Alternative {
 	return alternatives(events, season, episode, cached)
 }
+
+func IsAutonomousActionForTest(tool string) bool { return isAutonomousAction(tool) }
+
+func (d *Dispatcher) CallPolledForTest(
+	ctx context.Context, every, total time.Duration, name string, args map[string]any,
+) (any, error) {
+	return d.call(ctx, &toolCall{pollEvery: every, pollFor: total}, name, args)
+}

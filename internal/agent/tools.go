@@ -52,6 +52,7 @@ const (
 	toolSonarrRescan         = "sonarr_rescan"
 	toolRadarrRescan         = "radarr_rescan"
 	toolClearJellyfinCache   = "clear_jellyfin_cache"
+	toolBazarrSearch         = "bazarr_search_subtitles"
 	toolListDirectory        = "list_directory"
 	toolGetDiskInfo          = "get_disk_info"
 	toolCompleteDiagnosis    = "complete_diagnosis"
@@ -203,6 +204,7 @@ func toolRegistry() []toolSpec {
 		decypharrActionToolSpecs(),
 		jellyfinAndArrActionToolSpecs(),
 		arrActionToolSpecs(),
+		bazarrToolSpecs(),
 		approvalToolSpecs(),
 		[]toolSpec{completionSpec()},
 	)

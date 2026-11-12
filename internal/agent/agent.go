@@ -187,6 +187,7 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
   4. If the wanted language is absent from the file, say so in the root cause.
   5. A fix is verified with verify_subtitle_language; set verify_item_id to the episode item
      you ran stream_alignment on.
+  bazarr_search_subtitles forces a Bazarr search for a missing language and waits for the outcome.
   The only autonomous action is clear_jellyfin_cache on the Episode, and only when the evidence
   is stale metadata. restart_jellyfin and jellyfin_library_scan are refused on this incident.
 
@@ -391,6 +392,8 @@ type DiagnosticResult struct {
 
 	VerifySubtitleLanguage string `json:"verify_subtitle_language,omitempty"`
 	SubtitleItemID         string `json:"subtitle_item_id,omitempty"`
+
+	SubtitleSearch *BazarrSearchResult `json:"subtitle_search,omitempty"`
 
 	Outcome DiagnosisOutcome `json:"outcome,omitzero"`
 }
@@ -657,6 +660,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	argsJSON string,
 	gate Gate,
 	aligned []string,
+	search *BazarrSearchResult,
 ) (*DiagnosticResult, error) {
 	result, err := parseDiagnosis(argsJSON, gate.Calls())
 	if rejected, ok := errors.AsType[*diagnosisRejectedError](err); ok {
@@ -671,9 +675,10 @@ func (a *Agent) handleCompleteDiagnosis(
 	// no pre_fix parameter — but assign it unconditionally regardless, so a
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
+	result.SubtitleSearch = search
 	result.SubtitleItemID = ""
 	if _, _, known := langCodes(result.VerifySubtitleLanguage); inc.What == WhatSubtitles && known {
-		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned)
+		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned, search)
 	}
 
 	// Deliberately ignores result.VerifyItemID when it names a different item
@@ -1454,7 +1459,16 @@ func (a *Agent) attemptHistory(ctx context.Context, incidentID string) string {
 // identityParamKeys are the tool argument keys used across the registry to
 // identify *what* an action targets, checked by identityParamsMatch.
 func identityParamKeys() []string {
-	return []string{paramItemID, paramName, paramTitle, paramSeriesID, paramMovieID, paramSeason, paramEpisode}
+	return []string{
+		paramItemID,
+		paramName,
+		paramTitle,
+		paramSeriesID,
+		paramMovieID,
+		paramSeason,
+		paramEpisode,
+		paramLanguage,
+	}
 }
 
 // identityParamsMatch reports whether a and b identify the same target: both
@@ -1491,7 +1505,7 @@ func identityParamsMatch(a, b map[string]any) bool {
 		if !aok || !bok {
 			continue
 		}
-		if fmt.Sprint(av) != fmt.Sprint(bv) {
+		if identityValue(k, av) != identityValue(k, bv) {
 			return false
 		}
 		matchedAny = true
@@ -1690,4 +1704,15 @@ func appliedSince(log journal.AttemptLog, act *db.ActionLog, gen int64) bool {
 		}
 	}
 	return false
+}
+
+func identityValue(key string, v any) string {
+	s := fmt.Sprint(v)
+	if key != paramLanguage {
+		return s
+	}
+	if iso1, _, ok := langCodes(s); ok {
+		return iso1
+	}
+	return s
 }

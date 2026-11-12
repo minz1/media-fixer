@@ -125,6 +125,10 @@ func (s *callServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	case "/api/v3/episodefile":
 		writeJSON(w, []client.EpisodeFile{{ID: 7001, SeriesID: 42, Path: "/mnt/x/e07.mkv", Size: 1}})
+	case "/api/episodes":
+		s.writeBazarrEpisode(w)
+	case "/api/episodes/subtitles":
+		w.WriteHeader(http.StatusNoContent)
 	case "/api/v3/command":
 		writeJSON(w, map[string]int{"id": 1})
 	default:
@@ -147,6 +151,7 @@ func fullDispatcher(url string) *agent.Dispatcher {
 		Sonarr:     client.NewArr(url, "key"),
 		Radarr:     client.NewArr(url, "key"),
 		MediaAgent: client.NewMediaAgent(url, "key"),
+		Bazarr:     client.NewBazarr(url, "key"),
 	}
 }
 
@@ -256,6 +261,11 @@ func TestWriteTools_ActBeforeSideEffect(t *testing.T) {
 		{"search season", "arr_search_missing", withKeys(map[string]any{"season": 9})},
 		{"search series", "arr_search_missing", withKeys(nil)},
 		{"search movie", "arr_search_missing", map[string]any{"media_type": "movie", "title": "Arrival"}},
+		{
+			"bazarr search",
+			"bazarr_search_subtitles",
+			withKeys(map[string]any{"season": 9, "episode": 9, "language": "en"}),
+		},
 	}
 	covered := map[string]bool{}
 	for _, tc := range cases {
@@ -823,4 +833,12 @@ func TestReview2_BoundCutIsInterrupted(t *testing.T) {
 	if len(replies) == 0 || !strings.Contains(replies[0], "unknown") {
 		t.Errorf("reply = %v, want the outcome unknown", replies)
 	}
+}
+
+func (s *callServer) writeBazarrEpisode(w http.ResponseWriter) {
+	subs := []any{}
+	if slices.Contains(s.log(), "PATCH /api/episodes/subtitles") {
+		subs = append(subs, map[string]any{"code2": "en", "path": "/x/e09.en.srt", "file_size": 1})
+	}
+	writeJSON(w, map[string]any{"data": []map[string]any{{"subtitles": subs}}})
 }

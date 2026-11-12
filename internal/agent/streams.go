@@ -359,7 +359,9 @@ func alignedItems(messages []openai.ChatCompletionMessage) []string {
 	return out
 }
 
-func (a *Agent) resolveSubtitleItem(ctx context.Context, inc *db.Incident, verifyItem string, aligned []string) string {
+func (a *Agent) resolveSubtitleItem(
+	ctx context.Context, inc *db.Incident, verifyItem string, aligned []string, search *BazarrSearchResult,
+) string {
 	if a.disp == nil || a.disp.Jellyfin == nil {
 		return ""
 	}
@@ -375,17 +377,23 @@ func (a *Agent) resolveSubtitleItem(ctx context.Context, inc *db.Incident, verif
 			return ""
 		}
 	}
-	if verifyItem == "" || !slices.Contains(aligned, verifyItem) {
+	if verifyItem == "" {
 		return ""
 	}
 	info, err := a.disp.Jellyfin.ItemInfo(ctx, verifyItem)
 	if err != nil {
 		return ""
 	}
+	vouched := slices.Contains(aligned, verifyItem)
 	switch {
 	case info.Type == itemEpisode && (inc.JellyfinItemID == "" || info.SeriesID == inc.JellyfinItemID):
-		return verifyItem
+		vouched = vouched || search.coversEpisode(info)
 	case info.Type == itemMovie && inc.JellyfinItemID == "":
+		vouched = vouched || search.coversMovie(info)
+	default:
+		vouched = false
+	}
+	if vouched {
 		return verifyItem
 	}
 	return ""

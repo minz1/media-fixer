@@ -28,6 +28,8 @@ type toolCall struct {
 	verdict   Verdict
 	gateErr   error
 	sideBound time.Duration
+	pollEvery time.Duration
+	pollFor   time.Duration
 	side      context.Context
 	release   context.CancelFunc
 	cut       bool

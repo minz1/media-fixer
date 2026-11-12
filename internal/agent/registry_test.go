@@ -228,6 +228,7 @@ func TestA6_ThreeListsOneRegistry(t *testing.T) {
 		"radarr_rescan":           agent.LiveTierWrite,
 		"clear_jellyfin_cache":    agent.LiveTierWrite,
 		"arr_search_missing":      agent.LiveTierWrite,
+		"bazarr_search_subtitles": agent.LiveTierWrite,
 		"restart_decypharr":       agent.LiveTierDisruptive,
 		"restart_jellyfin":        agent.LiveTierDisruptive,
 		"jellyfin_library_scan":   agent.LiveTierDisruptive,
@@ -290,7 +291,7 @@ func TestRegistry_SideEffectBoundsFitShutdown(t *testing.T) {
 			t.Errorf("%s: bound %v is not under the media-agent timeout %v", spec.Name, bound, client.MediaAgentTimeout)
 		}
 	}
-	if bounded != 11 {
-		t.Errorf("%d tools have a side-effect bound, want the 11 write tools", bounded)
+	if bounded != 12 {
+		t.Errorf("%d tools have a side-effect bound, want the 12 write tools", bounded)
 	}
 }
