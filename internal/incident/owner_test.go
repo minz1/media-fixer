@@ -35,7 +35,7 @@ func TestI1_20_RerunNeverCancelsWithoutReplacement(t *testing.T) {
 	id := env.report(t, "Rerun fails")
 	waitGateStart(t, ag)
 	env.exec(t, `CREATE TRIGGER refuse BEFORE UPDATE OF status ON incidents BEGIN SELECT RAISE(ABORT, 'refused'); END`)
-	if err := env.svc.Rerun(t.Context(), id, incident.Version{}); err == nil {
+	if err := env.svc.Rerun(t.Context(), id, env.svc.CurrentVersion(t.Context(), id)); err == nil {
 		t.Fatal("rerun succeeded through a refusing trigger")
 	}
 	if !env.svc.ReservedOrRunningForTest(id) || ag.runs.Load() != 1 {
@@ -52,7 +52,7 @@ func TestI5_10_RerunNoReplacementImpossible(t *testing.T) {
 	env := newRoutingEnv(t, ag, nil, nil)
 	id := env.report(t, "Rerun replaces")
 	waitGateStart(t, ag)
-	if err := env.svc.Rerun(t.Context(), id, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(t.Context(), id, env.svc.CurrentVersion(t.Context(), id)); err != nil {
 		t.Fatal(err)
 	}
 	waitGateStart(t, ag)
@@ -92,7 +92,7 @@ func TestI2_14_RerunClearsPendingOutcome(t *testing.T) {
 		lcReport("Rerun clears"),
 		lifecycletest.Spec{State: lifecycle.AwaitingDownload},
 	)
-	if err := env.svc.Rerun(t.Context(), s.ID, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(t.Context(), s.ID, env.svc.CurrentVersion(t.Context(), s.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := env.db.GetPendingOutcome(t.Context(), s.ID); !errors.Is(err, db.ErrNotFound) {
@@ -122,7 +122,7 @@ func TestA1_8_ServiceRerunResetsBudget(t *testing.T) {
 	env := newLifecycleEnv(t, nil)
 	s := env.claimed(t, "Rerun budget")
 	env.force(t, s.ID, func(n *lifecycle.Snapshot) { n.Locked, n.ActionCount = true, 3 })
-	if err := env.svc.Rerun(t.Context(), s.ID, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(t.Context(), s.ID, env.svc.CurrentVersion(t.Context(), s.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if got := env.snap(t, s.ID); got.Locked || got.ActionCount != 0 {
@@ -151,7 +151,7 @@ func TestRerun_PausedParksAndNotesReporters(t *testing.T) {
 	if err := env.svc.SetAutonomousPaused(t.Context(), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.svc.Rerun(t.Context(), s.ID, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(t.Context(), s.ID, env.svc.CurrentVersion(t.Context(), s.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if got := env.snap(t, s.ID); got.Status != lifecycle.Reopened || !got.Parked {
@@ -209,5 +209,21 @@ func TestOwnerEvent_RestartingBeforeVersion(t *testing.T) {
 	stale := incident.Version{N: env.snap(t, s.ID).Version - 1, Set: true}
 	if err := env.svc.KeepSearching(context.Background(), s.ID, stale); !errors.Is(err, card.ErrRestarting) {
 		t.Fatalf("keep searching while restarting: %v", err)
+	}
+}
+
+func TestF21_DoubleRerunLaunchesOnce(t *testing.T) {
+	t.Parallel()
+	for _, st := range []lifecycle.State{lifecycle.ManualTestNeeded, lifecycle.Reopened} {
+		env := newLifecycleEnv(t, nil)
+		s := lifecycletest.SeedReport(t, env.db, lcReport("Double rerun"), lifecycletest.Spec{State: st})
+		v := env.svc.CurrentVersion(t.Context(), s.ID)
+		if err := env.svc.Rerun(t.Context(), s.ID, v); err != nil {
+			t.Fatal(err)
+		}
+		err := env.svc.Rerun(t.Context(), s.ID, v)
+		if got := env.snap(t, s.ID).Generation - s.Generation; !incident.IsRefusal(err) || got != 1 {
+			t.Fatalf("%s, second press: err %v, generation moved by %d", st, err, got)
+		}
 	}
 }

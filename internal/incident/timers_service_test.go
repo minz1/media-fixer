@@ -226,7 +226,7 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(time.Millisecond)
 
-	if err := svc.Rerun(t.Context(), inc.ID, incident.Version{}); err != nil {
+	if err := svc.Rerun(t.Context(), inc.ID, svc.CurrentVersion(t.Context(), inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 

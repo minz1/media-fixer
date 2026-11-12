@@ -296,7 +296,13 @@ func TestD4_11_TranscriptPageKeepsStream(t *testing.T) {
 	if !ok || strings.Contains(first, "event: settled") || !strings.Contains(first, "incident-transcript") {
 		t.Fatalf("first transcript render of a settled incident: %q", first)
 	}
-	if rec := do(t, srv, http.MethodPost, "/media/incidents/"+s.ID+"/rerun", nil); rec.Code != http.StatusSeeOther {
+	if rec := do(
+		t,
+		srv,
+		http.MethodPost,
+		"/media/incidents/"+s.ID+"/rerun",
+		versionForm(t, database, s.ID),
+	); rec.Code != http.StatusSeeOther {
 		t.Fatalf("rerun: %d %s", rec.Code, rec.Body.String())
 	}
 	next, ok := nextSSE(t, events, sseEventDeadline)

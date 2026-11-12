@@ -347,7 +347,7 @@ func TestRerunAndResolve_ClearStoredPlan(t *testing.T) {
 		run  func() error
 	}{
 		{"Resolve", func() error { return svc.Resolve(ctx, inc.ID, incident.Version{}) }},
-		{"Rerun", func() error { return svc.Rerun(ctx, inc.ID, incident.Version{}) }},
+		{"Rerun", func() error { return svc.Rerun(ctx, inc.ID, svc.CurrentVersion(ctx, inc.ID)) }},
 	} {
 		lifecycletest.MoveTo(t, database, inc.ID, db.StatusManualTestNeeded)
 		lifecycletest.StorePlan(t, database, inc.ID, []byte(`{"Title":"x"}`))

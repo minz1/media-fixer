@@ -916,3 +916,12 @@ func TestMaintenance_CrashedBadgeAndInfo(t *testing.T) {
 		}
 	}
 }
+
+func versionForm(t *testing.T, database *db.DB, id string) url.Values {
+	t.Helper()
+	s, err := database.GetIncidentSnapshot(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return url.Values{"v": {"v" + strconv.FormatInt(s.Version, 10)}}
+}

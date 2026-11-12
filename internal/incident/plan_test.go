@@ -77,7 +77,7 @@ func TestI1_19_ServiceRerunRefusedDuringPlan(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- fx.approveNow(inc.ID, fp) }()
 	<-ag.execStart
-	err := fx.svc.Rerun(context.Background(), inc.ID, incident.Version{})
+	err := fx.svc.Rerun(context.Background(), inc.ID, fx.svc.CurrentVersion(context.Background(), inc.ID))
 	close(ag.execGate)
 	<-done
 	if !errors.Is(err, lifecycle.ErrPlanRunning) {
@@ -114,7 +114,11 @@ func TestI5_11_ApproveCannotSupersedeRerun(t *testing.T) {
 	inc := fx.incident(t)
 	fp := fx.preview(t, inc.ID)
 	old := fx.svc.CurrentVersion(context.Background(), inc.ID)
-	if err := fx.svc.Rerun(context.Background(), inc.ID, incident.Version{}); err != nil {
+	if err := fx.svc.Rerun(
+		context.Background(),
+		inc.ID,
+		fx.svc.CurrentVersion(context.Background(), inc.ID),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := fx.svc.ApproveEscalation(context.Background(), inc.ID, fp, old); err == nil {

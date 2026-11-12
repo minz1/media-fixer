@@ -145,7 +145,7 @@ func TestSweepStaleRuns_LeavesReopenedIncidentWaitingForTheGlobalSlot(t *testing
 		Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Queued",
 	}
 	lifecycletest.Incident(t, database, waiting)
-	if err := svc.Rerun(ctx, waiting.ID, incident.Version{}); err != nil {
+	if err := svc.Rerun(ctx, waiting.ID, svc.CurrentVersion(ctx, waiting.ID)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,7 +188,7 @@ func TestRerun_HungSummarizerDoesNotHoldTheRunBeforeDiagnosis(t *testing.T) {
 	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetSeedTimeoutForTest(quietWindow)
 
-	if err := svc.Rerun(ctx, inc.ID, incident.Version{}); err != nil {
+	if err := svc.Rerun(ctx, inc.ID, svc.CurrentVersion(ctx, inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 

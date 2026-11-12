@@ -48,7 +48,7 @@ func OwnerView(s Snapshot) View {
 }
 
 func Versioned(cur, next Snapshot) Snapshot {
-	if OwnerView(cur) != OwnerView(next) {
+	if OwnerView(cur) != OwnerView(next) || cur.Generation != next.Generation {
 		next.Version = cur.Version + 1
 	} else {
 		next.Version = cur.Version

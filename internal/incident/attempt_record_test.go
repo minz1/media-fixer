@@ -7,7 +7,6 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
-	"github.com/minz1/mediafixer/internal/incident"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/incident/lifecycletest"
 	"github.com/minz1/mediafixer/internal/journal"
@@ -100,7 +99,7 @@ func TestOwnerRerun_AppendsMarker(t *testing.T) {
 	}
 
 	live := seed("Live rerun")
-	if err := env.svc.Rerun(ctx, live.ID, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(ctx, live.ID, env.svc.CurrentVersion(ctx, live.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := ownerRerunGens(t, env, live.ID), env.snap(t, live.ID).Generation; len(got) != 1 || got[0] != want {
@@ -123,7 +122,7 @@ func TestOwnerRerun_AppendsMarker(t *testing.T) {
 	if err := env.svc.SetAutonomousPaused(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.svc.Rerun(ctx, parked.ID, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(ctx, parked.ID, env.svc.CurrentVersion(ctx, parked.ID)); err != nil {
 		t.Fatal(err)
 	}
 	after := env.snap(t, parked.ID)

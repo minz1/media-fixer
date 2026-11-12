@@ -388,7 +388,7 @@ func TestRerunClearsLock(t *testing.T) {
 	lifecycletest.Lock(t, database, inc.ID, true)
 
 	// Rerun is a deliberate human override — it must clear the lock.
-	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
+	if rerunErr := rerunCurrent(ctx, svc, inc.ID); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 	got, err := database.GetIncident(ctx, inc.ID)
@@ -429,7 +429,7 @@ func TestResolveAndRerun(t *testing.T) {
 	}
 
 	// Rerun with nil agent just marks it reopened (agent goroutine exits immediately).
-	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
+	if rerunErr := rerunCurrent(ctx, svc, inc.ID); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 	got, err = database.GetIncident(ctx, inc.ID)
@@ -491,7 +491,7 @@ func TestStatusTransitions_NotifyLiveSubscribers(t *testing.T) {
 	}
 	waitForStatusChanged(t, ch, "Resolve")
 
-	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
+	if rerunErr := rerunCurrent(ctx, svc, inc.ID); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 	waitForStatusChanged(t, ch, "Rerun")
@@ -772,7 +772,7 @@ func TestRerun_SupersedesInFlightRun_NotifiesReporterExactlyOnce(t *testing.T) {
 	}
 
 	// Rerun must supersede (cancel) run A and launch run B.
-	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
+	if rerunErr := rerunCurrent(ctx, svc, inc.ID); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 
@@ -933,7 +933,7 @@ func TestRerun_OfTerminalIncident_ActuallyRunsAgain(t *testing.T) {
 	}
 
 	// Re-run diagnosis on the now-terminal incident.
-	if rerunErr := svc.Rerun(ctx, inc.ID, incident.Version{}); rerunErr != nil {
+	if rerunErr := rerunCurrent(ctx, svc, inc.ID); rerunErr != nil {
 		t.Fatal(rerunErr)
 	}
 
@@ -1510,7 +1510,7 @@ func TestRerun_HeldNoteDoesNotLetTheOldRunFinish(t *testing.T) {
 	}
 
 	rerunDone := make(chan error, 1)
-	go func() { rerunDone <- svc.Rerun(ctx, inc.ID, incident.Version{}) }()
+	go func() { rerunDone <- rerunCurrent(ctx, svc, inc.ID) }()
 	time.Sleep(1500 * time.Millisecond)
 	close(notif.release)
 	if err = <-rerunDone; err != nil {
@@ -1604,4 +1604,13 @@ func (a *lowConfidenceOnceAgent) OperationFor(
 	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
 ) (operation.Spec, error) {
 	return operation.Spec{}, nil
+}
+
+func rerunCurrent(ctx context.Context, svc *incident.Service, id string) error {
+	for {
+		err := svc.Rerun(ctx, id, svc.CurrentVersion(ctx, id))
+		if !errors.Is(err, lifecycle.ErrChanged) {
+			return err
+		}
+	}
 }

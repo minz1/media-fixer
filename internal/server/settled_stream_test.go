@@ -22,7 +22,13 @@ func settledStreamFollowsRerun(t *testing.T, sp lifecycletest.Spec) {
 	if !ok || strings.Contains(first, "event: settled") {
 		t.Fatalf("first render of a %s incident: %q", sp.State, first)
 	}
-	if rec := do(t, srv, http.MethodPost, "/media/incidents/"+s.ID+"/rerun", nil); rec.Code != http.StatusSeeOther {
+	if rec := do(
+		t,
+		srv,
+		http.MethodPost,
+		"/media/incidents/"+s.ID+"/rerun",
+		versionForm(t, database, s.ID),
+	); rec.Code != http.StatusSeeOther {
 		t.Fatalf("rerun: %d %s", rec.Code, rec.Body.String())
 	}
 	next, ok := nextSSE(t, events, sseEventDeadline)

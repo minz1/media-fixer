@@ -55,7 +55,7 @@ func newRunningIncident(
 
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Slow"}
 	lifecycletest.Incident(t, database, inc)
-	if err = svc.Rerun(context.Background(), inc.ID, incident.Version{}); err != nil {
+	if err = svc.Rerun(context.Background(), inc.ID, svc.CurrentVersion(context.Background(), inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -73,7 +73,7 @@ func TestRerun_ReadFailureLeavesTheRunningRunAlone(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Rerun(context.Background(), id, incident.Version{}); err == nil {
+	if err := svc.Rerun(context.Background(), id, svc.CurrentVersion(context.Background(), id)); err == nil {
 		t.Fatal("Rerun on a closed DB returned nil, want an error")
 	}
 

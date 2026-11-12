@@ -113,7 +113,9 @@ func TestI2_18_DownloadCheckStaleGenerationRejected(t *testing.T) {
 	t.Parallel()
 	f := newDLFixture(t, statusAwaiting, freshTrack())
 	old := f.snap(t).Generation
-	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{Kind: lifecycle.OwnerRerun}); err != nil {
+	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{
+		Kind: lifecycle.OwnerRerun, Version: f.snap(t).Version, HasVersion: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	before := f.snap(t)
@@ -135,7 +137,9 @@ func TestI1_15_StaleDownloadCheckAfterRerunIgnored(t *testing.T) {
 	if f.svc.ArmedForTest(f.inc.ID) != gen {
 		t.Fatal("no download check armed")
 	}
-	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{Kind: lifecycle.OwnerRerun}); err != nil {
+	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{
+		Kind: lifecycle.OwnerRerun, Version: f.snap(t).Version, HasVersion: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.svc.ArmedForTest(f.inc.ID); got != 0 {
@@ -149,7 +153,9 @@ func TestI1_16_LeftoverPendingOutcomeDroppedOnRerun(t *testing.T) {
 	if f.snap(t).Download == nil {
 		t.Fatal("no_release seed has no pending outcome")
 	}
-	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{Kind: lifecycle.OwnerRerun}); err != nil {
+	if _, err := f.svc.ApplyForTest(t.Context(), f.inc.ID, lifecycle.Event{
+		Kind: lifecycle.OwnerRerun, Version: f.snap(t).Version, HasVersion: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.db.GetPendingOutcome(t.Context(), f.inc.ID); !errors.Is(err, db.ErrNotFound) {

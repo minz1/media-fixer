@@ -42,7 +42,7 @@ func TestA5_6_ResumeLaunchesParked(t *testing.T) {
 	if err := env.svc.SetAutonomousPaused(t.Context(), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.svc.Rerun(t.Context(), s.ID, incident.Version{}); err != nil {
+	if err := env.svc.Rerun(t.Context(), s.ID, env.svc.CurrentVersion(t.Context(), s.ID)); err != nil {
 		t.Fatal(err)
 	}
 	if err := env.svc.SetAutonomousPaused(t.Context(), false); err != nil {

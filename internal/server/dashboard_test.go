@@ -368,7 +368,9 @@ func TestActionRerun_SurvivesCancelledRequest(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	req := httptest.NewRequest(http.MethodPost, "/media/incidents/"+inc.ID+"/rerun", nil)
+	req := httptest.NewRequest(http.MethodPost, "/media/incidents/"+inc.ID+"/rerun",
+		strings.NewReader(versionForm(t, database, inc.ID).Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req = req.WithContext(cancelled)
 	rec := httptest.NewRecorder()

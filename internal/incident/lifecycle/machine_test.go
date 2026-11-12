@@ -130,6 +130,7 @@ func TestVersionChecked_MatchesRuling(t *testing.T) {
 	t.Parallel()
 	checked := []lifecycle.EventKind{
 		lifecycle.OwnerApprove, lifecycle.OwnerPreview, lifecycle.OwnerKeepSearching, lifecycle.OwnerResumeOp,
+		lifecycle.OwnerRerun,
 	}
 	for _, k := range lifecycle.EventKinds() {
 		if got, want := lifecycle.VersionChecked(k), slices.Contains(checked, k); got != want {

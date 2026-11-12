@@ -161,9 +161,9 @@ func workerEvent(k EventKind) bool {
 
 func versionChecked(k EventKind) bool {
 	switch k {
-	case OwnerApprove, OwnerPreview, OwnerKeepSearching, OwnerResumeOp:
+	case OwnerApprove, OwnerPreview, OwnerKeepSearching, OwnerResumeOp, OwnerRerun:
 		return true
-	case OwnerRerun, OwnerResolve, OwnerUnlock, Reported, RunClaimed, ActionAttempted, AttemptFinished,
+	case OwnerResolve, OwnerUnlock, Reported, RunClaimed, ActionAttempted, AttemptFinished,
 		RunFinished, VerifyObserved, DownloadObserved, PlanExecuted, SystemRerun, StaleRun, Relaunch, Resumed,
 		PlanLost, Tick:
 	}

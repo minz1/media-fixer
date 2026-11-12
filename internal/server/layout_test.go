@@ -147,7 +147,7 @@ func TestIncidentAction_DoneNotice(t *testing.T) {
 	}
 	lifecycletest.Incident(t, database, inc)
 	page := "/media/incidents/" + inc.ID
-	rec := doWith(t, srv, http.MethodPost, page+"/rerun", url.Values{}, nil)
+	rec := doWith(t, srv, http.MethodPost, page+"/rerun", versionForm(t, database, inc.ID), nil)
 	if rec.Header().Get("Location") != page+"?done=rerun" {
 		t.Fatalf("Location = %q", rec.Header().Get("Location"))
 	}
