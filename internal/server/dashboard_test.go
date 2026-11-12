@@ -415,7 +415,7 @@ func TestActionResolve_SurvivesCancelledRequest(t *testing.T) {
 	srv, database := newDashboardTestServer(t)
 	ctx := context.Background()
 	inc := &db.Incident{
-		Status: db.StatusAgentFixed, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
+		Status: db.StatusManualTestNeeded, Source: "discord", ReportedBy: "x", What: "cant_play", Title: "Dropped",
 	}
 	lifecycletest.Incident(t, database, inc)
 
