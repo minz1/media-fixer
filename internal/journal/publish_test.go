@@ -26,6 +26,33 @@ func TestPublish_NotifiesIncidentAndAllSubscribers(t *testing.T) {
 	}
 }
 
+func TestF12_FullSubscriberIsMarkedDropped(t *testing.T) {
+	t.Parallel()
+	j, _ := openTestJournal(t)
+	all, unsubscribeAll := j.SubscribeAll()
+	defer unsubscribeAll()
+	other, unsubscribeOther := j.SubscribeAll()
+	defer unsubscribeOther()
+	e := &db.Event{IncidentID: "inc-1", Kind: string(journal.KindStatusChanged)}
+	for range cap(all) {
+		j.Publish(e)
+	}
+	if j.Dropped(all) {
+		t.Fatal("dropped before the buffer overflowed")
+	}
+	<-other
+	j.Publish(e)
+	if !j.Dropped(all) {
+		t.Fatal("a skipped send was not recorded")
+	}
+	if j.Dropped(all) {
+		t.Fatal("Dropped did not clear the flag")
+	}
+	if j.Dropped(other) {
+		t.Fatal("a subscriber with room was marked dropped")
+	}
+}
+
 func TestRunFinishedEvent_IsUnsentAndCarriesTheExit(t *testing.T) {
 	t.Parallel()
 	e := journal.RunFinishedEvent("inc-1", 3, "concluded", errors.New("boom"))

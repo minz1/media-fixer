@@ -23,6 +23,7 @@ import (
 const (
 	cardKeep     = 14 * 24 * time.Hour
 	pruneEvery   = 24 * time.Hour
+	resyncEvery  = 10 * time.Second
 	prefixSuffix = ":"
 
 	detailsTooLong = "Details too long for Discord; review them on the dashboard"
@@ -58,6 +59,8 @@ func (b *Bot) setOverlay(messageID string, ov overlay) {
 	b.mu.Unlock()
 	b.wakeCards()
 }
+
+func (b *Bot) OnDropped(f func() bool) { b.dropped = f }
 
 func (b *Bot) wakeCards() {
 	select {
@@ -95,10 +98,13 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 	b.cardPass(ctx, d, msgs, b.startupTriggers(ctx, d), timer)
 	prune := time.NewTicker(pruneEvery)
 	defer prune.Stop()
+	resync := time.NewTicker(b.resyncEvery)
+	defer resync.Stop()
 	var last int64
 	for {
 		trig := map[string]cardKind{}
 		select {
+		case <-resync.C:
 		case <-ctx.Done():
 			return
 		case ev, ok := <-events:
@@ -118,6 +124,9 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if b.dropped != nil && b.dropped() {
+			b.Refresh(card.IncidentSubject(""))
 		}
 		b.collect(ctx, d, trig)
 		b.cardPass(ctx, d, msgs, trig, timer)

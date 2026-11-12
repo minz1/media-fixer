@@ -445,6 +445,24 @@ func TestUpdater_SeqGapRefreshesAllInc(t *testing.T) {
 	}
 }
 
+func TestF12_DroppedStatusEventResyncsCard(t *testing.T) {
+	t.Parallel()
+	e := newCardEnv(t, "")
+	r := newRenderer(false)
+	e.track("inc:1", "m9", incCard("1"), time.Now())
+	var dropped atomic.Bool
+	e.bot.OnDropped(func() bool { return dropped.Swap(false) })
+	discord.SetResyncEveryForTest(e.bot, 10*time.Millisecond)
+	e.start(map[string]card.Renderer{"inc": r.render})
+	e.waitCalls(r, "inc:1", 1)
+	r.set("inc:1", card.Update{Status: "Escalated"})
+	dropped.Store(true)
+	edits := e.waitEdits(1)
+	if !strings.Contains(editJSON(t, edits[0]), "Escalated") {
+		t.Errorf("edit = %s, want the new status", editJSON(t, edits[0]))
+	}
+}
+
 func TestUpdater_404DropsRows(t *testing.T) {
 	t.Parallel()
 	e := newCardEnv(t, "")

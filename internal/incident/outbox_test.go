@@ -45,7 +45,9 @@ func TestF9_OneDecisionReachesEachRecipientOnce(t *testing.T) {
 	seerr := &fakeSeerr{}
 	svc.SetSeerr(seerr)
 	ctx := context.Background()
-	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", ReportedBy: "fixture", What: "cant_play", Title: "Lost"}
+	inc := &db.Incident{
+		Status: db.StatusOpen, Source: "discord", ReportedBy: "fixture", What: "cant_play", Title: "Lost",
+	}
 	lifecycletest.Incident(t, database, inc)
 	for _, who := range []string{"alice", "bob"} {
 		if err := database.AddReporter(ctx, inc.ID, who, "discord", "discord-"+who); err != nil {

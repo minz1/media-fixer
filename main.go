@@ -177,6 +177,7 @@ func startCards(
 	handlers map[string]card.Handler, renderers map[string]card.Renderer,
 ) func() {
 	ch, unsub := jrnl.SubscribeAll()
+	bot.OnDropped(func() bool { return jrnl.Dropped(ch) })
 	bot.StartCards(ctx, database, ch, handlers, renderers)
 	return unsub
 }

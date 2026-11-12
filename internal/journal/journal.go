@@ -79,11 +79,12 @@ type Journal struct {
 	mu      sync.Mutex
 	subs    map[string][]chan *db.Event
 	allSubs []chan *db.Event
+	dropped map[<-chan *db.Event]bool
 }
 
 // New builds a Journal backed by database.
 func New(database *db.DB) *Journal {
-	return &Journal{db: database, subs: make(map[string][]chan *db.Event)}
+	return &Journal{db: database, subs: make(map[string][]chan *db.Event), dropped: map[<-chan *db.Event]bool{}}
 }
 
 // Append writes one event, applying its projection (if any) in the same
@@ -130,6 +131,7 @@ func (j *Journal) Subscribe(incidentID string) (<-chan *db.Event, func()) {
 		if len(j.subs[incidentID]) == 0 {
 			delete(j.subs, incidentID)
 		}
+		delete(j.dropped, ch)
 		close(ch)
 	}
 	return ch, unsubscribe
@@ -150,6 +152,7 @@ func (j *Journal) SubscribeAll() (<-chan *db.Event, func()) {
 		j.mu.Lock()
 		defer j.mu.Unlock()
 		j.allSubs = without(j.allSubs, ch)
+		delete(j.dropped, ch)
 		close(ch)
 	}
 	return ch, unsubscribe
@@ -165,8 +168,8 @@ const subscriberBufferSize = 32
 func (j *Journal) notify(e *db.Event) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	send(j.subs[e.IncidentID], e)
-	send(j.allSubs, e)
+	j.send(j.subs[e.IncidentID], e)
+	j.send(j.allSubs, e)
 }
 
 func (j *Journal) Publish(events ...*db.Event) {
@@ -183,16 +186,25 @@ func (j *Journal) AutonomousPauseChanged() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, subs := range j.subs {
-		send(subs, e)
+		j.send(subs, e)
 	}
-	send(j.allSubs, e)
+	j.send(j.allSubs, e)
 }
 
-func send(subs []chan *db.Event, e *db.Event) {
+func (j *Journal) Dropped(ch <-chan *db.Event) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	d := j.dropped[ch]
+	delete(j.dropped, ch)
+	return d
+}
+
+func (j *Journal) send(subs []chan *db.Event, e *db.Event) {
 	for _, ch := range subs {
 		select {
 		case ch <- e:
 		default:
+			j.dropped[ch] = true
 		}
 	}
 }

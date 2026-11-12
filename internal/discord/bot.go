@@ -56,6 +56,8 @@ type Bot struct {
 	confirmFor     time.Duration
 	onPass         func()
 	onTimer        func()
+	dropped        func() bool
+	resyncEvery    time.Duration
 	conn           Conn
 }
 
@@ -86,6 +88,7 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 		cardRetryFirst: cardRetryFirstDefault,
 		cardRetryCap:   cardRetryCapDefault,
 		confirmFor:     confirmWindow,
+		resyncEvery:    resyncEvery,
 		conn:           Conn{State: ConnIdle},
 	}
 	b.connect = b.openAndRegister

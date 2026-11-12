@@ -65,6 +65,8 @@ func GatewayForTest(b *Bot, up bool) {
 	b.onDisconnect(nil, &discordgo.Disconnect{})
 }
 
+func SetResyncEveryForTest(b *Bot, d time.Duration) { b.resyncEvery = d }
+
 func SetConfirmForTest(b *Bot, d time.Duration) { b.confirmFor = d }
 
 func CardsDoneForTest(b *Bot) <-chan struct{} { return b.cardsDone }
