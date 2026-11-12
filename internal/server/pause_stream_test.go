@@ -72,15 +72,21 @@ func nextSSE(t *testing.T, events <-chan string, wait time.Duration) (string, bo
 	}
 }
 
-func renderAfterToggle(t *testing.T, srv *server.Server, events <-chan string, action string) string {
+func renderAfterToggle(t *testing.T, srv *server.Server, events <-chan string, action string, paused bool) string {
 	t.Helper()
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(sseEventDeadline); time.Now().Before(deadline); {
 		rec := doWith(t, srv, http.MethodPost, "/media/"+action, url.Values{}, map[string]string{"HX-Request": "true"})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("POST /media/%s: %d", action, rec.Code)
 		}
-		if ev, ok := nextSSE(t, events, 100*time.Millisecond); ok {
-			return ev
+		for {
+			ev, ok := nextSSE(t, events, 100*time.Millisecond)
+			if !ok {
+				break
+			}
+			if strings.Contains(ev, pausedLine) == paused {
+				return ev
+			}
 		}
 	}
 	t.Fatalf("no render after %s", action)
@@ -118,7 +124,7 @@ func TestD4_12_PauseAndResumeRerenderOpenStreams(t *testing.T) {
 			}
 			lifecycletest.Incident(t, database, inc)
 			ts := httptest.NewServer(srv.Handler())
-			defer ts.Close()
+			t.Cleanup(ts.Close)
 
 			events := openSSE(t, ts, strings.Replace(tc.path, "%s", inc.ID, 1))
 			first, ok := nextSSE(t, events, sseEventDeadline)
@@ -126,8 +132,8 @@ func TestD4_12_PauseAndResumeRerenderOpenStreams(t *testing.T) {
 				t.Fatal("no initial render")
 			}
 			checkPauseRender(t, first, false, tc.incident)
-			checkPauseRender(t, renderAfterToggle(t, srv, events, "pause"), true, tc.incident)
-			checkPauseRender(t, renderAfterToggle(t, srv, events, "resume"), false, tc.incident)
+			checkPauseRender(t, renderAfterToggle(t, srv, events, "pause", true), true, tc.incident)
+			checkPauseRender(t, renderAfterToggle(t, srv, events, "resume", false), false, tc.incident)
 		})
 	}
 }
