@@ -273,6 +273,7 @@ func build(ctx context.Context, cfg *config.Config, database *db.DB, log *slog.L
 	a.srv.SetDiscord(a.bot.Conn)
 	a.srv.SetSeerrWebhookSecret(cfg.Seerr.WebhookSecret)
 	a.srv.SetSonarrWebhookSecret(cfg.Sonarr.WebhookSecret)
+	a.srv.SetBazarrWebhook(cfg.Bazarr.WebhookSecret, bundle.clients.BazarrWaits)
 	a.jws = newJellyfinEvents(cfg, a.svc, a.srv, log)
 
 	if err = crashRunningSweeps(ctx, database, log); err != nil {
@@ -402,6 +403,9 @@ func enabledFeatures(clients *clientset.Set) []string {
 	}
 	if clients.Seerr.Configured() {
 		features = append(features, "seerr")
+	}
+	if clients.Bazarr.Configured() {
+		features = append(features, "bazarr")
 	}
 	return features
 }

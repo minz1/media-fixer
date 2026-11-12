@@ -877,13 +877,14 @@ func isAutonomousAction(toolName string) bool {
 
 // Dispatcher holds the clients needed to execute tool calls.
 type Dispatcher struct {
-	Decypharr  *client.DecypharrClient
-	Jellyfin   *client.JellyfinClient
-	Sonarr     *client.ArrClient
-	Radarr     *client.ArrClient
-	Loki       *client.LokiClient
-	MediaAgent *client.MediaAgentClient
-	Bazarr     *client.BazarrClient
+	Decypharr   *client.DecypharrClient
+	Jellyfin    *client.JellyfinClient
+	Sonarr      *client.ArrClient
+	Radarr      *client.ArrClient
+	Loki        *client.LokiClient
+	MediaAgent  *client.MediaAgentClient
+	Bazarr      *client.BazarrClient
+	BazarrWaits *BazarrWaits
 }
 
 // Call executes a tool by name with already-decoded arguments and returns the

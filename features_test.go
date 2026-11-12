@@ -28,7 +28,8 @@ func TestD11_3_FeatureSetUnchangedForLiveConfig(t *testing.T) {
 	cfg.Loki.URL = "http://l"
 	cfg.MediaAgent.URL = "http://m"
 	cfg.Seerr.URL = "http://se"
-	want := []string{"sweep", "stuck-queue:sonarr", "stuck-queue:radarr", "stuck-read", "seerr"}
+	cfg.Bazarr.URL = "http://b"
+	want := []string{"sweep", "stuck-queue:sonarr", "stuck-queue:radarr", "stuck-read", "seerr", "bazarr"}
 	if got := enabledFeatures(buildClients(t, cfg)); !slices.Equal(got, want) {
 		t.Errorf("enabledFeatures = %v, want %v", got, want)
 	}

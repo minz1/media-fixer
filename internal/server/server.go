@@ -73,6 +73,9 @@ type Server struct {
 	seerrWebhookSecret  string
 	sonarrWebhookSecret string
 
+	bazarrWebhookSecret string
+	bazarrWaits         *agent.BazarrWaits
+
 	sweep   *sweep.Scheduler
 	stuck   *stuckqueue.Scheduler
 	babysit *babysit.Service
@@ -151,6 +154,7 @@ func New(
 
 	r.Post("/ingest/seerr", s.handleSeerrWebhook)
 	r.Post("/ingest/sonarr", s.handleSonarrWebhook)
+	r.Post("/ingest/bazarr", s.handleBazarrWebhook)
 
 	r.Route(baseURL, func(r chi.Router) {
 		// Every mutating route below is an unauthenticated-from-this-service's

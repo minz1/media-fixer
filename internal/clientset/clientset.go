@@ -16,15 +16,16 @@ import (
 // Set holds every service client the agent's tools dispatch to. MediaAgent
 // may be nil if [config.MediaAgentConfig.URL] is unset.
 type Set struct {
-	Decypharr  *client.DecypharrClient
-	Jellyfin   *client.JellyfinClient
-	Sonarr     *client.ArrClient
-	Radarr     *client.ArrClient
-	Loki       *client.LokiClient
-	MediaAgent *client.MediaAgentClient
-	Seerr      *client.SeerrClient
-	Bazarr     *client.BazarrClient
-	LokiErr    error
+	Decypharr   *client.DecypharrClient
+	Jellyfin    *client.JellyfinClient
+	Sonarr      *client.ArrClient
+	Radarr      *client.ArrClient
+	Loki        *client.LokiClient
+	MediaAgent  *client.MediaAgentClient
+	Seerr       *client.SeerrClient
+	Bazarr      *client.BazarrClient
+	BazarrWaits *agent.BazarrWaits
+	LokiErr     error
 }
 
 // Build constructs a Set from config. It does not fail: every client is dialed
@@ -69,15 +70,16 @@ func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
 	}
 
 	return &Set{
-		Decypharr:  client.NewDecypharr(cfg.Decypharr.URL, cfg.Decypharr.APIToken),
-		Jellyfin:   client.NewJellyfin(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey),
-		Sonarr:     client.NewArr(cfg.Sonarr.URL, cfg.Sonarr.APIKey),
-		Radarr:     client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey),
-		Loki:       loki,
-		MediaAgent: mediaAgent,
-		Seerr:      client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey),
-		Bazarr:     client.NewBazarr(cfg.Bazarr.URL, cfg.Bazarr.APIKey),
-		LokiErr:    lokiErr,
+		Decypharr:   client.NewDecypharr(cfg.Decypharr.URL, cfg.Decypharr.APIToken),
+		Jellyfin:    client.NewJellyfin(cfg.Jellyfin.URL, cfg.Jellyfin.APIKey),
+		Sonarr:      client.NewArr(cfg.Sonarr.URL, cfg.Sonarr.APIKey),
+		Radarr:      client.NewArr(cfg.Radarr.URL, cfg.Radarr.APIKey),
+		Loki:        loki,
+		MediaAgent:  mediaAgent,
+		Seerr:       client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey),
+		Bazarr:      client.NewBazarr(cfg.Bazarr.URL, cfg.Bazarr.APIKey),
+		BazarrWaits: &agent.BazarrWaits{},
+		LokiErr:     lokiErr,
 	}, nil
 }
 
@@ -88,12 +90,13 @@ func (s *Set) Dispatcher() *agent.Dispatcher {
 		loki = client.NewLokiUnavailable(s.LokiErr)
 	}
 	return &agent.Dispatcher{
-		Decypharr:  s.Decypharr,
-		Jellyfin:   s.Jellyfin,
-		Sonarr:     s.Sonarr,
-		Radarr:     s.Radarr,
-		Loki:       loki,
-		MediaAgent: s.MediaAgent,
-		Bazarr:     s.Bazarr,
+		Decypharr:   s.Decypharr,
+		Jellyfin:    s.Jellyfin,
+		Sonarr:      s.Sonarr,
+		Radarr:      s.Radarr,
+		Loki:        loki,
+		MediaAgent:  s.MediaAgent,
+		Bazarr:      s.Bazarr,
+		BazarrWaits: s.BazarrWaits,
 	}
 }

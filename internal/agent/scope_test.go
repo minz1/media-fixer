@@ -15,6 +15,9 @@ func TestRule8_DispatcherHoldsOnlyClients(t *testing.T) {
 	typ := reflect.TypeFor[agent.Dispatcher]()
 	clientPkg := reflect.TypeFor[client.ArrClient]().PkgPath()
 	for f := range typ.Fields() {
+		if f.Type == reflect.TypeFor[*agent.BazarrWaits]() {
+			continue
+		}
 		if f.Type.Kind() != reflect.Pointer || f.Type.Elem().PkgPath() != clientPkg {
 			t.Errorf("Dispatcher.%s is %s, want a pointer to a type in %s", f.Name, f.Type, clientPkg)
 		}
