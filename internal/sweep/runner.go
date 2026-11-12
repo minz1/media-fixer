@@ -38,6 +38,7 @@ const (
 	commandWait    = 15 * time.Minute
 	finishTries    = 3
 	finishGap      = time.Second
+	liveRefresh    = 10 * time.Second
 
 	seriesAnime = "anime"
 )
@@ -99,6 +100,7 @@ type run struct {
 	imported   []string
 	lastGrab   time.Time
 	lastSearch time.Time
+	refreshed  time.Time
 }
 
 type Pass string
@@ -156,8 +158,8 @@ func (r *Runner) runScoped(ctx context.Context, trigger string, dry bool, s Sett
 	x := &run{
 		Runner: r, id: id, dry: dry, s: s, sc: sc, tried: map[string]bool{}, handled: map[int]bool{}, start: start,
 		burst: map[string]bool{}, attempted: map[string]bool{}, looked: map[string]bool{},
-		seasonMiss: map[int]map[int]int{},
-		c:          db.SweepCounts{MaxGrabs: s.MaxGrabs, MaxLookups: s.MaxLookups, MaxSearches: s.MaxSearches},
+		seasonMiss: map[int]map[int]int{}, refreshed: start,
+		c: db.SweepCounts{MaxGrabs: s.MaxGrabs, MaxLookups: s.MaxLookups, MaxSearches: s.MaxSearches},
 	}
 	x.report("preflight", "")
 	tracked := r.notifyStart(ctx, startCard(id, trigger, dry, s))
@@ -914,8 +916,12 @@ func (x *run) addItem(ctx context.Context, it *db.SweepItem) error {
 
 func (x *run) report(phase, current string) {
 	x.mu.Lock()
-	defer x.mu.Unlock()
 	x.progress = &Progress{RunID: x.id, Phase: phase, Current: current, Dry: x.dry, Started: x.start, Counts: x.c}
+	x.mu.Unlock()
+	if now := x.Now(); x.Refresh != nil && now.Sub(x.refreshed) >= liveRefresh {
+		x.refreshed = now
+		x.Refresh(card.SweepSubject(x.id))
+	}
 }
 
 func (r *Runner) notifyStart(ctx context.Context, c card.Card) bool {

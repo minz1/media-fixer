@@ -96,3 +96,7 @@ func StartForTest(s *Scheduler, ticks <-chan time.Time) {
 func WaitRunsForTest(s *Scheduler) { s.jobs.Wait() }
 
 var ErrNotStartedForTest = errNotStarted
+
+func ReportForTest(r *Runner, id int64, start time.Time) func(phase, current string) {
+	return (&run{Runner: r, id: id, start: start, refreshed: start}).report
+}

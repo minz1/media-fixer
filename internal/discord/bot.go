@@ -38,7 +38,6 @@ type Bot struct {
 	mu        sync.Mutex
 	cards     cardState
 	wake      chan struct{}
-	poll      time.Duration
 	renderers map[string]card.Renderer
 	handlers  map[string]card.Handler
 	procCtx   context.Context
@@ -80,7 +79,6 @@ func New(token, guildID, ownerID, publicURL string, log *slog.Logger) (*Bot, err
 			warned: map[string]bool{},
 		},
 		wake:      make(chan struct{}, 1),
-		poll:      livePoll,
 		inFlight:  map[string]bool{},
 		now:       time.Now,
 		cardsDone: make(chan struct{}),

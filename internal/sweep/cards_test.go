@@ -280,3 +280,56 @@ func createRun(t *testing.T, h *harness) int64 {
 	}
 	return id
 }
+
+func e8Runner(clock *fakeClock, got *[]string) *sweep.Runner {
+	return &sweep.Runner{Now: clock.Now, Refresh: func(s string) { *got = append(*got, s) }}
+}
+
+func TestE8_ProgressRefreshWithinThrottle(t *testing.T) {
+	t.Parallel()
+	clock := &fakeClock{t: t0()}
+	var got []string
+	report := sweep.ReportForTest(e8Runner(clock, &got), 7, t0())
+	report("season pass", "")
+	if len(got) != 0 {
+		t.Fatalf("refreshed %v right after the start card, want none", got)
+	}
+	clock.t = t0().Add(10 * time.Second)
+	report("season pass", "Show S01")
+	if len(got) != 1 || got[0] != card.SweepSubject(7) {
+		t.Errorf("refreshed %v, want [%s]", got, card.SweepSubject(7))
+	}
+}
+
+func TestE8_BurstOneRefreshPerWindow(t *testing.T) {
+	t.Parallel()
+	clock := &fakeClock{t: t0()}
+	var got []string
+	report := sweep.ReportForTest(e8Runner(clock, &got), 7, t0())
+	for i := range 30 {
+		clock.t = t0().Add(time.Duration(i) * time.Second)
+		report("episode pass", "Show S01E01")
+	}
+	if len(got) != 2 {
+		t.Errorf("refreshed %d times over 29s, want 2", len(got))
+	}
+}
+
+func TestE8_FinalRefreshStillHappens(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	var live []bool
+	render := h.runner.CardRenderer()
+	h.runner.Refresh = func(subject string) {
+		r, err := render(context.Background(), subject)
+		if err != nil || r.Outcome != card.Render {
+			t.Errorf("render %s: %v %v", subject, r.Outcome, err)
+			return
+		}
+		live = append(live, r.Update.Live)
+	}
+	h.run(t, false, settings())
+	if len(live) == 0 || live[len(live)-1] {
+		t.Errorf("live at each refresh = %v, want a final non-live refresh", live)
+	}
+}

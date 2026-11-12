@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	livePoll     = 30 * time.Second
 	cardKeep     = 14 * 24 * time.Hour
 	pruneEvery   = 24 * time.Hour
 	prefixSuffix = ":"
@@ -94,8 +93,6 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 	timer.Stop()
 	defer timer.Stop()
 	b.cardPass(ctx, d, msgs, b.startupTriggers(ctx, d), timer)
-	poll := time.NewTicker(b.poll)
-	defer poll.Stop()
 	prune := time.NewTicker(pruneEvery)
 	defer prune.Stop()
 	var last int64
@@ -114,8 +111,6 @@ func (b *Bot) cardLoop(ctx context.Context, d *db.DB, events <-chan *db.Event) {
 			if b.onTimer != nil {
 				b.onTimer()
 			}
-		case <-poll.C:
-			pollLive(msgs, trig)
 		case <-prune.C:
 			for _, id := range b.prune(ctx, d) {
 				delete(msgs, id)
@@ -144,16 +139,8 @@ func (b *Bot) startupTriggers(ctx context.Context, d *db.DB) map[string]cardKind
 	return trig
 }
 
-func pollLive(msgs map[string]cardSnap, trig map[string]cardKind) {
-	for id, s := range msgs {
-		if s.Phase == cardLive {
-			addTrigger(trig, id, cardPoll)
-		}
-	}
-}
-
 func addTrigger(trig map[string]cardKind, id string, k cardKind) {
-	rank := func(k cardKind) int { return slices.Index([]cardKind{cardPress, cardRetryDue, cardMark, cardPoll}, k) }
+	rank := func(k cardKind) int { return slices.Index([]cardKind{cardPress, cardRetryDue, cardMark}, k) }
 	if cur, ok := trig[id]; !ok || rank(k) < rank(cur) {
 		trig[id] = k
 	}

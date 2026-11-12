@@ -30,7 +30,6 @@ type cardKind string
 const (
 	cardMark        cardKind = "mark"
 	cardPress       cardKind = "press"
-	cardPoll        cardKind = "poll"
 	cardRetryDue    cardKind = "retry_due"
 	cardShown       cardKind = "shown"
 	cardHeld        cardKind = "held"
@@ -43,7 +42,7 @@ const (
 
 func cardKinds() []cardKind {
 	return []cardKind{
-		cardMark, cardPress, cardPoll, cardRetryDue, cardShown, cardHeld, cardMissing, cardUndecodable, cardAllGone,
+		cardMark, cardPress, cardRetryDue, cardShown, cardHeld, cardMissing, cardUndecodable, cardAllGone,
 		cardFailed, cardPruned,
 	}
 }
@@ -133,28 +132,28 @@ func cardTransitions() map[cardPhase]map[cardKind]cardRule {
 	dirty, gone, rej := cardTo(cardDirty), cardTo(cardGone), cardReject
 	return map[cardPhase]map[cardKind]cardRule{
 		cardCurrent: {
-			cardMark: dirty, cardPress: dirty, cardPoll: cardStay, cardRetryDue: rej,
+			cardMark: dirty, cardPress: dirty, cardRetryDue: rej,
 			cardShown: rej, cardHeld: rej, cardMissing: rej, cardUndecodable: rej, cardAllGone: rej, cardFailed: rej,
 			cardPruned: gone,
 		},
 		cardDirty: {
-			cardMark: cardStay, cardPress: cardStay, cardPoll: cardStay, cardRetryDue: rej,
+			cardMark: cardStay, cardPress: cardStay, cardRetryDue: rej,
 			cardShown: cardShownRule, cardHeld: cardTo(cardCurrent), cardMissing: gone, cardUndecodable: gone,
 			cardAllGone: gone, cardFailed: cardFailedRule, cardPruned: gone,
 		},
 		cardLive: {
-			cardMark: dirty, cardPress: dirty, cardPoll: dirty, cardRetryDue: rej,
+			cardMark: dirty, cardPress: dirty, cardRetryDue: rej,
 			cardShown: rej, cardHeld: rej, cardMissing: rej, cardUndecodable: rej, cardAllGone: rej, cardFailed: rej,
 			cardPruned: gone,
 		},
 		cardFailing: {
-			cardMark: cardStay, cardPress: cardPressWhileFailing, cardPoll: cardStay,
+			cardMark: cardStay, cardPress: cardPressWhileFailing,
 			cardRetryDue: cardRetryDueWhileFailing,
 			cardShown:    rej, cardHeld: rej, cardMissing: rej, cardUndecodable: rej, cardAllGone: rej, cardFailed: rej,
 			cardPruned: gone,
 		},
 		cardGone: {
-			cardMark: rej, cardPress: rej, cardPoll: rej, cardRetryDue: rej,
+			cardMark: rej, cardPress: rej, cardRetryDue: rej,
 			cardShown: rej, cardHeld: rej, cardMissing: rej, cardUndecodable: rej, cardAllGone: rej, cardFailed: rej,
 			cardPruned: rej,
 		},

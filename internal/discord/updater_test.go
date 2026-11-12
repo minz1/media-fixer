@@ -488,25 +488,6 @@ func TestUpdater_UnknownStateLeavesMessage(t *testing.T) {
 	}
 }
 
-func TestUpdater_LivePolls(t *testing.T) {
-	t.Parallel()
-	e := newCardEnv(t, "")
-	var (
-		mu sync.Mutex
-		n  int
-	)
-	live := func(context.Context, string) (card.Rendering, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		n++
-		return card.Rendered(card.Update{Status: fmt.Sprintf("probed %d", n), Live: true}), nil
-	}
-	discord.SetPollIntervalForTest(e.bot, 10*time.Millisecond)
-	e.track("sweep:1", "m1", card.Card{Subject: "sweep:1", Title: "Sweep"}, time.Now())
-	e.start(map[string]card.Renderer{"sweep": live})
-	e.waitEdits(3)
-}
-
 func TestUpdater_StartupRefreshAndPrune(t *testing.T) {
 	t.Parallel()
 	e := newCardEnv(t, "")
@@ -1200,40 +1181,6 @@ func TestUpdater_PressAndRefreshAreOneAttempt(t *testing.T) {
 	}
 }
 
-func TestUpdater_PollSetIsLiveMessages(t *testing.T) {
-	t.Parallel()
-	e := newCardEnv(t, "")
-	counts := map[string]*atomic.Int32{"sweep:1": {}, "sweep:2": {}, "sweep:3": {}}
-	renderer := func(live bool) card.Renderer {
-		return func(_ context.Context, subject string) (card.Rendering, error) {
-			n := counts[subject].Add(1)
-			return card.Rendered(card.Update{Status: fmt.Sprintf("probe %d", n), Live: live}), nil
-		}
-	}
-	e.api.errFor = map[string]error{"m3": serverError()}
-	discord.SetPollIntervalForTest(e.bot, 10*time.Millisecond)
-	discord.SetCardRetryForTest(e.bot, time.Hour, time.Hour)
-	for i, subject := range []string{"sweep:1", "sweep:2", "sweep:3"} {
-		e.track(subject, fmt.Sprintf("m%d", i+1), card.Card{Subject: subject, Title: "Sweep"}, time.Now())
-	}
-	e.start(map[string]card.Renderer{"sweep": func(ctx context.Context, subject string) (card.Rendering, error) {
-		return renderer(subject != "sweep:2")(ctx, subject)
-	}})
-	deadline := time.Now().Add(waitLimit)
-	for counts["sweep:1"].Load() < 5 {
-		if time.Now().After(deadline) {
-			t.Fatal("the live message was not polled")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if n := counts["sweep:2"].Load(); n != 1 {
-		t.Errorf("not-live message rendered %d times, want 1", n)
-	}
-	if n := counts["sweep:3"].Load(); n != 1 {
-		t.Errorf("failing message rendered %d times, want 1", n)
-	}
-}
-
 func TestUpdater_ShutdownMidPassStopsWithoutWarn(t *testing.T) {
 	t.Parallel()
 	e, buf := logEnv(t)
@@ -1334,7 +1281,6 @@ func TestUpdater_RefreshNeverBlocksDuringPass(t *testing.T) {
 		return card.Rendered(card.Update{Status: fmt.Sprintf("status %d", calls.Add(1))}), nil
 	}
 	passes := make(chan struct{}, 1000)
-	discord.SetPollIntervalForTest(e.bot, time.Hour)
 	discord.SetPassDoneForTest(e.bot, func() { passes <- struct{}{} })
 	for i := 1; i <= 3; i++ {
 		e.trackInc(fmt.Sprintf("m%d", i), fmt.Sprintf("inc:%d", i))

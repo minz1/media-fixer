@@ -49,8 +49,6 @@ func HasOverlayForTest(b *Bot, messageID string) bool {
 	return ok
 }
 
-func SetPollIntervalForTest(b *Bot, d time.Duration) { b.poll = d }
-
 func SetCardRetryForTest(b *Bot, first, ceiling time.Duration) {
 	b.cardRetryFirst, b.cardRetryCap = first, ceiling
 }
@@ -116,7 +114,6 @@ const (
 	CardGone        = cardGone
 	CardMark        = cardMark
 	CardPress       = cardPress
-	CardPoll        = cardPoll
 	CardRetryDue    = cardRetryDue
 	CardShown       = cardShown
 	CardHeld        = cardHeld

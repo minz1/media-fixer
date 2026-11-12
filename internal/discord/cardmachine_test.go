@@ -52,7 +52,7 @@ func cardEvents(k discord.CardKind) []discord.CardEvent {
 		case discord.CardFailed:
 			out = append(out,
 				discord.CardEvent{Kind: k, At: at}, discord.CardEvent{Kind: k, At: at, RetryAfter: time.Hour})
-		case discord.CardMark, discord.CardPress, discord.CardPoll, discord.CardRetryDue, discord.CardHeld,
+		case discord.CardMark, discord.CardPress, discord.CardRetryDue, discord.CardHeld,
 			discord.CardMissing, discord.CardUndecodable, discord.CardAllGone, discord.CardPruned:
 			out = append(out, discord.CardEvent{Kind: k, At: at})
 		}
@@ -147,7 +147,7 @@ func cardFuzzPath(kinds ...discord.CardKind) []byte {
 }
 
 func FuzzCardMachine(f *testing.F) {
-	f.Add(cardFuzzPath(discord.CardMark, discord.CardShown, discord.CardPoll))
+	f.Add(cardFuzzPath(discord.CardMark, discord.CardShown, discord.CardMark))
 	f.Add(cardFuzzPath(discord.CardMark, discord.CardFailed, discord.CardRetryDue, discord.CardFailed))
 	f.Add(cardFuzzPath(discord.CardPress, discord.CardFailed, discord.CardPress, discord.CardHeld))
 	f.Add(cardFuzzPath(discord.CardMark, discord.CardAllGone, discord.CardMark))
@@ -260,7 +260,7 @@ func TestCardMachine_PressBypassesBackoffNotRateLimit(t *testing.T) {
 func TestCardMachine_MarkDefersWhileFailing(t *testing.T) {
 	t.Parallel()
 	s := failAt(t, discord.CardSnap{Phase: discord.CardDirty}, cardT0(), 0)
-	for _, k := range []discord.CardKind{discord.CardMark, discord.CardPoll} {
+	for _, k := range []discord.CardKind{discord.CardMark} {
 		if got := mustCard(t, s, discord.CardEvent{Kind: k, At: cardT0().Add(time.Hour)}); got != s {
 			t.Errorf("%v while failing = %+v, want unchanged", k, got)
 		}
