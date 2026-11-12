@@ -2,15 +2,15 @@ package incident_test
 
 import (
 	"context"
-	"io"
+	"errors"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -22,10 +22,9 @@ import (
 )
 
 const (
-	timersUnit      = 10 * time.Millisecond
-	timersEarly     = 150 * time.Millisecond
-	timersLate      = 2 * time.Second
-	timersSeedAlive = 100 * time.Millisecond
+	timersUnit  = 10 * time.Millisecond
+	timersEarly = 150 * time.Millisecond
+	timersLate  = 2 * time.Second
 )
 
 func openTimersDB(t *testing.T) *db.DB {
@@ -205,16 +204,13 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 	t.Parallel()
 	database, inc := newReopenedIncident(t, 0)
 	saveTimers(t, database, func(tm *incident.Timers) { tm.StaleRunMinutes = 240 })
-	lived := make(chan time.Duration, 1)
-	llm := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		start := time.Now()
-		<-r.Context().Done()
-		lived <- time.Since(start)
-	}))
-	t.Cleanup(llm.Close)
+	deadlines := make(chan time.Time, 1)
 	cfg := openai.DefaultConfig("test")
-	cfg.BaseURL = llm.URL
+	cfg.HTTPClient = doerFunc(func(r *http.Request) (*http.Response, error) {
+		dl, _ := r.Context().Deadline()
+		deadlines <- dl
+		return nil, errors.New("llm down")
+	})
 	jrnl := journal.New(database)
 	seed := []openai.ChatCompletionMessage{{Role: "user", Content: "seed"}}
 	if err := jrnl.RunStarted(t.Context(), inc.ID, seed); err != nil {
@@ -226,19 +222,24 @@ func TestSeedTimeout_FromSavedTimers(t *testing.T) {
 	t.Cleanup(func() { stopService(t, svc) })
 	svc.SetUnitForTest(time.Millisecond)
 
+	before := time.Now()
 	if err := svc.Rerun(t.Context(), inc.ID, svc.CurrentVersion(t.Context(), inc.ID)); err != nil {
 		t.Fatal(err)
 	}
 
 	select {
-	case d := <-lived:
-		if d < timersSeedAlive {
-			t.Fatalf("seed context ended after %v, want the saved 240 minutes (240 ms)", d)
+	case dl := <-deadlines:
+		if d := dl.Sub(before); d < 240*time.Millisecond {
+			t.Fatalf("seed context deadline %v after the rerun, want the saved 240 minutes (240 ms)", d)
 		}
 	case <-time.After(timersLate):
-		t.Fatal("seed context never ended")
+		t.Fatal("the rerun never asked the summarizer")
 	}
 }
+
+type doerFunc func(*http.Request) (*http.Response, error)
+
+func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 
 func newPendingTracker(t *testing.T, database *db.DB) *db.Incident {
 	t.Helper()
@@ -259,58 +260,63 @@ func newPendingTracker(t *testing.T, database *db.DB) *db.Incident {
 
 func TestBackgroundLoop_ResetsToSavedInterval(t *testing.T) {
 	t.Parallel()
-	database := openTimersDB(t)
-	saveTimers(t, database, func(tm *incident.Timers) {
-		tm.CheckEveryMinutes = 60
-		tm.NoReleaseGraceMinutes = 240
-		tm.TrackCapHours = 72
-	})
-	var checks atomic.Int32
-	ag := &scriptedPendingOutcomeAgent{
-		checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
-			checks.Add(1)
-			return &agent.PendingOutcomeObservation{}, nil
-		},
-	}
-	svc := incident.NewService(
-		t.Context(),
-		database,
-		nil,
-		ag,
-		nil,
-		nil,
-		newSyncNotifier(),
-		slog.New(slog.DiscardHandler),
-	)
-	t.Cleanup(func() { stopService(t, svc) })
-	svc.SetUnitForTest(20 * time.Millisecond)
-	newPendingTracker(t, database)
-
-	ctx, stop := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		svc.BackgroundSweepLoopForTest(ctx)
-		close(done)
-	}()
-	saveTimers(t, database, func(tm *incident.Timers) {
-		tm.CheckEveryMinutes = 1
-		tm.NoReleaseGraceMinutes = 240
-		tm.TrackCapHours = 72
-	})
-
-	deadline := time.Now().Add(3 * time.Second)
-	for checks.Load() < 5 {
-		if time.Now().After(deadline) {
-			t.Fatalf("checks = %d after 3s, want at least 5 once the saved 1 minute interval applies", checks.Load())
+	synctest.Test(t, func(t *testing.T) {
+		database := openTimersDB(t)
+		saveTimers(t, database, func(tm *incident.Timers) {
+			tm.CheckEveryMinutes = 60
+			tm.NoReleaseGraceMinutes = 240
+			tm.TrackCapHours = 72
+		})
+		var checks atomic.Int32
+		ag := &scriptedPendingOutcomeAgent{
+			checkOutcome: func(context.Context, *db.PendingOutcome) (*agent.PendingOutcomeObservation, error) {
+				checks.Add(1)
+				return &agent.PendingOutcomeObservation{}, nil
+			},
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	stop()
-	select {
-	case <-done:
-	case <-time.After(timersLate):
-		t.Fatal("loop did not return after cancel")
-	}
+		svc := incident.NewService(
+			t.Context(),
+			database,
+			nil,
+			ag,
+			nil,
+			nil,
+			newSyncNotifier(),
+			slog.New(slog.DiscardHandler),
+		)
+		t.Cleanup(func() { stopService(t, svc) })
+		svc.SetUnitForTest(20 * time.Millisecond)
+		newPendingTracker(t, database)
+
+		ctx, stop := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			svc.BackgroundSweepLoopForTest(ctx)
+			close(done)
+		}()
+		saveTimers(t, database, func(tm *incident.Timers) {
+			tm.CheckEveryMinutes = 1
+			tm.NoReleaseGraceMinutes = 240
+			tm.TrackCapHours = 72
+		})
+
+		deadline := time.Now().Add(3 * time.Second)
+		for checks.Load() < 5 {
+			if time.Now().After(deadline) {
+				t.Fatalf(
+					"checks = %d after 3s, want at least 5 once the saved 1 minute interval applies",
+					checks.Load(),
+				)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		stop()
+		select {
+		case <-done:
+		case <-time.After(timersLate):
+			t.Fatal("loop did not return after cancel")
+		}
+	})
 }
 
 func newTrackedIncident(t *testing.T, database *db.DB, status db.IncidentStatus, po *db.PendingOutcome) *db.Incident {
