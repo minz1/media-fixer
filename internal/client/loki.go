@@ -60,16 +60,38 @@ type LokiQueryResult struct {
 }
 
 type LokiLine struct {
-	Timestamp time.Time
-	Message   string
+	Timestamp time.Time `json:"timestamp"`
+	Message   string    `json:"message"`
+	Context   bool      `json:"context,omitempty"`
+	Unit      string    `json:"-"`
 }
 
-// QueryRange queries Loki for log lines matching logQL in the given time window.
+// QueryRange queries Loki for log lines matching logQL in the given time window, newest first.
 func (c *LokiClient) QueryRange(
 	ctx context.Context,
 	logQL string,
 	from, to time.Time,
 	limit int,
+) (*LokiQueryResult, error) {
+	return c.query(ctx, logQL, from, to, limit, "backward")
+}
+
+// QueryForward is QueryRange with the oldest lines first.
+func (c *LokiClient) QueryForward(
+	ctx context.Context,
+	logQL string,
+	from, to time.Time,
+	limit int,
+) (*LokiQueryResult, error) {
+	return c.query(ctx, logQL, from, to, limit, "forward")
+}
+
+func (c *LokiClient) query(
+	ctx context.Context,
+	logQL string,
+	from, to time.Time,
+	limit int,
+	direction string,
 ) (*LokiQueryResult, error) {
 	u, _ := url.Parse(c.base + "/loki/api/v1/query_range")
 	q := u.Query()
@@ -77,7 +99,7 @@ func (c *LokiClient) QueryRange(
 	q.Set("start", strconv.FormatInt(from.UnixNano(), 10))
 	q.Set("end", strconv.FormatInt(to.UnixNano(), 10))
 	q.Set("limit", strconv.Itoa(limit))
-	q.Set("direction", "backward")
+	q.Set("direction", direction)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -96,7 +118,8 @@ func (c *LokiClient) QueryRange(
 	var raw struct {
 		Data struct {
 			Result []struct {
-				Values [][]string `json:"values"` // [[ns_timestamp, line], ...]
+				Stream map[string]string `json:"stream"`
+				Values [][]string        `json:"values"` // [[ns_timestamp, line], ...]
 			} `json:"result"`
 		} `json:"data"`
 	}
@@ -118,6 +141,7 @@ func (c *LokiClient) QueryRange(
 			result.Lines = append(result.Lines, LokiLine{
 				Timestamp: time.Unix(0, nsec),
 				Message:   v[1],
+				Unit:      stream.Stream["unit"],
 			})
 		}
 	}
