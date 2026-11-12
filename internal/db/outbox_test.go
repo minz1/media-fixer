@@ -90,6 +90,46 @@ func TestF9_DueOutboxInIDOrder(t *testing.T) {
 	}
 }
 
+func TestF9_PruneOutboxDropsFinishedRowsAfter30Days(t *testing.T) {
+	t.Parallel()
+	d := openDB(t, filepath.Join(t.TempDir(), "o.db"))
+	ctx := context.Background()
+	for _, k := range []string{"old-sent", "old-gone", "pending", "new-sent"} {
+		if err := d.EnqueueOutbox(ctx, outboxRow(k, t20())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := d.DueOutbox(ctx, t20(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		switch r.Key {
+		case "old-sent":
+			err = d.MarkOutboxSent(ctx, r.ID, t20())
+		case "old-gone":
+			err = d.GiveUpOutbox(ctx, r.ID, t20())
+		case "new-sent":
+			err = d.MarkOutboxSent(ctx, r.ID, t20().Add(20*24*time.Hour))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := d.PruneOutbox(ctx, t20().Add(31*24*time.Hour))
+	if err != nil || n != 2 {
+		t.Fatalf("PruneOutbox = %d, %v; want 2", n, err)
+	}
+	for _, k := range []string{"old-sent", "old-gone", "pending", "new-sent"} {
+		if err = d.EnqueueOutbox(ctx, outboxRow(k, t20())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := dueKeys(t, d, t20()); !slices.Equal(got, []string{"pending", "old-sent", "old-gone"}) {
+		t.Fatalf("due after prune and re-enqueue %v, want pending kept and only the pruned keys free again", got)
+	}
+}
+
 func TestMigration26_UpDownUp(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

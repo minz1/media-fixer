@@ -79,8 +79,18 @@ func (d *Dispatcher) Wake() {
 func (d *Dispatcher) Run(ctx context.Context) {
 	t := time.NewTicker(tick)
 	defer t.Stop()
+	var pruned time.Time
 	for {
-		d.Flush(ctx, d.now())
+		now := d.now()
+		if now.Sub(pruned) >= 24*time.Hour {
+			pruned = now
+			if n, err := d.db.PruneOutbox(ctx, now); err != nil {
+				d.log.WarnContext(ctx, "outbox prune", "error", err)
+			} else if n > 0 {
+				d.log.InfoContext(ctx, "outbox pruned", "rows", n)
+			}
+		}
+		d.Flush(ctx, now)
 		select {
 		case <-ctx.Done():
 			return

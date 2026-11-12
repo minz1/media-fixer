@@ -102,6 +102,15 @@ func (d *DB) StuckOutboxCount(ctx context.Context, now time.Time) (int, error) {
 	return n, err
 }
 
+func (d *DB) PruneOutbox(ctx context.Context, now time.Time) (int64, error) {
+	res, err := d.write.ExecContext(ctx, `DELETE FROM notify_outbox WHERE COALESCE(sent_at, gave_up_at) < ?`,
+		now.Add(-30*24*time.Hour))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (d *DB) execOutbox(ctx context.Context, q string, args ...any) error {
 	_, err := d.write.ExecContext(ctx, q, args...)
 	return err
