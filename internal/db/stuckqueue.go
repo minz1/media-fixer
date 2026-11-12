@@ -204,7 +204,7 @@ func (d *DB) ListStuck(ctx context.Context, app string) ([]StuckRow, error) {
 }
 
 func (d *DB) GetStuck(ctx context.Context, app, downloadID string) (StuckRow, bool, error) {
-	rows, err := queryStuck(ctx, d.read, `app = ? AND download_id = ?`, app, downloadID)
+	rows, err := queryStuck(ctx, d.read, `app = ? AND download_id = ? COLLATE NOCASE`, app, downloadID)
 	if err != nil || len(rows) == 0 {
 		return StuckRow{}, false, err
 	}

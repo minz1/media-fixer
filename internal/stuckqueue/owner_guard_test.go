@@ -236,3 +236,35 @@ func TestP6Followup_ImportCommandIDZeroOnActedImportRecordsOutcome(t *testing.T)
 		t.Fatalf("row = %+v, want acted import recorded at %v", row, e.clock.Now())
 	}
 }
+
+func TestL8_OwnerGuardIgnoresDownloadIDCase(t *testing.T) {
+	t.Parallel()
+	e, s := regrabEnv(t)
+	fp := ""
+	entries, err := e.sonarr.client().QueueEntries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range stuckqueue.Group(stuckqueue.AppSonarr, entries) {
+		if d.DownloadID == "D" {
+			fp = d.TargetsFP()
+		}
+	}
+	lower := func() error {
+		_, err := s.Act(context.Background(), stuckqueue.AppSonarr, "d", stuckqueue.ActionRegrab, fp)
+		return err
+	}
+	seedSnap(t, e, waitingAt(e, time.Hour))
+	refusedNoWrite(t, e.sonarr, lower(), "inside the 6 h wait")
+
+	seedSnap(t, e, waitingAt(e, 7*time.Hour))
+	if err = lower(); err != nil {
+		t.Fatal(err)
+	}
+	if row := storedRow(t, e); row.State != string(stuckqueue.StateActed) || row.ActedOpID <= 0 {
+		t.Fatalf("row = %+v, want the stored D row acted", row)
+	}
+	if rows, err := e.db.ListStuck(context.Background(), "sonarr"); err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v (err %v), want only the stored D row", rows, err)
+	}
+}

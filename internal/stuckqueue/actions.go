@@ -47,11 +47,11 @@ func (s *Scheduler) Act(
 	if !known {
 		return "", refuse("%s is not offered for this download", action)
 	}
-	key := Key{App: app, DownloadID: downloadID}
-	_, minAge, err := s.guard(ctx, c, key, owner)
+	snap, minAge, err := s.guard(ctx, c, Key{App: app, DownloadID: downloadID}, owner)
 	if err != nil {
 		return "", err
 	}
+	key := snap.Key
 	d, cands, err := s.liveChecks(ctx, c, app, downloadID, action, targetsFp)
 	if err != nil {
 		return "", err
@@ -233,11 +233,11 @@ func (s *Scheduler) ImportMapped(
 	if c == nil {
 		return "", refuse("Sonarr is not configured")
 	}
-	key := Key{App: AppSonarr, DownloadID: downloadID}
-	_, minAge, err := s.guard(ctx, c, key, OwnerMappedImport)
+	snap, minAge, err := s.guard(ctx, c, Key{App: AppSonarr, DownloadID: downloadID}, OwnerMappedImport)
 	if err != nil {
 		return "", err
 	}
+	key := snap.Key
 	entries, err := c.QueueEntries(ctx)
 	if err != nil {
 		return "", err
