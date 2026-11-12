@@ -145,12 +145,11 @@ func (d *Dispatcher) drainAt(ctx context.Context, now time.Time) bool {
 func (d *Dispatcher) giveUp(ctx context.Context, r db.OutboxRow, now time.Time, why string) {
 	d.log.ErrorContext(ctx, "outbox gave up", "id", r.ID, "key", r.Key, "target", r.Target, "kind", r.Kind,
 		"attempts", r.Attempts, "reason", why)
-	if err := d.db.GiveUpOutbox(ctx, r.ID, now); err != nil {
-		d.log.WarnContext(ctx, "outbox give up", "id", r.ID, "error", err)
-		return
-	}
 	if d.gaveUp != nil {
 		d.gaveUp(ctx, r, now)
+	}
+	if err := d.db.GiveUpOutbox(ctx, r.ID, now); err != nil {
+		d.log.WarnContext(ctx, "outbox give up", "id", r.ID, "error", err)
 	}
 }
 

@@ -171,6 +171,26 @@ func TestF9_OutboxGivesUpAfter24h(t *testing.T) {
 	}
 }
 
+func TestF9_GiveUpHookRunsBeforeTheRowIsMarked(t *testing.T) {
+	t.Parallel()
+	d := openDB(t)
+	ownerCard(t, d, "old", "old", t0())
+	now := t0().Add(24 * time.Hour)
+	disp := newAt(d, &fakeSender{}, &now)
+	marked := -1
+	disp.OnGiveUp(func(ctx context.Context, _ db.OutboxRow, at time.Time) {
+		n, err := d.StuckOutboxCount(ctx, at)
+		if err != nil {
+			t.Error(err)
+		}
+		marked = n
+	})
+	disp.DrainForTest(context.Background())
+	if marked != 0 {
+		t.Fatalf("given-up rows when the hook ran = %d, want 0: a crash after the mark would skip the hook", marked)
+	}
+}
+
 func TestF9_OutboxRoutesEveryKind(t *testing.T) {
 	t.Parallel()
 	d := openDB(t)
