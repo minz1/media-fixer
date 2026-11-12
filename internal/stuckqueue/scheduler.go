@@ -1,9 +1,11 @@
 package stuckqueue
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/base64"
+	"encoding/gob"
 	"errors"
 	"sync"
 	"time"
@@ -35,15 +37,36 @@ const lastResultKey = "stuckqueue_last_result"
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
 	s := &Scheduler{r: r, d: d, base: base, store: d, slot: slot{holder: holderNone}}
 	raw, err := d.GetSetting(base, lastResultKey)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-	case err == nil && json.Unmarshal([]byte(raw), &s.slot.last) == nil:
-		s.slot.hasLast = true
-	default:
+	if errors.Is(err, sql.ErrNoRows) {
+		return s
+	}
+	if err == nil {
+		s.slot.last, err = decodeLast(raw)
+	}
+	if err != nil {
 		s.slot.last = Result{}
 		r.logger().WarnContext(base, "stuck-queue: stored last result unreadable", "err", err)
+		return s
 	}
+	s.slot.hasLast = true
 	return s
+}
+
+func encodeLast(r Result) (string, error) {
+	var b bytes.Buffer
+	if err := gob.NewEncoder(&b).Encode(r); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(b.Bytes()), nil
+}
+
+func decodeLast(raw string) (Result, error) {
+	var r Result
+	b, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return r, err
+	}
+	return r, gob.NewDecoder(bytes.NewReader(b)).Decode(&r)
 }
 
 func (s *Scheduler) Wait() { s.wg.Wait() }

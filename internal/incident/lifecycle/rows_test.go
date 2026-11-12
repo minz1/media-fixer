@@ -417,7 +417,7 @@ func TestF20_ResolveRefusedWhilePlanExecutes(t *testing.T) {
 
 func TestF15_ResolveAfterFixIsQuiet(t *testing.T) {
 	t.Parallel()
-	count := map[K]int{}
+	count := make(map[K]int)
 	cur := snap(lifecycle.Investigating)
 	for _, step := range []tev{runFinished(lifecycle.OutcomeFixed), ev(lifecycle.OwnerResolve)} {
 		d, err := apply(cur, step)

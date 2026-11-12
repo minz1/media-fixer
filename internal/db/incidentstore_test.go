@@ -431,7 +431,8 @@ func TestF18_CardViewIsOneSnapshot(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := d.ApplyIncident(ctx, s.ID, force(func(n *lifecycle.Snapshot) { n.ActionCount = i % 2 })); err != nil {
+			toggle := force(func(n *lifecycle.Snapshot) { n.ActionCount = i % 2 })
+			if _, err := d.ApplyIncident(ctx, s.ID, toggle); err != nil {
 				t.Error(err)
 				return
 			}

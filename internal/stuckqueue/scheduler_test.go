@@ -2,8 +2,8 @@ package stuckqueue_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -276,10 +276,12 @@ func TestF19_LastResultSurvivesRestart(t *testing.T) {
 	}
 	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
 	got, ok, _ := s2.State()
-	wj, _ := json.Marshal(want)
-	gj, _ := json.Marshal(got)
-	if !ok || string(gj) != string(wj) {
-		t.Fatalf("after restart: ok %v, result %s, want %s", ok, gj, wj)
+	if !ok || !got.FinishedAt.Equal(want.FinishedAt) {
+		t.Fatalf("after restart: ok %v, finished %v, want %v", ok, got.FinishedAt, want.FinishedAt)
+	}
+	got.FinishedAt, want.FinishedAt = time.Time{}, time.Time{}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("after restart: %+v, want %+v", got, want)
 	}
 }
 
