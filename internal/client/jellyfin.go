@@ -166,6 +166,10 @@ type JellyfinItem struct {
 	Name string `json:"Name"`
 	Type string `json:"Type"`
 	Path string `json:"Path"`
+
+	IndexNumber       *int   `json:"IndexNumber,omitempty"`
+	ParentIndexNumber *int   `json:"ParentIndexNumber,omitempty"`
+	SeriesName        string `json:"SeriesName,omitempty"`
 }
 
 type ItemsResponse struct {
@@ -337,37 +341,31 @@ func (c *JellyfinClient) ScanStatus(ctx context.Context) (*ScanStatus, error) {
 	return &ScanStatus{Running: false}, nil
 }
 
-// DeleteCache removes the metadata and image cache for an item.
+// DeleteCache runs a full metadata refresh of an item, replacing its provider metadata (images kept).
 func (c *JellyfinClient) DeleteCache(ctx context.Context, itemID string) error {
-	paths := []string{
-		fmt.Sprintf("/Items/%s/Refresh", url.PathEscape(itemID)),
+	p := fmt.Sprintf("/Items/%s/Refresh", url.PathEscape(itemID))
+	q := url.Values{
+		"metadataRefreshMode": {"FullRefresh"},
+		"imageRefreshMode":    {"FullRefresh"},
+		"replaceAllMetadata":  {"true"},
+		"replaceAllImages":    {"false"},
 	}
-	for _, p := range paths {
-		req, err := http.NewRequestWithContext(
-			ctx,
-			http.MethodPost,
-			c.base+p,
-			strings.NewReader(
-				`{"Recursive":true,"ImageRefreshMode":"FullRefresh","MetadataRefreshMode":"FullRefresh","ReplaceAllImages":true,"ReplaceAllMetadata":true}`,
-			),
-		)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		c.authorize(req)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+p+"?"+q.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	c.authorize(req)
 
-		resp, err := c.http.Do(req)
-		if err != nil {
-			return err
-		}
-		closeErr := resp.Body.Close()
-		if resp.StatusCode >= http.StatusMultipleChoices {
-			return fmt.Errorf("jellyfin refresh %s: status %d", p, resp.StatusCode)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close response body: %w", closeErr)
-		}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	closeErr := resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("jellyfin refresh %s: status %d", p, resp.StatusCode)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close response body: %w", closeErr)
 	}
 	return nil
 }

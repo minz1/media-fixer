@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"testing"
 
 	"github.com/minz1/mediafixer/internal/client"
@@ -300,5 +303,62 @@ func TestJellyfin_ScanStatus_Idle(t *testing.T) {
 	}
 	if st.Running {
 		t.Error("expected not running")
+	}
+}
+
+func TestG4_EpisodesCarrySeasonAndEpisode(t *testing.T) {
+	t.Parallel()
+	var fields string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fields = r.URL.Query().Get("Fields")
+		_, _ = w.Write([]byte(`{"Items":[{"Id":"ep6","Name":"Six","Type":"Episode","IndexNumber":6,` +
+			`"ParentIndexNumber":1,"SeriesName":"Overgeared"},{"Id":"sp1","Type":"Episode","IndexNumber":1,` +
+			`"ParentIndexNumber":0}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	eps, err := client.NewJellyfin(srv.URL, "key").ListEpisodes(context.Background(), "series-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields == "" {
+		t.Error("Fields no longer requested")
+	}
+	e := eps[0]
+	if e.IndexNumber == nil || *e.IndexNumber != 6 || e.ParentIndexNumber == nil || *e.ParentIndexNumber != 1 ||
+		e.SeriesName != "Overgeared" {
+		t.Errorf("episode = %+v, want S01E06 of Overgeared", e)
+	}
+	if eps[1].ParentIndexNumber == nil || *eps[1].ParentIndexNumber != 0 {
+		t.Errorf("special = %+v, want season 0 kept", eps[1])
+	}
+}
+
+func TestG7_DeleteCacheSendsQueryOptions(t *testing.T) {
+	t.Parallel()
+	var gotPath, gotQuery string
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	if err := client.NewJellyfin(srv.URL, "key").DeleteCache(context.Background(), "item-1"); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/Items/item-1/Refresh" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(body) != 0 {
+		t.Errorf("body = %q, want empty", body)
+	}
+	want := url.Values{
+		"metadataRefreshMode": {"FullRefresh"},
+		"imageRefreshMode":    {"FullRefresh"},
+		"replaceAllMetadata":  {"true"},
+		"replaceAllImages":    {"false"},
+	}
+	if got, _ := url.ParseQuery(gotQuery); !reflect.DeepEqual(got, want) {
+		t.Errorf("query = %v, want %v", got, want)
 	}
 }

@@ -572,8 +572,9 @@ func arrActionToolSpecs() []toolSpec {
 		{
 			Name: toolClearJellyfinCache,
 			Def: &openai.FunctionDefinition{
-				Name:        toolClearJellyfinCache,
-				Description: "Force a full metadata and image refresh for a Jellyfin item.",
+				Name: toolClearJellyfinCache,
+				Description: "Full metadata refresh of a Jellyfin item: replaces its provider metadata (locked " +
+					"fields and images kept). On a Series it reaches every episode; use the Episode id for one episode.",
 				Parameters: jsonSchema(map[string]any{
 					paramItemID: param("string", "Jellyfin item ID"),
 				}, []string{paramItemID}),

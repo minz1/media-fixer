@@ -89,7 +89,7 @@ func TestArr_SearchMovie_NormalizedMatch(t *testing.T) {
 
 // TestArr_PathPrefixedBase_NoDoublePrefix is a regression test for a bug
 // where GetEpisodes/GetEpisodeFiles/GetMovieFiles/SeriesGrabHistory/
-// MovieGrabHistory built their query string via url.Parse(base+"/api/v3/...")
+// MovieGrabHistory built their query string via [url.Parse](base+"/api/v3/...")
 // but then passed u.RequestURI() (which already includes base's path) back
 // into get(), which prepended base a second time. Against a bare-host test
 // server (no path component in base) the bug was invisible; it only shows up
