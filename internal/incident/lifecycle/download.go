@@ -27,6 +27,9 @@ func stepDownloadObserved(cur Snapshot, ev Event, now time.Time) (Decision, erro
 	if cur.Download == nil {
 		return Decision{Next: cur}, errNoDownload
 	}
+	if ev.Seq != cur.Download.CheckSeq {
+		return Decision{Next: cur}, ErrStale
+	}
 	next := cur
 	switch {
 	case ev.Err != "" || ev.Obs == nil:
@@ -41,7 +44,7 @@ func stepDownloadObserved(cur Snapshot, ev Event, now time.Time) (Decision, erro
 
 func recheck(s *Snapshot, at time.Time, effs ...Effect) (Decision, error) {
 	s.NextCheck = at
-	return moved(*s, append(effs, check(s.Generation, at, CheckDownload))...)
+	return moved(*s, append(effs, check(s.Generation, &s.Download.CheckSeq, at, CheckDownload))...)
 }
 
 func downloadFailed(cur, next Snapshot, errText string, now time.Time) (Decision, error) {

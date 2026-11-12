@@ -193,6 +193,7 @@ func prepare(s lifecycle.Snapshot, t tev) (lifecycle.Snapshot, lifecycle.Event) 
 	}
 	ev := t.ev
 	ev.Gen = s.Generation
+	ev.Seq = s.CheckSeq()
 	if t.stale {
 		ev.Gen = s.Generation + 1
 	}

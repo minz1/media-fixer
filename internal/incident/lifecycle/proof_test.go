@@ -24,7 +24,6 @@ func TestIncidentMachine_IdempotenceOwnerRerun(t *testing.T) {
 
 func TestIncidentMachine_IdempotenceVerifyObserved(t *testing.T) {
 	t.Parallel()
-	t.Skip("R2.1")
 	machinetest.Idempotence(t, incidentMachine(), []lifecycle.EventKind{lifecycle.VerifyObserved})
 }
 

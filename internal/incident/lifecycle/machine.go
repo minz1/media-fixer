@@ -196,8 +196,9 @@ func launch(gen int64, seed Seed, origin Origin) Effect {
 
 func cancel(gen int64) Effect { return Effect{Kind: CancelRun, Gen: gen} }
 
-func check(gen int64, at time.Time, k CheckKind) Effect {
-	return Effect{Kind: ScheduleCheck, Gen: gen, At: at, Check: k}
+func check(gen int64, seq *int, at time.Time, k CheckKind) Effect {
+	*seq++
+	return Effect{Kind: ScheduleCheck, Gen: gen, Seq: *seq, At: at, Check: k}
 }
 
 func note(n Note) Effect { return Effect{Kind: NotifyReporters, Note: n} }
@@ -319,7 +320,7 @@ func startVerify(next Snapshot, o Outcome, now time.Time) (Decision, error) {
 	}
 	next.Verify = &Verify{ChecksLeft: max(next.In.Limits.VerifyChecks, 1), Spec: spec}
 	gen := bump(&next)
-	return moved(next, check(gen, next.NextCheck, CheckVerify))
+	return moved(next, check(gen, &next.Verify.Spec.CheckSeq, next.NextCheck, CheckVerify))
 }
 
 func startDownload(next Snapshot, o Outcome, now time.Time) (Decision, error) {
@@ -333,7 +334,7 @@ func startDownload(next Snapshot, o Outcome, now time.Time) (Decision, error) {
 	next.Download = &d
 	next.NextCheck = now.Add(next.In.Limits.CheckEvery)
 	gen := bump(&next)
-	return moved(next, note(NoteSearching), check(gen, next.NextCheck, CheckDownload))
+	return moved(next, note(NoteSearching), check(gen, &next.Download.CheckSeq, next.NextCheck, CheckDownload))
 }
 
 func stepRunFinishedUnclaimed(cur Snapshot, ev Event, _ time.Time) (Decision, error) {
@@ -351,9 +352,12 @@ func stepVerifyObserved(cur Snapshot, ev Event, now time.Time) (Decision, error)
 	if v == nil {
 		return Decision{Next: cur}, errors.New("lifecycle: verifying without a verify spec")
 	}
+	if ev.Seq != v.Spec.CheckSeq {
+		return Decision{Next: cur}, ErrStale
+	}
 	reschedule := func(at time.Time, effs ...Effect) (Decision, error) {
 		next.NextCheck = at
-		return moved(next, append(effs, check(next.Generation, at, CheckVerify))...)
+		return moved(next, append(effs, check(next.Generation, &v.Spec.CheckSeq, at, CheckVerify))...)
 	}
 	switch ev.Verify {
 	case VerifyFixed:
@@ -448,7 +452,7 @@ func stepKeepSearching(cur Snapshot, _ Event, now time.Time) (Decision, error) {
 	next.Download = &d
 	next.NextCheck = now.Add(l.KeepSearchingCheck)
 	gen := bump(&next)
-	return moved(next, check(gen, next.NextCheck, CheckDownload))
+	return moved(next, check(gen, &next.Download.CheckSeq, next.NextCheck, CheckDownload))
 }
 
 func resetTrack(d *Download, now time.Time) {

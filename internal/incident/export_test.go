@@ -227,15 +227,16 @@ func (s *Service) CheckNowForTest(ctx context.Context, id string) {
 		return
 	}
 	if snap.Status == lifecycle.Verifying {
-		s.verifyCheck(ctx, id, snap.Generation)
+		s.verifyCheck(ctx, id, snap.Generation, snap.CheckSeq())
 	}
 	if snap.Status == lifecycle.AwaitingDownload {
-		s.downloadCheck(ctx, id, snap.Generation)
+		s.downloadCheck(ctx, id, snap.Generation, snap.CheckSeq())
 	}
 }
 
 func (s *Service) DownloadCheckForTest(ctx context.Context, id string, gen int64) {
-	s.downloadCheck(ctx, id, gen)
+	snap, _ := s.db.GetIncidentSnapshot(ctx, id)
+	s.downloadCheck(ctx, id, gen, snap.CheckSeq())
 }
 
 func (s *Service) ReservedOrRunningForTest(id string) bool {

@@ -93,6 +93,7 @@ type Report struct {
 type Event struct {
 	Kind       EventKind
 	Gen        int64
+	Seq        int
 	Version    int64
 	HasVersion bool
 	Origin     Origin

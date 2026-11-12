@@ -82,7 +82,7 @@ func approvedVerify(cur Snapshot, now time.Time) (Decision, error) {
 	next.NextCheck = now.Add(delay)
 	next.Verify = &Verify{ChecksLeft: max(next.In.Limits.VerifyChecks, 1), Spec: spec}
 	gen := bump(&next)
-	return moved(next, check(gen, next.NextCheck, CheckVerify))
+	return moved(next, check(gen, &next.Verify.Spec.CheckSeq, next.NextCheck, CheckVerify))
 }
 
 func opFailed(cur Snapshot) (Decision, error) {

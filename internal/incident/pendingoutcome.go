@@ -30,13 +30,13 @@ func pendingOutcomeOf(d *lifecycle.Download) *db.PendingOutcome {
 	}
 }
 
-func (s *Service) downloadCheck(ctx context.Context, id string, gen int64) {
+func (s *Service) downloadCheck(ctx context.Context, id string, gen int64, seq int) {
 	snap, _, ok := s.checkTarget(ctx, id, gen, lifecycle.AwaitingDownload)
 	obs := s.observer()
 	if !ok || snap.Download == nil || obs == nil {
 		return
 	}
-	ev := lifecycle.Event{Kind: lifecycle.DownloadObserved, Gen: gen}
+	ev := lifecycle.Event{Kind: lifecycle.DownloadObserved, Gen: gen, Seq: seq}
 	o, err := obs.CheckPendingOutcome(ctx, pendingOutcomeOf(snap.Download))
 	if err != nil {
 		s.log.WarnContext(ctx, "pending outcome check failed, will retry", "incident", id, "error", err)
@@ -75,7 +75,11 @@ func (s *Service) ArmSonarrDownloadWake(ctx context.Context, mediaType, title st
 			continue
 		}
 		s.scheduleCheckEarlier(inc.ID, lifecycle.Effect{
-			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: time.Now(), Check: lifecycle.CheckDownload,
+			Kind:  lifecycle.ScheduleCheck,
+			Gen:   snap.Generation,
+			Seq:   snap.CheckSeq(),
+			At:    time.Now(),
+			Check: lifecycle.CheckDownload,
 		})
 	}
 	return nil

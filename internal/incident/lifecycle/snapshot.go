@@ -63,6 +63,7 @@ type VerifySpec struct {
 	Action     string          `json:"action,omitempty"`
 	ETAMinutes int             `json:"eta_minutes,omitempty"`
 	Extensions int             `json:"extensions"`
+	CheckSeq   int             `json:"check_seq,omitempty"`
 	ETANoted   bool            `json:"eta_noted"`
 
 	VerifyEnteredAt time.Time `json:"verify_entered_at,omitzero"`
@@ -91,6 +92,7 @@ type Download struct {
 	GrabNotified       bool      `json:"grab_notified"`
 	KeepSearching      bool      `json:"keep_searching"`
 	KeepSearchingUntil time.Time `json:"keep_searching_until"`
+	CheckSeq           int       `json:"check_seq,omitempty"`
 }
 
 type Plan struct {
@@ -157,4 +159,14 @@ func (s Snapshot) Clone() Snapshot {
 		n.Op = &o
 	}
 	return n
+}
+
+func (s Snapshot) CheckSeq() int {
+	switch {
+	case s.Verify != nil:
+		return s.Verify.Spec.CheckSeq
+	case s.Download != nil:
+		return s.Download.CheckSeq
+	}
+	return 0
 }

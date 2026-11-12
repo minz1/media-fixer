@@ -75,7 +75,7 @@ func reconcileOne(r Observed, live Liveness, p Policy) (Intent, bool) {
 		if at.Before(now) {
 			at = now
 		}
-		eff := check(s.Generation, at, k)
+		eff := Effect{Kind: ScheduleCheck, Gen: s.Generation, Seq: s.CheckSeq(), At: at, Check: k}
 		return Intent{ID: s.ID, Arm: &eff}, true
 	case ExecutingPlan:
 		if !live.Plans[s.ID] {

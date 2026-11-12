@@ -378,3 +378,31 @@ func checkDocRow(t *testing.T, r docRow) {
 		r.assert(t, d.Next)
 	}
 }
+
+func TestF1_SecondObservationAtSameSeqIsStale(t *testing.T) {
+	t.Parallel()
+	cur := snap(lifecycle.Verifying)
+	cur.Verify.ChecksLeft = 3
+	ev := lifecycle.Event{Kind: lifecycle.VerifyObserved, Gen: cur.Generation, Verify: lifecycle.VerifyNotYet}
+	d, err := lifecycle.Next(cur, ev, base())
+	if err != nil || d.Next.Verify.ChecksLeft != 2 {
+		t.Fatalf("first observation: err %v, checks left %v", err, d.Next.Verify)
+	}
+	d2, err := lifecycle.Next(d.Next, ev, base())
+	if !errors.Is(err, lifecycle.ErrStale) {
+		t.Fatalf("second observation at the same seq: err %v, checks left %d", err, d2.Next.Verify.ChecksLeft)
+	}
+}
+
+func TestF1_SecondDownloadObservationAtSameSeqIsStale(t *testing.T) {
+	t.Parallel()
+	cur := snap(lifecycle.AwaitingDownload)
+	ev := lifecycle.Event{Kind: lifecycle.DownloadObserved, Gen: cur.Generation, Obs: &lifecycle.Observation{}}
+	d, err := lifecycle.Next(cur, ev, base())
+	if err != nil {
+		t.Fatalf("first observation: %v", err)
+	}
+	if _, err = lifecycle.Next(d.Next, ev, base()); !errors.Is(err, lifecycle.ErrStale) {
+		t.Fatalf("second observation at the same seq: err %v", err)
+	}
+}

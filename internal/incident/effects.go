@@ -159,12 +159,12 @@ func (s *Service) scheduleCheckEarlier(id string, e lifecycle.Effect) {
 }
 
 func (s *Service) checkFire(id string, e lifecycle.Effect) func(done func()) {
-	gen, kind := e.Gen, e.Check
+	gen, seq, kind := e.Gen, e.Seq, e.Check
 	short := (&db.Incident{ID: id}).ShortID()
 	return func(done func()) {
 		if !s.work.goNamed("check:"+short, func(ctx context.Context) {
 			defer done()
-			s.runCheck(ctx, id, gen, kind)
+			s.runCheck(ctx, id, gen, seq, kind)
 		}) {
 			done()
 			s.log.Info("check not started, shutting down", "incident", id, "check", string(kind))

@@ -84,6 +84,7 @@ type Notice struct {
 type Effect struct {
 	Kind       EffectKind
 	Gen        int64
+	Seq        int
 	Seed       Seed
 	Origin     Origin
 	At         time.Time

@@ -86,6 +86,7 @@ func (sd *seeder) step(ev lifecycle.Event) {
 		ev.Gen = sd.s.Generation
 	}
 	ev.Version, ev.HasVersion = sd.s.Version, true
+	ev.Seq = sd.s.CheckSeq()
 	a, err := sd.d.ApplyIncident(sd.t.Context(), sd.s.ID, Decide(ev, Limits(), sd.now))
 	if err != nil {
 		sd.t.Fatalf("seed %s: %s: %v", sd.s.Status, ev.Kind, err)

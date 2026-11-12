@@ -86,12 +86,12 @@ func (s *Service) applyOutcome(ctx context.Context, id string, ev lifecycle.Even
 	}
 }
 
-func (s *Service) runCheck(ctx context.Context, id string, gen int64, kind lifecycle.CheckKind) {
+func (s *Service) runCheck(ctx context.Context, id string, gen int64, seq int, kind lifecycle.CheckKind) {
 	switch kind {
 	case lifecycle.CheckVerify:
-		s.verifyCheck(ctx, id, gen)
+		s.verifyCheck(ctx, id, gen, seq)
 	case lifecycle.CheckDownload:
-		s.downloadCheck(ctx, id, gen)
+		s.downloadCheck(ctx, id, gen, seq)
 	}
 }
 
@@ -116,13 +116,20 @@ func (s *Service) checkTarget(ctx context.Context, id string, gen int64, want li
 	return snap, inc, true
 }
 
-func (s *Service) verifyCheck(ctx context.Context, id string, gen int64) {
+func (s *Service) verifyCheck(ctx context.Context, id string, gen int64, seq int) {
 	snap, inc, ok := s.checkTarget(ctx, id, gen, lifecycle.Verifying)
 	if !ok || snap.Verify == nil {
 		return
 	}
 	res, scan := s.observeVerify(ctx, inc, snap)
-	ev := lifecycle.Event{Kind: lifecycle.VerifyObserved, Gen: gen, Verify: res, Scan: scan, Notice: s.notVerified(inc)}
+	ev := lifecycle.Event{
+		Kind:   lifecycle.VerifyObserved,
+		Gen:    gen,
+		Seq:    seq,
+		Verify: res,
+		Scan:   scan,
+		Notice: s.notVerified(inc),
+	}
 	if _, err := s.apply(ctx, id, ev, nil); err != nil {
 		s.logCheckErr(ctx, id, err)
 	}
@@ -200,7 +207,11 @@ func (s *Service) ArmStuckReadClear(ctx context.Context, title string) error {
 			at = now
 		}
 		s.scheduleCheckEarlier(inc.ID, lifecycle.Effect{
-			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: at, Check: lifecycle.CheckVerify,
+			Kind:  lifecycle.ScheduleCheck,
+			Gen:   snap.Generation,
+			Seq:   snap.CheckSeq(),
+			At:    at,
+			Check: lifecycle.CheckVerify,
 		})
 	}
 	return nil
@@ -222,7 +233,11 @@ func (s *Service) ArmScanSettled(ctx context.Context, ended time.Time) error {
 			continue
 		}
 		s.scheduleCheckEarlier(inc.ID, lifecycle.Effect{
-			Kind: lifecycle.ScheduleCheck, Gen: snap.Generation, At: now, Check: lifecycle.CheckVerify,
+			Kind:  lifecycle.ScheduleCheck,
+			Gen:   snap.Generation,
+			Seq:   snap.CheckSeq(),
+			At:    now,
+			Check: lifecycle.CheckVerify,
 		})
 	}
 	return s.settleScan(ctx, ended)
