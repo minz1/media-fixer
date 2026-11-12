@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -360,6 +361,8 @@ func hostReadToolSpecs() []toolSpec {
 							"services in the window, including ones about a completely different title. Omit " +
 							"only for a general infrastructure/connectivity incident with no specific item."),
 					"filter": param("string", "Deprecated alias for one entry of filters."),
+					"context_after": param("number", "Lines to return after each matching line, from the "+
+						"same service (max 30, 0 = none). Use 20 on subtitle extraction / ffmpeg / transcoding failures."),
 					"around_incident": param("boolean",
 						"Center the window on when the incident was reported instead of the current time "+
 							"(default true). Leave true unless you deliberately want to see what's happening "+
@@ -988,7 +991,99 @@ func (d *Dispatcher) readLokiQuery(ctx context.Context, c *toolCall, args map[st
 	if now := time.Now(); to.After(now) {
 		to = now
 	}
-	return d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
+	res, err := d.Loki.QueryRange(ctx, units, from, to, lokiResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	lines := res.Lines
+	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Timestamp.Before(lines[j].Timestamp) })
+	after, _ := args["context_after"].(float64)
+	lines = d.withLokiContext(ctx, lines, min(int(after), maxLokiContextAfter), to)
+	return &LokiQueryOutput{Lines: lines, ItemIDs: subtitleItemIDs(lines)}, nil
+}
+
+type LokiQueryOutput struct {
+	Lines   []client.LokiLine `json:"lines"`
+	ItemIDs []string          `json:"item_ids,omitempty"`
+}
+
+const (
+	maxLokiContextAfter   = 30
+	maxLokiContextMatches = 5
+)
+
+func (d *Dispatcher) withLokiContext(
+	ctx context.Context,
+	lines []client.LokiLine,
+	n int,
+	to time.Time,
+) []client.LokiLine {
+	if n <= 0 {
+		return lines
+	}
+	type lineKey struct {
+		at  int64
+		msg string
+	}
+	seen := make(map[lineKey]bool, len(lines))
+	var picked []int
+	for i, l := range lines {
+		seen[lineKey{l.Timestamp.UnixNano(), l.Message}] = true
+		if l.Unit != "" {
+			picked = append(picked, i)
+		}
+	}
+	if len(picked) > maxLokiContextMatches {
+		picked = picked[len(picked)-maxLokiContextMatches:]
+	}
+	windowEnd := map[string]time.Time{}
+	blocks := map[int][]client.LokiLine{}
+	for _, i := range picked {
+		m := lines[i]
+		if end, ok := windowEnd[m.Unit]; ok && !m.Timestamp.After(end) {
+			continue
+		}
+		res, err := d.Loki.QueryForward(ctx, `{unit="`+escapeLogQLString(m.Unit)+`"}`, m.Timestamp, to, n+1)
+		if err != nil {
+			continue
+		}
+		end := m.Timestamp
+		for _, l := range res.Lines {
+			if l.Timestamp.After(end) {
+				end = l.Timestamp
+			}
+			k := lineKey{l.Timestamp.UnixNano(), l.Message}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			l.Context = true
+			blocks[i] = append(blocks[i], l)
+		}
+		windowEnd[m.Unit] = end
+	}
+	out := make([]client.LokiLine, 0, len(lines))
+	for i, l := range lines {
+		out = append(out, l)
+		out = append(out, blocks[i]...)
+	}
+	return out
+}
+
+var subtitleCachePathID = regexp.MustCompile(
+	`(?i)/subtitles/[0-9a-f]{2}/([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/`)
+
+func subtitleItemIDs(lines []client.LokiLine) []string {
+	var ids []string
+	for _, l := range lines {
+		for _, m := range subtitleCachePathID.FindAllStringSubmatch(l.Message, -1) {
+			id := strings.ToLower(strings.ReplaceAll(m[1], "-", ""))
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 var lokiAlnumRun = regexp.MustCompile(`[A-Za-z0-9]+`)

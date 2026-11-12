@@ -159,7 +159,7 @@ func checkLokiQuery(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ 
 	if r.Status != StatusOK {
 		return r
 	}
-	if qr, ok := result.(*client.LokiQueryResult); ok && len(qr.Lines) == 0 {
+	if qr, ok := result.(*agent.LokiQueryOutput); ok && len(qr.Lines) == 0 {
 		r.Status = StatusDegraded
 		r.Detail = "query ok, 0 lines in the last 30 minutes — check the unit selector or Loki retention"
 	}
