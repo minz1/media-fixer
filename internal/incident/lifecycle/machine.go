@@ -417,6 +417,9 @@ func stepOwnerResolve(cur Snapshot, _ Event, _ time.Time) (Decision, error) {
 	next := cur
 	enter(&next, Resolved)
 	gen := bump(&next)
+	if cur.Status == AgentFixed {
+		return moved(next, cancel(gen))
+	}
 	return moved(next, cancel(gen), note(NoteResolved), Effect{Kind: SeerrResolve})
 }
 

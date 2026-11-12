@@ -414,3 +414,23 @@ func TestF20_ResolveRefusedWhilePlanExecutes(t *testing.T) {
 		t.Fatalf("resolve during a plan: err %v", err)
 	}
 }
+
+func TestF15_ResolveAfterFixIsQuiet(t *testing.T) {
+	t.Parallel()
+	count := map[K]int{}
+	cur := snap(lifecycle.Investigating)
+	for _, step := range []tev{runFinished(lifecycle.OutcomeFixed), ev(lifecycle.OwnerResolve)} {
+		d, err := apply(cur, step)
+		if err != nil {
+			t.Fatalf("%s: %v", step.ev.Kind, err)
+		}
+		for _, e := range d.Effects {
+			count[e.Kind]++
+		}
+		cur = d.Next
+	}
+	if cur.Status != lifecycle.Resolved || count[repK] != 1 || count[seerrK] != 1 {
+		t.Fatalf("status %s, reporter notes %d, seerr resolves %d; want resolved, 1, 1",
+			cur.Status, count[repK], count[seerrK])
+	}
+}
