@@ -417,3 +417,29 @@ func TestB8_PromptSubtitleProtocolB(t *testing.T) {
 		}
 	}
 }
+
+func TestC13_PromptBazarrStep(t *testing.T) {
+	t.Parallel()
+	prompt := agent.SystemPromptForTest()
+	_, rest, ok := strings.Cut(prompt, "--- Subtitles (what=subtitles) ---")
+	if !ok {
+		t.Fatal("no subtitles section")
+	}
+	section, _, _ := strings.Cut(rest, "\n--- ")
+	for _, want := range []string{
+		"bazarr_search_subtitles", "primary_reason", "verify_after_seconds", "60",
+		"index_drift", "subtitle_extract_test", "already applied", "stream_alignment",
+		"verify_subtitle_language", "verify_item_id", "manual_investigation",
+		"Both autonomous actions",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("subtitles section lacks %q", want)
+		}
+	}
+	if strings.Contains(section, "The only autonomous action") {
+		t.Error("section still says clear_jellyfin_cache is the only autonomous action")
+	}
+	if n := strings.Count(section, "bazarr_search_subtitles forces"); n != 0 {
+		t.Errorf("interim line left in place: %d", n)
+	}
+}

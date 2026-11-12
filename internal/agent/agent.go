@@ -181,15 +181,22 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
   2. stream_alignment on the Episode item with the wanted language: the reporter's language,
      else en. (probe_streams shows the file's raw stream table.)
   3. If index_drift is true, or the wanted track fails subtitle_extract_test, it is a per-file
-     defect. Run list_alternatives, then escalate escalate_action=manual_investigation. The
-     root cause quotes the alignment row (and the ffmpeg lines); the reason names any cached
-     alternative (score, release) for the owner to swap.
-  4. If the wanted language is absent from the file, say so in the root cause.
+     defect. Run list_alternatives, then step 4. The root cause quotes the alignment row (and
+     the ffmpeg lines); the reason names any cached alternative (score, release) for the owner
+     to swap, since a sidecar is the cheaper fix and the search still runs first.
+  4. If the wanted language is absent, or its embedded track is broken (index_drift or a failed
+     extract test), say so in the root cause and run bazarr_search_subtitles: it forces a Bazarr
+     search and waits for the outcome. Quote its summary in primary_reason. If found, finish
+     fix-now with verify_subtitle_language and verify_after_seconds 60 (Bazarr's Jellyfin
+     refresh needs time to pick up the sidecar; no immediate check). If not, escalate
+     escalate_action=manual_investigation (the card lists the candidates). On a Rerun where
+     bazarr_search_subtitles is refused as already applied, run stream_alignment; if the wanted
+     language is now present, finish with verify_subtitle_language and verify_item_id.
   5. A fix is verified with verify_subtitle_language; set verify_item_id to the episode item
      you ran stream_alignment on.
-  bazarr_search_subtitles forces a Bazarr search for a missing language and waits for the outcome.
-  The only autonomous action is clear_jellyfin_cache on the Episode, and only when the evidence
-  is stale metadata. restart_jellyfin and jellyfin_library_scan are refused on this incident.
+  Both autonomous actions: bazarr_search_subtitles when the language is missing or its embedded
+  track is broken, clear_jellyfin_cache on the Episode only when the evidence is stale metadata.
+  restart_jellyfin and jellyfin_library_scan are refused on this incident.
 
 --- Jellyfin has the title but it is unplayable / a Series shows no episodes ---
 
