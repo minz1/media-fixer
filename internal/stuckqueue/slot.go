@@ -1,6 +1,8 @@
 package stuckqueue
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -111,8 +113,12 @@ func (s *Scheduler) claim(c Holder, now time.Time) (func(update), error) {
 
 func (s *Scheduler) release(c Holder, u update) {
 	s.mu.Lock()
+	var last []byte
 	if u != nil {
 		u(&s.slot)
+		if s.slot.hasLast {
+			last, _ = json.Marshal(s.slot.last)
+		}
 	}
 	next, err := nextSlot(s.slot.holder, slotEvent{Kind: slotRelease, Holder: c})
 	if err == nil {
@@ -121,5 +127,10 @@ func (s *Scheduler) release(c Holder, u update) {
 	s.mu.Unlock()
 	if err != nil {
 		s.r.logger().ErrorContext(s.base, "stuck-queue: slot release rejected", "holder", c, "err", err)
+	}
+	if last != nil {
+		if err := s.d.SetSetting(context.WithoutCancel(s.base), lastResultKey, string(last)); err != nil {
+			s.r.logger().WarnContext(s.base, "stuck-queue: store last result", "err", err)
+		}
 	}
 }

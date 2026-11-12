@@ -2,6 +2,7 @@ package stuckqueue_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -262,5 +263,37 @@ func TestE1_StuckQueueWakeRespectsSettings(t *testing.T) {
 	}
 	if !s.StartedAt().Equal(first) {
 		t.Fatal("a refused wake ran")
+	}
+}
+
+func TestF19_LastResultSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	e.tickAt(s, time.Minute)
+	want, ok, _ := s.State()
+	if !ok {
+		t.Fatal("setup: no run")
+	}
+	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
+	got, ok, _ := s2.State()
+	wj, _ := json.Marshal(want)
+	gj, _ := json.Marshal(got)
+	if !ok || string(gj) != string(wj) {
+		t.Fatalf("after restart: ok %v, result %s, want %s", ok, gj, wj)
+	}
+}
+
+func TestF19_CorruptLastResultIsIgnored(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	if err := e.db.SetSetting(context.Background(), "stuckqueue_last_result", "{"); err != nil {
+		t.Fatal(err)
+	}
+	s := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
+	if _, ok, _ := s.State(); ok {
+		t.Fatal("a corrupt stored result was used")
+	}
+	if !strings.Contains(e.logs.String(), "stuck-queue: stored last result unreadable") {
+		t.Fatalf("logs = %s", e.logs.String())
 	}
 }

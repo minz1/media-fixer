@@ -2,6 +2,8 @@ package stuckqueue
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -28,8 +30,20 @@ type Scheduler struct {
 	store opexec.Store
 }
 
+const lastResultKey = "stuckqueue_last_result"
+
 func NewScheduler(base context.Context, r *Runner, d *db.DB) *Scheduler {
-	return &Scheduler{r: r, d: d, base: base, store: d, slot: slot{holder: holderNone}}
+	s := &Scheduler{r: r, d: d, base: base, store: d, slot: slot{holder: holderNone}}
+	raw, err := d.GetSetting(base, lastResultKey)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err == nil && json.Unmarshal([]byte(raw), &s.slot.last) == nil:
+		s.slot.hasLast = true
+	default:
+		s.slot.last = Result{}
+		r.logger().WarnContext(base, "stuck-queue: stored last result unreadable", "err", err)
+	}
+	return s
 }
 
 func (s *Scheduler) Wait() { s.wg.Wait() }
