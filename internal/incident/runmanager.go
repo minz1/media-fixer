@@ -216,6 +216,9 @@ func (m *runManager) arm(id string, gen int64, at time.Time, earlier bool, fire 
 	if gen < m.current[id] {
 		return false
 	}
+	if cur, ok := m.inflight[id]; ok && earlier && cur.gen >= gen {
+		return false
+	}
 	m.current[id] = gen
 	if c, ok := m.checks[id]; ok {
 		sooner := earlier && c.gen == gen && at.Before(c.at)

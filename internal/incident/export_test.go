@@ -153,7 +153,14 @@ func (r *RunManagerForTest) CancelBelow(id string, gen int64) { r.m.cancelBelow(
 
 func (r *RunManagerForTest) ArmCheck(id string, gen int64, at time.Time, fire func()) bool {
 	return r.m.armCheck(id, gen, at, func(done func()) {
-		done()
+		defer done()
+		fire()
+	})
+}
+
+func (r *RunManagerForTest) ArmCheckEarlier(id string, gen int64, at time.Time, fire func()) bool {
+	return r.m.armCheckEarlier(id, gen, at, func(done func()) {
+		defer done()
 		fire()
 	})
 }

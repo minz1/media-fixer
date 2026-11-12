@@ -1,7 +1,9 @@
 package incident_test
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/minz1/mediafixer/internal/incident"
 )
@@ -59,5 +61,26 @@ func TestE7_PlanReleaseWakesReconciler(t *testing.T) {
 	second()
 	if woke != 1 {
 		t.Fatalf("the plan release to zero woke the reconciler %d times, want 1", woke)
+	}
+}
+
+func TestF1_EarlierArmDuringInflightCheckRunsOnce(t *testing.T) {
+	t.Parallel()
+	m := incident.NewRunManagerForTest(t.Context())
+	release := make(chan struct{})
+	var runs atomic.Int32
+	fire := func() { runs.Add(1); <-release }
+	m.ArmCheck("i1", 3, time.Now(), fire)
+	deadline := time.Now().Add(5 * time.Second)
+	for runs.Load() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if m.ArmCheckEarlier("i1", 3, time.Now(), fire) {
+		t.Fatal("an earlier arm at the in-flight generation was accepted")
+	}
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	if got := runs.Load(); got != 1 {
+		t.Fatalf("checks run = %d, want 1", got)
 	}
 }
