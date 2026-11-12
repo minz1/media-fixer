@@ -23,6 +23,7 @@ type Config struct {
 	Loki       LokiConfig       `toml:"loki"`
 	MediaAgent MediaAgentConfig `toml:"media_agent"`
 	Seerr      SeerrConfig      `toml:"seerr"`
+	Bazarr     BazarrConfig     `toml:"bazarr"`
 	SelfTest   SelfTestConfig   `toml:"selftest"`
 }
 
@@ -74,6 +75,12 @@ type LokiConfig struct {
 type MediaAgentConfig struct {
 	URL    string `toml:"url"`
 	APIKey string `toml:"api_key"`
+}
+
+type BazarrConfig struct {
+	URL           string `toml:"url"`
+	APIKey        string `toml:"api_key"`
+	WebhookSecret string `toml:"webhook_secret"`
 }
 
 type SeerrConfig struct {
@@ -155,6 +162,8 @@ func applyEnvOverrides(cfg *Config) {
 	envOverride("MEDIA_FIXER_SEERR_API_KEY", &cfg.Seerr.APIKey)
 	envOverride("MEDIA_FIXER_SEERR_WEBHOOK_SECRET", &cfg.Seerr.WebhookSecret)
 	envOverride("MEDIA_FIXER_SONARR_WEBHOOK_SECRET", &cfg.Sonarr.WebhookSecret)
+	envOverride("MEDIA_FIXER_BAZARR_API_KEY", &cfg.Bazarr.APIKey)
+	envOverride("MEDIA_FIXER_BAZARR_WEBHOOK_SECRET", &cfg.Bazarr.WebhookSecret)
 
 	if v := os.Getenv("MEDIA_FIXER_CONTROL_LLM_API_KEY"); v != "" {
 		if cfg.ControlLLM == nil {

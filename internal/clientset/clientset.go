@@ -23,6 +23,7 @@ type Set struct {
 	Loki       *client.LokiClient
 	MediaAgent *client.MediaAgentClient
 	Seerr      *client.SeerrClient
+	Bazarr     *client.BazarrClient
 	LokiErr    error
 }
 
@@ -75,6 +76,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*Set, error) {
 		Loki:       loki,
 		MediaAgent: mediaAgent,
 		Seerr:      client.NewSeerr(cfg.Seerr.URL, cfg.Seerr.APIKey),
+		Bazarr:     client.NewBazarr(cfg.Bazarr.URL, cfg.Bazarr.APIKey),
 		LokiErr:    lokiErr,
 	}, nil
 }
@@ -92,5 +94,6 @@ func (s *Set) Dispatcher() *agent.Dispatcher {
 		Radarr:     s.Radarr,
 		Loki:       loki,
 		MediaAgent: s.MediaAgent,
+		Bazarr:     s.Bazarr,
 	}
 }

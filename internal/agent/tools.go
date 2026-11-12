@@ -883,6 +883,7 @@ type Dispatcher struct {
 	Radarr     *client.ArrClient
 	Loki       *client.LokiClient
 	MediaAgent *client.MediaAgentClient
+	Bazarr     *client.BazarrClient
 }
 
 // Call executes a tool by name with already-decoded arguments and returns the

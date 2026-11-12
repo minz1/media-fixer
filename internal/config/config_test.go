@@ -52,3 +52,20 @@ func TestLoad_PublicURL(t *testing.T) {
 		})
 	}
 }
+
+func TestC9_ConfigBazarr(t *testing.T) {
+	t.Setenv("MEDIA_FIXER_BAZARR_API_KEY", "key")
+	t.Setenv("MEDIA_FIXER_BAZARR_WEBHOOK_SECRET", "sec")
+	path := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(path, []byte("[bazarr]\nurl = \"http://b/bazarr\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := config.BazarrConfig{URL: "http://b/bazarr", APIKey: "key", WebhookSecret: "sec"}
+	if cfg.Bazarr != want {
+		t.Fatalf("bazarr = %+v, want %+v", cfg.Bazarr, want)
+	}
+}
