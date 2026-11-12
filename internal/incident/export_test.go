@@ -297,3 +297,9 @@ func CardButtonVerbsForTest() []string {
 	}
 	return out
 }
+
+func (s *Service) SetApplyForTest(f func(ctx context.Context, id string, ev lifecycle.Event) (db.Applied, error)) {
+	s.applyFn = func(ctx context.Context, id string, ev lifecycle.Event, _ eventsFor) (db.Applied, error) {
+		return f(ctx, id, ev)
+	}
+}

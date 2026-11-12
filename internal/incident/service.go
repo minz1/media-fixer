@@ -47,6 +47,7 @@ type Service struct {
 	wake        chan struct{}
 
 	beforePlanLost func(id string)
+	applyFn        func(context.Context, string, lifecycle.Event, eventsFor) (db.Applied, error)
 
 	seerrAlertMu sync.Mutex
 	seerrAlertAt time.Time
@@ -93,6 +94,7 @@ func NewService(
 		wake:       make(chan struct{}, 1),
 		work:       work,
 	}
+	s.applyFn = s.apply
 	s.runs.wake = s.wakeReconciler
 	s.progressTimers = make(map[string]*time.Timer)
 	if paused, err := database.IsAutonomousPaused(base); err == nil {

@@ -451,3 +451,41 @@ func TestGate_RecordsAcrossAttempts(t *testing.T) {
 		t.Fatalf("records seen at each attempt start = %v, want [] then [tool_1]", before)
 	}
 }
+
+type countingObserver struct {
+	*observingAgent
+
+	runs atomic.Int32
+}
+
+func (a *countingObserver) Run(
+	ctx context.Context, inc *db.Incident, msgs []openai.ChatCompletionMessage, gate agent.Gate,
+) agent.RunExit {
+	a.runs.Add(1)
+	return a.observingAgent.Run(ctx, inc, msgs, gate)
+}
+
+func TestF6_TransientOutcomeWriteIsRetried(t *testing.T) {
+	t.Parallel()
+	ag := &countingObserver{observingAgent: newObservingAgent()}
+	ag.verifyAt = 3600
+	env := newLifecycleEnv(t, ag)
+	var finished atomic.Int32
+	env.svc.SetApplyForTest(func(ctx context.Context, id string, ev lifecycle.Event) (db.Applied, error) {
+		if ev.Kind == lifecycle.RunFinished && finished.Add(1) == 1 {
+			return db.Applied{}, errors.New("database is locked")
+		}
+		return env.svc.ApplyForTest(ctx, id, ev)
+	})
+	inc, err := env.svc.Handle(t.Context(), &incident.Report{
+		Source: "discord", ReportedBy: "alice", What: "cant_play", Title: "Locked once",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := env.waitStatusWithin(t, inc.ID, lifecycle.Verifying, loadedWaitTimeout)
+	if got.Status != lifecycle.Verifying || ag.runs.Load() != 1 || finished.Load() != 2 {
+		t.Fatalf("status %s runs %d RunFinished applies %d, want verifying 1 2",
+			got.Status, ag.runs.Load(), finished.Load())
+	}
+}

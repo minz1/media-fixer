@@ -46,6 +46,11 @@ func (s *Service) runVerification(ctx context.Context, inc *db.Incident, gen int
 	s.applyOutcome(ctx, inc.ID, ev)
 }
 
+const (
+	outcomeWriteTries = 3
+	outcomeWriteGap   = time.Second
+)
+
 func (s *Service) applyOutcome(ctx context.Context, id string, ev lifecycle.Event) {
 	if ctx.Err() != nil {
 		s.log.InfoContext(
@@ -58,7 +63,19 @@ func (s *Service) applyOutcome(ctx context.Context, id string, ev lifecycle.Even
 		)
 		return
 	}
-	_, err := s.apply(ctx, id, ev, nil)
+	var err error
+	for try := 1; try <= outcomeWriteTries; try++ {
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), attemptWriteTimeout)
+		_, err = s.applyFn(wctx, id, ev, nil)
+		cancel()
+		if err == nil || errors.Is(err, lifecycle.ErrStale) || errors.Is(err, lifecycle.ErrUnclaimed) {
+			break
+		}
+		if try < outcomeWriteTries {
+			s.log.WarnContext(ctx, "apply run outcome failed, retrying", "incident", id, "try", try, "error", err)
+			time.Sleep(time.Duration(try) * outcomeWriteGap)
+		}
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, lifecycle.ErrStale), errors.Is(err, lifecycle.ErrUnclaimed):
