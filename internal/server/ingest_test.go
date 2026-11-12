@@ -223,7 +223,7 @@ func TestSeerrIssueTypeMapping(t *testing.T) {
 	}{
 		{"VIDEO", "cant_play"},
 		{"AUDIO", "cant_play"},
-		{"SUBTITLES", "cant_play"},
+		{"SUBTITLES", "subtitles"},
 		{"OTHER", "other"},
 		{"UNKNOWN", "other"},
 	}

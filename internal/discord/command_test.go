@@ -25,3 +25,19 @@ func TestReportCommand_OffersBuffering(t *testing.T) {
 	}
 	t.Fatal("report command has no what option")
 }
+
+func TestG1_ReportOffersSubtitles(t *testing.T) {
+	t.Parallel()
+	for _, opt := range discord.ReportCommandForTest().Options {
+		if opt.Name != "what" {
+			continue
+		}
+		for _, c := range opt.Choices {
+			if c.Name == "Subtitles" && c.Value == "subtitles" {
+				return
+			}
+		}
+		t.Fatalf("what choices = %+v, want Subtitles", opt.Choices)
+	}
+	t.Fatal("report command has no what option")
+}

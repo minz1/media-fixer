@@ -918,6 +918,9 @@ var (
 	errStuckReadNoList = errors.New(
 		"list_directory is disabled for stuck_read incidents: it stats every file in the folder, " +
 			"and a stat of the stuck file would wedge too; use get_torrent_state and get_repair_status instead")
+	errSubtitlesNoServiceWide = errors.New(
+		"restart_jellyfin and jellyfin_library_scan are disabled for subtitle incidents: a subtitle defect is " +
+			"per-file and a service-wide action can't fix it; escalate with escalate_action=manual_investigation")
 )
 
 func (d *Dispatcher) readDDReadability(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
@@ -1327,6 +1330,9 @@ func (d *Dispatcher) dispatchCacheCleanup(ctx context.Context, c *toolCall, _ ma
 }
 
 func (d *Dispatcher) dispatchLibraryScan(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
+	if c.scope.What == WhatSubtitles {
+		return nil, errSubtitlesNoServiceWide
+	}
 	status, err := d.Jellyfin.ScanStatus(ctx)
 	if err == nil && status.Running {
 		return nil, refuseWith("a library scan is already running", map[string]any{
@@ -1433,6 +1439,9 @@ func (d *Dispatcher) jellyfinServing(ctx context.Context) error {
 }
 
 func (d *Dispatcher) dispatchRestartJellyfin(ctx context.Context, c *toolCall, _ map[string]any) (any, error) {
+	if c.scope.What == WhatSubtitles {
+		return nil, errSubtitlesNoServiceWide
+	}
 	sctx, actErr := c.act(ctx, nil)
 	if actErr != nil {
 		return nil, actErr

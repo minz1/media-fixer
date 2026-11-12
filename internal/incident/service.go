@@ -194,7 +194,7 @@ type Report struct {
 	ReportedBy        string
 	ReporterDiscordID string // empty for non-Discord sources
 	SeerrIssueID      string
-	What              string // "cant_play" | "buffering" | "login_failed" | "missing_media" | "other"
+	What              string // "cant_play" | "buffering" | "subtitles" | "login_failed" | "missing_media" | "other"
 	Title             string
 	JellyfinItemID    string
 	Details           string

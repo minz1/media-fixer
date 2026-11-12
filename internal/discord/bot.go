@@ -182,6 +182,7 @@ func reportCommand() *discordgo.ApplicationCommand {
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{Name: "Can't play", Value: "cant_play"},
 					{Name: "It plays but buffers / low quality", Value: "buffering"},
+					{Name: "Subtitles", Value: "subtitles"},
 					{Name: "Login failed", Value: "login_failed"},
 					{Name: "Missing media", Value: "missing_media"},
 					{Name: "Other", Value: "other"},

@@ -20,7 +20,10 @@ import (
 	"github.com/minz1/mediafixer/internal/operation"
 )
 
-const WhatStuckRead = "stuck_read"
+const (
+	WhatStuckRead = "stuck_read"
+	WhatSubtitles = "subtitles"
+)
 
 const systemPrompt = `You are a media stack diagnostic agent. You help troubleshoot problems
 in a self-hosted Jellyfin + decypharr (debrid FUSE mount) setup.

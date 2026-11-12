@@ -101,7 +101,9 @@ func (s *Server) handleSeerrWebhook(w http.ResponseWriter, r *http.Request) {
 
 func seerrIssueTypeToWhat(issueType string) string {
 	switch issueType {
-	case "VIDEO", "AUDIO", "SUBTITLES":
+	case "SUBTITLES":
+		return "subtitles"
+	case "VIDEO", "AUDIO":
 		return "cant_play"
 	default:
 		return "other"
