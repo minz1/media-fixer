@@ -219,37 +219,64 @@ func (d *DB) ListActedBefore(ctx context.Context, t time.Time) ([]StuckRow, erro
 	return queryStuck(ctx, d.read, `state = 'acted' AND acted_at < ?`, t.UTC())
 }
 
+type StuckStep struct {
+	App    string
+	Keys   []string
+	Decide func(cur map[string]*StuckRow) ([]StuckRow, []string, error)
+}
+
 func (d *DB) ApplyStuck(
 	ctx context.Context,
 	app string,
 	keys []string,
 	decide func(cur map[string]*StuckRow) ([]StuckRow, []string, error),
 ) error {
+	return d.ApplyStuckBatch(ctx, []StuckStep{{App: app, Keys: keys, Decide: decide}}, nil)
+}
+
+func (d *DB) ApplyStuckBatch(ctx context.Context, steps []StuckStep, outbox func() []OutboxRow) error {
 	return runTx(ctx, d.write, func(ctx context.Context, tx *sql.Tx) error {
-		rows, err := loadStuck(ctx, tx, app, keys)
-		if err != nil {
-			return err
-		}
-		cur := make(map[string]*StuckRow, len(rows))
-		for i := range rows {
-			cur[rows[i].DownloadID] = &rows[i]
-		}
-		put, del, err := decide(cur)
-		if err != nil {
-			return err
-		}
-		for _, id := range del {
-			if err = deleteStuck(ctx, tx, app, id); err != nil {
+		for _, s := range steps {
+			if err := applyStuckStep(ctx, tx, s); err != nil {
 				return err
 			}
 		}
-		for _, r := range put {
-			if err = upsertStuck(ctx, tx, r); err != nil {
+		if outbox == nil {
+			return nil
+		}
+		for _, r := range outbox() {
+			if err := enqueueOutbox(ctx, tx, r); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func applyStuckStep(ctx context.Context, tx *sql.Tx, s StuckStep) error {
+	rows, err := loadStuck(ctx, tx, s.App, s.Keys)
+	if err != nil {
+		return err
+	}
+	cur := make(map[string]*StuckRow, len(rows))
+	for i := range rows {
+		cur[rows[i].DownloadID] = &rows[i]
+	}
+	put, del, err := s.Decide(cur)
+	if err != nil {
+		return err
+	}
+	for _, id := range del {
+		if err = deleteStuck(ctx, tx, s.App, id); err != nil {
+			return err
+		}
+	}
+	for _, r := range put {
+		if err = upsertStuck(ctx, tx, r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func loadStuck(ctx context.Context, tx *sql.Tx, app string, keys []string) ([]StuckRow, error) {

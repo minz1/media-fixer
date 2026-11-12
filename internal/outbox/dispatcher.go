@@ -42,10 +42,17 @@ type Dispatcher struct {
 	now    func() time.Time
 	mu     sync.Mutex
 	failed func(ctx context.Context, r db.OutboxRow, now time.Time, err error) bool
+	gaveUp func(ctx context.Context, r db.OutboxRow, now time.Time)
 }
 
 func (d *Dispatcher) OnFailed(f func(ctx context.Context, r db.OutboxRow, now time.Time, err error) bool) {
 	d.failed = f
+}
+
+func (d *Dispatcher) OnGiveUp(f func(ctx context.Context, r db.OutboxRow, now time.Time)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.gaveUp = f
 }
 
 func (d *Dispatcher) Flush(ctx context.Context, now time.Time) {
@@ -129,6 +136,10 @@ func (d *Dispatcher) giveUp(ctx context.Context, r db.OutboxRow, now time.Time, 
 		"attempts", r.Attempts, "reason", why)
 	if err := d.db.GiveUpOutbox(ctx, r.ID, now); err != nil {
 		d.log.WarnContext(ctx, "outbox give up", "id", r.ID, "error", err)
+		return
+	}
+	if d.gaveUp != nil {
+		d.gaveUp(ctx, r, now)
 	}
 }
 

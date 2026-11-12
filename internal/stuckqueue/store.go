@@ -49,6 +49,18 @@ func fromRow(r db.StuckRow) Snapshot {
 }
 
 func (r *Runner) apply(ctx context.Context, app App, events map[Key]Event) ([]Snapshot, []Effect, error) {
+	var snaps []Snapshot
+	var effs []Effect
+	s := r.stepFor(ctx, app, events, &snaps, &effs)
+	if err := r.DB.ApplyStuck(ctx, s.App, s.Keys, s.Decide); err != nil {
+		return nil, nil, err
+	}
+	return snaps, effs, nil
+}
+
+func (r *Runner) stepFor(
+	ctx context.Context, app App, events map[Key]Event, snaps *[]Snapshot, effs *[]Effect,
+) db.StuckStep {
 	keys := make([]string, 0, len(events))
 	for k := range events {
 		if k.App == app {
@@ -56,18 +68,14 @@ func (r *Runner) apply(ctx context.Context, app App, events map[Key]Event) ([]Sn
 		}
 	}
 	slices.Sort(keys)
-	var snaps []Snapshot
-	var effs []Effect
-	err := r.DB.ApplyStuck(ctx, string(app), keys, func(cur map[string]*db.StuckRow) ([]db.StuckRow, []string, error) {
+	return db.StuckStep{App: string(app), Keys: keys, Decide: func(cur map[string]*db.StuckRow) (
+		[]db.StuckRow, []string, error,
+	) {
 		var put []db.StuckRow
 		var del []string
-		snaps, effs, put, del = r.stepRows(ctx, app, cur, keys, events)
+		*snaps, *effs, put, del = r.stepRows(ctx, app, cur, keys, events)
 		return put, del, nil
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return snaps, effs, nil
+	}}
 }
 
 func (r *Runner) stepRows(

@@ -110,8 +110,10 @@ func startSweep(
 func startStuckQueue(
 	ctx context.Context, clients *clientset.Set, database *db.DB, bot *discord.Bot,
 	srv *server.Server, log *slog.Logger, handlers map[string]card.Handler, renderers map[string]card.Renderer,
+	ob *outbox.Dispatcher,
 ) *stuckqueue.Scheduler {
-	r := &stuckqueue.Runner{DB: database, Notify: bot.NotifyOwner, Now: time.Now, Log: log}
+	r := &stuckqueue.Runner{DB: database, Wake: ob.Wake, Now: time.Now, Log: log}
+	ob.OnGiveUp(r.GaveUp)
 	if clients.Sonarr.Configured() {
 		r.Sonarr = clients.Sonarr
 	}
@@ -145,11 +147,11 @@ func newStuckRead(clients *clientset.Set, svc *incident.Service, database *db.DB
 func startMaintenance(
 	ctx context.Context, cfg *config.Config, bundle *agentBundle, database *db.DB,
 	bot *discord.Bot, srv *server.Server, log *slog.Logger,
-	handlers map[string]card.Handler, renderers map[string]card.Renderer, sr *stuckread.Watcher,
+	handlers map[string]card.Handler, renderers map[string]card.Renderer, sr *stuckread.Watcher, ob *outbox.Dispatcher,
 ) []step {
 	clients := bundle.clients
 	sweepSch := startSweep(ctx, clients.Sonarr, database, bot, srv, log, renderers)
-	stuckSch := startStuckQueue(ctx, clients, database, bot, srv, log, handlers, renderers)
+	stuckSch := startStuckQueue(ctx, clients, database, bot, srv, log, handlers, renderers, ob)
 	if sweepSch != nil && stuckSch != nil {
 		srv.SetBabysit(&babysit.Service{
 			DB: database, Sonarr: clients.Sonarr, State: stuckSch.State, LLM: bundle.summary,
@@ -290,7 +292,7 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 		interrupt: func() error { return interruptOperations(ctx, a.database, a.log) },
 		maintenance: func() {
 			maintenance = startMaintenance(
-				ctx, a.cfg, a.bundle, a.database, a.bot, a.srv, a.log, handlers, renderers, a.sr)
+				ctx, a.cfg, a.bundle, a.database, a.bot, a.srv, a.log, handlers, renderers, a.sr, a.outbox)
 			maintenance = append(maintenance, startJellyfinEvents(ctx, a.jws)...)
 		},
 		cards: func() { unsub = startCards(ctx, a.bot, a.database, a.jrnl, handlers, renderers) },

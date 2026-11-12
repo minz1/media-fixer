@@ -18,6 +18,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/outbox"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -71,7 +72,23 @@ type runEnv struct {
 	dms            []string
 	cards          []card.Card
 	notifyErr      error
+	disp           *outbox.Dispatcher
+	notify         func(context.Context, card.Card) error
 }
+
+type envSender struct{ e *runEnv }
+
+func (s envSender) NotifyOwner(ctx context.Context, c card.Card) error { return s.e.notify(ctx, c) }
+
+func (envSender) NotifyUser(context.Context, string, card.Card) error {
+	return errors.New("no users here")
+}
+
+func (envSender) SeerrComment(context.Context, string, string) error {
+	return errors.New("no seerr here")
+}
+
+func (envSender) SeerrResolve(context.Context, string) error { return errors.New("no seerr here") }
 
 func newRunEnv(t *testing.T) *runEnv {
 	t.Helper()
@@ -86,20 +103,23 @@ func newRunEnv(t *testing.T) *runEnv {
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	e.db = d
-	e.runner = &stuckqueue.Runner{
-		Sonarr: e.sonarr.client(), Radarr: e.radarr.client(), DB: d, Now: e.clock.Now,
-		Log: slog.New(slog.NewTextHandler(e.logs, nil)),
-		Notify: func(_ context.Context, msg card.Card) error {
-			e.mu.Lock()
-			defer e.mu.Unlock()
-			if e.notifyErr != nil {
-				return e.notifyErr
-			}
-			e.dms = append(e.dms, msg.Plain())
-			e.cards = append(e.cards, msg)
-			return nil
-		},
+	log := slog.New(slog.NewTextHandler(e.logs, nil))
+	e.notify = func(_ context.Context, msg card.Card) error {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.notifyErr != nil {
+			return e.notifyErr
+		}
+		e.dms = append(e.dms, msg.Plain())
+		e.cards = append(e.cards, msg)
+		return nil
 	}
+	e.disp = outbox.New(d, envSender{e}, log)
+	e.runner = &stuckqueue.Runner{
+		Sonarr: e.sonarr.client(), Radarr: e.radarr.client(), DB: d, Now: e.clock.Now, Log: log,
+		Wake: func() { e.disp.Flush(context.Background(), e.clock.Now()) },
+	}
+	e.disp.OnGiveUp(e.runner.GaveUp)
 	return e
 }
 
@@ -412,6 +432,7 @@ func TestRun_DMFailureRetries(t *testing.T) {
 	e.mu.Unlock()
 	e.clock.Add(time.Hour)
 	e.runner.Run(context.Background(), liveSettings())
+	e.disp.Flush(context.Background(), e.clock.Now())
 	if dms := e.dmsCopy(); len(dms) != 1 || !strings.Contains(dms[0], "NOVA") {
 		t.Fatalf("dms = %q", dms)
 	}
@@ -422,7 +443,7 @@ func TestRun_UntrackedDMCountsDelivered(t *testing.T) {
 	e := newRunEnv(t)
 	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
 	sends := 0
-	e.runner.Notify = func(context.Context, card.Card) error {
+	e.notify = func(context.Context, card.Card) error {
 		sends++
 		return fmt.Errorf("discord: %w", card.ErrUntracked)
 	}
@@ -593,7 +614,7 @@ func (e *runEnv) rowOf(t *testing.T, id string) (db.StuckRow, bool) {
 
 func (e *runEnv) sendCounter() *int {
 	n := new(int)
-	e.runner.Notify = func(context.Context, card.Card) error {
+	e.notify = func(context.Context, card.Card) error {
 		*n++
 		return nil
 	}
@@ -601,14 +622,11 @@ func (e *runEnv) sendCounter() *int {
 }
 
 func (e *runEnv) failingSends(sends *int, err error) {
-	e.runner.Notify = func(context.Context, card.Card) error {
+	e.notify = func(context.Context, card.Card) error {
 		*sends++
 		return err
 	}
 }
-
-const failReleases = `CREATE TRIGGER IF NOT EXISTS refuse_release BEFORE UPDATE ON stuck_downloads
-	WHEN NEW.state = 'due' BEGIN SELECT RAISE(ABORT, 'refused'); END`
 
 const failClaims = `CREATE TRIGGER refuse_claim BEFORE UPDATE ON stuck_downloads WHEN NEW.state = 'notified'
 	BEGIN SELECT RAISE(ABORT, 'refused'); END`
@@ -635,55 +653,6 @@ func TestQ1_10_ClaimWriteFailureSendsNothing(t *testing.T) {
 	e.runner.Run(context.Background(), liveSettings())
 	if dms := e.dmsCopy(); len(dms) != 1 {
 		t.Fatalf("dms = %q, want one once the claim works", dms)
-	}
-}
-
-func TestQ1_10_SendFailureReleasesClaimAndRetriesOnce(t *testing.T) {
-	t.Parallel()
-	e := newRunEnv(t)
-	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
-	e.runner.Run(context.Background(), liveSettings())
-	sends := 0
-	e.failingSends(&sends, errors.New("discord down"))
-	e.clock.Add(6 * time.Hour)
-	e.runner.Run(context.Background(), liveSettings())
-	row, _ := e.rowOf(t, "D2")
-	if sends != 1 || row.State != "due" || !row.NotifiedAt.IsZero() {
-		t.Fatalf("sends = %d, row = %+v; want one failed send and the claim released", sends, row)
-	}
-	ok := e.sendCounter()
-	for range 3 {
-		e.clock.Add(time.Hour)
-		e.runner.Run(context.Background(), liveSettings())
-	}
-	if *ok != 1 {
-		t.Fatalf("retries = %d, want exactly one", *ok)
-	}
-}
-
-func TestQ1_10_FailedReleaseNeverDMsTwice(t *testing.T) {
-	t.Parallel()
-	e := newRunEnv(t)
-	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
-	e.runner.Run(context.Background(), liveSettings())
-	sends := 0
-	e.runner.Notify = func(context.Context, card.Card) error {
-		sends++
-		e.rawExec(t, failReleases)
-		return errors.New("discord down")
-	}
-	e.clock.Add(6 * time.Hour)
-	e.runner.Run(context.Background(), liveSettings())
-	for range 3 {
-		e.clock.Add(time.Hour)
-		e.runner.Run(context.Background(), liveSettings())
-	}
-	if sends != 1 {
-		t.Fatalf("sends = %d, want 1", sends)
-	}
-	if logs := e.logs.String(); !strings.Contains(logs, "level=ERROR") ||
-		!strings.Contains(logs, "stuck-queue: notification lost") || !strings.Contains(logs, "count=1") {
-		t.Fatalf("logs = %s", logs)
 	}
 }
 
@@ -872,5 +841,64 @@ func TestDeadColumns_OldTableNeverWritten(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("the old table has %d rows after runs", n)
+	}
+}
+
+func TestF10_SendFailureKeepsClaimAndOutboxRetries(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.runner.Run(context.Background(), liveSettings())
+	sends := 0
+	e.failingSends(&sends, errors.New("discord down"))
+	e.clock.Add(6 * time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	row, _ := e.rowOf(t, "D2")
+	if sends != 1 || row.State != "notified" {
+		t.Fatalf("sends = %d, row = %+v; want one failed send and the claim kept", sends, row)
+	}
+	ok := e.sendCounter()
+	for range 3 {
+		e.clock.Add(time.Hour)
+		e.runner.Run(context.Background(), liveSettings())
+		e.disp.Flush(context.Background(), e.clock.Now())
+	}
+	if *ok != 1 {
+		t.Fatalf("retries = %d, want exactly one", *ok)
+	}
+}
+
+func TestF10_GiveUpReleasesClaim(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	sends := 0
+	e.failingSends(&sends, errors.New("discord down"))
+	e.agedRun(liveSettings())
+	e.clock.Add(25 * time.Hour)
+	e.disp.Flush(context.Background(), e.clock.Now())
+	if row, _ := e.rowOf(t, "D2"); row.State != "due" {
+		t.Fatalf("row = %+v, want the claim released after the outbox gave up", row)
+	}
+	ok := e.sendCounter()
+	e.clock.Add(time.Hour)
+	e.runner.Run(context.Background(), liveSettings())
+	if *ok != 1 {
+		t.Fatalf("sends after release = %d, want 1", *ok)
+	}
+}
+
+func TestF10_ClaimedRowIsSentAfterCrash(t *testing.T) {
+	t.Parallel()
+	e := newRunEnv(t)
+	e.sonarr.set(rawRec(2, "D2", "NOVA", 1, false, sample))
+	e.runner.Wake = func() {}
+	e.agedRun(liveSettings())
+	if row, _ := e.rowOf(t, "D2"); row.State != "notified" || len(e.dmsCopy()) != 0 {
+		t.Fatalf("row = %+v, dms %q; want claimed and nothing sent", row, e.dmsCopy())
+	}
+	outbox.New(e.db, envSender{e}, slog.New(slog.DiscardHandler)).Flush(context.Background(), e.clock.Now())
+	if dms := e.dmsCopy(); len(dms) != 1 || !strings.Contains(dms[0], "NOVA") {
+		t.Fatalf("dms = %q, want one owner DM listing the claimed download", dms)
 	}
 }

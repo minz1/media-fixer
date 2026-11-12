@@ -3,13 +3,15 @@ package stuckqueue
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
 )
@@ -66,7 +68,7 @@ type Runner struct {
 	Sonarr *client.ArrClient
 	Radarr *client.ArrClient
 	DB     *db.DB
-	Notify func(context.Context, card.Card) error
+	Wake   func()
 	Now    func() time.Time
 	Log    *slog.Logger
 }
@@ -356,28 +358,96 @@ func offered(d Download, v Verdict, guardErr error) []Action {
 }
 
 func (r *Runner) notify(ctx context.Context, due []Item, capHit bool) {
-	if (len(due) == 0 && !capHit) || r.Notify == nil {
+	if (len(due) == 0 && !capHit) || r.Wake == nil {
 		return
 	}
 	slices.SortStableFunc(due, func(a, b Item) int { return cmp.Compare(b.Age, a.Age) })
 	c, shown := stuckCard(due, capHit)
 	claimAt := r.Now()
-	claimed := r.claim(ctx, due[:shown], claimAt)
-	if len(due) > 0 && len(claimed) == 0 {
+	items := due[:shown]
+	won := map[Key]bool{}
+	steps := r.claimSteps(ctx, items, claimAt, won)
+	var overflow []Item
+	queue := func() []db.OutboxRow {
+		claimed := slices.DeleteFunc(slices.Clone(items), func(it Item) bool {
+			return !won[Key{App: it.App, DownloadID: it.DownloadID}]
+		})
+		if len(items) > 0 && len(claimed) == 0 {
+			return nil
+		}
+		if len(claimed) < shown {
+			var fit int
+			c, fit = stuckCard(claimed, capHit)
+			overflow = claimed[fit:]
+		}
+		first := ""
+		if len(claimed) > 0 {
+			first = string(claimed[0].App) + "/" + claimed[0].DownloadID
+		}
+		body, _ := json.Marshal(c)
+		return []db.OutboxRow{{Key: fmt.Sprintf("%s%d:%s", stuckKeyPrefix, claimAt.UnixNano(), first), Target: "owner",
+			Kind: "card", Body: string(body), CreatedAt: claimAt, NextAt: claimAt}}
+	}
+	if err := r.DB.ApplyStuckBatch(ctx, steps, queue); err != nil {
+		r.logger().WarnContext(ctx, "stuck-queue: claim failed; sending nothing", "err", err)
 		return
 	}
-	if len(claimed) < shown {
-		var fit int
-		c, fit = stuckCard(claimed, capHit)
-		if fit < len(claimed) {
-			r.release(ctx, claimed[fit:], claimAt)
-			claimed = claimed[:fit]
+	if len(overflow) > 0 {
+		r.release(ctx, overflow, claimAt)
+	}
+	r.Wake()
+}
+
+func (r *Runner) claimSteps(ctx context.Context, items []Item, claimAt time.Time, won map[Key]bool) []db.StuckStep {
+	steps := make([]db.StuckStep, 0, len(allApps()))
+	for _, a := range allApps() {
+		events := itemEvents(items, a, Event{Kind: EvClaimed, At: claimAt})
+		if len(events) == 0 {
+			continue
+		}
+		var snaps []Snapshot
+		var effs []Effect
+		step := r.stepFor(ctx, a, events, &snaps, &effs)
+		decide := step.Decide
+		step.Decide = func(cur map[string]*db.StuckRow) ([]db.StuckRow, []string, error) {
+			put, del, err := decide(cur)
+			for _, s := range snaps {
+				if s.State == StateNotified && s.NotifiedAt.Equal(claimAt) {
+					won[s.Key] = true
+				}
+			}
+			return put, del, err
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+const stuckKeyPrefix = "stuck:"
+
+func (r *Runner) GaveUp(ctx context.Context, row db.OutboxRow, _ time.Time) {
+	rest, ok := strings.CutPrefix(row.Key, stuckKeyPrefix)
+	if !ok {
+		return
+	}
+	nanos, _, _ := strings.Cut(rest, ":")
+	n, err := strconv.ParseInt(nanos, 10, 64)
+	if err != nil {
+		return
+	}
+	at := time.Unix(0, n)
+	rows, err := r.DB.ListStuckInState(ctx, string(StateNotified))
+	if err != nil {
+		r.logger().ErrorContext(ctx, "stuck-queue: list claims to release", "err", err)
+		return
+	}
+	var items []Item
+	for _, s := range rows {
+		if s.NotifiedAt.Equal(at) {
+			items = append(items, Item{App: App(s.App), DownloadID: s.DownloadID})
 		}
 	}
-	if err := r.Notify(ctx, c); err != nil && !errors.Is(err, card.ErrUntracked) {
-		r.logger().WarnContext(ctx, "stuck-queue: owner DM failed; will retry next run", "err", err)
-		r.release(ctx, claimed, claimAt)
-	}
+	r.release(ctx, items, at)
 }
 
 func itemEvents(items []Item, app App, ev Event) map[Key]Event {
@@ -388,29 +458,6 @@ func itemEvents(items []Item, app App, ev Event) map[Key]Event {
 		}
 	}
 	return out
-}
-
-func (r *Runner) claim(ctx context.Context, items []Item, at time.Time) []Item {
-	won := map[Key]bool{}
-	for _, a := range allApps() {
-		events := itemEvents(items, a, Event{Kind: EvClaimed, At: at})
-		if len(events) == 0 {
-			continue
-		}
-		snaps, _, err := r.apply(ctx, a, events)
-		if err != nil {
-			r.logger().WarnContext(ctx, "stuck-queue: claim failed; sending nothing for this app", "app", a, "err", err)
-			continue
-		}
-		for _, s := range snaps {
-			if s.State == StateNotified && s.NotifiedAt.Equal(at) {
-				won[s.Key] = true
-			}
-		}
-	}
-	return slices.DeleteFunc(slices.Clone(items), func(it Item) bool {
-		return !won[Key{App: it.App, DownloadID: it.DownloadID}]
-	})
 }
 
 func (r *Runner) release(ctx context.Context, items []Item, at time.Time) {
