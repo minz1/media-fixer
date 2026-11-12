@@ -222,9 +222,11 @@ func (s *Service) Handle(ctx context.Context, r *Report) (*db.Incident, error) {
 	release := s.runs.reserve(nr.ID)
 	defer release()
 	t := s.timers(ctx)
-	nr.Render = s.render(t, r.SeerrIssueID)
+	var unclaim func()
+	nr.Render, unclaim = s.render(t, r.SeerrIssueID)
 	a, err := s.db.CreateFromReport(ctx, nr, s.decide(lifecycle.Event{Kind: lifecycle.Reported}, s.limits(t), nil, nil))
 	if err != nil {
+		unclaim()
 		return nil, fmt.Errorf("record report: %w", err)
 	}
 	if a.Merged {

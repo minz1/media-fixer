@@ -62,8 +62,10 @@ func (s *Service) apply(ctx context.Context, id string, ev lifecycle.Event, extr
 	release := s.runs.reserve(id)
 	defer release()
 	t := s.timers(ctx)
-	a, err := s.db.ApplyIncident(ctx, id, s.decide(ev, s.limits(t), extra, s.render(t, "")))
+	render, unclaim := s.render(t, "")
+	a, err := s.db.ApplyIncident(ctx, id, s.decide(ev, s.limits(t), extra, render))
 	if err != nil {
+		unclaim()
 		if errors.Is(err, lifecycle.ErrNoSpec) {
 			s.log.ErrorContext(ctx, "owner approve without an operation spec", "reject", "no_spec", "incident", id)
 		}

@@ -325,6 +325,34 @@ func TestHandle_SystemicLockRetriesFailedAlert(t *testing.T) {
 	}
 }
 
+func TestF9_SystemicAlertClaimReleasedOnFailedCommit(t *testing.T) {
+	t.Parallel()
+	e := newLifecycleEnv(t, nil)
+	ctx := context.Background()
+	report := func(title string) error {
+		_, err := e.svc.Handle(ctx, &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: title})
+		return err
+	}
+	for _, title := range []string{"A", "B", "C", "D", "E"} {
+		if err := report(title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.exec(t, `CREATE TRIGGER refuse_alert BEFORE INSERT ON notify_outbox WHEN NEW.target = 'owner'
+		BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+	if err := report("F"); err == nil {
+		t.Fatal("the refused alert row did not fail the report")
+	}
+	e.exec(t, `DROP TRIGGER refuse_alert`)
+	if err := report("G"); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.FlushOutboxForTest(ctx, time.Now())
+	if n := len(e.notif.owner); n != 1 {
+		t.Fatalf("owner cards = %d, want 1: the rolled-back alert still held the claim", n)
+	}
+}
+
 func TestHandle_SystemicLockRealertsAfterConfiguredGap(t *testing.T) {
 	t.Parallel()
 	svc, database, notif := newTestService(t)

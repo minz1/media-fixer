@@ -61,14 +61,22 @@ func (s *Service) reporterNotes(key string, c card.Card, gap time.Duration) []db
 	return notes
 }
 
-func (s *Service) render(t Timers, seerrIssue string) db.Render {
-	return func(inc *db.Incident, snap lifecycle.Snapshot, effects []lifecycle.Effect) db.Outgoing {
+func (s *Service) render(t Timers, seerrIssue string) (db.Render, func()) {
+	var before, after int64
+	r := func(inc *db.Incident, snap lifecycle.Snapshot, effects []lifecycle.Effect) db.Outgoing {
 		var o db.Outgoing
+		before = s.lockAlertAt.Load()
 		base := fmt.Sprintf("inc:%s:g%d:v%d:%d", snap.ID, snap.Generation, snap.Version, time.Now().UnixNano())
 		for i, e := range effects {
 			s.renderEffect(&o, fmt.Sprintf("%s:%d", base, i), inc, snap, e, t, seerrIssue)
 		}
+		after = s.lockAlertAt.Load()
 		return o
+	}
+	return r, func() {
+		if after != before {
+			s.lockAlertAt.CompareAndSwap(after, before)
+		}
 	}
 }
 
