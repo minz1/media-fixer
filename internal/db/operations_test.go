@@ -207,6 +207,7 @@ func TestMigration22_SyntheticSnapshotShape(t *testing.T) {
 	}
 	delete(after, "operations")
 	delete(after, "stuck_downloads")
+	delete(after, "notify_outbox")
 	delete(after, "schema_version")
 	delete(before, "schema_version")
 	if !reflect.DeepEqual(before, after) {

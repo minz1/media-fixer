@@ -81,9 +81,11 @@ func MigrateDown(ctx context.Context, path string, version int, out io.Writer) e
 		run = migrateDownOn
 	case migOperations:
 		run = migrateDown22On
+	case migNotifyOutbox:
+		run = migrateDown26On
 	default:
-		return fmt.Errorf("%w: only migrations %d and %d can be rolled back",
-			ErrDownRefused, migIncidentLifecycle, migOperations)
+		return fmt.Errorf("%w: only migrations %d, %d and %d can be rolled back",
+			ErrDownRefused, migIncidentLifecycle, migOperations, migNotifyOutbox)
 	}
 	lock, err := takeLock(path, true)
 	if err != nil {

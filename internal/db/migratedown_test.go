@@ -401,8 +401,21 @@ func TestMigrateDown_PrintsCountsChangedRowsAndIdsOnly(t *testing.T) {
 	}
 }
 
+func strip26(t *testing.T, path string) {
+	t.Helper()
+	raw := rawOpen(t, path)
+	defer raw.Close()
+	if maxVersion(t, raw) != 26 {
+		return
+	}
+	mustExec(t, raw, `DROP TABLE notify_outbox`)
+	mustExec(t, raw, `ALTER TABLE incidents DROP COLUMN last_seerr_note_at`)
+	mustExec(t, raw, `DELETE FROM schema_version WHERE version = 26`)
+}
+
 func strip25(t *testing.T, path string) {
 	t.Helper()
+	strip26(t, path)
 	raw := rawOpen(t, path)
 	defer raw.Close()
 	if maxVersion(t, raw) != 25 {
