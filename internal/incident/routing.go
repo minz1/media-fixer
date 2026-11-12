@@ -137,10 +137,10 @@ func (s *Service) handleAgentError(ctx context.Context, inc *db.Incident, gen in
 func surfaceCard(inc *db.Incident, result *agent.DiagnosticResult, note string) card.Card {
 	return ownerCard(inc, card.Warn, fmt.Sprintf(
 		"🔍 Incident **%s** (#%s) needs your attention%s.", inc.Title, inc.ShortID(), note,
-	), "",
+	), "", withSubtitleSearch(inc, result,
 		card.Field{Name: fieldRootCause, Value: result.RootCause},
 		card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)},
-		card.Field{Name: fieldReason, Value: result.PrimaryReason})
+		card.Field{Name: fieldReason, Value: result.PrimaryReason})...)
 }
 
 func (s *Service) surfaceToOwner(

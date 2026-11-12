@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident/lifecycle"
@@ -119,8 +120,13 @@ func isNotify(k lifecycle.EffectKind) bool {
 func (s *Service) reporterNote(inc *db.Incident, e lifecycle.Effect, t Timers) (card.Card, time.Duration, bool) {
 	switch e.Note {
 	case lifecycle.NoteFixed:
-		return reporterCard(card.Success,
-			fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title)), 0, true
+		body := fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title)
+		if result, ok := agent.ParseDiagnosticResult(inc.Finding); ok && inc.What == "subtitles" {
+			if f, has := subtitleSearchField(result.SubtitleSearch); has && f.Name == fieldDownloaded {
+				body += "\n" + f.Name + ": " + f.Value
+			}
+		}
+		return reporterCard(card.Success, body), 0, true
 	case lifecycle.NoteSearching:
 		return reporterCard(card.Info, fmt.Sprintf(
 			"🔎 Searching for **%s** — we'll let you know once it's downloading.", inc.Title)), 0, true

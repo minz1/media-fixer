@@ -287,7 +287,7 @@ func (s *Service) settleScan(ctx context.Context, ended time.Time) error {
 func (s *Service) notVerified(inc *db.Incident) lifecycle.Notice {
 	fields := []card.Field{}
 	if result, ok := agent.ParseDiagnosticResult(inc.Finding); ok {
-		fields = append(fields,
+		fields = withSubtitleSearch(inc, result,
 			card.Field{Name: fieldRootCause, Value: result.RootCause},
 			card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)},
 			card.Field{Name: fieldReason, Value: result.PrimaryReason})

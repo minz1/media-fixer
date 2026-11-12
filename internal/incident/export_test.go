@@ -294,3 +294,16 @@ func (s *Service) SetApplyForTest(f func(ctx context.Context, id string, ev life
 func (s *Service) PausedForTest() bool { return s.paused.Load() }
 
 func (s *Service) FlushOutboxForTest(ctx context.Context, now time.Time) { s.outbox.Flush(ctx, now) }
+
+func SurfaceCardForTest(inc *db.Incident, result *agent.DiagnosticResult, note string) card.Card {
+	return surfaceCard(inc, result, note)
+}
+
+func (s *Service) NotVerifiedForTest(inc *db.Incident) lifecycle.Notice {
+	return s.notVerified(inc)
+}
+
+func (s *Service) FixedNoteForTest(inc *db.Incident) string {
+	c, _, _ := s.reporterNote(inc, lifecycle.Effect{Note: lifecycle.NoteFixed}, Timers{})
+	return c.Body
+}

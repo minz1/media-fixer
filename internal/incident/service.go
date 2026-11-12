@@ -354,7 +354,9 @@ func (s *Service) evaluateDiagnosis(
 			"⚠️ Control reviewer flagged a potentially unreliable diagnosis for **%s** (#%s).",
 			inc.Title,
 			inc.ShortID(),
-		), "", card.Field{Name: fieldRootCause, Value: result.RootCause}, card.Field{Name: "Concern", Value: verdict.Reason}))
+		), "", withSubtitleSearch(inc, result,
+			card.Field{Name: fieldRootCause, Value: result.RootCause},
+			card.Field{Name: "Concern", Value: verdict.Reason})...))
 		return diagnosisOutcome{done: true}
 
 	case agent.VerdictSuggestAlternative:
@@ -362,9 +364,9 @@ func (s *Service) evaluateDiagnosis(
 			s.escalate(ctx, inc, gen, lifecycle.ReasonNeedsOwner, ownerCard(inc, card.Warn, fmt.Sprintf(
 				"⚠️ **%s** (#%s): agent still needs approval after %d retries.",
 				inc.Title, inc.ShortID(), attempt+1,
-			), "",
+			), "", withSubtitleSearch(inc, result,
 				card.Field{Name: fieldRootCause, Value: result.RootCause},
-				card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)}))
+				card.Field{Name: fieldAction, Value: agent.EscalationSummary(result)})...))
 			return diagnosisOutcome{done: true}
 		}
 		feedback := openai.ChatCompletionMessage{
