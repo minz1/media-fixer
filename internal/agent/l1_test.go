@@ -226,3 +226,39 @@ func TestL1_HistoryReadErrorBlocksDisruptive(t *testing.T) {
 		})
 	}
 }
+
+func TestL11_OwnerRerunCanRetrackDownload(t *testing.T) {
+	t.Parallel()
+	applied := map[string]any{
+		"media_type": "tv", "title": "Rick and Morty", "season": float64(9), "episode": float64(7),
+	}
+	for _, tc := range []struct {
+		name       string
+		ownerRerun bool
+		tool       string
+		want       int
+	}{
+		{"owner rerun lifts the search guard", true, "arr_search_missing", 1},
+		{"stale relaunch keeps the guard", false, "arr_search_missing", 0},
+		{"owner rerun keeps the guard for other tools", true, "restart_jellyfin", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, srv := newCallServer(t)
+			args, params := searchEpisode7, applied
+			if tc.tool != "arr_search_missing" {
+				args, params = `{}`, nil
+			}
+			ag, database, inc := newRig(t, srv.URL, script(tc.tool, args), rigOpts{})
+			seedApplied(t, database, inc.ID, inc.Generation-1, tc.tool, params)
+			if tc.ownerRerun {
+				seedOwnerRerun(t, database, inc.ID, inc.Generation)
+			}
+			g := newRecGate(database, inc)
+			ag.Run(context.Background(), inc, nil, g)
+			if got := g.acted(); len(got) != tc.want {
+				t.Errorf("Act ran %v, want %d", got, tc.want)
+			}
+		})
+	}
+}

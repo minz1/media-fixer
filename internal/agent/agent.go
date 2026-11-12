@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -1498,8 +1499,17 @@ func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID, action, ar
 	if search {
 		args = resolveSearchScope(args)
 	}
+	lifted := search && a.journal != nil
+	var log journal.AttemptLog
+	if lifted {
+		log, err = a.journal.ActionAttempts(ctx, incidentID)
+		lifted = err == nil && log.OwnerRerun > 0
+	}
 	for _, act := range actions {
 		if act.Action != action || act.Status != db.ActionApplied {
+			continue
+		}
+		if lifted && !appliedSince(log, act, log.OwnerRerun) {
 			continue
 		}
 		params, _ := act.Params.(map[string]any)
@@ -1645,4 +1655,14 @@ func repeatMessage(tool string, rec CallRecord) string {
 	}
 	return fmt.Sprintf("%s (with these parameters) was %s. Do not repeat it. Choose a different action, "+
 		"or call complete_diagnosis with your current findings.", tool, earlier)
+}
+
+func appliedSince(log journal.AttemptLog, act *db.ActionLog, gen int64) bool {
+	for _, done := range log.Applied {
+		if done.Generation >= gen && done.Action == act.Action && done.Status == string(act.Status) &&
+			reflect.DeepEqual(done.Params, act.Params) {
+			return true
+		}
+	}
+	return false
 }
