@@ -60,6 +60,7 @@ func readCheckSpecs() []checkSpec {
 		{Tool: "jellyfin_list_episodes", Run: checkJellyfinListEpisodes},
 		{Tool: "jellyfin_scan_status", Run: checkJellyfinScanStatus},
 		{Tool: "dd_readability_test", Run: checkDDReadability},
+		{Tool: "probe_streams", Run: checkProbeStreams},
 		{Tool: "get_torrent_state", Run: checkGetTorrentState},
 		{Tool: "loki_query", Run: checkLokiQuery},
 		{Tool: "list_directory", Run: checkListDirectory},
@@ -135,6 +136,14 @@ func checkDDReadability(ctx context.Context, disp *agent.Dispatcher, fx *Fixture
 		return degraded("no fixture: no sample file discovered")
 	}
 	result, err := disp.Call(ctx, "dd_readability_test", map[string]any{argFilePath: fx.SamplePath})
+	return classify(result, err)
+}
+
+func checkProbeStreams(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.SamplePath == "" {
+		return degraded("no fixture: no sample file discovered")
+	}
+	result, err := disp.Call(ctx, "probe_streams", map[string]any{argFilePath: fx.SamplePath})
 	return classify(result, err)
 }
 

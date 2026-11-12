@@ -52,6 +52,7 @@ func TestD11_3_UnconfiguredServicesShowUnconfigured(t *testing.T) {
 		"sonarr_rescan":           "sonarr not configured",
 		"radarr_rescan":           "radarr not configured",
 		"dd_readability_test":     "media-agent not configured",
+		"probe_streams":           "media-agent not configured",
 		"list_directory":          "media-agent not configured",
 		"get_disk_info":           "media-agent not configured",
 		"restart_decypharr":       "media-agent not configured",

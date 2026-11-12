@@ -82,3 +82,34 @@ func TestG1_PromptHasSubtitleProtocol(t *testing.T) {
 		}
 	}
 }
+
+func TestB2_ProbeStreamsRefusedOnStuckRead(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"streams": []any{}})
+	}))
+	t.Cleanup(srv.Close)
+	disp := &agent.Dispatcher{MediaAgent: client.NewMediaAgent(srv.URL, "")}
+	args := map[string]any{"file_path": "/mnt/x.mkv"}
+
+	_, err := disp.CallScoped(context.Background(), agent.Scope{What: agent.WhatStuckRead}, "probe_streams", args)
+	if err == nil || !strings.Contains(err.Error(), "probe_streams is disabled for stuck_read incidents") {
+		t.Fatalf("stuck_read err = %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("stuck_read reached media-agent: %d requests", hits.Load())
+	}
+	if _, err = disp.CallScoped(
+		context.Background(),
+		agent.Scope{What: agent.WhatSubtitles},
+		"probe_streams",
+		args,
+	); err != nil {
+		t.Fatalf("subtitles: %v", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("subtitles requests = %d, want 1", hits.Load())
+	}
+}

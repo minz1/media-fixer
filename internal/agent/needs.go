@@ -84,6 +84,7 @@ func toolNeeds() map[string]toolNeed {
 		toolSonarrRescan:         needSonarr,
 		toolRadarrRescan:         needRadarr,
 		toolDDReadability:        needMediaAgent,
+		toolProbeStreams:         needMediaAgent,
 		toolListDirectory:        needMediaAgent,
 		toolGetDiskInfo:          needMediaAgent,
 		toolRestartDecypharr:     needMediaAgent,

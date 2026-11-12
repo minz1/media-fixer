@@ -35,6 +35,7 @@ const (
 	toolJellyfinScanStatus   = "jellyfin_scan_status"
 	toolJellyfinLibraryScan  = "jellyfin_library_scan"
 	toolDDReadability        = "dd_readability_test"
+	toolProbeStreams         = "probe_streams"
 	toolGetTorrentState      = "get_torrent_state"
 	toolLokiQuery            = "loki_query"
 	toolRefreshLinks         = "refresh_decypharr_links"
@@ -98,6 +99,7 @@ const diskInfoDesc = "Get disk usage for the media host paths: /mnt/decypharr (F
 const (
 	paramTitle    = "title"
 	paramItemID   = "item_id"
+	paramFilePath = "file_path"
 	paramName     = "name"
 	paramReason   = "reason"
 	paramSeriesID = "series_id"
@@ -328,11 +330,25 @@ func hostReadToolSpecs() []toolSpec {
 					"check arr_media_status before concluding anything about decypharr. Any other error " +
 					"(e.g. EIO) on a path that DOES exist confirms a FUSE/debrid link problem.",
 				Parameters: jsonSchema(map[string]any{
-					"file_path": param("string", "Absolute path to the file on the media host FUSE mount"),
-				}, []string{"file_path"}),
+					paramFilePath: param("string", "Absolute path to the file on the media host FUSE mount"),
+				}, []string{paramFilePath}),
 			},
 			Risk:    riskRead,
 			Handler: (*Dispatcher).readDDReadability,
+		},
+		{
+			Name: toolProbeStreams,
+			Def: &openai.FunctionDefinition{
+				Name: toolProbeStreams,
+				Description: "Read a file's stream table with ffprobe (headers only, safe on the debrid mount): " +
+					"index, codec, language, title, forced/default, and any Matroska codec ids ffmpeg can't read. " +
+					"Use it for subtitle and audio-track problems.",
+				Parameters: jsonSchema(map[string]any{
+					paramFilePath: param("string", "Absolute path to the file on the media host FUSE mount"),
+				}, []string{paramFilePath}),
+			},
+			Risk:    riskRead,
+			Handler: (*Dispatcher).readProbeStreams,
 		},
 		{
 			Name: toolGetTorrentState,
@@ -920,6 +936,9 @@ var (
 	errStuckReadNoProbe = errors.New(
 		"dd_readability_test is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
 			"use get_torrent_state and get_repair_status instead")
+	errStuckReadNoStreamProbe = errors.New(
+		"probe_streams is disabled for stuck_read incidents: reading the stuck file would wedge too; " +
+			"use get_torrent_state and get_repair_status instead")
 	errStuckReadNoList = errors.New(
 		"list_directory is disabled for stuck_read incidents: it stats every file in the folder, " +
 			"and a stat of the stuck file would wedge too; use get_torrent_state and get_repair_status instead")
@@ -929,11 +948,19 @@ var (
 )
 
 func (d *Dispatcher) readDDReadability(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
-	filePath, _ := args["file_path"].(string)
+	filePath, _ := args[paramFilePath].(string)
 	if c.scope.What == WhatStuckRead {
 		return nil, errStuckReadNoProbe
 	}
 	return d.MediaAgent.DDReadabilityTest(ctx, filePath)
+}
+
+func (d *Dispatcher) readProbeStreams(ctx context.Context, c *toolCall, args map[string]any) (any, error) {
+	filePath, _ := args[paramFilePath].(string)
+	if c.scope.What == WhatStuckRead {
+		return nil, errStuckReadNoStreamProbe
+	}
+	return d.MediaAgent.ProbeStreams(ctx, filePath)
 }
 
 func (d *Dispatcher) readTorrentState(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {

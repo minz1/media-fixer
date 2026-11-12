@@ -178,6 +178,7 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
   2. loki_query with filters, then again with context_after: 20 on any extraction / ffmpeg /
      transcoding failure line.
   3. dd_readability_test on the file, so a broken link is not mistaken for a subtitle defect.
+     probe_streams shows the file's real stream table (codec, language, forced/default).
   4. Escalate escalate_action=manual_investigation, quoting the ffmpeg lines that explain it.
   The only autonomous action is clear_jellyfin_cache on the Episode, and only when the evidence
   is stale metadata. restart_jellyfin and jellyfin_library_scan are refused on this incident.
