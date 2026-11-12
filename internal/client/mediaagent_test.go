@@ -56,6 +56,12 @@ func (s *stubOps) StuckReads() (*mediaagentapi.StuckReadsResult, error) {
 	return &mediaagentapi.StuckReadsResult{Readers: []mediaagentapi.StuckReader{}}, nil
 }
 
+func (s *stubOps) ProbeStreams(_ context.Context, path string) (*mediaagentapi.ProbeResult, error) {
+	return &mediaagentapi.ProbeResult{Streams: []mediaagentapi.ProbeStream{
+		{Index: 6, CodecType: "subtitle", CodecName: "ass", Language: "eng", Title: path, Forced: true},
+	}, UnknownCodecIDs: []string{"S_TEXT/WEBVTT"}}, nil
+}
+
 func newTestPair(t *testing.T, ops mediaagent.Ops) *client.MediaAgentClient {
 	t.Helper()
 	h := mediaagent.NewHandler(ops, testAPIKey, slog.New(slog.DiscardHandler))
@@ -234,5 +240,18 @@ func TestClientStuckReadsTimeoutCoversBody(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("StuckReads took %s, want the 50 ms stuck-reads timeout", d)
+	}
+}
+
+func TestB1_ProbeRoute(t *testing.T) {
+	t.Parallel()
+	c := newTestPair(t, &stubOps{})
+	res, err := c.ProbeStreams(context.Background(), "/mnt/x.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Streams) != 1 || res.Streams[0].Title != "/mnt/x.mkv" || !res.Streams[0].Forced ||
+		res.UnknownCodecIDs[0] != "S_TEXT/WEBVTT" {
+		t.Errorf("result = %+v", res)
 	}
 }

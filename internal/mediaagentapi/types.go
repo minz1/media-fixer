@@ -90,3 +90,24 @@ type StuckReader struct {
 type StuckReadsResult struct {
 	Readers []StuckReader `json:"readers"`
 }
+
+type ProbeRequest struct {
+	Path string `json:"path"`
+}
+
+type ProbeStream struct {
+	Index     int    `json:"index"`
+	CodecType string `json:"codec_type"`
+	CodecName string `json:"codec_name"`
+	Language  string `json:"language,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Forced    bool   `json:"forced,omitempty"`
+	Default   bool   `json:"default,omitempty"`
+}
+
+type ProbeResult struct {
+	Streams         []ProbeStream `json:"streams"`
+	UnknownCodecIDs []string      `json:"unknown_codec_ids,omitempty"`
+	Error           string        `json:"error,omitempty"`
+	NotFound        bool          `json:"not_found,omitempty"`
+}

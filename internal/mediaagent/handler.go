@@ -21,6 +21,8 @@ import (
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
+const errPathRequired = "path required"
+
 // Ops is the interface for OS-level operations; swapped for stubs in tests.
 type Ops interface {
 	DDTest(ctx context.Context, path string) (*mediaagentapi.DDTestResult, error)
@@ -28,6 +30,7 @@ type Ops interface {
 	DiskUsage() (*mediaagentapi.DiskResult, error)
 	ListDir(path string) (*mediaagentapi.ListDirResult, error)
 	StuckReads() (*mediaagentapi.StuckReadsResult, error)
+	ProbeStreams(ctx context.Context, path string) (*mediaagentapi.ProbeResult, error)
 }
 
 // NewHandler builds the media-agent HTTP router.
@@ -49,7 +52,7 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 	r.Post("/dd-test", func(w http.ResponseWriter, req *http.Request) {
 		var body mediaagentapi.DDTestRequest
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Path == "" {
-			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: "path required"})
+			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: errPathRequired})
 			return
 		}
 		result, err := ops.DDTest(req.Context(), body.Path)
@@ -61,10 +64,25 @@ func NewHandler(ops Ops, apiKey string, log *slog.Logger) http.Handler {
 		writeJSON(w, http.StatusOK, result)
 	})
 
+	r.Post("/probe", func(w http.ResponseWriter, req *http.Request) {
+		var body mediaagentapi.ProbeRequest
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Path == "" {
+			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: errPathRequired})
+			return
+		}
+		result, err := ops.ProbeStreams(req.Context(), body.Path)
+		if err != nil {
+			log.ErrorContext(req.Context(), "probe failed", "path", body.Path, "error", err)
+			writeJSON(w, http.StatusInternalServerError, mediaagentapi.ErrorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
 	r.Get("/ls", func(w http.ResponseWriter, req *http.Request) {
 		path := req.URL.Query().Get("path")
 		if path == "" {
-			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: "path required"})
+			writeJSON(w, http.StatusBadRequest, mediaagentapi.ErrorResponse{Error: errPathRequired})
 			return
 		}
 		result, err := ops.ListDir(path)

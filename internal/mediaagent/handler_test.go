@@ -282,6 +282,9 @@ type allowAllOps struct{}
 func (allowAllOps) DDTest(context.Context, string) (*mediaagentapi.DDTestResult, error) {
 	return &mediaagentapi.DDTestResult{}, nil
 }
+func (allowAllOps) ProbeStreams(context.Context, string) (*mediaagentapi.ProbeResult, error) {
+	return &mediaagentapi.ProbeResult{}, nil
+}
 func (allowAllOps) Restart(context.Context, string) error { return nil }
 func (allowAllOps) DiskUsage() (*mediaagentapi.DiskResult, error) {
 	return &mediaagentapi.DiskResult{}, nil

@@ -460,6 +460,10 @@ linters:
       - path: 'internal/mediaagent/handler\.go'
         text: 'G702'
         linters: [gosec]
+      # ProbeStreams: path is validated by resolveUnderMounts and the ffprobe argv is fixed.
+      - path: 'internal/mediaagent/probe\.go'
+        text: 'G204|G702|G703'
+        linters: [gosec]
       # id is validated as a UUID by parseUUIDParam; redirect target is always baseURL/incidents/{uuid}, not user-controlled.
       - path: 'internal/server/dashboard\.go'
         text: 'G710'

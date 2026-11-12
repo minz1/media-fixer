@@ -177,3 +177,33 @@ func (c *MediaAgentClient) auth(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 }
+
+func (c *MediaAgentClient) ProbeStreams(ctx context.Context, path string) (*mediaagentapi.ProbeResult, error) {
+	body, _ := json.Marshal(mediaagentapi.ProbeRequest{Path: path})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/probe", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	c.auth(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var e mediaagentapi.ErrorResponse
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error != "" {
+			return nil, fmt.Errorf("media-agent probe: %s", e.Error)
+		}
+		return nil, fmt.Errorf("media-agent probe: status %d", resp.StatusCode)
+	}
+	var result mediaagentapi.ProbeResult
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&result); decodeErr != nil {
+		return nil, fmt.Errorf("media-agent probe decode: %w", decodeErr)
+	}
+	return &result, nil
+}
