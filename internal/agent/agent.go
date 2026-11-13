@@ -196,6 +196,10 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      language is now present, finish with verify_subtitle_language and verify_item_id.
   5. A fix is verified with verify_subtitle_language; set verify_item_id to the episode item
      you ran stream_alignment on.
+  6. A desync report (the reporter says the subtitles are out of sync, late, early or behind) is
+     the owner's: resolve the Episode item, run stream_alignment on it so the card carries the
+     stream table, take no action (no bazarr_search_subtitles, no swap), and complete with
+     escalate_action=manual_investigation. The system escalates a desync report whatever you set.
   Both autonomous actions: bazarr_search_subtitles when the language is missing or its embedded
   track is broken, clear_jellyfin_cache on the Episode only when the evidence is stale metadata.
   restart_jellyfin and jellyfin_library_scan are refused on this incident.
@@ -408,6 +412,9 @@ type DiagnosticResult struct {
 	SubtitleItemID         string `json:"subtitle_item_id,omitempty"`
 
 	SubtitleSearch *BazarrSearchResult `json:"subtitle_search,omitempty"`
+
+	SubtitleDesync  bool       `json:"subtitle_desync,omitempty"`
+	SubtitleStreams *Alignment `json:"subtitle_streams,omitempty"`
 
 	Outcome DiagnosisOutcome `json:"outcome,omitzero"`
 }
@@ -677,6 +684,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	gate Gate,
 	aligned []string,
 	search *BazarrSearchResult,
+	streams *Alignment,
 ) (*DiagnosticResult, error) {
 	result, err := parseDiagnosis(argsJSON, gate.Calls())
 	if rejected, ok := errors.AsType[*diagnosisRejectedError](err); ok {
@@ -692,6 +700,10 @@ func (a *Agent) handleCompleteDiagnosis(
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
 	result.SubtitleSearch = search
+	result.SubtitleDesync, result.SubtitleStreams = false, nil
+	if inc.What == WhatSubtitles && IsDesyncReport(inc.Details) {
+		escalateDesync(&result, streams)
+	}
 	result.SubtitleItemID = ""
 	if _, _, known := langCodes(result.VerifySubtitleLanguage); inc.What == WhatSubtitles && known {
 		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned, search)

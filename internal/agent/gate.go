@@ -78,6 +78,7 @@ func (a *Agent) conclude(
 		gate,
 		alignedItems(*messages),
 		lastBazarrSearch(*messages),
+		lastAlignment(*messages),
 	)
 	var rejected *diagnosisRejectedError
 	if err != nil && !errors.As(err, &rejected) {

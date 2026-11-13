@@ -164,3 +164,44 @@ func TestC12_CardCap(t *testing.T) {
 		t.Errorf("len %d, value %q", len(f.Value), f.Value[max(0, len(f.Value)-40):])
 	}
 }
+
+func TestF40_DesyncCardShowsStreams(t *testing.T) {
+	t.Parallel()
+	subs := &db.Incident{ID: "abc", What: "subtitles", Title: "Show"}
+	res := subsResult(nil)
+	res.SubtitleDesync = true
+	res.SubtitleStreams = &agent.Alignment{
+		Path: "/data/library/Show/S01E02.mkv",
+		Streams: []agent.AlignedStream{
+			{
+				JellyfinIndex:     2,
+				Language:          "eng",
+				Title:             "English",
+				FileIndex:         2,
+				FfmpegMapsTo:      2,
+				FfmpegMapsToCodec: "subrip",
+			},
+			{JellyfinIndex: 3, Language: "spa", FileIndex: 3, FfmpegMapsTo: 3, FfmpegMapsToCodec: "ass"},
+		},
+	}
+	f, ok := fieldNamed(incident.SurfaceCardForTest(subs, res, "").Fields, "Subtitles out of sync")
+	if !ok {
+		t.Fatal("no desync field")
+	}
+	for _, want := range []string{"S01E02.mkv", "#2 eng English · subrip", "#3 spa · ass"} {
+		if !strings.Contains(f.Value, want) {
+			t.Errorf("desync field %q lacks %q", f.Value, want)
+		}
+	}
+
+	res.SubtitleStreams = nil
+	f, ok = fieldNamed(incident.SurfaceCardForTest(subs, res, "").Fields, "Subtitles out of sync")
+	if !ok || !strings.Contains(f.Value, "no stream table") {
+		t.Errorf("desync field without streams = %+v, %v", f, ok)
+	}
+
+	res.SubtitleDesync = false
+	if _, has := fieldNamed(incident.SurfaceCardForTest(subs, res, "").Fields, "Subtitles out of sync"); has {
+		t.Error("non-desync card has the desync field")
+	}
+}

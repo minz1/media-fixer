@@ -46,6 +46,7 @@ func escalationVerbs() []string {
 const (
 	fieldCandidates     = "Subtitle candidates"
 	fieldDownloaded     = "Subtitles downloaded"
+	fieldDesync         = "Subtitles out of sync"
 	candidatePick       = "Pick one in Bazarr, then Rerun"
 	maxCandidates       = 5
 	fieldValueLimit     = 1024
@@ -79,8 +80,30 @@ func withSubtitleSearch(inc *db.Incident, result *agent.DiagnosticResult, fields
 	if inc.What != "subtitles" || result == nil {
 		return fields
 	}
+	if result.SubtitleDesync {
+		fields = append(fields, desyncField(result.SubtitleStreams))
+	}
 	if f, ok := subtitleSearchField(result.SubtitleSearch); ok {
 		return append(fields, f)
 	}
 	return fields
+}
+
+func desyncField(al *agent.Alignment) card.Field {
+	if al == nil {
+		return card.Field{
+			Name:  fieldDesync,
+			Value: "Reported by the viewer; no stream table (stream_alignment did not run)",
+		}
+	}
+	lines := []string{filepath.Base(al.Path)}
+	for _, s := range al.Streams {
+		lines = append(
+			lines,
+			strings.Join(strings.Fields(fmt.Sprintf("#%d %s %s", s.JellyfinIndex, s.Language, s.Title)), " ")+
+				" · "+s.FfmpegMapsToCodec,
+		)
+	}
+	v := []rune(strings.Join(lines, "\n"))
+	return card.Field{Name: fieldDesync, Value: string(v[:min(len(v), fieldValueLimit)])}
 }
