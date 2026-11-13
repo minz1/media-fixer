@@ -34,7 +34,7 @@ func (x *Executor) classify(ctx context.Context, op operation.Op, i int, err err
 		if errors.Is(err, client.ErrNotFound) {
 			return x.confirmGone(ctx, st, err)
 		}
-	case operation.StepBlocklist, operation.StepSearch, operation.StepTorrentAdd, operation.StepSubtitleSync:
+	case operation.StepBlocklist, operation.StepSearch, operation.StepTorrentAdd:
 	}
 	return byError(err)
 }

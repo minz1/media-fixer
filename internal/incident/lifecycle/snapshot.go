@@ -11,7 +11,6 @@ import (
 const (
 	EscalateRemoveAndSearch    = "remove_and_search"
 	EscalateDeleteTorrentReadd = "delete_torrent_readd"
-	EscalateResyncSubtitle     = "resync_subtitle"
 	WhatStuckRead              = "stuck_read"
 )
 
@@ -42,10 +41,7 @@ type Finding struct {
 }
 
 func (f Finding) Escalatable() bool {
-	return slices.Contains(
-		[]string{EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateResyncSubtitle},
-		f.EscalateAction,
-	)
+	return f.EscalateAction == EscalateRemoveAndSearch || f.EscalateAction == EscalateDeleteTorrentReadd
 }
 
 type VerifyKind string
@@ -54,7 +50,6 @@ const (
 	VerifyGeneric   VerifyKind = "generic"
 	VerifyStuckRead VerifyKind = "stuck_read"
 	VerifySubtitles VerifyKind = "subtitles"
-	VerifyResync    VerifyKind = "resync"
 )
 
 type Verify struct {
@@ -68,7 +63,6 @@ type VerifySpec struct {
 	PreFix         json.RawMessage `json:"pre,omitempty"`
 	Language       string          `json:"language,omitempty"`
 	SubtitleItemID string          `json:"subtitle_item_id,omitempty"`
-	Resync         *ResyncTarget   `json:"resync,omitempty"`
 	Action         string          `json:"action,omitempty"`
 	ETAMinutes     int             `json:"eta_minutes,omitempty"`
 	Extensions     int             `json:"extensions"`
@@ -76,14 +70,6 @@ type VerifySpec struct {
 	ETANoted       bool            `json:"eta_noted"`
 
 	VerifyEnteredAt time.Time `json:"verify_entered_at,omitzero"`
-}
-
-type ResyncTarget struct {
-	Movie    bool   `json:"movie,omitempty"`
-	ID       int    `json:"id,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Language string `json:"language,omitempty"`
-	Baseline int    `json:"baseline,omitempty"`
 }
 
 type Stage string

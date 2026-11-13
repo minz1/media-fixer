@@ -418,7 +418,7 @@ func migrations() []migration {
 	return slices.Concat(legacyMigrations(), eventLogMigrations(), stuckQueueMigrations(), discordCardsMigrations(),
 		sweepTargetsMigrations(), babysitMigrations(), lifecycleMigrations(),
 		operationsMigrations(), discordCardsRenderStateMigrations(), stuckDownloadsMigrations(), sweepMigrations(),
-		outboxMigrations(), resyncSubtitleMigrations())
+		outboxMigrations())
 }
 
 func legacyMigrations() []migration {

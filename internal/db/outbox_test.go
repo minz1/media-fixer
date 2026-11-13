@@ -149,7 +149,6 @@ func TestMigration26_UpDownUp(t *testing.T) {
 	}
 	d.Close()
 
-	strip27(t, path)
 	var out bytes.Buffer
 	if err = db.MigrateDown(ctx, path, 26, &out); err != nil {
 		t.Fatal(err)

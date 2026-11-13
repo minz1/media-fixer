@@ -19,13 +19,12 @@ func Statuses() []Status { return []Status{Running, Done, FailedAtStep} }
 type Kind string
 
 const (
-	KindReplace        Kind = "replace"
-	KindTorrentReadd   Kind = "torrent_readd"
-	KindRegrab         Kind = "regrab"
-	KindResyncSubtitle Kind = "resync_subtitle"
+	KindReplace      Kind = "replace"
+	KindTorrentReadd Kind = "torrent_readd"
+	KindRegrab       Kind = "regrab"
 )
 
-func Kinds() []Kind { return []Kind{KindReplace, KindTorrentReadd, KindRegrab, KindResyncSubtitle} }
+func Kinds() []Kind { return []Kind{KindReplace, KindTorrentReadd, KindRegrab} }
 
 type StepKind string
 
@@ -36,14 +35,10 @@ const (
 	StepTorrentDelete StepKind = "torrent_delete"
 	StepTorrentAdd    StepKind = "torrent_add"
 	StepQueueRemove   StepKind = "queue_remove"
-	StepSubtitleSync  StepKind = "subtitle_sync"
 )
 
 func StepKinds() []StepKind {
-	return []StepKind{
-		StepBlocklist, StepDeleteFile, StepSearch, StepTorrentDelete, StepTorrentAdd, StepQueueRemove,
-		StepSubtitleSync,
-	}
+	return []StepKind{StepBlocklist, StepDeleteFile, StepSearch, StepTorrentDelete, StepTorrentAdd, StepQueueRemove}
 }
 
 type StepState string
@@ -103,8 +98,6 @@ type Step struct {
 	Category   string    `json:"category,omitempty"`
 	Name       string    `json:"name,omitempty"`
 	Magnet     string    `json:"magnet,omitempty"`
-	Baseline   int       `json:"baseline,omitempty"`
-	HI         bool      `json:"hi,omitempty"`
 }
 
 type Result struct {

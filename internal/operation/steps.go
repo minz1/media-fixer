@@ -2,7 +2,6 @@ package operation
 
 import (
 	"fmt"
-	"path"
 	"strings"
 )
 
@@ -36,11 +35,6 @@ func Line(op Op) string {
 	}
 	if op.Kind == KindReplace {
 		return fmt.Sprintf("%s: %s.", header(op), replaceBody(op))
-	}
-	if op.Kind == KindResyncSubtitle {
-		return lead(
-			op.Results[0].State, "Resync sent to Bazarr", "The resync may have been sent to Bazarr", "Resync not sent",
-		) + "."
 	}
 	return smallBody(op) + "."
 }
@@ -158,8 +152,6 @@ type phrase struct {
 	kind  StepKind
 	count int
 	cmd   string
-	base  string
-	lang  string
 }
 
 func NextLine(op Op) string {
@@ -173,7 +165,7 @@ func NextLine(op Op) string {
 			ps[n-1].count++
 			continue
 		}
-		ps = append(ps, phrase{kind: st.Kind, count: 1, cmd: st.Command, base: path.Base(st.Path), lang: st.Name})
+		ps = append(ps, phrase{kind: st.Kind, count: 1, cmd: st.Command})
 	}
 	words := make([]string, len(ps))
 	for i, p := range ps {
@@ -203,8 +195,6 @@ func (p phrase) words() string {
 		return "re-add it"
 	case StepQueueRemove:
 		return "remove the queue item"
-	case StepSubtitleSync:
-		return "resync " + p.base + " (" + p.lang + ") in Bazarr"
 	}
 	return string(p.kind)
 }

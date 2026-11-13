@@ -131,10 +131,7 @@ func (s *Service) verifyCheck(ctx context.Context, id string, gen int64, seq int
 	if !ok || snap.Verify == nil {
 		return
 	}
-	res, scan := lifecycle.VerifyNotYet, false
-	if snap.Verify.Spec.Kind != lifecycle.VerifyResync {
-		res, scan = s.observeVerify(ctx, inc, snap)
-	}
+	res, scan := s.observeVerify(ctx, inc, snap)
 	ev := lifecycle.Event{
 		Kind:   lifecycle.VerifyObserved,
 		Gen:    gen,
