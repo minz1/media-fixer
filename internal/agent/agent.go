@@ -184,7 +184,8 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      defect. Run list_alternatives, then step 4. The root cause quotes the alignment row (and
      the ffmpeg lines); the reason names any cached alternative (score, release) for the owner
      to swap, since a sidecar is the cheaper fix and the search still runs first.
-     sonarr_swap_plan previews swapping to one (read-only); recommend it with escalate_action=swap_release.
+     Use sonarr_swap_plan only after list_alternatives lists a cached alternative and stream_alignment showed the current file's subtitle track broken or absent; it previews the swap (read-only), then complete with escalate_action=swap_release, escalate_params from the plan (its release) and requires_approval=true.
+     Never swap for a missing language before bazarr_search_subtitles has run: Bazarr may fix it (step 4).
   4. If the wanted language is absent, or its embedded track is broken (index_drift or a failed
      extract test), say so in the root cause and run bazarr_search_subtitles: it forces a Bazarr
      search and waits for the outcome. Quote its summary in primary_reason. If found, finish
