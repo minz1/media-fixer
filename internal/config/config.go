@@ -84,14 +84,17 @@ type BazarrConfig struct {
 	ResyncMaxGB   int    `toml:"resync_max_gb"`
 }
 
-const defaultResyncMaxGB = 20
+const (
+	defaultResyncMaxGB = 20
+	BytesPerGB         = 1 << 30
+)
 
 func (c BazarrConfig) ResyncMaxBytes() int64 {
 	gb := c.ResyncMaxGB
 	if gb <= 0 {
 		gb = defaultResyncMaxGB
 	}
-	return int64(gb) << 30
+	return int64(gb) * BytesPerGB
 }
 
 type SeerrConfig struct {

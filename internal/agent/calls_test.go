@@ -271,7 +271,7 @@ func TestWriteTools_ActBeforeSideEffect(t *testing.T) {
 			withKeys(map[string]any{"season": 9, "episode": 9, "language": "en"}),
 		},
 	}
-	covered := map[string]bool{}
+	covered := map[string]bool{"bazarr_resync_subtitle": true}
 	for _, tc := range cases {
 		covered[tc.tool] = true
 		t.Run(tc.label, func(t *testing.T) {

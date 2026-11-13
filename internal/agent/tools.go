@@ -205,6 +205,7 @@ func toolRegistry() []toolSpec {
 		jellyfinAndArrActionToolSpecs(),
 		arrActionToolSpecs(),
 		bazarrToolSpecs(),
+		[]toolSpec{resyncToolSpec()},
 		approvalToolSpecs(),
 		[]toolSpec{completionSpec()},
 	)

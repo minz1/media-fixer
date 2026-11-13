@@ -98,6 +98,7 @@ func toolNeeds() map[string]toolNeed {
 		toolJellyfinLibraryScan:  needJellyfin,
 		toolClearJellyfinCache:   needJellyfin,
 		toolBazarrSearch:         needBazarrAndArr,
+		toolBazarrResync:         needBazarrAndArr,
 		toolGetTorrentState:      needDecypharr,
 		toolRepairStatus:         needDecypharr,
 		toolRepairHealth:         needDecypharr,

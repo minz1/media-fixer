@@ -524,7 +524,8 @@ func TestRS2_AttemptsSince(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Tool != "bazarr_resync_subtitle" || got[0].Params["path"] != "/tv/bazarr_resync_subtitle.srt" {
+	if len(got) != 1 || got[0].Tool != "bazarr_resync_subtitle" ||
+		got[0].Params["path"] != "/tv/bazarr_resync_subtitle.srt" {
 		t.Fatalf("attempts = %+v", got)
 	}
 }

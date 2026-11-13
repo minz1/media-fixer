@@ -431,7 +431,7 @@ func TestC13_PromptBazarrStep(t *testing.T) {
 		"bazarr_search_subtitles", "primary_reason", "verify_after_seconds", "60",
 		"index_drift", "subtitle_extract_test", "already applied", "stream_alignment",
 		"verify_subtitle_language", "verify_item_id", "manual_investigation",
-		"Both autonomous actions",
+		"The autonomous actions", "bazarr_resync_subtitle",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("subtitles section lacks %q", want)

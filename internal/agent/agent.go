@@ -194,12 +194,17 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      language is now present, finish with verify_subtitle_language and verify_item_id.
   5. A fix is verified with verify_subtitle_language; set verify_item_id to the episode item
      you ran stream_alignment on.
-  6. A desync report (the reporter says the subtitles are out of sync, late, early or behind) is
-     the owner's: resolve the Episode item, run stream_alignment on it so the card carries the
-     stream table, take no action (no bazarr_search_subtitles), and complete with
-     escalate_action=manual_investigation. The system escalates a desync report whatever you set.
-  Both autonomous actions: bazarr_search_subtitles when the language is missing or its embedded
-  track is broken, clear_jellyfin_cache on the Episode only when the evidence is stale metadata.
+  6. A desync report (the reporter says the subtitles are out of sync, late, early or behind):
+     resolve the Episode item and run stream_alignment on it so the card carries the stream
+     table. Then run bazarr_search_subtitles for the reported language; found=true → fix-now
+     with verify_subtitle_language and verify_after_seconds 60. Otherwise run
+     bazarr_resync_subtitle for that language; synced=true → fix-now with
+     verify_subtitle_language. Only when both fail, escalate
+     escalate_action=manual_investigation.
+  The autonomous actions: bazarr_search_subtitles when the language is missing, its embedded
+  track is broken or the subtitles are out of sync; bazarr_resync_subtitle only on a desync
+  report after that search; clear_jellyfin_cache on the Episode only when the evidence is
+  stale metadata.
   restart_jellyfin and jellyfin_library_scan are refused on this incident.
 
 --- Jellyfin has the title but it is unplayable / a Series shows no episodes ---
