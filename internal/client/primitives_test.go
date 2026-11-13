@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -126,42 +125,6 @@ func TestArr_Search_Commands(t *testing.T) {
 			}
 			wantCall(t, *calls, sweepCall{method: http.MethodPost, path: "/sonarr/api/v3/command", body: tc.body})
 		})
-	}
-}
-
-func statusServer(t *testing.T, status int, body string) *client.DecypharrClient {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-	return client.NewDecypharr(srv.URL, "")
-}
-
-func TestDecypharr_DeleteTorrent_StatusErrorWithBody(t *testing.T) {
-	t.Parallel()
-	c := statusServer(t, http.StatusNotFound, "no such torrent")
-	err := c.DeleteTorrent(context.Background(), "movies", "dead", true)
-	se, ok := errors.AsType[*client.HTTPStatusError](err)
-	if !ok || se.Status != http.StatusNotFound || se.Body != "no such torrent" {
-		t.Fatalf("err = %v, want *HTTPStatusError 404 with the body", err)
-	}
-	if !strings.Contains(err.Error(), "no such torrent") {
-		t.Errorf("message %q lacks the body", err)
-	}
-}
-
-func TestDecypharr_AddTorrent_StatusErrorWithBody(t *testing.T) {
-	t.Parallel()
-	c := statusServer(t, http.StatusBadRequest, "bad magnet")
-	err := c.AddTorrent(context.Background(), "magnet:?xt=urn:btih:abc", "tv")
-	se, ok := errors.AsType[*client.HTTPStatusError](err)
-	if !ok || se.Status != http.StatusBadRequest || se.Body != "bad magnet" {
-		t.Fatalf("err = %v, want *HTTPStatusError 400 with the body", err)
-	}
-	if !strings.Contains(err.Error(), "bad magnet") {
-		t.Errorf("message %q lacks the body", err)
 	}
 }
 

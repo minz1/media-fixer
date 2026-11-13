@@ -125,28 +125,6 @@ func TestDecypharr_MountCacheCleanup(t *testing.T) {
 	}
 }
 
-func TestDecypharr_DeleteTorrent(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Errorf("method: %s", r.Method)
-		}
-		if !strings.HasSuffix(r.URL.Path, "/api/torrents/movies/deadbeef") {
-			t.Errorf("path: %s", r.URL.Path)
-		}
-		if r.URL.Query().Get("removeFromDebrid") != "true" {
-			t.Error("expected removeFromDebrid=true")
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := client.NewDecypharr(srv.URL, "")
-	if err := c.DeleteTorrent(context.Background(), "movies", "deadbeef", true); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestDecypharr_ListTorrents_NotFoundIsAnError replaces an earlier test that
 // asserted the opposite ("404 should be treated as no results"). That
 // expectation was wrong: decypharr answers a search matching nothing with 200

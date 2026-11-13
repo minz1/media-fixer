@@ -2,7 +2,6 @@ package opexec
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/operation"
@@ -62,23 +61,4 @@ func searchStep(app string, plan *client.ReplacePlan) (operation.Step, error) {
 			plan.MediaType, plan.Scope)
 	}
 	return st, nil
-}
-
-func ReaddSpec(subject operation.Subject, plan *client.ReaddPlan, source []byte) (operation.Spec, error) {
-	if strings.TrimSpace(plan.Magnet) == "" {
-		return operation.Spec{}, fmt.Errorf("decypharr readd: %q cannot be re-added: %w", plan.Name, client.ErrNoMagnet)
-	}
-	return operation.Spec{
-		Subject: subject, Kind: operation.KindTorrentReadd, Title: plan.Name, Source: source,
-		Steps: []operation.Step{
-			{
-				Kind: operation.StepTorrentDelete, InfoHash: plan.InfoHash, Category: plan.Category,
-				Name: plan.Name, Season: -1,
-			},
-			{
-				Kind: operation.StepTorrentAdd, InfoHash: plan.InfoHash, Category: plan.Category,
-				Name: plan.Name, Magnet: plan.Magnet, Season: -1,
-			},
-		},
-	}, nil
 }

@@ -453,7 +453,7 @@ func (a *escalationAgent) OperationFor(
 
 func TestF25_EscalationActionsTakeRegistryFlag(t *testing.T) {
 	t.Parallel()
-	for _, a := range []string{agent.EscalateRemoveAndSearch, agent.EscalateDeleteTorrentReadd} {
+	for _, a := range []string{agent.EscalateRemoveAndSearch} {
 		if agent.Disruptive(a) {
 			t.Errorf("escalation action %q is disruptive in the registry; logEscalation must tag it", a)
 		}

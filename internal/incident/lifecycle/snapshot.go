@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	EscalateRemoveAndSearch    = "remove_and_search"
-	EscalateDeleteTorrentReadd = "delete_torrent_readd"
-	WhatStuckRead              = "stuck_read"
+	EscalateRemoveAndSearch = "remove_and_search"
+	WhatStuckRead           = "stuck_read"
 )
 
 type Snapshot struct {
@@ -41,7 +40,7 @@ type Finding struct {
 }
 
 func (f Finding) Escalatable() bool {
-	return f.EscalateAction == EscalateRemoveAndSearch || f.EscalateAction == EscalateDeleteTorrentReadd
+	return f.EscalateAction == EscalateRemoveAndSearch
 }
 
 type VerifyKind string

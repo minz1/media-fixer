@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,19 +29,15 @@ func NewDecypharr(base, apiToken string) *DecypharrClient {
 func (c *DecypharrClient) Configured() bool { return c != nil && c.base != "" }
 
 type TorrentEntry struct {
-	Name             string `json:"name"`
-	OriginalFilename string `json:"original_filename,omitempty"`
-	InfoHash         string `json:"info_hash"`
-	Category         string `json:"category"`
-	State            string `json:"state"`
-	// Magnet is what a delete-and-re-add puts back; decypharr omits it for
-	// entries that did not arrive as a magnet (storage.Entry.Magnet is
-	// `json:"magnet,omitempty"`), which PlanTorrentReadd treats as a refusal.
-	Magnet   string    `json:"magnet,omitempty"`
-	Size     int64     `json:"size"`
-	Progress float64   `json:"progress"`
-	AddedOn  time.Time `json:"added_on"`
-	Bad      bool      `json:"bad"`
+	Name             string    `json:"name"`
+	OriginalFilename string    `json:"original_filename,omitempty"`
+	InfoHash         string    `json:"info_hash"`
+	Category         string    `json:"category"`
+	State            string    `json:"state"`
+	Size             int64     `json:"size"`
+	Progress         float64   `json:"progress"`
+	AddedOn          time.Time `json:"added_on"`
+	Bad              bool      `json:"bad"`
 
 	// ActiveProvider is which debrid backend currently holds the torrent
 	// ("torbox", "usenet", ...). Named `debrid` in an earlier decypharr
@@ -165,28 +160,6 @@ func (c *DecypharrClient) RecheckEntry(ctx context.Context, name string, fix boo
 	return c.post(ctx, u, nil, nil)
 }
 
-// DeleteTorrent removes a torrent, optionally deleting it from the debrid provider.
-func (c *DecypharrClient) DeleteTorrent(ctx context.Context, category, hash string, removeFromDebrid bool) error {
-	u := fmt.Sprintf("%s/api/torrents/%s/%s", c.base, url.PathEscape(category), url.PathEscape(hash))
-	if removeFromDebrid {
-		u += "?removeFromDebrid=true"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
-	if err != nil {
-		return err
-	}
-	c.setAuth(req)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		return decypharrStatusError("decypharr DELETE "+u, resp)
-	}
-	return nil
-}
-
 func (c *DecypharrClient) get(ctx context.Context, rawURL string, out any) error {
 	u := rawURL
 	if len(rawURL) > 0 && rawURL[0] == '/' {
@@ -267,10 +240,4 @@ func (c *DecypharrClient) TorrentByHash(ctx context.Context, hash string) (bool,
 			return false, nil
 		}
 	}
-}
-
-func decypharrStatusError(label string, resp *http.Response) error {
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, statusScanLimit))
-	se := &HTTPStatusError{Status: resp.StatusCode, Body: string(b[:min(len(b), statusBodyLimit)])}
-	return fmt.Errorf("%s: %w", label, se)
 }

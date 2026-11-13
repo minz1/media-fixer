@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
-	"strings"
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
@@ -29,7 +28,6 @@ type Fixtures struct {
 	SeriesTitle            string `json:"series_title,omitempty"`
 	MovieTitle             string `json:"movie_title,omitempty"`
 	TorrentName            string `json:"torrent_name,omitempty"`
-	ReaddTorrentName       string `json:"readd_torrent_name,omitempty"`
 	TorrentFolder          string `json:"torrent_folder,omitempty"`
 	SamplePath             string `json:"sample_path,omitempty"`
 	TorrentIsFile          bool   `json:"torrent_is_file,omitempty"`
@@ -172,7 +170,7 @@ func discoverJellyfinPlaybackItem(ctx context.Context, disp *agent.Dispatcher, f
 // this stack has used (see systemPrompt's note that /data/library entries
 // are symlinks into /mnt/decypharr/__all__/<torrent>/).
 func discoverTorrentAndSample(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures) {
-	if fx.TorrentName == "" || fx.ReaddTorrentName == "" {
+	if fx.TorrentName == "" {
 		discoverTorrentNames(ctx, disp, fx)
 	}
 	switch {
@@ -196,12 +194,7 @@ func discoverTorrentNames(ctx context.Context, disp *agent.Dispatcher, fx *Fixtu
 		fx.missing("decypharr has no torrents")
 		return
 	}
-	if fx.TorrentName == "" {
-		pickTorrentFixture(fx, torrents)
-	}
-	if fx.ReaddTorrentName == "" {
-		discoverReaddTorrentName(ctx, disp, fx, torrents)
-	}
+	pickTorrentFixture(fx, torrents)
 }
 
 func pickTorrentFixture(fx *Fixtures, torrents []*client.TorrentEntry) {
@@ -213,35 +206,6 @@ func pickTorrentFixture(fx *Fixtures, torrents []*client.TorrentEntry) {
 		}
 	}
 	fx.missing("every decypharr torrent on the newest page is marked bad")
-}
-
-func discoverReaddTorrentName(
-	ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, torrents []*client.TorrentEntry,
-) {
-	searched := map[string]bool{}
-	for _, t := range torrents {
-		name := strings.TrimSpace(t.Name)
-		if name == "" || strings.TrimSpace(t.Magnet) == "" || searched[strings.ToLower(name)] {
-			continue
-		}
-		searched[strings.ToLower(name)] = true
-		matches, err := disp.Decypharr.ListTorrents(ctx, name, "")
-		if err != nil {
-			fx.missing("decypharr readd fixture discovery: " + err.Error())
-			return
-		}
-		count := 0
-		for _, m := range matches {
-			if strings.EqualFold(strings.TrimSpace(m.Name), name) {
-				count++
-			}
-		}
-		if count == 1 {
-			fx.ReaddTorrentName = name
-			return
-		}
-	}
-	fx.missing("no decypharr torrent with a stored magnet and a unique name among the newest entries")
 }
 
 const decypharrAllDir = "/mnt/decypharr/__all__"

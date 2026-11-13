@@ -116,18 +116,6 @@ func TestLine_ReplacePartialCounts(t *testing.T) {
 	}
 }
 
-func TestLine_ReaddDeletedNotReadded(t *testing.T) {
-	t.Parallel()
-	op := play(readdSpec(), stopAt(1, operation.ResultFailed)...)
-	if got, want := operation.Line(op), "Deleted the torrent; re-add not sent."; got != want {
-		t.Errorf("line %q, want %q", got, want)
-	}
-	unknown := play(readdSpec(), stopAt(0, operation.ResultUnknown)...)
-	if got, want := operation.Line(unknown), "The torrent may be deleted; re-add not sent."; got != want {
-		t.Errorf("line %q, want %q", got, want)
-	}
-}
-
 func TestLine_RegrabRemovalUnknown(t *testing.T) {
 	t.Parallel()
 	op := play(regrabSpec(), stopAt(0, operation.ResultUnknown)...)
@@ -148,9 +136,5 @@ func TestNextLine_NamesWhatResumeDoes(t *testing.T) {
 	}
 	if got := operation.NextLine(play(replaceSpec(1, 1))); got != "" {
 		t.Errorf("a running op says %q", got)
-	}
-	readd := play(readdSpec(), stopAt(0, operation.ResultUnknown)...)
-	if got, want := operation.NextLine(readd), "Resume: delete the torrent, re-add it."; got != want {
-		t.Errorf("next %q, want %q", got, want)
 	}
 }

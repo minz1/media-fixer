@@ -14,7 +14,7 @@ func TestD11_3_ToolsRefuseUnconfiguredDecypharr(t *testing.T) {
 	disp := &agent.Dispatcher{Decypharr: client.NewDecypharr("", "k")}
 	const want = "decypharr not configured"
 	for _, tool := range []string{
-		"get_torrent_state", "get_repair_status", "get_repair_health", "decypharr_delete_readd",
+		"get_torrent_state", "get_repair_status", "get_repair_health",
 	} {
 		_, err := disp.Call(context.Background(), tool, map[string]any{"name": "x"})
 		if err == nil || err.Error() != want {

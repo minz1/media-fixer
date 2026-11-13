@@ -70,12 +70,12 @@ func seedIncidentOp(t *testing.T, database *db.DB, spec operation.Spec) (string,
 	return inc.ID, *a.Snap.Op
 }
 
-func readdSpec() operation.Spec {
+func replaceOpSpec() operation.Spec {
 	return operation.Spec{
-		Kind: operation.KindTorrentReadd, Title: "Dark", Source: []byte(`{}`),
+		Kind: operation.KindReplace, Title: "Dark", Source: []byte(`{}`),
 		Steps: []operation.Step{
-			{Kind: operation.StepTorrentDelete, InfoHash: "abc", Category: "tv", Name: "Dark"},
-			{Kind: operation.StepTorrentAdd, InfoHash: "abc", Category: "tv", Magnet: "magnet:?xt=urn:btih:abc"},
+			{Kind: operation.StepBlocklist, HistoryID: 3},
+			{Kind: operation.StepSearch, App: "sonarr", Command: "SeasonSearch", MediaID: 5, Season: 1},
 		},
 	}
 }
@@ -83,7 +83,7 @@ func readdSpec() operation.Spec {
 func TestDashboard_PartialOpShowsLineAndResume(t *testing.T) {
 	t.Parallel()
 	srv, database, _ := newServiceServer(t)
-	id, op := seedIncidentOp(t, database, readdSpec())
+	id, op := seedIncidentOp(t, database, replaceOpSpec())
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/media/incidents/"+id, nil))
@@ -93,8 +93,7 @@ func TestDashboard_PartialOpShowsLineAndResume(t *testing.T) {
 		html.EscapeString(operation.Line(op)),
 		html.EscapeString(operation.NextLine(op)),
 		`class="info"`,
-		"torrent_add",
-		"urn:btih:abc",
+		"search",
 		"/incidents/" + id + "/resume",
 	} {
 		if !strings.Contains(body, want) {

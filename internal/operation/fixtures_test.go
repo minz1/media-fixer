@@ -52,17 +52,6 @@ func replaceSpec(blocks, deletes int) operation.Spec {
 	}
 }
 
-func readdSpec() operation.Spec {
-	return operation.Spec{
-		Subject: operation.Subject{Kind: operation.SubjectIncident, ID: "inc-1"}, Kind: operation.KindTorrentReadd,
-		Title: "Show S01",
-		Steps: []operation.Step{
-			{Kind: operation.StepTorrentDelete, InfoHash: "abc", Category: "tv", Name: "Show"},
-			{Kind: operation.StepTorrentAdd, InfoHash: "abc", Category: "tv", Magnet: "magnet:?xt=urn:btih:abc"},
-		},
-	}
-}
-
 func regrabSpec() operation.Spec {
 	return operation.Spec{
 		Subject: operation.Subject{Kind: operation.SubjectDownload, ID: "dl-1"}, Kind: operation.KindRegrab,
@@ -180,8 +169,7 @@ func samples(s operation.Status) []operation.Op {
 	case operation.Running:
 		return runningSamples()
 	case operation.Done:
-		return []operation.Op{play(replaceSpec(1, 1), through(3)...), play(readdSpec(), through(2)...),
-			play(regrabSpec(), through(2)...)}
+		return []operation.Op{play(replaceSpec(1, 1), through(3)...), play(regrabSpec(), through(2)...)}
 	case operation.FailedAtStep:
 		return failedSamples()
 	}
@@ -195,7 +183,6 @@ func runningSamples() []operation.Op {
 		play(replaceSpec(1, 1), through(1)...),
 		play(replaceSpec(1, 1), append(through(1), started(1))...),
 		play(replaceSpec(1, 1), append(through(2), started(2))...),
-		play(readdSpec()),
 		play(regrabSpec(), started(0)),
 	}
 }
@@ -208,8 +195,6 @@ func failedSamples() []operation.Op {
 		play(replaceSpec(1, 1), append(through(1), started(1), interrupted(operation.CauseRestart))...),
 		play(replaceSpec(1, 1), interrupted(operation.CauseRestart)),
 		play(replaceSpec(1, 1), append(through(2), interrupted(operation.CauseStore))...),
-		play(readdSpec(), stopAt(0, operation.ResultUnknown)...),
-		play(readdSpec(), stopAt(1, operation.ResultFailed)...),
 		play(regrabSpec(), stopAt(0, operation.ResultUnknown)...),
 		play(regrabSpec(), stopAt(0, operation.ResultFailed)...),
 		play(regrabSpec(), stopAt(1, operation.ResultUnknown)...),
@@ -224,7 +209,7 @@ func eventsFor(k operation.EventKind) []tev {
 	case operation.Created:
 		bad := replaceSpec(1, 1)
 		bad.Steps = nil
-		for _, s := range []operation.Spec{replaceSpec(1, 1), readdSpec(), regrabSpec(), bad, overSpec()} {
+		for _, s := range []operation.Spec{replaceSpec(1, 1), regrabSpec(), bad, overSpec()} {
 			out = append(out, tev{ev: created(s)})
 		}
 	case operation.StepStarted:

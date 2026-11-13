@@ -214,26 +214,19 @@ func partialOf(action string, execResult any) string {
 	if err != nil || string(b) == nullResult {
 		return unreadable
 	}
-	switch action {
-	case agent.EscalateRemoveAndSearch:
-		var r client.ReplaceResult
-		if json.Unmarshal(b, &r) != nil {
-			return unreadable
-		}
-		search := "search not sent"
-		if r.SearchTriggered != "" {
-			search = "search sent"
-		}
-		return fmt.Sprintf("Partial: deleted %d files, blocklisted %d, %s",
-			len(r.DeletedFiles), len(r.BlocklistedGrabs), search)
-	case agent.EscalateDeleteTorrentReadd:
-		var r client.ReaddResult
-		if json.Unmarshal(b, &r) != nil {
-			return unreadable
-		}
-		return "Partial: torrent deleted, re-add failed"
+	if action != agent.EscalateRemoveAndSearch {
+		return unreadable
 	}
-	return unreadable
+	var r client.ReplaceResult
+	if json.Unmarshal(b, &r) != nil {
+		return unreadable
+	}
+	search := "search not sent"
+	if r.SearchTriggered != "" {
+		search = "search sent"
+	}
+	return fmt.Sprintf("Partial: deleted %d files, blocklisted %d, %s",
+		len(r.DeletedFiles), len(r.BlocklistedGrabs), search)
 }
 
 // logEscalation records an owner-approved escalation to the event log,
@@ -284,8 +277,6 @@ func opResultJSON(action string, op operation.Op) string {
 			}
 		}
 		out = entry
-	case agent.EscalateDeleteTorrentReadd:
-		out = opexec.ReaddResultFrom(op)
 	default:
 		return ""
 	}

@@ -821,7 +821,7 @@ func TestSystemPromptStuckReadSection(t *testing.T) {
 		t.Fatalf("system prompt has no %q section", header)
 	}
 	section, _, _ := strings.Cut(rest, "\n---")
-	for _, want := range []string{"dd_readability_test", "decypharr_recheck", "refresh_decypharr_links", "delete_torrent_readd"} {
+	for _, want := range []string{"dd_readability_test", "decypharr_recheck", "refresh_decypharr_links", "manual_investigation"} {
 		if !strings.Contains(section, want) {
 			t.Errorf("stuck_read section does not mention %s", want)
 		}

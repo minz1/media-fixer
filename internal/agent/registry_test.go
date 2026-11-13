@@ -159,7 +159,6 @@ func TestUserPhrase_Values(t *testing.T) {
 		"decypharr_cache_cleanup": "fixing the media storage",
 		"decypharr_recheck":       "fixing the media storage",
 		"restart_decypharr":       "fixing the media storage",
-		"decypharr_delete_readd":  "fixing the media storage",
 		"clear_jellyfin_cache":    "reloading the app",
 		"restart_jellyfin":        "reloading the app",
 		"jellyfin_library_scan":   "updating the library",
@@ -168,7 +167,6 @@ func TestUserPhrase_Values(t *testing.T) {
 		"arr_search_missing":      "looking for a new copy",
 		"arr_remove_and_search":   "looking for a new copy",
 		"remove_and_search":       "looking for a new copy",
-		"delete_torrent_readd":    "fixing the media storage",
 		"nope":                    "",
 	}
 	for _, spec := range agent.ToolRegistry() {
@@ -234,7 +232,6 @@ func TestA6_ThreeListsOneRegistry(t *testing.T) {
 		"restart_jellyfin":        agent.LiveTierDisruptive,
 		"jellyfin_library_scan":   agent.LiveTierDisruptive,
 		"arr_remove_and_search":   agent.LiveTierPreview,
-		"decypharr_delete_readd":  agent.LiveTierPreview,
 	}
 	for name, want := range wantTier {
 		got, ok := agent.LiveTierOf(name)

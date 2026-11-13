@@ -32,7 +32,7 @@ func TestOverride_SingleFileTorrentListsItsFolder(t *testing.T) {
 	t.Parallel()
 	sample := decypharrAll + "/" + singleFileName
 	fx, result, stub := overrideAgainst(t, singleFileListings(), livecheck.Fixtures{
-		TorrentName: singleFileName, ReaddTorrentName: "readd", SamplePath: sample,
+		TorrentName: singleFileName, SamplePath: sample,
 	})
 	if !fx.TorrentIsFile {
 		t.Errorf("TorrentIsFile = false, want true (notes %q)", fx.Notes)
@@ -55,7 +55,7 @@ func TestOverride_MultiFileTorrentListsTheTorrentFolder(t *testing.T) {
 	fx, result, stub := overrideAgainst(t, map[string][]mediaagentapi.ListDirEntry{
 		decypharrAll:                {{Name: folder, IsDir: true}},
 		decypharrAll + "/" + folder: {{Name: "ep01.mkv", IsDir: false}},
-	}, livecheck.Fixtures{TorrentName: folder, ReaddTorrentName: "readd", SamplePath: sample})
+	}, livecheck.Fixtures{TorrentName: folder, SamplePath: sample})
 	if fx.TorrentIsFile {
 		t.Error("TorrentIsFile = true, want false for a folder")
 	}

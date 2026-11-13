@@ -16,12 +16,12 @@ func planSource() json.RawMessage { return json.RawMessage(`{"files":[]}`) }
 func opSpec() operation.Spec {
 	return operation.Spec{
 		Subject: operation.Subject{Kind: operation.SubjectIncident, ID: "inc"},
-		Kind:    operation.KindTorrentReadd,
+		Kind:    operation.KindReplace,
 		Title:   "Show S01",
 		Source:  planSource(),
 		Steps: []operation.Step{
-			{Kind: operation.StepTorrentDelete, InfoHash: "abc"},
-			{Kind: operation.StepTorrentAdd, InfoHash: "abc", Magnet: "magnet:?xt=urn:btih:abc"},
+			{Kind: operation.StepBlocklist, HistoryID: 3},
+			{Kind: operation.StepSearch, App: "sonarr", Command: "SeasonSearch", MediaID: 5, Season: 1},
 		},
 	}
 }

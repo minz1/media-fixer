@@ -20,18 +20,17 @@ import (
 type rebooted struct {
 	svc   *incident.Service
 	arr   *resumeArr
-	decy  *resumeDecy
 	notif *syncNotifier
 }
 
 func reboot(t *testing.T, database *db.DB) *rebooted {
 	t.Helper()
-	r := &rebooted{arr: &resumeArr{}, decy: &resumeDecy{}, notif: newSyncNotifier()}
+	r := &rebooted{arr: &resumeArr{}, notif: newSyncNotifier()}
 	jrnl := journal.New(database)
 	log := slog.New(slog.DiscardHandler)
 	ag := agent.New(nil, "stub", &agent.Dispatcher{}, database, jrnl, log)
 	r.svc = incident.NewService(context.Background(), database, jrnl, ag, nil, nil, r.notif, log)
-	r.svc.SetOpPorts(opexec.Ports{Arr: func(string) opexec.Arr { return r.arr }, Decypharr: r.decy})
+	r.svc.SetOpPorts(opexec.Ports{Arr: func(string) opexec.Arr { return r.arr }})
 	t.Cleanup(func() { stopService(t, r.svc) })
 	return r
 }
@@ -39,16 +38,14 @@ func reboot(t *testing.T, database *db.DB) *rebooted {
 func (r *rebooted) calls() int {
 	r.arr.mu.Lock()
 	defer r.arr.mu.Unlock()
-	r.decy.mu.Lock()
-	defer r.decy.mu.Unlock()
-	return len(r.arr.calls) + len(r.decy.calls)
+	return len(r.arr.calls)
 }
 
 func crashMidRun(t *testing.T, failFrom int) (*approvedFixture, string) {
 	t.Helper()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	fx := newApprovedFixture(t, &fakeArr{})
 	fx.svc.SetOpStoreForTest(&flakyStore{inner: fx.db, failFrom: failFrom})
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	inc := fx.awaiting(t, replaceParams())
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the store to stop mid-run")
 	}
@@ -146,8 +143,8 @@ func TestRestart_KillDuringEachStepPoint(t *testing.T) {
 
 func TestRestart_KillAfterLastResultBeforePlanExecuted(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{})
+	inc := fx.awaiting(t, replaceParams())
 	if err := fx.approve(t, inc.ID, twoFiles()); err != nil {
 		t.Fatal(err)
 	}
@@ -194,9 +191,9 @@ func TestRestart_ResolvedMidOpThenCrashKeepsNoResume(t *testing.T) {
 
 func TestReconciler_PlanLostUsesStoreCause(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	fx := newApprovedFixture(t, &fakeArr{})
 	fx.svc.SetOpStoreForTest(&flakyStore{inner: fx.db, failFrom: 4})
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	inc := fx.awaiting(t, replaceParams())
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the store failure")
 	}
@@ -221,9 +218,9 @@ func TestReconciler_PlanLostUsesStoreCause(t *testing.T) {
 
 func TestReconciler_PlanLostDefaultsToRestartCause(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	fx := newApprovedFixture(t, &fakeArr{})
 	fx.svc.SetOpStoreForTest(&flakyStore{inner: fx.db, failFrom: 4})
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	inc := fx.awaiting(t, replaceParams())
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the store failure")
 	}

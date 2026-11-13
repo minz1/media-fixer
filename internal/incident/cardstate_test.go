@@ -167,8 +167,6 @@ func TestRenderer_ButtonRules(t *testing.T) {
 			}, []string{"rerun", "resolve"}},
 		{"preview without a plan", db.StatusManualTestNeeded, agent.EscalateRemoveAndSearch, nil,
 			[]string{"preview", "rerun", "resolve"}},
-		{"preview for a torrent re-add", db.StatusManualTestNeeded, agent.EscalateDeleteTorrentReadd, nil,
-			[]string{"preview", "rerun", "resolve"}},
 		{"no preview for manual investigation", db.StatusManualTestNeeded, agent.EscalateManualInvestigation, nil,
 			[]string{"rerun", "resolve"}},
 		{"stale plan offers Preview", db.StatusManualTestNeeded, agent.EscalateRemoveAndSearch,
@@ -296,32 +294,6 @@ func TestRenderer_PlanTooLong(t *testing.T) {
 	}
 }
 
-func TestRenderer_ReaddPlanSection(t *testing.T) {
-	t.Parallel()
-	svc, d, _ := newCardService(t, &cardNotifier{}, nil)
-	inc := cardIncident(t, d, db.StatusManualTestNeeded, agent.EscalateDeleteTorrentReadd)
-	fp := storePlan(t, d, inc.ID, &client.ReaddPlan{Name: "The.Boys.S01", Provider: "torbox", State: "error"})
-
-	up := renderInc(t, svc, inc.ID)
-	var text []string
-	for _, s := range up.Sections {
-		text = append(text, s.Value)
-	}
-	joined := strings.Join(text, "\n")
-	for _, want := range []string{"The.Boys.S01", "torbox", "error"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("sections %q missing %q", joined, want)
-		}
-	}
-	i := slices.IndexFunc(up.Buttons, func(b card.Button) bool { return strings.HasPrefix(b.ID, "mf1:inc:approve:") })
-	if i < 0 {
-		t.Fatalf("buttons = %+v, want Approve", up.Buttons)
-	}
-	if a, _ := card.Decode(up.Buttons[i].ID); a.Args[len(a.Args)-1] != fp {
-		t.Errorf("approve args = %v, want the plan fingerprint %s last", a.Args, fp)
-	}
-}
-
 func clickInc(
 	t *testing.T,
 	svc *incident.Service,
@@ -364,8 +336,7 @@ func TestHandler_ApproveReturnsConfirm(t *testing.T) {
 func TestHandler_ConfirmLabelPerAction(t *testing.T) {
 	t.Parallel()
 	for action, label := range map[string]string{
-		agent.EscalateRemoveAndSearch:    "Yes, delete and re-search",
-		agent.EscalateDeleteTorrentReadd: "Yes, delete and re-add",
+		agent.EscalateRemoveAndSearch: "Yes, delete and re-search",
 	} {
 		t.Run(action, func(t *testing.T) {
 			t.Parallel()

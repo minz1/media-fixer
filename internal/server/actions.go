@@ -57,9 +57,6 @@ func stepList(op operation.Op) string {
 	parts := make([]string, len(op.Steps))
 	for i, st := range op.Steps {
 		parts[i] = fmt.Sprintf("%d. %s %s", i+1, st.Kind, op.Results[i].State)
-		if st.Magnet != "" {
-			parts[i] += " " + st.Magnet
-		}
 	}
 	return strings.Join(parts, "; ")
 }

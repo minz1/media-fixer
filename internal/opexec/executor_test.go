@@ -149,22 +149,6 @@ func TestExecutor_DeleteFile404ReadErrorIsUnknown(t *testing.T) {
 	wantStates(t, got, unknown, pending)
 }
 
-func TestExecutor_TorrentDeleteAnyErrorIsUnknown(t *testing.T) {
-	t.Parallel()
-	for _, code := range []int{404, 400, 500} {
-		t.Run(strconv.Itoa(code), func(t *testing.T) {
-			t.Parallel()
-			r := newRig(mustOp(t, readdSpec()))
-			r.decy.fail["tdelete"] = status(code)
-			got := r.x.Run(context.Background(), r.store.op)
-			wantStates(t, got, unknown, pending)
-			if r.j.has("call:tadd") {
-				t.Fatal("add called after a delete error")
-			}
-		})
-	}
-}
-
 func TestExecutor_QueueRemove404IsUnknown(t *testing.T) {
 	t.Parallel()
 	r := newRig(mustOp(t, regrabSpec()))
@@ -262,41 +246,5 @@ func TestS9_6_SearchErrorAfterDeletesStopsAtSearch(t *testing.T) {
 	}
 	if !strings.Contains(operation.Line(got), "deleted 2 of 2 files") {
 		t.Fatalf("line = %q", operation.Line(got))
-	}
-}
-
-func TestQ5a_6_ResumeAfterUnknownDeleteDeletesThenReadds(t *testing.T) {
-	t.Parallel()
-	r := newRig(mustOp(t, readdSpec()))
-	r.decy.fail["tdelete"] = status(500)
-	r.decy.present = true
-	first := r.x.Run(context.Background(), r.store.op)
-	wantStates(t, first, unknown, pending)
-	probes, err := r.x.Probe(context.Background(), first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantVerdicts(t, probes, operation.VerdictTodo, operation.VerdictTodo)
-	delete(r.decy.fail, "tdelete")
-	resumed := apply(t, first, operation.Event{Kind: operation.OwnerContinued, Version: first.Version, Probes: probes})
-	r.store.op = resumed
-	got := r.x.Run(context.Background(), resumed)
-	wantStates(t, got, done, done)
-	if !r.j.has("call:tadd") {
-		t.Fatalf("re-add never sent: %v", r.j.all())
-	}
-}
-
-func TestQ5a_6_DeletedNotReaddedStopsAtAdd(t *testing.T) {
-	t.Parallel()
-	r := newRig(mustOp(t, readdSpec()))
-	r.decy.fail["tadd"] = status(400)
-	got := r.x.Run(context.Background(), r.store.op)
-	wantStates(t, got, done, failed)
-	if got.Steps[1].Magnet != "magnet:?xt=abc" {
-		t.Fatalf("magnet = %q", got.Steps[1].Magnet)
-	}
-	if line := operation.Line(got); line != "Deleted the torrent; re-add not sent." {
-		t.Fatalf("line = %q", line)
 	}
 }

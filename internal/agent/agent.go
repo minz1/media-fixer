@@ -151,8 +151,7 @@ wedged, so a read of the stuck file would wedge too.
     hang in the same state and park a media-agent goroutine, so both are refused on this incident.
     get_torrent_state and get_repair_status are safe.
   - Go to get_repair_status, then decypharr_recheck by name, then refresh_decypharr_links. If
-    those were already tried on this incident, escalate delete_torrent_readd (the existing
-    approval flow).
+    those were already tried on this incident, escalate manual_investigation.
 
 --- Buffering / low quality (what=buffering) ---
 
@@ -298,7 +297,8 @@ a cache clear failed, with no new evidence a restart would help) is worse than a
 and control review will likely catch it anyway once two or more actions have been tried.
 
 Action priority (least destructive first):
-1. refresh_decypharr_links  — for EIO / stale CDN URLs
+1. refresh_decypharr_links  — for EIO / stale CDN URLs, and for a torrent whose debrid links are dead:
+   decypharr re-adds it from its magnet itself
 2. decypharr_recheck        — recheck one specific broken entry by name
 3. decypharr_repair_sweep   — general broken-entry check
 4. decypharr_cache_cleanup  — FUSE mount serving stale paths (EIO through mount, debrid link OK)
@@ -315,8 +315,7 @@ decypharr_cache_cleanup: they act on every file and cannot change that one.
 You may call autonomous actions directly. Approval-required actions must only appear in
 complete_diagnosis.escalate_action, never called as a tool yourself.
 
-escalate_action must be one of: none | remove_and_search | delete_torrent_readd |
-manual_investigation.
+escalate_action must be one of: none | remove_and_search | manual_investigation.
   - remove_and_search: the file(s) on disk are wrong/corrupt and Sonarr/Radarr should delete
     them, blocklist the release that produced them, and search for a replacement. Use this
     when dd_readability_test or get_torrent_state points at a specific bad file/release
@@ -330,14 +329,6 @@ manual_investigation.
     merely wrong; say wrong_content or wrong_quality instead, which are not contradicted by a
     file that reads. Be as specific as the evidence allows — prefer scope=episode over season
     or series when you know which episode is bad.
-  - delete_torrent_readd: decypharr has the torrent but its debrid links are broken in a way
-    the repair tools cannot fix — you have ALREADY tried refresh_decypharr_links and
-    decypharr_repair_sweep this incident and dd_readability_test still fails with an I/O error
-    (not not_found: missing content is arr_search_missing, not this). Removes the torrent from
-    decypharr and the debrid provider and re-adds it from its magnet so the provider re-fetches
-    it. Set escalate_params: name (the exact torrent name from get_torrent_state). The preview
-    refuses if the torrent has no stored magnet, because the delete would then be
-    unrecoverable — if that happens, use manual_investigation.
   - manual_investigation: you cannot form a confident diagnosis or fix; the owner needs to look.
   - none: no escalation needed (requires_approval should be false in this case).
 
@@ -489,8 +480,6 @@ func escalationLabel(action string) string {
 		return "no action"
 	case EscalateRemoveAndSearch:
 		return "remove file(s) and re-search"
-	case EscalateDeleteTorrentReadd:
-		return "delete the torrent and re-add it to the debrid provider"
 	case EscalateManualInvestigation:
 		return "manual investigation needed"
 	default:
@@ -1243,8 +1232,6 @@ func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult, wh
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
 		return a.disp.planRemoveAndSearch(ctx, result.EscalateParams, what != WhatStuckRead)
-	case EscalateDeleteTorrentReadd:
-		return a.disp.readDecypharrReaddPlan(ctx, &toolCall{}, result.EscalateParams)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
@@ -1256,8 +1243,6 @@ func (a *Agent) OperationFor(
 	switch result.EscalateAction {
 	case EscalateRemoveAndSearch:
 		return a.disp.replaceOperation(subject, planJSON)
-	case EscalateDeleteTorrentReadd:
-		return a.disp.readdOperation(subject, planJSON)
 	default:
 		return operation.Spec{}, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}

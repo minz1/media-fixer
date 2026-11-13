@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/card"
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/incident"
@@ -141,48 +140,6 @@ func (a *resumeArr) probes() int {
 	return a.count("read:")
 }
 
-type resumeDecy struct {
-	mu      sync.Mutex
-	calls   []string
-	present bool
-	failAdd error
-	magnets []string
-}
-
-func (d *resumeDecy) DeleteTorrent(_ context.Context, _, hash string, _ bool) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.calls = append(d.calls, "tdelete:"+hash)
-	return nil
-}
-
-func (d *resumeDecy) AddTorrent(_ context.Context, magnet, _ string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.calls = append(d.calls, "tadd")
-	d.magnets = append(d.magnets, magnet)
-	return d.failAdd
-}
-
-func (d *resumeDecy) TorrentByHash(context.Context, string) (bool, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.calls = append(d.calls, "tread")
-	return d.present, nil
-}
-
-func (d *resumeDecy) count(prefix string) int {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	n := 0
-	for _, c := range d.calls {
-		if strings.HasPrefix(c, prefix) {
-			n++
-		}
-	}
-	return n
-}
-
 func twoFileArr() *resumeArr {
 	return &resumeArr{files: map[int]client.EpisodeFile{
 		10: {ID: 10, Path: "/mnt/s01e01.mkv"}, 11: {ID: 11, Path: "/mnt/s01e02.mkv"},
@@ -192,28 +149,23 @@ func twoFileArr() *resumeArr {
 type resumeFx struct {
 	*approvedFixture
 
-	arr  *resumeArr
-	decy *resumeDecy
-	id   string
+	arr *resumeArr
+	id  string
 }
 
-func newResumeFx(t *testing.T, arr *resumeArr, decy *resumeDecy) *resumeFx {
+func newResumeFx(t *testing.T, arr *resumeArr) *resumeFx {
 	t.Helper()
-	fx := newApprovedFixture(t, nil, nil)
+	fx := newApprovedFixture(t, nil)
 	fx.disp.Sonarr = client.NewArr("http://127.0.0.1:1", "k")
 	fx.disp.Radarr = client.NewArr("http://127.0.0.1:1", "k")
 	ports := opexec.Ports{Arr: func(string) opexec.Arr { return arr }}
-	if decy != nil {
-		ports.Decypharr = decy
-		fx.disp.Decypharr = client.NewDecypharr("http://127.0.0.1:1", "t")
-	}
 	fx.svc.SetOpPorts(ports)
-	return &resumeFx{approvedFixture: fx, arr: arr, decy: decy}
+	return &resumeFx{approvedFixture: fx, arr: arr}
 }
 
 func (fx *resumeFx) failReplace(t *testing.T, plan client.ReplacePlan) {
 	t.Helper()
-	fx.id = fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams()).ID
+	fx.id = fx.awaiting(t, replaceParams()).ID
 	if err := fx.approve(t, fx.id, plan); err == nil {
 		t.Fatal("approve succeeded, want a failed step")
 	}
@@ -242,7 +194,7 @@ func TestResume_RefusesDuringShutdown(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{11: errRejected}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	before := fx.op(t)
 	probes := arr.probes()
@@ -282,7 +234,7 @@ func TestResume_ShutdownWhileWaitingForSlotRefuses(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{11: errRejected}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	release, err := fx.svc.HoldGlobalForTest(context.Background())
 	if err != nil {
@@ -308,7 +260,7 @@ func TestResume_StaleIncidentVersionRefused(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{11: errRejected}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	op := fx.op(t)
 	v := fx.svc.CurrentVersion(context.Background(), fx.id)
@@ -337,7 +289,7 @@ func TestResume_StaleOpVersionRefused(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{11: errRejected}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	op := fx.op(t)
 	v := fx.svc.CurrentVersion(context.Background(), fx.id)
@@ -371,7 +323,7 @@ func TestResume_DoubleTapRunsOnce(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failSearch = errRejected
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	arr.set(func() { arr.failSearch = nil })
 	searches := arr.count("search")
@@ -415,7 +367,7 @@ func TestResume_ConflictShowsProbeNote(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{11: errRejected}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	before := fx.op(t)
 	arr.set(func() { arr.files[11] = client.EpisodeFile{ID: 11, Path: "/mnt/other.mkv"} })
@@ -443,7 +395,7 @@ func TestResume_DeletedFileIDIsDoneNotDeletedAgain(t *testing.T) {
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{10: errBoom}
 	arr.loseOnFail = true
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	arr.set(func() { arr.failDelete = nil })
 
@@ -462,41 +414,11 @@ func TestResume_DeletedFileIDIsDoneNotDeletedAgain(t *testing.T) {
 	}
 }
 
-func TestResume_TorrentAlreadyPresentIsNotAddedTwice(t *testing.T) {
-	t.Parallel()
-	decy := &resumeDecy{failAdd: errBoom}
-	fx := newResumeFx(t, &resumeArr{}, decy)
-	fx.id = fx.awaiting(t, agent.EscalateDeleteTorrentReadd, map[string]any{"name": "The.Boys.S01"}).ID
-	plan := client.ReaddPlan{
-		Name:     "The.Boys.S01",
-		InfoHash: "abc",
-		Category: "sonarr",
-		Magnet:   "magnet:?xt=urn:btih:abc",
-	}
-	if err := fx.approve(t, fx.id, plan); err == nil {
-		t.Fatal("approve succeeded, want the add failure")
-	}
-	decy.mu.Lock()
-	decy.present = true
-	decy.mu.Unlock()
-
-	if err := fx.resume(t); err != nil {
-		t.Fatal(err)
-	}
-
-	if decy.count("tadd") != 1 {
-		t.Errorf("AddTorrent called %d times, want once", decy.count("tadd"))
-	}
-	if fx.op(t).Status != operation.Done || fx.state(t) != lifecycle.Verifying {
-		t.Errorf("op=%s incident=%s, want done and verifying", fx.op(t).Status, fx.state(t))
-	}
-}
-
 func TestResume_UnknownBlocklistIsProbedNotRepeated(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failBlock = errBoom
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	plan := twoFiles()
 	plan.SkipBlocklist = false
 	plan.GrabsToBlocklist = []client.HistoryRecord{{ID: 5, DownloadID: "dl1", Date: time.Now().Add(-time.Hour)}}
@@ -521,14 +443,14 @@ func movieFx(t *testing.T) *resumeFx {
 		movieFiles: map[int]client.MovieFile{7: {ID: 7, Path: "/mnt/movie.mkv"}},
 		failDelete: map[int]error{7: errBoom}, loseOnFail: true,
 	}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	plan := client.ReplacePlan{
 		MediaType: client.ReplaceMediaMovie, Title: "Movie", Scope: client.ReplaceScopeSeries, MediaID: 5,
 		SeasonNumber: -1, EpisodeNumber: -1, EpisodeID: -1, SkipBlocklist: true,
 		Files:  []client.ReplaceFile{{ID: 7, Path: "/mnt/movie.mkv"}},
 		Reason: client.ReplaceReasonWrongContent,
 	}
-	fx.id = fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams()).ID
+	fx.id = fx.awaiting(t, replaceParams()).ID
 	if err := fx.approve(t, fx.id, plan); err == nil {
 		t.Fatal("approve succeeded, want the delete failure")
 	}
@@ -559,7 +481,7 @@ func TestS9_4_ResumeContinuesFromTheFailedStep(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failDelete = map[int]error{11: errBoom}
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	arr.set(func() { arr.failDelete = nil })
 
@@ -583,7 +505,7 @@ func TestS9_6_ResumeSendsTheSearch(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failSearch = errRejected
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	arr.set(func() { arr.failSearch = nil })
 
@@ -593,42 +515,6 @@ func TestS9_6_ResumeSendsTheSearch(t *testing.T) {
 
 	if arr.count("delete") != 2 || arr.count("search") != 2 {
 		t.Errorf("calls = %v, want the deletes once and the search twice", arr.calls)
-	}
-	if fx.state(t) != lifecycle.Verifying {
-		t.Errorf("incident = %s, want verifying", fx.state(t))
-	}
-}
-
-func TestQ5a_6_ResumeReaddsFromTheStoredMagnet(t *testing.T) {
-	t.Parallel()
-	decy := &resumeDecy{failAdd: errRejected}
-	fx := newResumeFx(t, &resumeArr{}, decy)
-	fx.id = fx.awaiting(t, agent.EscalateDeleteTorrentReadd, map[string]any{"name": "The.Boys.S01"}).ID
-	plan := client.ReaddPlan{
-		Name:     "The.Boys.S01",
-		InfoHash: "abc",
-		Category: "sonarr",
-		Magnet:   "magnet:?xt=urn:btih:abc",
-	}
-	if err := fx.approve(t, fx.id, plan); err == nil {
-		t.Fatal("approve succeeded, want the add failure")
-	}
-	decy.mu.Lock()
-	decy.failAdd = nil
-	decy.mu.Unlock()
-
-	if err := fx.resume(t); err != nil {
-		t.Fatal(err)
-	}
-
-	decy.mu.Lock()
-	magnets := slices.Clone(decy.magnets)
-	decy.mu.Unlock()
-	if len(magnets) != 2 || magnets[1] != plan.Magnet {
-		t.Errorf("magnets added = %v, want the stored magnet again", magnets)
-	}
-	if decy.count("tdelete") != 1 {
-		t.Errorf("torrent deleted %d times, want once", decy.count("tdelete"))
 	}
 	if fx.state(t) != lifecycle.Verifying {
 		t.Errorf("incident = %s, want verifying", fx.state(t))
@@ -651,7 +537,7 @@ func TestResume_ButtonIsNormalStyleWithoutConfirm(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failSearch = errRejected
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	arr.set(func() { arr.failSearch = nil })
 
@@ -679,7 +565,7 @@ func TestResume_ShowsNextBesideButton(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failSearch = errRejected
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 
 	_, up := resumeButton(t, fx)
@@ -701,7 +587,7 @@ func TestResume_KeepsRerunResolveUnlock(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failSearch = errRejected
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	lifecycletest.Lock(t, fx.db, fx.id, true)
 
@@ -722,7 +608,7 @@ func TestResume_RunsWhilePaused(t *testing.T) {
 	t.Parallel()
 	arr := twoFileArr()
 	arr.failSearch = errRejected
-	fx := newResumeFx(t, arr, nil)
+	fx := newResumeFx(t, arr)
 	fx.failReplace(t, twoFiles())
 	arr.set(func() { arr.failSearch = nil })
 	if err := fx.svc.SetAutonomousPaused(context.Background(), true); err != nil {

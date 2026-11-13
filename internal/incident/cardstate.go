@@ -69,8 +69,8 @@ func (s *Service) cardUpdate(ctx context.Context, inc *db.Incident, snap lifecyc
 	snap.In.Limits = s.limits(s.timers(ctx))
 	up := card.Update{Status: statusLine(inc.Status) + statusNotes(snap)}
 	var plan cardPlan
-	if action := escalatable(inc); action != "" && snap.PlanFresh(time.Now()) {
-		if plan, _, err = s.freshPlan(ctx, inc, action); err != nil {
+	if escalatable(inc) && snap.PlanFresh(time.Now()) {
+		if plan, _, err = s.freshPlan(ctx, inc); err != nil {
 			return card.Update{}, err
 		}
 		up.Sections = plan.sections
@@ -153,22 +153,15 @@ func statusLine(st db.IncidentStatus) string {
 	return string(st)
 }
 
-func escalatable(inc *db.Incident) string {
+func escalatable(inc *db.Incident) bool {
 	if inc.Status != db.StatusManualTestNeeded {
-		return ""
+		return false
 	}
 	result, err := escalationResult(inc)
-	if err != nil {
-		return ""
-	}
-	switch result.EscalateAction {
-	case agent.EscalateRemoveAndSearch, agent.EscalateDeleteTorrentReadd:
-		return result.EscalateAction
-	}
-	return ""
+	return err == nil && result.EscalateAction == agent.EscalateRemoveAndSearch
 }
 
-func (s *Service) freshPlan(ctx context.Context, inc *db.Incident, action string) (cardPlan, bool, error) {
+func (s *Service) freshPlan(ctx context.Context, inc *db.Incident) (cardPlan, bool, error) {
 	planJSON, at, err := s.db.GetEscalationPlan(ctx, inc.ID)
 	if errors.Is(err, db.ErrNoEscalationPlan) {
 		return cardPlan{}, false, nil
@@ -180,27 +173,12 @@ func (s *Service) freshPlan(ctx context.Context, inc *db.Incident, action string
 	if time.Now().After(expires) {
 		return cardPlan{}, false, nil
 	}
-	var secs []card.Field
-	var lines int
-	if action == agent.EscalateDeleteTorrentReadd {
-		var p client.ReaddPlan
-		if err = json.Unmarshal(planJSON, &p); err != nil {
-			return cardPlan{}, false, fmt.Errorf("decode readd plan: %w", err)
-		}
-		secs = []card.Field{
-			{Name: "Torrent", Value: p.Name},
-			{Name: "Provider", Value: p.Provider},
-			{Name: "State", Value: p.State},
-		}
-		lines = 1
-	} else {
-		var p client.ReplacePlan
-		if err = json.Unmarshal(planJSON, &p); err != nil {
-			return cardPlan{}, false, fmt.Errorf("decode replace plan: %w", err)
-		}
-		secs = replaceSections(&p, inc.What)
-		lines = len(p.Files)
+	var p client.ReplacePlan
+	if err = json.Unmarshal(planJSON, &p); err != nil {
+		return cardPlan{}, false, fmt.Errorf("decode replace plan: %w", err)
 	}
+	secs := replaceSections(&p, inc.What)
+	lines := len(p.Files)
 	secs = append(secs, card.Field{Name: "Expires", Value: fmt.Sprintf("<t:%d:t>", expires.Unix())})
 	plan := cardPlan{
 		sections: secs,
@@ -313,13 +291,9 @@ func (s *Service) cardApprove(ctx context.Context, id string, v Version, a card.
 		}
 		return card.Result{Line: fmt.Sprintf("🚀 Approved · <t:%d:t>", time.Now().Unix())}, nil
 	}
-	result, _, err := s.approvable(ctx, id, fp)
+	_, _, err := s.approvable(ctx, id, fp)
 	if err != nil {
 		return card.Result{}, err
-	}
-	label := "Yes, delete and re-search"
-	if result.EscalateAction == agent.EscalateDeleteTorrentReadd {
-		label = "Yes, delete and re-add"
 	}
 	confirm, okConfirm := card.Encode(card.Action{Kind: a.Kind, Verb: verbConfirm, Args: a.Args})
 	cancel, okCancel := card.Encode(card.Action{Kind: a.Kind, Verb: verbCancel, Args: a.Args[:minIncArgs]})
@@ -327,7 +301,7 @@ func (s *Service) cardApprove(ctx context.Context, id string, v Version, a card.
 		return card.Result{}, fmt.Errorf("%w: confirm id too long", card.ErrUnknownID)
 	}
 	return card.Result{Confirm: []card.Button{
-		{Label: label, Style: card.Danger, ID: confirm},
+		{Label: "Yes, delete and re-search", Style: card.Danger, ID: confirm},
 		{Label: "Cancel", Style: card.Secondary, ID: cancel},
 	}}, nil
 }

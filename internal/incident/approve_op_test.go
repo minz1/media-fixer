@@ -92,8 +92,8 @@ func TestApprove_StepsDurableAcrossTheRun(t *testing.T) {
 		defer mu.Unlock()
 		seen[file] = got
 	}}
-	fx = newApprovedFixture(t, arr, nil)
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx = newApprovedFixture(t, arr)
+	inc := fx.awaiting(t, replaceParams())
 	id = inc.ID
 
 	if err := fx.approve(t, id, twoFiles()); err != nil {
@@ -117,8 +117,8 @@ func TestApprove_StepsDurableAcrossTheRun(t *testing.T) {
 
 func TestS9_4_PartialDeleteLandsInPlanPartialWithResume(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}}, nil)
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}})
+	inc := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the delete failure")
@@ -135,8 +135,8 @@ func TestS9_4_PartialDeleteLandsInPlanPartialWithResume(t *testing.T) {
 
 func TestS9_6_SearchNotSentLandsInPlanPartialWithResume(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{failSearch: true}, nil)
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{failSearch: true})
+	inc := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the search failure")
@@ -152,31 +152,10 @@ func TestS9_6_SearchNotSentLandsInPlanPartialWithResume(t *testing.T) {
 	}
 }
 
-func TestQ5a_6_DeletedNotReaddedOffersResume(t *testing.T) {
-	t.Parallel()
-	fx := newApprovedFixture(t, nil, failingReaddDecypharr(t))
-	inc := fx.awaiting(t, agent.EscalateDeleteTorrentReadd, map[string]any{"name": "The.Boys.S01"})
-
-	err := fx.approve(t, inc.ID, client.ReaddPlan{
-		Name: "The.Boys.S01", InfoHash: "abc", Category: "sonarr", Magnet: "magnet:?xt=urn:btih:abc",
-	})
-	if err == nil {
-		t.Fatal("approve succeeded, want the re-add failure")
-	}
-
-	s := snapOf(t, fx, inc.ID)
-	if s.Reason != lifecycle.ReasonPlanPartial || !operation.Resumable(incidentOp(t, fx, inc.ID)) {
-		t.Fatalf("incident = %s op=%v, want plan_partial with a resumable op", s.Reason, s.Op)
-	}
-	if incidentOp(t, fx, inc.ID).Results[0].State != operation.ResultDone {
-		t.Error("delete step is not done")
-	}
-}
-
 func TestApprove_NothingAppliedOffersPreviewAgain(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{10: true}, deleteState: 400}, nil)
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{10: true}, deleteState: 400})
+	inc := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the delete failure")
@@ -193,8 +172,8 @@ func TestApprove_NothingAppliedOffersPreviewAgain(t *testing.T) {
 
 func TestApprove_OneLogRowPerExecution(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}}, nil)
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}})
+	inc := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the delete failure")
@@ -208,9 +187,9 @@ func TestApprove_OneLogRowPerExecution(t *testing.T) {
 
 func TestApprove_StoreFailureInterruptsOp(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	fx := newApprovedFixture(t, &fakeArr{})
 	fx.svc.SetOpStoreForTest(&flakyStore{inner: fx.db, failFrom: 4, spareInterrupt: true})
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	inc := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the store failure")
@@ -231,9 +210,9 @@ func TestApprove_StoreFailureInterruptsOp(t *testing.T) {
 
 func TestApprove_StoreFailureRecordsLostCause(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
+	fx := newApprovedFixture(t, &fakeArr{})
 	fx.svc.SetOpStoreForTest(&flakyStore{inner: fx.db, failFrom: 4})
-	inc := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	inc := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, inc.ID, twoFiles()); err == nil {
 		t.Fatal("approve succeeded, want the store failure")

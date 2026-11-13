@@ -123,17 +123,7 @@ func sendPart(s StepState, what string) string {
 }
 
 func smallBody(op Op) string {
-	var first string
-	if op.Kind == KindTorrentReadd {
-		first = lead(
-			op.Results[0].State,
-			"Deleted the torrent",
-			"The torrent may be deleted",
-			"The torrent is not deleted",
-		)
-		return first + "; " + sendPart(op.Results[1].State, "re-add")
-	}
-	first = lead(op.Results[0].State, "Removed", "The removal may have landed", "Not removed")
+	first := lead(op.Results[0].State, "Removed", "The removal may have landed", "Not removed")
 	return first + "; " + sendPart(op.Results[1].State, "search")
 }
 
@@ -189,10 +179,6 @@ func (p phrase) words() string {
 		return "delete " + plural(p.count, "file", "files")
 	case StepSearch:
 		return "send " + p.cmd
-	case StepTorrentDelete:
-		return "delete the torrent"
-	case StepTorrentAdd:
-		return "re-add it"
 	case StepQueueRemove:
 		return "remove the queue item"
 	}

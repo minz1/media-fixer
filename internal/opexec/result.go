@@ -18,28 +18,8 @@ func ReplaceResultFrom(op operation.Op) client.ReplaceResult {
 			res.DeletedFiles = append(res.DeletedFiles, client.ReplaceFile{ID: st.FileID, Path: st.Path, Size: st.Size})
 		case operation.StepSearch:
 			res.SearchTriggered = st.Command
-		case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepQueueRemove:
+		case operation.StepQueueRemove:
 		}
 	}
 	return res
-}
-
-func ReaddResultFrom(op operation.Op) client.ReaddResult {
-	var res client.ReaddResult
-	for i, st := range op.Steps {
-		switch st.Kind {
-		case operation.StepTorrentDelete:
-			res.Name = st.Name
-			res.Deleted = stepDone(op, i)
-		case operation.StepTorrentAdd:
-			res.Magnet = st.Magnet
-			res.Readded = stepDone(op, i)
-		case operation.StepBlocklist, operation.StepDeleteFile, operation.StepSearch, operation.StepQueueRemove:
-		}
-	}
-	return res
-}
-
-func stepDone(op operation.Op, i int) bool {
-	return i < len(op.Results) && op.Results[i].State == operation.ResultDone
 }

@@ -44,15 +44,8 @@ type Arr interface {
 	) (bool, error)
 }
 
-type Decypharr interface {
-	DeleteTorrent(ctx context.Context, category, hash string, removeFromDebrid bool) error
-	AddTorrent(ctx context.Context, magnet, category string) error
-	TorrentByHash(ctx context.Context, hash string) (bool, error)
-}
-
 type Ports struct {
-	Arr       func(app string) Arr
-	Decypharr Decypharr
+	Arr func(app string) Arr
 }
 
 type Executor struct {
@@ -126,9 +119,6 @@ func (x *Executor) call(ctx context.Context, op operation.Op, i int) error {
 	cctx, cancel := x.stepContext(ctx)
 	defer cancel()
 	st := op.Steps[i]
-	if st.Kind == operation.StepTorrentDelete || st.Kind == operation.StepTorrentAdd {
-		return x.callDecypharr(cctx, st)
-	}
 	a, err := x.arrFor(st.App)
 	if err != nil {
 		return err
@@ -153,20 +143,8 @@ func callArr(ctx context.Context, a Arr, st operation.Step, res operation.Result
 			id = res.QueueID
 		}
 		return a.RemoveQueueItem(ctx, id, false, true, true)
-	case operation.StepTorrentDelete, operation.StepTorrentAdd:
 	}
 	return fmt.Errorf("unknown step kind %q", st.Kind)
-}
-
-func (x *Executor) callDecypharr(ctx context.Context, st operation.Step) error {
-	d := x.Ports.Decypharr
-	if d == nil {
-		return fmt.Errorf("%w: decypharr", errNoPort)
-	}
-	if st.Kind == operation.StepTorrentDelete {
-		return d.DeleteTorrent(ctx, st.Category, st.InfoHash, true)
-	}
-	return d.AddTorrent(ctx, st.Magnet, st.Category)
 }
 
 func isMovie(st operation.Step) bool { return st.App == appRadarr }

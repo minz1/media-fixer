@@ -172,33 +172,10 @@ func (a *fakeArr) FailedForDownload(
 	return a.failedHit, a.failedErr
 }
 
-type fakeDecy struct {
-	j          *journal
-	fail       map[string]error
-	present    bool
-	presentErr error
-}
-
-func (d *fakeDecy) DeleteTorrent(_ context.Context, _, hash string, _ bool) error {
-	d.j.add("call:tdelete:" + hash)
-	return d.fail["tdelete"]
-}
-
-func (d *fakeDecy) AddTorrent(_ context.Context, _, _ string) error {
-	d.j.add("call:tadd")
-	return d.fail["tadd"]
-}
-
-func (d *fakeDecy) TorrentByHash(context.Context, string) (bool, error) {
-	d.j.add("read:torrent")
-	return d.present, d.presentErr
-}
-
 type rig struct {
 	j     *journal
 	store *memStore
 	arr   *fakeArr
-	decy  *fakeDecy
 	x     *opexec.Executor
 }
 
@@ -208,12 +185,11 @@ func newRig(op operation.Op) *rig {
 		j:     j,
 		store: &memStore{j: j, op: op},
 		arr:   &fakeArr{j: j, fail: map[string]error{}, block: map[string]bool{}},
-		decy:  &fakeDecy{j: j, fail: map[string]error{}},
 	}
 	tick := 0
 	r.x = &opexec.Executor{
 		Store: r.store,
-		Ports: opexec.Ports{Arr: func(string) opexec.Arr { return r.arr }, Decypharr: r.decy},
+		Ports: opexec.Ports{Arr: func(string) opexec.Arr { return r.arr }},
 		Now: func() time.Time {
 			tick++
 			return t0().Add(time.Duration(tick) * time.Second)
@@ -258,16 +234,6 @@ func replaceSpec(blocks, deletes int) operation.Spec {
 	}
 }
 
-func readdSpec() operation.Spec {
-	return operation.Spec{
-		Subject: incident(), Kind: operation.KindTorrentReadd, Title: "Show",
-		Steps: []operation.Step{
-			{Kind: operation.StepTorrentDelete, InfoHash: "abc", Category: "tv", Name: "Show"},
-			{Kind: operation.StepTorrentAdd, InfoHash: "abc", Category: "tv", Name: "Show", Magnet: "magnet:?xt=abc"},
-		},
-	}
-}
-
 func regrabSpec() operation.Spec {
 	return operation.Spec{
 		Subject: operation.Subject{Kind: operation.SubjectDownload, ID: "dl-q"}, Kind: operation.KindRegrab,
@@ -300,14 +266,10 @@ func apply(t *testing.T, op operation.Op, ev operation.Event) operation.Op {
 	return next
 }
 
-func interruptedAt(t *testing.T, spec operation.Spec, k int) operation.Op {
+func interruptedAt(t *testing.T, spec operation.Spec) operation.Op {
 	t.Helper()
 	op := mustOp(t, spec)
-	for j := range k {
-		op = apply(t, op, operation.Event{Kind: operation.StepStarted, Index: j})
-		op = apply(t, op, operation.Event{Kind: operation.StepFinished, Index: j, Outcome: operation.ResultDone})
-	}
-	op = apply(t, op, operation.Event{Kind: operation.StepStarted, Index: k})
+	op = apply(t, op, operation.Event{Kind: operation.StepStarted, Index: 0})
 	return apply(t, op, operation.Event{Kind: operation.Interrupted, Cause: operation.CauseRestart})
 }
 
@@ -338,5 +300,4 @@ func wantStates(t *testing.T, op operation.Op, want ...operation.StepState) {
 func TestPortsAreSatisfiedByClients(t *testing.T) {
 	t.Parallel()
 	var _ opexec.Arr = (*client.ArrClient)(nil)
-	var _ opexec.Decypharr = (*client.DecypharrClient)(nil)
 }

@@ -357,7 +357,6 @@ func opPorts(clients *clientset.Set) opexec.Ports {
 			}
 			return nil
 		},
-		Decypharr: clients.Decypharr,
 	}
 }
 

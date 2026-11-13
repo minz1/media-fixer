@@ -2,7 +2,6 @@ package opexec_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -143,25 +142,6 @@ func TestReplaceSpec_RefusesOverMaxSteps(t *testing.T) {
 	if _, err = opexec.ReplaceSpec(incident(), plan, nil); err != nil {
 		t.Fatalf("2000 steps refused: %v", err)
 	}
-}
-
-func TestReaddSpec_RefusesBlankMagnet(t *testing.T) {
-	t.Parallel()
-	for _, magnet := range []string{"", "   "} {
-		plan := &client.ReaddPlan{Name: "Show", InfoHash: "abc", Category: "tv", Magnet: magnet}
-		if _, err := opexec.ReaddSpec(incident(), plan, nil); !errors.Is(err, client.ErrNoMagnet) {
-			t.Fatalf("magnet %q: err = %v", magnet, err)
-		}
-	}
-	plan := &client.ReaddPlan{Name: "Show", InfoHash: "abc", Category: "tv", Magnet: "magnet:?xt=abc"}
-	spec, err := opexec.ReaddSpec(incident(), plan, []byte(`{}`))
-	if err != nil {
-		t.Fatalf("ReaddSpec: %v", err)
-	}
-	if spec.Kind != operation.KindTorrentReadd || len(spec.Steps) != 2 || spec.Steps[1].Magnet != plan.Magnet {
-		t.Fatalf("spec = %+v", spec)
-	}
-	mustOp(t, spec)
 }
 
 func wantReplaceCalls(skip bool, name string) []string {

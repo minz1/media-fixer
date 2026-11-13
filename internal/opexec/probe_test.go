@@ -34,7 +34,7 @@ func TestProbe_DeletedFileIDIsDone(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.epFiles = []client.EpisodeFile{{ID: 2, Path: "/tv/e2.mkv", Size: 100}}
-	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 2), 0))
+	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 2)))
 	wantVerdicts(t, got, operation.VerdictDone, operation.VerdictTodo, operation.VerdictTodo)
 	if got[0].Index != 0 || got[1].Index != 1 || got[2].Index != 2 {
 		t.Fatalf("indexes = %+v", got)
@@ -45,7 +45,7 @@ func TestProbe_ChangedPathIsConflict(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.epFiles = []client.EpisodeFile{{ID: 1, Path: "/tv/other.mkv", Size: 100}}
-	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 1), 0))
+	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 1)))
 	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
 	if !strings.Contains(got[0].Note, "changed since approval") {
 		t.Fatalf("note = %q", got[0].Note)
@@ -56,7 +56,7 @@ func TestProbe_SizeChangedIsConflict(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.epFiles = []client.EpisodeFile{{ID: 1, Path: "/tv/e1.mkv", Size: 999}}
-	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 1), 0))
+	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 1)))
 	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
 }
 
@@ -65,7 +65,7 @@ func TestProbe_PendingDeleteNeverSkipsSearch(t *testing.T) {
 	r := newRig(operation.Op{})
 	r.arr.epFiles = []client.EpisodeFile{{ID: 1, Path: "/tv/e1.mkv", Size: 100}}
 	r.arr.queue = []client.QueueEntry{{ID: 9, DownloadID: "dl-up"}}
-	op := interruptedAt(t, replaceSpec(0, 1), 0)
+	op := interruptedAt(t, replaceSpec(0, 1))
 	got := probeOf(t, r, op)
 	wantVerdicts(t, got, operation.VerdictTodo, operation.VerdictTodo)
 	if r.j.has("read:queue") {
@@ -78,7 +78,7 @@ func TestProbe_RegrabUpgradeStillSearches(t *testing.T) {
 	r := newRig(operation.Op{})
 	r.arr.failedHit = true
 	r.arr.movies = []client.Movie{{ID: 5, HasFile: true}}
-	got := probeOf(t, r, interruptedAt(t, regrabSpec(), 0))
+	got := probeOf(t, r, interruptedAt(t, regrabSpec()))
 	wantVerdicts(t, got, operation.VerdictDone, operation.VerdictTodo)
 }
 
@@ -86,42 +86,15 @@ func TestProbe_MediaGoneIsConflict(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.seriesErr = notFound()
-	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 0), 0))
+	got := probeOf(t, r, interruptedAt(t, replaceSpec(0, 0)))
 	wantVerdicts(t, got, operation.VerdictConflict)
-}
-
-func TestProbe_TorrentPresentIsDone(t *testing.T) {
-	t.Parallel()
-	t.Run("add present", func(t *testing.T) {
-		t.Parallel()
-		r := newRig(operation.Op{})
-		r.decy.present = true
-		got := probeOf(t, r, interruptedAt(t, readdSpec(), 1))
-		wantVerdicts(t, got, operation.VerdictDone)
-		if !strings.Contains(got[0].Note, "already re-added") {
-			t.Fatalf("note = %q", got[0].Note)
-		}
-	})
-	t.Run("delete present", func(t *testing.T) {
-		t.Parallel()
-		r := newRig(operation.Op{})
-		r.decy.present = true
-		got := probeOf(t, r, interruptedAt(t, readdSpec(), 0))
-		wantVerdicts(t, got, operation.VerdictTodo, operation.VerdictTodo)
-	})
-	t.Run("delete absent", func(t *testing.T) {
-		t.Parallel()
-		r := newRig(operation.Op{})
-		got := probeOf(t, r, interruptedAt(t, readdSpec(), 0))
-		wantVerdicts(t, got, operation.VerdictDone, operation.VerdictTodo)
-	})
 }
 
 func TestProbe_BlocklistFoundInHistoryIsDone(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.failedHit = true
-	got := probeOf(t, r, interruptedAt(t, replaceSpec(1, 0), 0))
+	got := probeOf(t, r, interruptedAt(t, replaceSpec(1, 0)))
 	wantVerdicts(t, got, operation.VerdictDone, operation.VerdictTodo)
 	if r.arr.failedArgs != "tv/5/dl1/2026-11-07T12:00:00Z" {
 		t.Fatalf("args = %s", r.arr.failedArgs)
@@ -133,7 +106,7 @@ func TestProbe_BlocklistWithoutDownloadIDIsConflict(t *testing.T) {
 	r := newRig(operation.Op{})
 	spec := replaceSpec(1, 0)
 	spec.Steps[0].DownloadID = ""
-	got := probeOf(t, r, interruptedAt(t, spec, 0))
+	got := probeOf(t, r, interruptedAt(t, spec))
 	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
 	if !strings.Contains(got[0].Note, "has no download id") || !strings.Contains(got[0].Note, "Rerun") {
 		t.Fatalf("note = %q", got[0].Note)
@@ -147,7 +120,7 @@ func TestProbe_QueueStillQueuedIsTodoWithCurrentID(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.queue = []client.QueueEntry{{ID: 3, DownloadID: "other"}, {ID: 99, DownloadID: "DL-Q"}}
-	got := probeOf(t, r, interruptedAt(t, regrabSpec(), 0))
+	got := probeOf(t, r, interruptedAt(t, regrabSpec()))
 	wantVerdicts(t, got, operation.VerdictTodo, operation.VerdictTodo)
 	if got[0].QueueID != 99 {
 		t.Fatalf("queue id = %d", got[0].QueueID)
@@ -158,7 +131,7 @@ func TestProbe_QueueGoneWithFailedRecordIsDone(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.failedHit = true
-	got := probeOf(t, r, interruptedAt(t, regrabSpec(), 0))
+	got := probeOf(t, r, interruptedAt(t, regrabSpec()))
 	wantVerdicts(t, got, operation.VerdictDone, operation.VerdictTodo)
 	if r.arr.failedArgs != "tv/5/dl-q/2026-11-07T12:00:00Z" {
 		t.Fatalf("args = %s", r.arr.failedArgs)
@@ -168,7 +141,7 @@ func TestProbe_QueueGoneWithFailedRecordIsDone(t *testing.T) {
 func TestProbe_QueueGoneWithoutFailedRecordIsConflict(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
-	got := probeOf(t, r, interruptedAt(t, regrabSpec(), 0))
+	got := probeOf(t, r, interruptedAt(t, regrabSpec()))
 	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
 	if !strings.Contains(got[0].Note, "left the queue without a blocklist record") {
 		t.Fatalf("note = %q", got[0].Note)
@@ -179,12 +152,7 @@ func TestProbe_ReadErrorReturnsError(t *testing.T) {
 	t.Parallel()
 	r := newRig(operation.Op{})
 	r.arr.filesErr = status(500)
-	if _, err := r.x.Probe(context.Background(), interruptedAt(t, replaceSpec(0, 1), 0)); err == nil {
-		t.Fatal("want an error")
-	}
-	r2 := newRig(operation.Op{})
-	r2.decy.presentErr = status(500)
-	if _, err := r2.x.Probe(context.Background(), interruptedAt(t, readdSpec(), 0)); err == nil {
+	if _, err := r.x.Probe(context.Background(), interruptedAt(t, replaceSpec(0, 1))); err == nil {
 		t.Fatal("want an error")
 	}
 }

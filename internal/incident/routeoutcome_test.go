@@ -82,10 +82,10 @@ func TestRouteExit_OutcomeKindsMapToLifecycle(t *testing.T) {
 			r.Outcome = agent.DiagnosisOutcome{Kind: agent.DiagnosisAwaitDownload, Target: &target}
 		},
 		agent.DiagnosisNeedsApproval: func(r *agent.DiagnosticResult) {
-			r.RequiresApproval, r.EscalateAction = true, agent.EscalateDeleteTorrentReadd
+			r.RequiresApproval, r.EscalateAction = true, agent.EscalateRemoveAndSearch
 			r.EscalateParams = map[string]any{"name": "x"}
 			r.Outcome = agent.DiagnosisOutcome{
-				Kind: agent.DiagnosisNeedsApproval, Plan: agent.EscalateDeleteTorrentReadd,
+				Kind: agent.DiagnosisNeedsApproval, Plan: agent.EscalateRemoveAndSearch,
 			}
 		},
 		agent.DiagnosisManual: func(r *agent.DiagnosticResult) {

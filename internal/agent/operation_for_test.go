@@ -47,15 +47,6 @@ func TestOperationFor_NoClientIsError(t *testing.T) {
 			t.Errorf("%s: err = %v, want no client configured", mt, err)
 		}
 	}
-	readd := &agent.DiagnosticResult{EscalateAction: agent.EscalateDeleteTorrentReadd}
-	b, err := json.Marshal(client.ReaddPlan{Name: "n", InfoHash: "h", Magnet: "magnet:?xt=1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = ag.OperationFor(operationSubject(), readd, b); err == nil ||
-		!strings.Contains(err.Error(), "decypharr not configured") {
-		t.Errorf("readd: err = %v, want decypharr not configured", err)
-	}
 }
 
 func TestOperationFor_DecodesStoredPlanExactly(t *testing.T) {
@@ -87,25 +78,6 @@ func TestOperationFor_DecodesStoredPlanExactly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("replace spec differs\n got %+v\nwant %+v", got, want)
-	}
-
-	readdPlan := client.ReaddPlan{Name: "n", InfoHash: "h", Category: "tv", Magnet: "magnet:?xt=1"}
-	readdStored, err := json.Marshal(readdPlan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotReadd, err := ag.OperationFor(operationSubject(), &agent.DiagnosticResult{
-		EscalateAction: agent.EscalateDeleteTorrentReadd,
-	}, readdStored)
-	if err != nil {
-		t.Fatalf("OperationFor readd: %v", err)
-	}
-	wantReadd, err := opexec.ReaddSpec(operationSubject(), &readdPlan, readdStored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(gotReadd, wantReadd) {
-		t.Errorf("readd spec differs\n got %+v\nwant %+v", gotReadd, wantReadd)
 	}
 }
 

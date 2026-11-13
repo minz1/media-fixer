@@ -23,18 +23,16 @@ fields from your real types and fail when one goes.
 
 | Call | media-fixer use | Request | Response fields read |
 |---|---|---|---|
-| `GET /api/torrents?search=&state=&page=&limit=100` | get_torrent_state tool, list_alternatives (TorrentByHash: search by lower-case info hash, paged), livecheck fixtures | query only; `search` matches name + info hash | `torrents[]`, `total`; per entry `name`, `info_hash`, `category`, `state`, `size`, `progress`, `added_on`, `bad`, `active_provider`, `magnet` (omitempty), `original_filename` |
+| `GET /api/torrents?search=&state=&page=&limit=100` | get_torrent_state tool, list_alternatives (TorrentByHash: search by lower-case info hash, paged), livecheck fixtures | query only; `search` matches name + info hash | `torrents[]`, `total`; per entry `name`, `info_hash`, `category`, `state`, `size`, `progress`, `added_on`, `bad`, `active_provider`, `original_filename` |
 | `POST /api/repair/run` | refresh_decypharr_links (the dead-torrent route) | JSON `{"auto_repair": true, "unrestrict_link": true}` | `run_id` |
 | `POST /api/repair/run` | decypharr_repair_sweep | JSON `{"auto_repair": true}` | `run_id` |
 | `GET /api/repair/status` | get_repair_status tool (passed through raw), livecheck "is a repair running" | none | `active_run` present and not null = running; `active_run.stage` |
 | `GET /api/repair/health` | get_repair_health tool (raw), livecheck entry discovery | none | array; per entry `entry_name`, `status` |
 | `POST /api/repair/health/{name}/check[?fix=true]` | decypharr_recheck | name path-escaped, no body | status only |
 | `POST /api/mount/cache/cleanup` | decypharr_cache_cleanup | no body | status only |
-| `DELETE /api/torrents/{category}/{hash}?removeFromDebrid=true` | torrent delete-and-re-add | none | status only |
-| `POST /api/v2/torrents/add` (qBittorrent API) | torrent delete-and-re-add | form `urls=<magnet>`, `category=<arr category>` | status only |
 
-The last two rows leave this contract when media-fixer retires torrent
-delete-and-re-add.
+media-fixer no longer deletes or adds torrents itself: a dead torrent goes to
+the repair sweep below, which re-adds it inside decypharr.
 
 ## Repair semantics media-fixer counts on
 

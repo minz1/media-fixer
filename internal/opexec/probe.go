@@ -12,18 +12,10 @@ import (
 
 func (x *Executor) Probe(ctx context.Context, op operation.Op) ([]operation.Probe, error) {
 	var out []operation.Probe
-	deleteOwed := false
 	for _, i := range operation.Remaining(op) {
-		if deleteOwed && op.Steps[i].Kind == operation.StepTorrentAdd {
-			out = append(out, operation.Probe{Index: i, Verdict: operation.VerdictTodo})
-			continue
-		}
 		p, err := x.probeStep(ctx, op, i)
 		if err != nil {
 			return nil, fmt.Errorf("step %d: %w", i+1, err)
-		}
-		if op.Steps[i].Kind == operation.StepTorrentDelete && p.Verdict == operation.VerdictTodo {
-			deleteOwed = true
 		}
 		out = append(out, p)
 	}
@@ -37,8 +29,6 @@ func (x *Executor) probeStep(ctx context.Context, op operation.Op, i int) (opera
 	var p operation.Probe
 	var err error
 	switch st.Kind {
-	case operation.StepTorrentDelete, operation.StepTorrentAdd:
-		p, err = x.probeTorrent(pctx, st)
 	case operation.StepBlocklist, operation.StepDeleteFile, operation.StepSearch, operation.StepQueueRemove:
 		p, err = x.probeArr(pctx, op, st)
 	default:
@@ -62,26 +52,8 @@ func (x *Executor) probeArr(ctx context.Context, op operation.Op, st operation.S
 		return probeSearch(ctx, a, st)
 	case operation.StepQueueRemove:
 		return probeQueue(ctx, a, op, st)
-	case operation.StepTorrentDelete, operation.StepTorrentAdd:
 	}
 	return operation.Probe{}, fmt.Errorf("unknown step kind %q", st.Kind)
-}
-
-func (x *Executor) probeTorrent(ctx context.Context, st operation.Step) (operation.Probe, error) {
-	if x.Ports.Decypharr == nil {
-		return operation.Probe{}, fmt.Errorf("%w: decypharr", errNoPort)
-	}
-	present, err := x.Ports.Decypharr.TorrentByHash(ctx, st.InfoHash)
-	if err != nil {
-		return operation.Probe{}, err
-	}
-	switch {
-	case st.Kind == operation.StepTorrentAdd && present:
-		return operation.Probe{Verdict: operation.VerdictDone, Note: "already re-added"}, nil
-	case st.Kind == operation.StepTorrentDelete && !present:
-		return operation.Probe{Verdict: operation.VerdictDone, Note: "the torrent is gone"}, nil
-	}
-	return operation.Probe{Verdict: operation.VerdictTodo}, nil
 }
 
 func mediaType(st operation.Step) string {

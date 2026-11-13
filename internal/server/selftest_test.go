@@ -201,44 +201,6 @@ func TestSelftestRun_ConcurrentRequestsAreSingleFlighted(t *testing.T) {
 	}
 }
 
-func TestSelftestRun_ShowsReaddFixture(t *testing.T) {
-	t.Parallel()
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/torrents" {
-			w.Write([]byte(`{"torrents":[{"name":"Unique.Movie","info_hash":"c","magnet":"magnet:?xt=c"}]}`))
-			return
-		}
-		w.Write([]byte("[]"))
-	}))
-	defer stub.Close()
-
-	loki, err := client.NewLoki(stub.URL, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv, _ := newTestServer(t)
-	srv.SetChecker(&agent.Dispatcher{
-		Decypharr: client.NewDecypharr(stub.URL, ""),
-		Jellyfin:  client.NewJellyfin(stub.URL, ""),
-		Sonarr:    client.NewArr(stub.URL, ""),
-		Radarr:    client.NewArr(stub.URL, ""),
-		Loki:      loki,
-	})
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
-	resp, err := ts.Client().Post(ts.URL+"/media/selftest/run", "application/x-www-form-urlencoded", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), `readd="Unique.Movie"`) {
-		t.Errorf("status %d: expected readd fixture in report, got: %s", resp.StatusCode, body)
-	}
-}
-
 type blockedSelftest struct {
 	srv     *server.Server
 	ts      *httptest.Server

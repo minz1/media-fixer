@@ -1,11 +1,9 @@
 package opexec_test
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
-	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/opexec"
 )
 
@@ -63,27 +61,5 @@ func TestReplaceResultFrom_EmptyPlanShape(t *testing.T) {
 	want := `{"deleted_files":null,"blocklisted_grabs":null,"search_triggered":"MoviesSearch"}`
 	if have := asJSON(t, opexec.ReplaceResultFrom(got)); have != want {
 		t.Fatalf("result\nwant %s\nhave %s", want, have)
-	}
-}
-
-func TestReaddResultFrom_MatchesOldShape(t *testing.T) {
-	t.Parallel()
-	plan := &client.ReaddPlan{Name: "Show", InfoHash: "abc", Category: "tv", Magnet: "magnet:?xt=abc"}
-	spec, err := opexec.ReaddSpec(incident(), plan, nil)
-	if err != nil {
-		t.Fatalf("ReaddSpec: %v", err)
-	}
-	full := newRig(mustOp(t, spec))
-	got := full.x.Run(context.Background(), full.store.op)
-	want := `{"deleted":true,"readded":true,"name":"Show","magnet":"magnet:?xt=abc"}`
-	if have := asJSON(t, opexec.ReaddResultFrom(got)); have != want {
-		t.Fatalf("full = %s", have)
-	}
-	part := newRig(mustOp(t, spec))
-	part.decy.fail["tadd"] = status(500)
-	got = part.x.Run(context.Background(), part.store.op)
-	want = `{"deleted":true,"readded":false,"name":"Show","magnet":"magnet:?xt=abc"}`
-	if have := asJSON(t, opexec.ReaddResultFrom(got)); have != want {
-		t.Fatalf("partial = %s", have)
 	}
 }

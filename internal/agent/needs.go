@@ -106,7 +106,6 @@ func toolNeeds() map[string]toolNeed {
 		toolRepairSweep:          needDecypharr,
 		toolCacheCleanup:         needDecypharr,
 		toolDecypharrRecheck:     needDecypharr,
-		toolDecypharrDeleteReadd: needDecypharr,
 		toolArrMediaStatus:       needArr,
 		toolArrGrabHistory:       needArr,
 		toolArrSearchMissing:     needArr,

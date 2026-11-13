@@ -64,7 +64,6 @@ func createRows() []docRow {
 	return []docRow{
 		{name: "1 replace", from: none, ev: created(replaceSpec(1, 2)), to: operation.Running,
 			assert: all(indexIs(0), resultIs(0, operation.ResultPending), causeIs(operation.CauseNone))},
-		{name: "1 readd", from: none, ev: created(readdSpec()), to: operation.Running},
 		{name: "1 regrab", from: none, ev: created(regrabSpec()), to: operation.Running},
 		{name: "2 no steps", from: none, ev: badSteps(func(s *operation.Spec) { s.Steps = nil }),
 			code: operation.CodeBadSpec},
@@ -85,8 +84,9 @@ func createRows() []docRow {
 		{name: "3 interrupted", from: none, ev: interrupted(operation.CauseRestart), code: operation.CodeNoOp},
 		{name: "3 continued", from: none, ev: resumed(0), code: operation.CodeNoOp},
 		{name: "4 running", from: play(replaceSpec(1, 1)), ev: created(replaceSpec(1, 1)), code: operation.CodeExists},
-		{name: "4 done", from: play(readdSpec(), through(2)...), ev: created(readdSpec()), code: operation.CodeExists},
-		{name: "4 failed", from: play(readdSpec(), stopAt(0, operation.ResultFailed)...), ev: created(readdSpec()),
+		{name: "4 done", from: play(regrabSpec(), through(2)...), ev: created(regrabSpec()),
+			code: operation.CodeExists},
+		{name: "4 failed", from: play(regrabSpec(), stopAt(0, operation.ResultFailed)...), ev: created(regrabSpec()),
 			code: operation.CodeExists},
 	}
 }
@@ -153,7 +153,7 @@ func errIs(i int, want string) func(*testing.T, operation.Op) {
 }
 
 func finishedRows() []docRow {
-	done := play(readdSpec(), through(2)...)
+	done := play(regrabSpec(), through(2)...)
 	return []docRow{
 		{name: "14 started", from: done, ev: started(0), code: operation.CodeFinished},
 		{name: "14 finished", from: done, ev: finished(0, operation.ResultDone), code: operation.CodeFinished},
@@ -174,12 +174,12 @@ func failedRows() []docRow {
 func resumeRows() []docRow {
 	stopped := play(replaceSpec(1, 1), stopAt(1, operation.ResultUnknown)...)
 	nothing := play(replaceSpec(1, 1), stopAt(0, operation.ResultFailed)...)
-	readd := play(readdSpec(), stopAt(0, operation.ResultUnknown)...)
+	regrab := play(regrabSpec(), stopAt(0, operation.ResultUnknown)...)
 	todo := todoAll
 	conflicts := todo(stopped)
 	conflicts[0].Verdict, conflicts[0].Note = operation.VerdictConflict, "file 1 changed since approval"
 	conflicts[1].Verdict, conflicts[1].Note = operation.VerdictConflict, "second"
-	doneAll := probesFor(readd, "done")
+	doneAll := probesFor(regrab, "done")
 	return []docRow{
 		{name: "16 stale version", from: nothing, ev: resumed(nothing.Version+1, todo(nothing)...),
 			code: operation.CodeChanged},
@@ -195,13 +195,13 @@ func resumeRows() []docRow {
 			assert: all(indexIs(1), causeIs(operation.CauseNone), resultIs(1, operation.ResultPending))},
 		{
 			name: "20 mixed",
-			from: readd,
-			ev: resumed(readd.Version, operation.Probe{Index: 0, Verdict: operation.VerdictDone},
+			from: regrab,
+			ev: resumed(regrab.Version, operation.Probe{Index: 0, Verdict: operation.VerdictDone},
 				operation.Probe{Index: 1, Verdict: operation.VerdictTodo}),
 			to:     operation.Running,
 			assert: all(indexIs(1), resultIs(0, operation.ResultDone), resultIs(1, operation.ResultPending)),
 		},
-		{name: "21 all done", from: readd, ev: resumed(readd.Version, doneAll...), to: operation.Done,
+		{name: "21 all done", from: regrab, ev: resumed(regrab.Version, doneAll...), to: operation.Done,
 			assert: all(indexIs(1), causeIs(operation.CauseNone), resultIs(0, operation.ResultDone),
 				resultIs(1, operation.ResultDone))},
 	}

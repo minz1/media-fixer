@@ -24,8 +24,6 @@ func (x *Executor) classify(ctx context.Context, op operation.Op, i int, err err
 	}
 	st := op.Steps[i]
 	switch st.Kind {
-	case operation.StepTorrentDelete:
-		return unknownOutcome(err)
 	case operation.StepQueueRemove:
 		if isNotFound(err) {
 			return unknownOutcome(err)
@@ -34,7 +32,7 @@ func (x *Executor) classify(ctx context.Context, op operation.Op, i int, err err
 		if errors.Is(err, client.ErrNotFound) {
 			return x.confirmGone(ctx, st, err)
 		}
-	case operation.StepBlocklist, operation.StepSearch, operation.StepTorrentAdd:
+	case operation.StepBlocklist, operation.StepSearch:
 	}
 	return byError(err)
 }

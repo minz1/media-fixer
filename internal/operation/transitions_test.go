@@ -8,7 +8,7 @@ import (
 
 func TestOwnerContinued_AdvancesOverProbedDoneSteps(t *testing.T) {
 	t.Parallel()
-	op := play(readdSpec(), stopAt(0, operation.ResultUnknown)...)
+	op := play(regrabSpec(), stopAt(0, operation.ResultUnknown)...)
 	next, err := operation.Next(op, resumed(op.Version,
 		operation.Probe{Index: 0, Verdict: operation.VerdictDone, Note: "no torrent with this hash"},
 		operation.Probe{Index: 1, Verdict: operation.VerdictTodo}))
@@ -29,7 +29,7 @@ func TestOwnerContinued_AdvancesOverProbedDoneSteps(t *testing.T) {
 
 func TestOwnerContinued_KeepsTheOldErrorInTheNote(t *testing.T) {
 	t.Parallel()
-	op := play(readdSpec(), stopAt(0, operation.ResultUnknown)...)
+	op := play(regrabSpec(), stopAt(0, operation.ResultUnknown)...)
 	next, err := operation.Next(op, resumed(op.Version, todoAll(op)...))
 	if err != nil {
 		t.Fatal(err)

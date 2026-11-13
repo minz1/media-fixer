@@ -99,18 +99,8 @@ func TestClassify_Table(t *testing.T) {
 			"escalate_params is required for remove_and_search",
 		},
 		{
-			"K10 delete_torrent_readd", withParams(diag(true, agent.EscalateDeleteTorrentReadd, 0, "x"),
-				map[string]any{"hash": "h"}), nil, agent.DiagnosisOutcome{},
-			"escalate_params.name is required for delete_torrent_readd",
-		},
-		{
 			"K11 remove_and_search", withParams(diag(true, agent.EscalateRemoveAndSearch, 0, "x"), ras), nil,
 			agent.DiagnosisOutcome{Kind: agent.DiagnosisNeedsApproval, Plan: agent.EscalateRemoveAndSearch}, "",
-		},
-		{
-			"K11 delete_torrent_readd", withParams(diag(true, agent.EscalateDeleteTorrentReadd, 0, "x"),
-				map[string]any{"name": "Rick.S09"}), nil,
-			agent.DiagnosisOutcome{Kind: agent.DiagnosisNeedsApproval, Plan: agent.EscalateDeleteTorrentReadd}, "",
 		},
 		{
 			"K12 manual", diag(true, agent.EscalateManualInvestigation, 0, "x"), nil,
@@ -439,7 +429,7 @@ func FuzzClassify(f *testing.F) {
 	f.Add(false, "", 0, "restart_jellyfin", false, uint8(0), "")
 	f.Add(true, agent.EscalateRemoveAndSearch, 0, "x", true, uint8(2), "title")
 	f.Add(false, "", 0, agent.ToolArrSearchMissing, true, uint8(3), "")
-	f.Add(true, agent.EscalateDeleteTorrentReadd, 30, agent.ToolArrSearchMissing, false, uint8(1), "name")
+	f.Add(true, agent.EscalateRemoveAndSearch, 30, agent.ToolArrSearchMissing, false, uint8(1), "name")
 	statuses := []agent.CallOutcome{
 		agent.OutcomeApplied, agent.OutcomeFailed, agent.OutcomeRefused, agent.OutcomeInterrupted, agent.OutcomeInvalid,
 	}

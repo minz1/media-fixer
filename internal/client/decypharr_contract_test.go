@@ -113,7 +113,7 @@ func TestDecypharrContract_ClientReadsTheRecordedShapes(t *testing.T) {
 	}
 	e := torrents[0]
 	if e.Name == "" || e.InfoHash == "" || e.Category == "" || e.State == "" || e.Size == 0 ||
-		e.AddedOn.IsZero() || e.ActiveProvider == "" || e.Magnet == "" {
+		e.AddedOn.IsZero() || e.ActiveProvider == "" {
 		t.Errorf("entry decoded with a field missing: %+v", e)
 	}
 	found, err := c.TorrentByHash(ctx, e.InfoHash)
@@ -133,8 +133,7 @@ func TestDecypharrContract_ClientReadsTheRecordedShapes(t *testing.T) {
 	_, healthErr := c.RepairHealth(ctx)
 	cleanupErr := c.MountCacheCleanup(ctx)
 	recheckErr := c.RecheckEntry(ctx, "Show S01", true)
-	deleteErr := c.DeleteTorrent(ctx, "sonarr", "abc", true)
-	for _, callErr := range []error{statusErr, healthErr, cleanupErr, recheckErr, deleteErr} {
+	for _, callErr := range []error{statusErr, healthErr, cleanupErr, recheckErr} {
 		if callErr != nil {
 			t.Error(callErr)
 		}
@@ -155,7 +154,6 @@ func TestDecypharrContract_ClientReadsTheRecordedShapes(t *testing.T) {
 		{method: http.MethodGet, path: "/api/repair/health"},
 		{method: http.MethodPost, path: "/api/mount/cache/cleanup"},
 		{method: http.MethodPost, path: "/api/repair/health/Show S01/check", query: "fix=true"},
-		{method: http.MethodDelete, path: "/api/torrents/sonarr/abc", query: "removeFromDebrid=true"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("calls differ from the contract:\ngot  %+v\nwant %+v", got, want)

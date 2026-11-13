@@ -59,25 +59,7 @@ func (f *fakeArr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func failingReaddDecypharr(t *testing.T) *client.DecypharrClient {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/torrents/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("/api/v2/torrents/add", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return client.NewDecypharr(srv.URL, "token")
-}
-
-func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrClient) *approvedFixture {
+func newApprovedFixture(t *testing.T, arr *fakeArr) *approvedFixture {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "*.db")
 	if err != nil {
@@ -94,7 +76,7 @@ func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrC
 	jrnl := journal.New(database)
 	log := slog.New(slog.DiscardHandler)
 
-	disp := &agent.Dispatcher{Decypharr: decypharr}
+	disp := &agent.Dispatcher{}
 	if arr != nil {
 		srv := httptest.NewServer(arr)
 		t.Cleanup(srv.Close)
@@ -107,14 +89,14 @@ func newApprovedFixture(t *testing.T, arr *fakeArr, decypharr *client.DecypharrC
 	return &approvedFixture{svc: svc, db: database, disp: disp}
 }
 
-func (fx *approvedFixture) awaiting(t *testing.T, action string, params map[string]any) *db.Incident {
+func (fx *approvedFixture) awaiting(t *testing.T, params map[string]any) *db.Incident {
 	t.Helper()
 	inc := &db.Incident{Status: db.StatusOpen, Source: "discord", What: "cant_play", Title: "The Boys"}
 	lifecycletest.Incident(t, fx.db, inc)
 	finding := agent.DiagnosticResult{
 		RootCause:        "bad release",
 		PrimaryAction:    "manual_investigation",
-		EscalateAction:   action,
+		EscalateAction:   agent.EscalateRemoveAndSearch,
 		EscalateParams:   params,
 		RequiresApproval: true,
 	}
@@ -168,9 +150,9 @@ func seasonPlan(files ...client.ReplaceFile) client.ReplacePlan {
 
 func TestA2_3_ApprovedPlanLogsOnTheApprovedIncident(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
-	x := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
-	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{})
+	x := fx.awaiting(t, replaceParams())
+	y := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
 		t.Fatal(err)
@@ -186,8 +168,8 @@ func TestA2_3_ApprovedPlanLogsOnTheApprovedIncident(t *testing.T) {
 
 func TestA2_4_ApproveBeforeAnyRunRecordsTheExecution(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
-	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{})
+	y := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
 		t.Fatal(err)
@@ -210,8 +192,8 @@ func TestA2_4_ApproveBeforeAnyRunRecordsTheExecution(t *testing.T) {
 
 func TestA2_5_OwnerExecutionLogsOneRow(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{}, nil)
-	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{})
+	y := fx.awaiting(t, replaceParams())
 
 	if err := fx.approve(t, y.ID, seasonPlan(client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"})); err != nil {
 		t.Fatal(err)
@@ -229,37 +211,10 @@ func TestA2_5_OwnerExecutionLogsOneRow(t *testing.T) {
 	}
 }
 
-func TestA9_3_FailedApprovedReaddIsLoggedFailed(t *testing.T) {
-	t.Parallel()
-	fx := newApprovedFixture(t, nil, failingReaddDecypharr(t))
-	y := fx.awaiting(t, agent.EscalateDeleteTorrentReadd, map[string]any{"name": "The.Boys.S01"})
-
-	err := fx.approve(t, y.ID, client.ReaddPlan{
-		Name: "The.Boys.S01", InfoHash: "abc", Category: "sonarr", Magnet: "magnet:?xt=urn:btih:abc",
-	})
-	if err == nil {
-		t.Fatal("approve succeeded, want the re-add failure")
-	}
-
-	got := fx.actions(t, y.ID)
-	if len(got) == 0 {
-		t.Fatal("a re-add that deleted the torrent left no row")
-	}
-	for _, row := range got {
-		if row.Status != db.ActionFailed {
-			t.Errorf("row %s by %s is %q, want failed:%s",
-				row.Action, row.TriggeredBy, row.Status, describeActions(got))
-		}
-	}
-	if !strings.Contains(got[len(got)-1].Result, `"deleted":true`) {
-		t.Errorf("result %q does not record that the torrent was deleted", got[len(got)-1].Result)
-	}
-}
-
 func TestS9_8_ReplaceKeepsItsPartialResult(t *testing.T) {
 	t.Parallel()
-	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}}, nil)
-	y := fx.awaiting(t, agent.EscalateRemoveAndSearch, replaceParams())
+	fx := newApprovedFixture(t, &fakeArr{failDelete: map[int]bool{11: true}})
+	y := fx.awaiting(t, replaceParams())
 
 	err := fx.approve(t, y.ID, seasonPlan(
 		client.ReplaceFile{ID: 10, Path: "/mnt/s01e01.mkv"},
@@ -296,8 +251,5 @@ func portsFor(disp *agent.Dispatcher) opexec.Ports {
 		}
 		return nil
 	}}
-	if disp.Decypharr != nil {
-		p.Decypharr = disp.Decypharr
-	}
 	return p
 }

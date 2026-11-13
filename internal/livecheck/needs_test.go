@@ -47,7 +47,6 @@ func TestD11_3_UnconfiguredServicesShowUnconfigured(t *testing.T) {
 		"decypharr_repair_sweep":  "decypharr not configured",
 		"decypharr_cache_cleanup": "decypharr not configured",
 		"decypharr_recheck":       "decypharr not configured",
-		"decypharr_delete_readd":  "decypharr not configured",
 		"arr_media_status":        "sonarr and radarr not configured",
 		"arr_grab_history":        "sonarr and radarr not configured",
 		"arr_search_missing":      "sonarr and radarr not configured",

@@ -48,12 +48,11 @@ var (
 	errDownloadAndDeferred  = errors.New("download tracking and deferred verification are exclusive")
 	errSearchNotApplied     = errors.New(toolArrSearchMissing + " was not applied in this run")
 	errRemoveParamsRequired = errors.New("escalate_params is required for " + EscalateRemoveAndSearch)
-	errReaddNameRequired    = errors.New("escalate_params.name is required for " + EscalateDeleteTorrentReadd)
 	errDiagnosisInvalid     = errors.New("diagnosis outcome disagrees with its flags")
 )
 
 func isPlanKind(ea string) bool {
-	return ea == EscalateRemoveAndSearch || ea == EscalateDeleteTorrentReadd
+	return ea == EscalateRemoveAndSearch
 }
 
 type classifyIn struct {
@@ -113,10 +112,6 @@ func classifyRows() []classifyRow {
 		{func(in classifyIn) bool {
 			return in.r.EscalateAction == EscalateRemoveAndSearch && len(in.r.EscalateParams) == 0
 		}, fail(errRemoveParamsRequired)},
-		{func(in classifyIn) bool {
-			name, _ := in.r.EscalateParams[paramName].(string)
-			return in.r.EscalateAction == EscalateDeleteTorrentReadd && name == ""
-		}, fail(errReaddNameRequired)},
 		{func(in classifyIn) bool {
 			return isPlanKind(in.r.EscalateAction)
 		}, func(in classifyIn) (DiagnosisOutcome, error) {

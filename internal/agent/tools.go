@@ -57,7 +57,6 @@ const (
 	toolGetDiskInfo          = "get_disk_info"
 	toolCompleteDiagnosis    = "complete_diagnosis"
 	toolArrRemoveAndSearch   = "arr_remove_and_search"
-	toolDecypharrDeleteReadd = "decypharr_delete_readd"
 	toolArrMediaStatus       = "arr_media_status"
 	toolArrGrabHistory       = "arr_grab_history"
 	toolArrSearchMissing     = "arr_search_missing"
@@ -118,7 +117,6 @@ const (
 const (
 	EscalateNone                = "none"
 	EscalateRemoveAndSearch     = "remove_and_search"
-	EscalateDeleteTorrentReadd  = "delete_torrent_readd"
 	EscalateManualInvestigation = "manual_investigation"
 )
 
@@ -129,7 +127,7 @@ const ToolArrSearchMissing = toolArrSearchMissing
 // escalateActionEnum lists every value the escalate_action schema accepts.
 func escalateActionEnum() []string {
 	return []string{
-		EscalateNone, EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateManualInvestigation,
+		EscalateNone, EscalateRemoveAndSearch, EscalateManualInvestigation,
 	}
 }
 
@@ -459,9 +457,11 @@ func decypharrActionToolSpecs() []toolSpec {
 		{
 			Name: toolRefreshLinks,
 			Def: &openai.FunctionDefinition{
-				Name:        toolRefreshLinks,
-				Description: "Trigger decypharr to re-unrestrict download URLs for broken entries (link refresh repair sweep). Use when dd shows EIO errors.",
-				Parameters:  jsonSchema(map[string]any{}, []string{}),
+				Name: toolRefreshLinks,
+				Description: "Trigger decypharr's link-refresh repair sweep (auto_repair + unrestrict_link): it " +
+					"re-unrestricts download URLs for broken entries and re-adds a torrent whose debrid hash is " +
+					"dead from its magnet. Use when dd shows EIO errors or the debrid links are dead.",
+				Parameters: jsonSchema(map[string]any{}, []string{}),
 			},
 			Risk:       riskWrite,
 			Impact:     impactShared,
@@ -658,31 +658,6 @@ func approvalToolSpecs() []toolSpec {
 			Handler:    (*Dispatcher).readArrRemoveAndSearchPlan,
 			UserPhrase: phraseNewCopy,
 		},
-		{
-			Name: toolDecypharrDeleteReadd,
-			Def: &openai.FunctionDefinition{
-				Name: toolDecypharrDeleteReadd,
-				Description: "Preview removing a torrent from decypharr and the debrid provider and adding it " +
-					"straight back from its magnet, so the provider re-fetches it. For content whose debrid " +
-					"links are broken in a way refresh_decypharr_links and decypharr_repair_sweep have already " +
-					"failed to fix — not a first resort. Owner-approval-only: recommend it via " +
-					"complete_diagnosis.escalate_action, never call it directly.",
-				Parameters: jsonSchema(decypharrReaddProps(), []string{paramName}),
-			},
-			Risk:       riskApproval,
-			Handler:    (*Dispatcher).readDecypharrReaddPlan,
-			UserPhrase: phraseStorage,
-		},
-	}
-}
-
-// decypharrReaddProps is the parameter schema shared by the
-// decypharr_delete_readd tool and complete_diagnosis's escalate_params.
-func decypharrReaddProps() map[string]any {
-	return map[string]any{
-		paramName: param("string",
-			"Exact torrent name as shown by get_torrent_state. Must match one torrent exactly — "+
-				"this resolves to something that gets deleted."),
 	}
 }
 
@@ -863,11 +838,8 @@ func specByName(name string) (toolSpec, bool) {
 }
 
 func UserPhrase(tool string) string {
-	switch tool {
-	case EscalateRemoveAndSearch:
+	if tool == EscalateRemoveAndSearch {
 		tool = toolArrRemoveAndSearch
-	case EscalateDeleteTorrentReadd:
-		tool = toolDecypharrDeleteReadd
 	}
 	spec, _ := specByName(tool)
 	return spec.UserPhrase
@@ -1794,31 +1766,6 @@ func (d *Dispatcher) probeReplaceReadability(ctx context.Context, plan *client.R
 		}
 	}
 	return probe
-}
-
-// buildReplaceRequest translates escalate_params-shaped args into a
-// client.ReplaceRequest and picks the Sonarr or Radarr client to run it
-// against based on media_type.
-// readDecypharrReaddPlan builds a read-only preview of a delete-and-re-add,
-// including whether the torrent even has a magnet to be restored from. Never
-// deletes anything.
-func (d *Dispatcher) readDecypharrReaddPlan(ctx context.Context, _ *toolCall, args map[string]any) (any, error) {
-	if !d.Decypharr.Configured() {
-		return nil, errors.New("decypharr not configured")
-	}
-	name, _ := args[paramName].(string)
-	return d.Decypharr.PlanTorrentReadd(ctx, name)
-}
-
-func (d *Dispatcher) readdOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
-	if !d.Decypharr.Configured() {
-		return operation.Spec{}, errors.New("decypharr not configured")
-	}
-	var plan client.ReaddPlan
-	if err := json.Unmarshal(planJSON, &plan); err != nil {
-		return operation.Spec{}, fmt.Errorf("decode approved readd plan: %w", err)
-	}
-	return opexec.ReaddSpec(subject, &plan, planJSON)
 }
 
 func (d *Dispatcher) replaceOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 )
 
 func validateSpec(sub Subject, kind Kind, steps []Step) error {
@@ -31,8 +30,6 @@ func checkShape(kind Kind, steps []Step) error {
 
 func shapeOf(kind Kind) []StepKind {
 	switch kind {
-	case KindTorrentReadd:
-		return []StepKind{StepTorrentDelete, StepTorrentAdd}
 	case KindRegrab:
 		return []StepKind{StepQueueRemove, StepSearch}
 	case KindReplace:
@@ -54,7 +51,7 @@ func replaceRank(k StepKind) int {
 		return rankDelete
 	case StepSearch:
 		return rankSearch
-	case StepTorrentDelete, StepTorrentAdd, StepQueueRemove:
+	case StepQueueRemove:
 	}
 	return -1
 }
@@ -89,10 +86,6 @@ func checkFields(st Step) error {
 		return need(st.FileID > 0 && st.Path != "" && st.MediaID > 0, "file id, path and media id")
 	case StepSearch:
 		return checkSearch(st)
-	case StepTorrentDelete:
-		return need(st.InfoHash != "", "info hash")
-	case StepTorrentAdd:
-		return need(st.InfoHash != "" && strings.TrimSpace(st.Magnet) != "", "info hash and magnet")
 	case StepQueueRemove:
 		return need(
 			st.QueueID > 0 && st.DownloadID != "" && st.MediaID > 0 && (st.App == "sonarr" || st.App == "radarr"),

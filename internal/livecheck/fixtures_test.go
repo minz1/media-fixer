@@ -338,76 +338,6 @@ func TestDiscoverJellyfinItem_EmptySearchDegradesWithANote(t *testing.T) {
 	}
 }
 
-func readdFixtureServer(t *testing.T, pages map[string][]*client.TorrentEntry) *httptest.Server {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/decypharr/api/torrents", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(client.TorrentListResponse{Torrents: pages[r.URL.Query().Get("search")]})
-	})
-	return httptest.NewServer(mux)
-}
-
-func runReaddCheck(t *testing.T, srv *httptest.Server) (livecheck.Fixtures, livecheck.Result) {
-	t.Helper()
-	loki, err := client.NewLoki(srv.URL, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	disp := &agent.Dispatcher{
-		Sonarr:    client.NewArr(srv.URL+"/sonarr", "key"),
-		Radarr:    client.NewArr(srv.URL+"/radarr", "key"),
-		Decypharr: client.NewDecypharr(srv.URL+"/decypharr", "token"),
-		Jellyfin:  client.NewJellyfin(srv.URL+"/jellyfin", "key"),
-		Loki:      loki,
-	}
-	report := livecheck.New(disp, livecheck.Options{Only: []string{"decypharr_delete_readd"}}).Run(context.Background())
-	for _, r := range report.Results {
-		if r.Tool == "decypharr_delete_readd" {
-			return report.Fixtures, r
-		}
-	}
-	t.Fatal("decypharr_delete_readd did not run")
-	return livecheck.Fixtures{}, livecheck.Result{}
-}
-
-func TestDiscoverFixtures_ReaddPicksUniqueMagnetTorrent(t *testing.T) {
-	t.Parallel()
-	nzb := &client.TorrentEntry{Name: "Show.S01E01.NZB", InfoHash: "u1"}
-	dupA := &client.TorrentEntry{Name: "Lanterns.S01E08", InfoHash: "a", Magnet: "magnet:?xt=a"}
-	dupB := &client.TorrentEntry{Name: "Lanterns.S01E08", InfoHash: "b", Magnet: "magnet:?xt=b"}
-	unique := &client.TorrentEntry{Name: "Unique.Movie", InfoHash: "c", Magnet: "magnet:?xt=c"}
-	extras := &client.TorrentEntry{Name: "Unique.Movie.Extras", InfoHash: "d", Magnet: "magnet:?xt=d"}
-	srv := readdFixtureServer(t, map[string][]*client.TorrentEntry{
-		"":                {nzb, dupA, unique},
-		"Lanterns.S01E08": {dupA, dupB},
-		"Unique.Movie":    {unique, extras},
-	})
-	defer srv.Close()
-
-	fx, r := runReaddCheck(t, srv)
-	if fx.ReaddTorrentName != "Unique.Movie" {
-		t.Errorf("ReaddTorrentName = %q, want Unique.Movie", fx.ReaddTorrentName)
-	}
-	if r.Status != livecheck.StatusOK {
-		t.Errorf("status = %s (%s%s), want ok", r.Status, r.Detail, r.Error)
-	}
-}
-
-func TestDiscoverFixtures_ReaddDegradesWithoutUniqueMagnetTorrent(t *testing.T) {
-	t.Parallel()
-	dupA := &client.TorrentEntry{Name: "Lanterns.S01E08", InfoHash: "a", Magnet: "magnet:?xt=a"}
-	dupB := &client.TorrentEntry{Name: "Lanterns.S01E08", InfoHash: "b", Magnet: "magnet:?xt=b"}
-	srv := readdFixtureServer(t, map[string][]*client.TorrentEntry{
-		"":                {dupA},
-		"Lanterns.S01E08": {dupA, dupB},
-	})
-	defer srv.Close()
-
-	if _, r := runReaddCheck(t, srv); r.Status != livecheck.StatusDegraded {
-		t.Errorf("status = %s (%s%s), want degraded", r.Status, r.Detail, r.Error)
-	}
-}
-
 func discoverTorrentNamesFromJSON(t *testing.T, body string) livecheck.Fixtures {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -419,7 +349,7 @@ func discoverTorrentNamesFromJSON(t *testing.T, body string) livecheck.Fixtures 
 	defer srv.Close()
 
 	disp := &agent.Dispatcher{Decypharr: client.NewDecypharr(srv.URL+"/decypharr", "token")}
-	fx := livecheck.Fixtures{ReaddTorrentName: "preset"}
+	fx := livecheck.Fixtures{}
 	livecheck.DiscoverTorrentNamesForTest(context.Background(), disp, &fx)
 	return fx
 }
@@ -443,20 +373,5 @@ func TestDiscoverTorrentNames_AllBadRecordsANote(t *testing.T) {
 	}
 	if !slices.ContainsFunc(fx.Notes, func(n string) bool { return strings.Contains(n, "bad") }) {
 		t.Errorf("notes %q do not mention bad entries", fx.Notes)
-	}
-}
-
-func TestDiscoverFixtures_ReaddStillPicksABadEntry(t *testing.T) {
-	t.Parallel()
-	bad := &client.TorrentEntry{Name: "Broken.Movie", InfoHash: "c", Magnet: "magnet:?xt=c", Bad: true}
-	srv := readdFixtureServer(t, map[string][]*client.TorrentEntry{
-		"":             {bad},
-		"Broken.Movie": {bad},
-	})
-	defer srv.Close()
-
-	fx, _ := runReaddCheck(t, srv)
-	if fx.ReaddTorrentName != "Broken.Movie" {
-		t.Errorf("ReaddTorrentName = %q, want Broken.Movie: readd is the fix for a bad entry", fx.ReaddTorrentName)
 	}
 }
