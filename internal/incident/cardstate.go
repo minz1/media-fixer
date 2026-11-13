@@ -162,7 +162,7 @@ func escalatable(inc *db.Incident) string {
 		return ""
 	}
 	switch result.EscalateAction {
-	case agent.EscalateRemoveAndSearch, agent.EscalateDeleteTorrentReadd:
+	case agent.EscalateRemoveAndSearch, agent.EscalateDeleteTorrentReadd, agent.EscalateSwapRelease:
 		return result.EscalateAction
 	}
 	return ""
@@ -182,7 +182,8 @@ func (s *Service) freshPlan(ctx context.Context, inc *db.Incident, action string
 	}
 	var secs []card.Field
 	var lines int
-	if action == agent.EscalateDeleteTorrentReadd {
+	switch action {
+	case agent.EscalateDeleteTorrentReadd:
 		var p client.ReaddPlan
 		if err = json.Unmarshal(planJSON, &p); err != nil {
 			return cardPlan{}, false, fmt.Errorf("decode readd plan: %w", err)
@@ -193,7 +194,14 @@ func (s *Service) freshPlan(ctx context.Context, inc *db.Incident, action string
 			{Name: "State", Value: p.State},
 		}
 		lines = 1
-	} else {
+	case agent.EscalateSwapRelease:
+		var p client.SwapPlan
+		if err = json.Unmarshal(planJSON, &p); err != nil {
+			return cardPlan{}, false, fmt.Errorf("decode swap plan: %w", err)
+		}
+		secs = SwapSections(&p)
+		lines = len(secs)
+	default:
 		var p client.ReplacePlan
 		if err = json.Unmarshal(planJSON, &p); err != nil {
 			return cardPlan{}, false, fmt.Errorf("decode replace plan: %w", err)
@@ -317,9 +325,12 @@ func (s *Service) cardApprove(ctx context.Context, id string, v Version, a card.
 	if err != nil {
 		return card.Result{}, err
 	}
-	label := "Yes, delete and re-search"
-	if result.EscalateAction == agent.EscalateDeleteTorrentReadd {
-		label = "Yes, delete and re-add"
+	label := map[string]string{
+		agent.EscalateDeleteTorrentReadd: "Yes, delete and re-add",
+		agent.EscalateSwapRelease:        "Yes, swap the release",
+	}[result.EscalateAction]
+	if label == "" {
+		label = "Yes, delete and re-search"
 	}
 	confirm, okConfirm := card.Encode(card.Action{Kind: a.Kind, Verb: verbConfirm, Args: a.Args})
 	cancel, okCancel := card.Encode(card.Action{Kind: a.Kind, Verb: verbCancel, Args: a.Args[:minIncArgs]})

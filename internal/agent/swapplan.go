@@ -14,6 +14,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/operation"
+	"github.com/minz1/mediafixer/internal/opexec"
 	"github.com/minz1/mediafixer/internal/stuckqueue"
 )
 
@@ -368,4 +369,24 @@ func swapSteps(plan *client.SwapPlan, tgt *swapTarget) []operation.Step {
 		})
 	}
 	return steps
+}
+
+func (d *Dispatcher) planSwap(ctx context.Context, what string, args map[string]any) (any, error) {
+	if what != WhatSubtitles {
+		return nil, fmt.Errorf("%s only applies to %s incidents, not %q", EscalateSwapRelease, WhatSubtitles, what)
+	}
+	return d.readSwapPlan(ctx, &toolCall{scope: Scope{What: what}}, args)
+}
+
+func (d *Dispatcher) swapOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
+	var plan client.SwapPlan
+	if err := json.Unmarshal(planJSON, &plan); err != nil {
+		return operation.Spec{}, fmt.Errorf("decode approved swap plan: %w", err)
+	}
+	if plan.What != WhatSubtitles || plan.Language == "" {
+		return operation.Spec{}, fmt.Errorf(
+			"%s only applies to %s incidents with a wanted language", EscalateSwapRelease, WhatSubtitles,
+		)
+	}
+	return opexec.SwapSpec(subject, &plan, planJSON)
 }

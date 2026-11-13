@@ -484,8 +484,11 @@ func (s *Server) escalationPreview(w http.ResponseWriter, r *http.Request) {
 		// the preview renders several plan types and only one of them has a
 		// readability probe, so a template field access would error on the
 		// others.
-		if rp, isReplace := plan.(*client.ReplacePlan); isReplace {
-			s.readabilityFields(r.Context(), id, rp, data)
+		switch p := plan.(type) {
+		case *client.ReplacePlan:
+			s.readabilityFields(r.Context(), id, p, data)
+		case *client.SwapPlan:
+			data["Swap"] = incident.SwapSections(p)
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -520,6 +523,12 @@ func (s *Server) storedPreview(
 		var rp client.ReplacePlan
 		if json.Unmarshal(snap.Plan.JSON, &rp) == nil {
 			s.readabilityFields(ctx, snap.ID, &rp, data)
+		}
+	}
+	if snap.Finding.EscalateAction == agent.EscalateSwapRelease {
+		var sp client.SwapPlan
+		if json.Unmarshal(snap.Plan.JSON, &sp) == nil {
+			data["Swap"] = incident.SwapSections(&sp)
 		}
 	}
 	return data

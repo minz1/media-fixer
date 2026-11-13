@@ -184,7 +184,7 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      defect. Run list_alternatives, then step 4. The root cause quotes the alignment row (and
      the ffmpeg lines); the reason names any cached alternative (score, release) for the owner
      to swap, since a sidecar is the cheaper fix and the search still runs first.
-     sonarr_swap_plan previews swapping to one (read-only; nothing else uses it yet).
+     sonarr_swap_plan previews swapping to one (read-only); recommend it with escalate_action=swap_release.
   4. If the wanted language is absent, or its embedded track is broken (index_drift or a failed
      extract test), say so in the root cause and run bazarr_search_subtitles: it forces a Bazarr
      search and waits for the outcome. Quote its summary in primary_reason. If found, finish
@@ -303,7 +303,7 @@ decypharr_cache_cleanup: they act on every file and cannot change that one.
 You may call autonomous actions directly. Approval-required actions must only appear in
 complete_diagnosis.escalate_action, never called as a tool yourself.
 
-escalate_action must be one of: none | remove_and_search | delete_torrent_readd |
+escalate_action must be one of: none | remove_and_search | delete_torrent_readd | swap_release |
 manual_investigation.
   - remove_and_search: the file(s) on disk are wrong/corrupt and Sonarr/Radarr should delete
     them, blocklist the release that produced them, and search for a replacement. Use this
@@ -326,6 +326,10 @@ manual_investigation.
     it. Set escalate_params: name (the exact torrent name from get_torrent_state). The preview
     refuses if the torrent has no stored magnet, because the delete would then be
     unrecoverable — if that happens, use manual_investigation.
+  - swap_release (subtitles incidents only): the file has a defect and list_alternatives shows a release
+    decypharr already has cached. Set escalate_params: title, season, episode, release (the folder
+    name from list_alternatives) and language (the wanted subtitle language). Run sonarr_swap_plan
+    first; the owner approves what it returned. Always requires_approval=true.
   - manual_investigation: you cannot form a confident diagnosis or fix; the owner needs to look.
   - none: no escalation needed (requires_approval should be false in this case).
 
@@ -475,6 +479,8 @@ func escalationLabel(action string) string {
 		return "remove file(s) and re-search"
 	case EscalateDeleteTorrentReadd:
 		return "delete the torrent and re-add it to the debrid provider"
+	case EscalateSwapRelease:
+		return "swap the file for a cached release"
 	case EscalateManualInvestigation:
 		return "manual investigation needed"
 	default:
@@ -1218,6 +1224,8 @@ func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult, wh
 		return a.disp.planRemoveAndSearch(ctx, result.EscalateParams, what != WhatStuckRead)
 	case EscalateDeleteTorrentReadd:
 		return a.disp.readDecypharrReaddPlan(ctx, &toolCall{}, result.EscalateParams)
+	case EscalateSwapRelease:
+		return a.disp.planSwap(ctx, what, result.EscalateParams)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
@@ -1231,6 +1239,8 @@ func (a *Agent) OperationFor(
 		return a.disp.replaceOperation(subject, planJSON)
 	case EscalateDeleteTorrentReadd:
 		return a.disp.readdOperation(subject, planJSON)
+	case EscalateSwapRelease:
+		return a.disp.swapOperation(subject, planJSON)
 	default:
 		return operation.Spec{}, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}

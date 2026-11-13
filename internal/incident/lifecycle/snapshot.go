@@ -11,6 +11,7 @@ import (
 const (
 	EscalateRemoveAndSearch    = "remove_and_search"
 	EscalateDeleteTorrentReadd = "delete_torrent_readd"
+	EscalateSwapRelease        = "swap_release"
 	WhatStuckRead              = "stuck_read"
 )
 
@@ -41,7 +42,9 @@ type Finding struct {
 }
 
 func (f Finding) Escalatable() bool {
-	return f.EscalateAction == EscalateRemoveAndSearch || f.EscalateAction == EscalateDeleteTorrentReadd
+	return slices.Contains(
+		[]string{EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateSwapRelease}, f.EscalateAction,
+	)
 }
 
 type VerifyKind string

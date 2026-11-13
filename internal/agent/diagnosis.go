@@ -49,11 +49,13 @@ var (
 	errSearchNotApplied     = errors.New(toolArrSearchMissing + " was not applied in this run")
 	errRemoveParamsRequired = errors.New("escalate_params is required for " + EscalateRemoveAndSearch)
 	errReaddNameRequired    = errors.New("escalate_params.name is required for " + EscalateDeleteTorrentReadd)
+	errSwapParamsRequired   = errors.New("escalate_params is required for " + EscalateSwapRelease)
+	errSwapNeedsApproval    = errors.New(EscalateSwapRelease + " needs requires_approval=true")
 	errDiagnosisInvalid     = errors.New("diagnosis outcome disagrees with its flags")
 )
 
 func isPlanKind(ea string) bool {
-	return ea == EscalateRemoveAndSearch || ea == EscalateDeleteTorrentReadd
+	return ea == EscalateRemoveAndSearch || ea == EscalateDeleteTorrentReadd || ea == EscalateSwapRelease
 }
 
 type classifyIn struct {
@@ -77,6 +79,9 @@ func classifyRows() []classifyRow {
 		{func(in classifyIn) bool {
 			return in.r.EscalateAction != "" && !slices.Contains(escalateActionEnum(), in.r.EscalateAction)
 		}, fail(errEscalateEnum)},
+		{func(in classifyIn) bool {
+			return in.r.EscalateAction == EscalateSwapRelease && !in.r.RequiresApproval
+		}, fail(errSwapNeedsApproval)},
 		{func(in classifyIn) bool { return in.r.VerifyAfterSeconds < 0 }, fail(errNegativeVerify)},
 		{func(in classifyIn) bool {
 			return in.r.RequiresApproval && in.r.VerifyAfterSeconds > 0
@@ -117,6 +122,9 @@ func classifyRows() []classifyRow {
 			name, _ := in.r.EscalateParams[paramName].(string)
 			return in.r.EscalateAction == EscalateDeleteTorrentReadd && name == ""
 		}, fail(errReaddNameRequired)},
+		{func(in classifyIn) bool {
+			return in.r.EscalateAction == EscalateSwapRelease && len(in.r.EscalateParams) == 0
+		}, fail(errSwapParamsRequired)},
 		{func(in classifyIn) bool {
 			return isPlanKind(in.r.EscalateAction)
 		}, func(in classifyIn) (DiagnosisOutcome, error) {

@@ -232,6 +232,12 @@ func partialOf(action string, execResult any) string {
 			return unreadable
 		}
 		return "Partial: torrent deleted, re-add failed"
+	case agent.EscalateSwapRelease:
+		var r opexec.SwapResult
+		if json.Unmarshal(b, &r) != nil {
+			return unreadable
+		}
+		return swapPartial(r)
 	}
 	return unreadable
 }
@@ -286,6 +292,8 @@ func opResultJSON(action string, op operation.Op) string {
 		out = entry
 	case agent.EscalateDeleteTorrentReadd:
 		out = opexec.ReaddResultFrom(op)
+	case agent.EscalateSwapRelease:
+		out = opexec.SwapResultFrom(op)
 	default:
 		return ""
 	}
