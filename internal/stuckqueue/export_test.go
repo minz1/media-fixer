@@ -73,3 +73,15 @@ func TransitionIDsForTest() []string {
 	}
 	return ids
 }
+
+func RunWithLastForTest(s *Scheduler, at time.Time) error {
+	release, err := s.claim(holderRun, at)
+	if err != nil {
+		return err
+	}
+	release(func(sl *slot) {
+		sl.last = Result{FinishedAt: at}
+		sl.hasLast = true
+	})
+	return nil
+}

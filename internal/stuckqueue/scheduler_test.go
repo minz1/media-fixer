@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -269,10 +271,12 @@ func TestE1_StuckQueueWakeRespectsSettings(t *testing.T) {
 func TestF19_LastResultSurvivesRestart(t *testing.T) {
 	t.Parallel()
 	e, s := newSched(t)
+	e.sonarr.set(rawRec(1, "D", "NOVA", 1, false, sample))
 	e.tickAt(s, time.Minute)
+	e.tickAt(s, 6*time.Hour)
 	want, ok, _ := s.State()
-	if !ok {
-		t.Fatal("setup: no run")
+	if !ok || len(app(want, stuckqueue.AppSonarr).Items) != 1 {
+		t.Fatalf("setup: last = %+v", want)
 	}
 	s2 := stuckqueue.NewScheduler(context.Background(), e.runner, e.db)
 	got, ok, _ := s2.State()
@@ -282,6 +286,31 @@ func TestF19_LastResultSurvivesRestart(t *testing.T) {
 	got.FinishedAt, want.FinishedAt = time.Time{}, time.Time{}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("after restart: %+v, want %+v", got, want)
+	}
+}
+
+func TestF38_StoredLastResultIsTheNewest(t *testing.T) {
+	t.Parallel()
+	e, s := newSched(t)
+	base := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	var n atomic.Int64
+	for round := range 20 {
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				for range 10 {
+					for stuckqueue.RunWithLastForTest(s, base.Add(time.Duration(n.Add(1))*time.Second)) != nil {
+						runtime.Gosched()
+					}
+				}
+			})
+		}
+		wg.Wait()
+		want, _, _ := s.State()
+		got, ok, _ := stuckqueue.NewScheduler(context.Background(), e.runner, e.db).State()
+		if !ok || !got.FinishedAt.Equal(want.FinishedAt) {
+			t.Fatalf("round %d: stored %v, in memory %v", round, got.FinishedAt, want.FinishedAt)
+		}
 	}
 }
 

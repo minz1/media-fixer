@@ -112,12 +112,14 @@ func (s *Scheduler) claim(c Holder, now time.Time) (func(update), error) {
 
 func (s *Scheduler) release(c Holder, u update) {
 	s.mu.Lock()
-	var last string
 	var encErr error
 	if u != nil {
 		u(&s.slot)
 		if s.slot.hasLast {
-			last, encErr = encodeLast(s.slot.last)
+			var last string
+			if last, encErr = encodeLast(s.slot.last); encErr == nil {
+				encErr = s.d.SetSetting(context.WithoutCancel(s.base), lastResultKey, last)
+			}
 		}
 	}
 	next, err := nextSlot(s.slot.holder, slotEvent{Kind: slotRelease, Holder: c})
@@ -127,9 +129,6 @@ func (s *Scheduler) release(c Holder, u update) {
 	s.mu.Unlock()
 	if err != nil {
 		s.r.logger().ErrorContext(s.base, "stuck-queue: slot release rejected", "holder", c, "err", err)
-	}
-	if last != "" {
-		encErr = s.d.SetSetting(context.WithoutCancel(s.base), lastResultKey, last)
 	}
 	if encErr != nil {
 		s.r.logger().WarnContext(s.base, "stuck-queue: store last result", "err", encErr)
