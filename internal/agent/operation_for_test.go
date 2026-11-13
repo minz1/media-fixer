@@ -9,6 +9,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/client"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/operation"
 	"github.com/minz1/mediafixer/internal/opexec"
 )
@@ -122,5 +123,16 @@ func TestOperationFor_TooManyStepsIsBuildError(t *testing.T) {
 	}, planJSON(t, plan))
 	if err == nil || !strings.Contains(err.Error(), "narrow the scope") {
 		t.Fatalf("err = %v, want the step-cap refusal", err)
+	}
+}
+
+func TestS1_ResyncOperationForRefused(t *testing.T) {
+	t.Parallel()
+	ag := operationAgent(&agent.Dispatcher{})
+	_, err := ag.OperationFor(operationSubject(), &agent.DiagnosticResult{
+		EscalateAction: lifecycle.EscalateResyncSubtitle,
+	}, []byte(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "no automated plan") {
+		t.Fatalf("err = %v, want the no-plan refusal", err)
 	}
 }

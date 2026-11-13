@@ -23,9 +23,13 @@ const (
 	KindTorrentReadd Kind = "torrent_readd"
 	KindRegrab       Kind = "regrab"
 	KindSwapRelease  Kind = "swap_release"
+
+	KindResyncSubtitle Kind = "resync_subtitle"
 )
 
-func Kinds() []Kind { return []Kind{KindReplace, KindTorrentReadd, KindRegrab, KindSwapRelease} }
+func Kinds() []Kind {
+	return []Kind{KindReplace, KindTorrentReadd, KindRegrab, KindSwapRelease, KindResyncSubtitle}
+}
 
 type StepKind string
 
@@ -38,12 +42,13 @@ const (
 	StepQueueRemove    StepKind = "queue_remove"
 	StepImport         StepKind = "import"
 	StepJellyfinNotify StepKind = "jellyfin_notify"
+	StepSubtitleSync   StepKind = "subtitle_sync"
 )
 
 func StepKinds() []StepKind {
 	return []StepKind{
 		StepBlocklist, StepDeleteFile, StepSearch, StepTorrentDelete, StepTorrentAdd, StepQueueRemove, StepImport,
-		StepJellyfinNotify,
+		StepJellyfinNotify, StepSubtitleSync,
 	}
 }
 
@@ -105,6 +110,8 @@ type Step struct {
 	Name       string    `json:"name,omitempty"`
 	Magnet     string    `json:"magnet,omitempty"`
 	Episode    int       `json:"episode,omitempty"`
+	Baseline   int       `json:"baseline,omitempty"`
+	HI         bool      `json:"hi,omitempty"`
 }
 
 type Result struct {

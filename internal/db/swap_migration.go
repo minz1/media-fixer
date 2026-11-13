@@ -9,7 +9,7 @@ import (
 const migSwapRelease = 27
 
 func operationsSwapDDL() string {
-	return strings.Replace(operationsTableDDL, `'regrab')),`, `'regrab', 'swap_release')),`, 1)
+	return strings.Replace(operationsTableDDL, `'regrab')),`, `'regrab', 'swap_release', 'resync_subtitle')),`, 1)
 }
 
 func rebuildOperations(ctx context.Context, tx *sql.Tx, ddl string) error {

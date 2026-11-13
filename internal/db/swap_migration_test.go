@@ -29,6 +29,28 @@ func swapSpecFor(id string) operation.Spec {
 	}
 }
 
+func resyncSpecFor(id string) operation.Spec {
+	return operation.Spec{
+		Subject: operation.Subject{Kind: operation.SubjectIncident, ID: id}, Kind: operation.KindResyncSubtitle,
+		Title: "Show S01E06",
+		Steps: []operation.Step{{
+			Kind: operation.StepSubtitleSync, App: "bazarr", Path: "/media/tv/Show/e6.en.srt", Name: "en",
+			MediaID: 66, Category: "episode",
+		}},
+	}
+}
+
+func TestS1_ResyncKindStored(t *testing.T) {
+	t.Parallel()
+	d := opDB(t)
+	addIncident(t, d, "inc-resync")
+	op := newOp(t, d, resyncSpecFor("inc-resync"))
+	got, err := d.Operation(context.Background(), op.ID)
+	if err != nil || got.Kind != operation.KindResyncSubtitle {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
 func TestD2_SwapKindStored(t *testing.T) {
 	t.Parallel()
 	d := opDB(t)
@@ -61,7 +83,7 @@ func TestD2_Migration27DDL(t *testing.T) {
 	openDB(t, path).Close()
 	raw = rawOpen(t, path)
 	got := strs(t, raw, `SELECT sql FROM sqlite_master WHERE name = 'operations'`)[0]
-	if got != strings.Replace(want, `'regrab')),`, `'regrab', 'swap_release')),`, 1) || got == want {
+	if got != strings.Replace(want, `'regrab')),`, `'regrab', 'swap_release', 'resync_subtitle')),`, 1) || got == want {
 		t.Fatalf("ddl:\n%s", got)
 	}
 	if n := strs(
@@ -99,12 +121,17 @@ func seededSwaps(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"inc-done", "inc-run", "inc-keep", "inc-ver", "inc-find"} {
+	for _, id := range []string{
+		"inc-done", "inc-run", "inc-keep", "inc-ver", "inc-find", "inc-rdone", "inc-rrun", "inc-rver", "inc-rfind",
+	} {
 		addIncident(t, d, id)
 	}
 	done := newOp(t, d, swapSpecFor("inc-done"))
 	step(t, d, done.ID, startEv(0), finishEv(0, operation.ResultDone), startEv(1), finishEv(1, operation.ResultDone))
 	newOp(t, d, swapSpecFor("inc-run"))
+	rdone := newOp(t, d, resyncSpecFor("inc-rdone"))
+	step(t, d, rdone.ID, startEv(0), finishEv(0, operation.ResultDone))
+	newOp(t, d, resyncSpecFor("inc-rrun"))
 	newOp(t, d, replaceSpecFor("inc-keep"))
 	d.Close()
 	raw := rawOpen(t, path)
@@ -112,6 +139,9 @@ func seededSwaps(t *testing.T) string {
 	mustExec(t, raw, `UPDATE incidents SET status = 'verifying', verify_next_check = ?,
 		verify_spec = '{"kind":"subtitles","item_id":"x","swap":{"season":1}}' WHERE id = 'inc-ver'`, opAt(0))
 	mustExec(t, raw, `UPDATE incidents SET finding = '{"escalate_action":"swap_release"}' WHERE id = 'inc-find'`)
+	mustExec(t, raw, `UPDATE incidents SET status = 'verifying', verify_next_check = ?,
+		verify_spec = '{"kind":"resync","item_id":"x","resync":{"id":66}}' WHERE id = 'inc-rver'`, opAt(0))
+	mustExec(t, raw, `UPDATE incidents SET finding = '{"escalate_action":"resync_subtitle"}' WHERE id = 'inc-rfind'`)
 	return path
 }
 
@@ -121,7 +151,8 @@ func opRows(t *testing.T, raw *sql.DB) []string {
 		t,
 		raw,
 		`SELECT id || '|' || kind || '|' || subject_id || '|' || status || '|' || steps || '|' || results
-		|| '|' || version || '|' || created_at || '|' || updated_at FROM operations WHERE kind <> 'swap_release'
+		|| '|' || version || '|' || created_at || '|' || updated_at FROM operations
+			WHERE kind NOT IN ('swap_release', 'resync_subtitle')
 		ORDER BY id`,
 	)
 }
@@ -139,8 +170,10 @@ func TestD2_MigrateDown27(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	for _, want := range []string{
-		"running swap dropped: Show S01E06 series 7 S01E06", "swap operations deleted: 2",
-		"migration_cleared events: 1", "incidents with a swap verify or finding: 2 inc-find inc-ver",
+		"running swap dropped: Show S01E06 series 7 S01E06",
+		"running resync dropped: Show S01E06 en /media/tv/Show/e6.en.srt", "swap and resync operations deleted: 4",
+		"migration_cleared events: 2",
+		"incidents with a swap or resync verify or finding: 4 inc-find inc-rfind inc-rver inc-ver",
 		"dismiss or re-triage these incidents", "schema_version max: 26", "backup: ",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -174,8 +207,19 @@ func TestD2_MigrateDown27(t *testing.T) {
 		AND incident_id = 'inc-run' AND json_extract(payload, '$.status') = 'running'`); n[0] != "1" {
 		t.Fatalf("journal %v", n)
 	}
-	if n := strs(t, raw, `SELECT COUNT(*) FROM incident_events WHERE kind = 'migration_cleared'`); n[0] != "1" {
+	if n := strs(t, raw, `SELECT COUNT(*) FROM incident_events WHERE kind = 'migration_cleared'
+		AND incident_id = 'inc-rrun' AND json_extract(payload, '$.kind') = 'resync_subtitle'`); n[0] != "1" {
+		t.Fatalf("running resync not journaled: %v", n)
+	}
+	if n := strs(t, raw, `SELECT COUNT(*) FROM incident_events WHERE kind = 'migration_cleared'`); n[0] != "2" {
 		t.Fatalf("done op journaled: %v", n)
+	}
+	if n := strs(
+		t,
+		raw,
+		`SELECT COUNT(*) FROM operations WHERE kind IN ('swap_release', 'resync_subtitle')`,
+	); n[0] != "0" {
+		t.Fatalf("ops left: %v", n)
 	}
 	if strings.Contains(strs(t, raw, `SELECT sql FROM sqlite_master WHERE name = 'operations'`)[0], "swap_release") {
 		t.Fatal("old check not restored")
@@ -223,7 +267,7 @@ func TestD2_MigrateDown27NoSwapOpsAndRefusal(t *testing.T) {
 		27,
 		&out,
 	); err != nil ||
-		!strings.Contains(out.String(), "swap operations deleted: 0") {
+		!strings.Contains(out.String(), "swap and resync operations deleted: 0") {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	out.Reset()

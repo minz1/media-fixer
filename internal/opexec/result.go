@@ -19,7 +19,7 @@ func ReplaceResultFrom(op operation.Op) client.ReplaceResult {
 		case operation.StepSearch:
 			res.SearchTriggered = st.Command
 		case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepQueueRemove,
-			operation.StepImport, operation.StepJellyfinNotify:
+			operation.StepImport, operation.StepJellyfinNotify, operation.StepSubtitleSync:
 		}
 	}
 	return res
@@ -36,7 +36,7 @@ func ReaddResultFrom(op operation.Op) client.ReaddResult {
 			res.Magnet = st.Magnet
 			res.Readded = stepDone(op, i)
 		case operation.StepBlocklist, operation.StepDeleteFile, operation.StepSearch, operation.StepQueueRemove,
-			operation.StepImport, operation.StepJellyfinNotify:
+			operation.StepImport, operation.StepJellyfinNotify, operation.StepSubtitleSync:
 		}
 	}
 	return res
@@ -63,7 +63,7 @@ func SwapResultFrom(op operation.Op) SwapResult {
 		case operation.StepBlocklist:
 			res.Blocklisted = stepDone(op, i)
 		case operation.StepDeleteFile, operation.StepSearch, operation.StepTorrentDelete, operation.StepTorrentAdd,
-			operation.StepQueueRemove:
+			operation.StepQueueRemove, operation.StepSubtitleSync:
 		}
 	}
 	return res

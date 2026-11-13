@@ -41,7 +41,7 @@ func (x *Executor) classify(ctx context.Context, op operation.Op, i int, err err
 			return x.confirmGone(ctx, st, err)
 		}
 	case operation.StepImport, operation.StepJellyfinNotify, operation.StepBlocklist, operation.StepSearch,
-		operation.StepTorrentAdd:
+		operation.StepTorrentAdd, operation.StepSubtitleSync:
 	}
 	return byError(err)
 }

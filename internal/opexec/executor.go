@@ -139,6 +139,9 @@ func (x *Executor) call(ctx context.Context, op operation.Op, i int) error {
 	if st.Kind == operation.StepJellyfinNotify {
 		return x.callJellyfin(cctx, st)
 	}
+	if st.Kind == operation.StepSubtitleSync {
+		return fmt.Errorf("step kind %s not supported yet", st.Kind)
+	}
 	a, err := x.arrFor(st.App)
 	if err != nil {
 		return err
@@ -165,7 +168,8 @@ func (x *Executor) callArr(ctx context.Context, a Arr, st operation.Step, res op
 		return a.RemoveQueueItem(ctx, id, false, true, true)
 	case operation.StepImport:
 		return x.importStep(ctx, a, st)
-	case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepJellyfinNotify:
+	case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepJellyfinNotify,
+		operation.StepSubtitleSync:
 	}
 	return fmt.Errorf("unknown step kind %q", st.Kind)
 }

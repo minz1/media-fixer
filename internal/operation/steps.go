@@ -44,6 +44,11 @@ func Line(op Op) string {
 	if op.Kind == KindSwapRelease {
 		return swapBody(op) + "."
 	}
+	if op.Kind == KindResyncSubtitle {
+		return lead(
+			op.Results[0].State, "Resync sent to Bazarr", "The resync may have been sent to Bazarr", "Resync not sent",
+		) + "."
+	}
 	return smallBody(op) + "."
 }
 
@@ -164,6 +169,7 @@ type phrase struct {
 	episode string
 	grab    string
 	swap    bool
+	lang    string
 }
 
 func NextLine(op Op) string {
@@ -179,7 +185,7 @@ func NextLine(op Op) string {
 		}
 		ps = append(ps, phrase{
 			kind: st.Kind, count: 1, cmd: st.Command, base: path.Base(st.Path), episode: episodeCode(st),
-			grab: cmp.Or(st.Name, st.DownloadID), swap: op.Kind == KindSwapRelease,
+			grab: cmp.Or(st.Name, st.DownloadID), swap: op.Kind == KindSwapRelease, lang: st.Name,
 		})
 	}
 	words := make([]string, len(ps))
@@ -217,6 +223,8 @@ func (p phrase) words() string {
 		return "import " + p.base + " over " + p.episode
 	case StepJellyfinNotify:
 		return "tell Jellyfin about the new file"
+	case StepSubtitleSync:
+		return "resync " + p.base + " (" + p.lang + ") in Bazarr"
 	}
 	return string(p.kind)
 }

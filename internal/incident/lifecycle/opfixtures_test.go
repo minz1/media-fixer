@@ -99,6 +99,23 @@ func mtnOp(r lifecycle.Reason, op operation.Op) lifecycle.Snapshot {
 	return with(snap(lifecycle.ManualTestNeeded), finding(escalatable()), reason(r), setOp(op))
 }
 
+func resyncOp(evs ...operation.Event) operation.Op {
+	spec := operation.Spec{
+		Subject: operation.Subject{Kind: operation.SubjectIncident, ID: "inc"}, Kind: operation.KindResyncSubtitle,
+		Title: "Show S01E06", Source: planSource(),
+		Steps: []operation.Step{{
+			Kind: operation.StepSubtitleSync, App: "bazarr", Path: "/media/tv/Show/e6.en.srt", Name: "en",
+			MediaID: 66, Category: "episode",
+		}},
+	}
+	op := mustNext(operation.Op{}, operation.Event{Kind: operation.Created, Spec: &spec})
+	for _, e := range evs {
+		op = mustNext(op, e)
+	}
+	op.ID = opID
+	return op
+}
+
 func runningOp() operation.Op { return buildOp() }
 
 func startedOp() operation.Op { return buildOp(begin(0)) }
@@ -126,6 +143,9 @@ func execSamples() []lifecycle.Snapshot {
 	for _, op := range []operation.Op{
 		runningOp(), startedOp(), doneOp(), failedFirstOp(), failedSecondOp(), restartNothingOp(),
 		restartAppliedOp(), storeAppliedOp(),
+		resyncOp(), resyncOp(begin(0)), resyncOp(begin(0), finish(0, operation.ResultDone)),
+		resyncOp(begin(0), finish(0, operation.ResultFailed)),
+		resyncOp(begin(0), interrupt(operation.CauseRestart)),
 	} {
 		out = append(out, execOp(op))
 	}

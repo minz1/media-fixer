@@ -137,9 +137,12 @@ func (s *Service) verifyCheck(ctx context.Context, id string, gen int64, seq int
 		scan        bool
 		newID, note string
 	)
-	if snap.Verify.Spec.Swap != nil {
+	switch {
+	case snap.Verify.Spec.Swap != nil:
 		res, scan, newID, note = s.observeSwap(ctx, snap)
-	} else {
+	case snap.Verify.Spec.Kind == lifecycle.VerifyResync:
+		res, scan = lifecycle.VerifyNotYet, false
+	default:
 		res, scan = s.observeVerify(ctx, inc, snap)
 	}
 	var extra []card.Field

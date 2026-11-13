@@ -37,6 +37,8 @@ func shapeOf(kind Kind) []StepKind {
 		return []StepKind{StepQueueRemove, StepSearch}
 	case KindSwapRelease:
 		return []StepKind{StepImport, StepJellyfinNotify, StepBlocklist}
+	case KindResyncSubtitle:
+		return []StepKind{StepSubtitleSync}
 	case KindReplace:
 	}
 	return nil
@@ -56,7 +58,8 @@ func replaceRank(k StepKind) int {
 		return rankDelete
 	case StepSearch:
 		return rankSearch
-	case StepTorrentDelete, StepTorrentAdd, StepQueueRemove, StepImport, StepJellyfinNotify:
+	case StepTorrentDelete, StepTorrentAdd, StepQueueRemove, StepImport, StepJellyfinNotify,
+		StepSubtitleSync:
 	}
 	return -1
 }
@@ -104,6 +107,12 @@ func checkFields(st Step) error {
 		return need(ok && len(st.EpisodeIDs) == 1, "app, path, size, file id, media id and one episode")
 	case StepJellyfinNotify:
 		return need(st.App == "jellyfin" && st.Path != "" && st.Name != "", "app, path and item id")
+	case StepSubtitleSync:
+		ok := st.App == "bazarr" && st.Path != "" && st.Name != "" && st.MediaID > 0 && st.Baseline >= 0
+		return need(
+			ok && (st.Category == "episode" || st.Category == "movie"),
+			"app, path, language, media id, category and baseline",
+		)
 	case StepQueueRemove:
 		return need(
 			st.QueueID > 0 && st.DownloadID != "" && st.MediaID > 0 && (st.App == "sonarr" || st.App == "radarr"),
