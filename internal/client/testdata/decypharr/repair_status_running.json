@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "next_run_at": "2026-11-14T00:53:23Z",
+  "active_run": {
+    "repair_failed": 0,
+    "id": "79901833",
+    "trigger": "manual",
+    "status": "running",
+    "stage": "probing",
+    "started_at": "2026-11-13T00:53:23Z",
+    "updated_at": "2026-11-13T00:58:00Z",
+    "completed_at": "0001-01-01T00:00:00Z",
+    "stats": {}
+  },
+  "health_counts": {"healthy": 7424, "held": 174, "unknown": 61}
+}

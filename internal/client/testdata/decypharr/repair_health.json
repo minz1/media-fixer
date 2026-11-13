@@ -1,0 +1,16 @@
+[
+  {
+    "entry_name": "Show.Name.S01E06.1080p.WEB.h264-GROUP",
+    "protocol": "torrent",
+    "status": "broken",
+    "file_count": 1,
+    "broken_count": 1,
+    "failure_reason": "torrent_not_found",
+    "dirty": false,
+    "last_checked_at": "2026-11-13T01:10:00Z",
+    "last_ok_at": "2026-11-10T01:10:00Z",
+    "last_failed_at": "2026-11-13T01:10:00Z",
+    "last_repair_at": "0001-01-01T00:00:00Z",
+    "next_check_due_at": "2026-11-14T01:10:00Z"
+  }
+]
