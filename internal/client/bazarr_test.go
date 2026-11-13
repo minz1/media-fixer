@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -106,5 +108,90 @@ func TestC9_CandidatesTimeout(t *testing.T) {
 	}
 	if _, err := c.Subtitles(context.Background(), client.BazarrTarget{EpisodeID: 1}); err == nil {
 		t.Fatal("subtitles should hit the shortened call deadline")
+	}
+}
+
+func TestRS1_SyncRequest(t *testing.T) {
+	t.Parallel()
+	var method, path string
+	var q url.Values
+	status := http.StatusNoContent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "key" {
+			t.Errorf("key = %q", r.Header.Get("X-Api-Key"))
+		}
+		method, path, q = r.Method, r.URL.Path, r.URL.Query()
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+	c := client.NewBazarr(srv.URL, "key")
+	ctx := context.Background()
+
+	if err := c.Sync(ctx, client.BazarrTarget{SeriesID: 3, EpisodeID: 7}, "/tv/a.en.srt", "en", true); err != nil {
+		t.Fatal(err)
+	}
+	want := url.Values{
+		"action": {"sync"}, "language": {"en"}, "path": {"/tv/a.en.srt"}, "type": {"episode"}, "id": {"7"},
+		"forced": {"false"}, "hi": {"true"},
+	}
+	if method != http.MethodPatch || path != "/api/subtitles" || q.Encode() != want.Encode() {
+		t.Errorf("episode sync = %s %s %s", method, path, q.Encode())
+	}
+	if err := c.Sync(ctx, client.BazarrTarget{Movie: true, MovieID: 9}, "/m/b.en.srt", "en", false); err != nil {
+		t.Fatal(err)
+	}
+	want = url.Values{
+		"action": {"sync"}, "language": {"en"}, "path": {"/m/b.en.srt"}, "type": {"movie"}, "id": {"9"},
+		"forced": {"false"}, "hi": {"false"},
+	}
+	if q.Encode() != want.Encode() {
+		t.Errorf("movie sync query = %s", q.Encode())
+	}
+	for _, s := range []int{http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError} {
+		status = s
+		err := c.Sync(ctx, client.BazarrTarget{EpisodeID: 7}, "/tv/a.en.srt", "en", false)
+		if err == nil || !strings.Contains(err.Error(), strconv.Itoa(s)) {
+			t.Errorf("status %d err = %v", s, err)
+		}
+	}
+}
+
+func TestRS1_SyncHistory(t *testing.T) {
+	t.Parallel()
+	var path string
+	var q url.Values
+	body := `{"data":[
+		{"action":5,"subtitles_path":"/tv/a.en.srt","description":"English subtitles synchronization ended with an offset of 2.31 seconds and a framerate scale factor of 1."},
+		{"action":1,"subtitles_path":"/tv/a.en.srt","description":"downloaded"},
+		{"action":5,"subtitles_path":"/tv/other.en.srt","description":"other"},
+		{"action":5,"subtitles_path":"/tv/a.en.srt","description":"older"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, q = r.URL.Path, r.URL.Query()
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := client.NewBazarr(srv.URL, "key")
+	ctx := context.Background()
+
+	n, latest, err := c.SyncHistory(ctx, client.BazarrTarget{SeriesID: 3, EpisodeID: 7}, "/tv/a.en.srt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/episodes/history" || q.Encode() != "episodeid=7&length=-1" {
+		t.Errorf("episode history = %s %s", path, q.Encode())
+	}
+	if n != 2 || !strings.HasPrefix(latest, "English subtitles synchronization ended") {
+		t.Errorf("count %d latest %q", n, latest)
+	}
+	if _, _, err = c.SyncHistory(ctx, client.BazarrTarget{Movie: true, MovieID: 9}, "/m/b.srt"); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/movies/history" || q.Encode() != "length=-1&radarrid=9" {
+		t.Errorf("movie history = %s %s", path, q.Encode())
+	}
+	body = `{"data":[]}`
+	n, latest, err = c.SyncHistory(ctx, client.BazarrTarget{EpisodeID: 7}, "/tv/a.en.srt")
+	if err != nil || n != 0 || latest != "" {
+		t.Errorf("empty history = %d %q %v", n, latest, err)
 	}
 }

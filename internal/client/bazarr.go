@@ -125,6 +125,58 @@ func (c *BazarrClient) Candidates(ctx context.Context, t BazarrTarget) ([]Bazarr
 	return out, nil
 }
 
+func (c *BazarrClient) Sync(ctx context.Context, t BazarrTarget, path, lang string, hi bool) error {
+	q := url.Values{}
+	q.Set("action", "sync")
+	q.Set("language", lang)
+	q.Set("path", path)
+	if t.Movie {
+		q.Set("type", "movie")
+		q.Set("id", strconv.Itoa(t.MovieID))
+	} else {
+		q.Set("type", "episode")
+		q.Set("id", strconv.Itoa(t.EpisodeID))
+	}
+	q.Set("forced", "false")
+	q.Set("hi", strconv.FormatBool(hi))
+	return c.do(ctx, c.timeout, http.MethodPatch, "/api/subtitles", q, http.StatusNoContent, nil)
+}
+
+const bazarrActionSynced = 5
+
+func (c *BazarrClient) SyncHistory(ctx context.Context, t BazarrTarget, path string) (int, string, error) {
+	q := url.Values{}
+	endpoint := "/api/episodes/history"
+	if t.Movie {
+		endpoint = "/api/movies/history"
+		q.Set("radarrid", strconv.Itoa(t.MovieID))
+	} else {
+		q.Set("episodeid", strconv.Itoa(t.EpisodeID))
+	}
+	q.Set("length", "-1")
+	var out struct {
+		Data []struct {
+			Action      int    `json:"action"`
+			Path        string `json:"subtitles_path"`
+			Description string `json:"description"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, c.timeout, http.MethodGet, endpoint, q, http.StatusOK, &out); err != nil {
+		return 0, "", err
+	}
+	count, latest := 0, ""
+	for _, row := range out.Data {
+		if row.Action != bazarrActionSynced || row.Path != path {
+			continue
+		}
+		if count == 0 {
+			latest = row.Description
+		}
+		count++
+	}
+	return count, latest, nil
+}
+
 func (c *BazarrClient) do(
 	ctx context.Context, timeout time.Duration, method, path string, q url.Values, want int, out any,
 ) error {
