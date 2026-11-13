@@ -413,3 +413,53 @@ func TestF2_MidRunActionSendsNote(t *testing.T) {
 	}
 	release()
 }
+
+type cancelledLogAgent struct {
+	*escalationAgent
+
+	db *db.DB
+}
+
+func (a *cancelledLogAgent) Run(
+	ctx context.Context, inc *db.Incident, _ []openai.ChatCompletionMessage, gate agent.Gate,
+) agent.RunExit {
+	if err := gate.Claim(ctx); err != nil {
+		return agent.RunExit{State: agent.RunNotClaimed}
+	}
+	err := a.db.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "refresh_decypharr_links", TriggeredBy: "agent", Status: db.ActionApplied,
+	})
+	if err != nil {
+		return agent.RunExit{State: agent.RunNotClaimed}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	gate.ActionLogged(runCtx)
+	return gatedExit(ctx, gate, nil, nil, nil)
+}
+
+func TestF36_ReporterNoteSurvivesRunCancel(t *testing.T) {
+	t.Parallel()
+	_, database, _ := newTestService(t)
+	ag := &cancelledLogAgent{escalationAgent: newEscalationAgent(), db: database}
+	notif := newSyncNotifier()
+	svc := incident.NewService(context.Background(), database, nil, ag, nil, nil, notif, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
+
+	if _, err := svc.Handle(context.Background(), &incident.Report{
+		Source: "discord", ReportedBy: "alice", ReporterDiscordID: "discord-alice",
+		What: "cant_play", Title: "X",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "⏳ Still working on **X**: fixing the media storage."
+	select {
+	case got := <-notif.userMsgs:
+		if got != want {
+			t.Errorf("note = %q, want %q", got, want)
+		}
+	case <-time.After(notifyWaitTimeout):
+		t.Error("the reporter note was lost when the run's context was cancelled mid-delivery")
+	}
+}

@@ -70,8 +70,10 @@ func (g *runGate) Act(ctx context.Context, tool string, params map[string]any) (
 
 func (g *runGate) Gen() int64 { return g.gen }
 
-func (g *runGate) ActionLogged(ctx context.Context) {
-	g.s.armReporterNote(ctx, g.id, time.Now())
+func (g *runGate) ActionLogged(context.Context) {
+	short := (&db.Incident{ID: g.id}).ShortID()
+	now := time.Now()
+	g.s.work.goNamed("progress:"+short, func(ctx context.Context) { g.s.armReporterNote(ctx, g.id, now) })
 }
 
 func (g *runGate) Live(context.Context) agent.Verdict {
