@@ -150,8 +150,10 @@ func NeedOf(d *Dispatcher, tool string) (string, NeedState) {
 }
 
 func needSwapPlan(d *Dispatcher) (string, bool) {
-	if detail, ok := needSonarr(d); !ok {
-		return detail, false
+	for _, need := range []func(*Dispatcher) (string, bool){needSonarr, needDecypharr, needJellyfinAndMediaAgent} {
+		if detail, ok := need(d); !ok {
+			return detail, false
+		}
 	}
-	return needJellyfinAndMediaAgent(d)
+	return "", true
 }

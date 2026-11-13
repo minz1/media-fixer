@@ -621,7 +621,7 @@ func checkSonarrSwapPlan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtur
 	}
 	result, err := disp.Call(ctx, "sonarr_swap_plan", map[string]any{
 		argTitle: fx.SeriesTitle, "season": float64(1), "episode": float64(1),
-		"release": "livecheck-not-a-release", argLanguage: "en",
+		"download_id": "livecheck-not-a-download", argLanguage: "en",
 	})
 	if err != nil && strings.Contains(err.Error(), "not cached") {
 		return Result{Status: StatusOK, Detail: err.Error()}

@@ -55,7 +55,7 @@ func SwapSections(p *client.SwapPlan) []card.Field {
 		current = append(current, "id "+p.Current.DownloadID)
 	}
 	current = append(current, fmt.Sprintf("%d episode(s)", p.Current.PackSize))
-	deletes := "Sonarr deletes this file as part of the import · no recycle bin"
+	deletes := "No recycle bin: Sonarr deletes this file for good on import"
 	if p.RecycleBin != "" {
 		deletes = "Sonarr deletes this file as part of the import · recycle bin " + p.RecycleBin
 	}

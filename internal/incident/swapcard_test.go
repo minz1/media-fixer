@@ -93,6 +93,22 @@ func TestD7_SwapCardSections(t *testing.T) {
 	}
 }
 
+func TestD7_SwapCardNoRecycleBin(t *testing.T) {
+	t.Parallel()
+	svc, d, _ := newCardService(t, &cardNotifier{}, nil)
+	inc := cardIncident(t, d, db.StatusManualTestNeeded, agent.EscalateSwapRelease)
+	p := swapCardPlan()
+	p.RecycleBin = ""
+	storePlan(t, d, inc.ID, p)
+	up := renderInc(t, svc, inc.ID)
+	for _, s := range up.Sections {
+		if strings.Contains(s.Value, "No recycle bin: Sonarr deletes this file for good on import") {
+			return
+		}
+	}
+	t.Fatalf("sections = %+v, want the no recycle bin warning", up.Sections)
+}
+
 func TestD7_SwapCardTooLong(t *testing.T) {
 	t.Parallel()
 	svc, d, _ := newCardService(t, &cardNotifier{}, nil)

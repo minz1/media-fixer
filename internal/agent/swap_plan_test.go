@@ -19,8 +19,9 @@ import (
 const (
 	swapRoot    = "/data/downloads/sonarr"
 	swapRelease = "Show.S01E06.AnoZu"
+	swapFolder  = "Show S01E06 1080p WEB [AnoZu]"
 	swapOldPath = "/data/tv/Show/Show.S01E06.BiOMA.mkv"
-	swapNewPath = swapRoot + "/" + swapRelease + "/Show.S01E06.AnoZu.mkv"
+	swapNewPath = swapRoot + "/" + swapFolder + "/Show.S01E06.AnoZu.mkv"
 )
 
 type swapWorld struct {
@@ -31,6 +32,7 @@ type swapWorld struct {
 	epFileID int
 	folder   []map[string]any
 	history  []map[string]any
+	decy     []map[string]any
 	probe    mediaagentapi.ProbeResult
 	jfPath   string
 }
@@ -65,6 +67,10 @@ func newSwapWorld() *swapWorld {
 		{"id": 102, "episodeId": 66, "seriesId": 5, "eventType": "grabbed", "downloadId": "BBBB",
 			"sourceTitle": swapRelease, "date": old},
 	}
+	w.decy = []map[string]any{
+		{"info_hash": "cccc", "name": swapRelease, "content_path": swapRoot + "/" + swapRelease},
+		{"info_hash": "bbbb", "name": swapFolder + ".mkv", "content_path": swapRoot + "/" + swapFolder},
+	}
 	w.probe = mediaagentapi.ProbeResult{Streams: []mediaagentapi.ProbeStream{
 		{Index: 0, CodecType: "video", CodecName: "h264"},
 		{Index: 1, CodecType: "subtitle", CodecName: "ass", Language: "eng", Title: "Full"},
@@ -97,7 +103,7 @@ func (w *swapWorld) dispatcher(t *testing.T) *agent.Dispatcher {
 	sonarr.HandleFunc("/api/v3/episodefile", func(rw http.ResponseWriter, _ *http.Request) { reply(rw, w.files) })
 	sonarr.HandleFunc("/api/v3/history/series", func(rw http.ResponseWriter, _ *http.Request) { reply(rw, w.history) })
 	sonarr.HandleFunc("/api/v3/manualimport", func(rw http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("seriesId") != "" || r.URL.Query().Get("folder") != swapRoot+"/"+swapRelease {
+		if r.URL.Query().Get("seriesId") != "" || r.URL.Query().Get("folder") != swapRoot+"/"+swapFolder {
 			http.Error(rw, "bad query "+r.URL.RawQuery, http.StatusBadRequest)
 			return
 		}
@@ -126,6 +132,10 @@ func (w *swapWorld) dispatcher(t *testing.T) *agent.Dispatcher {
 			{ID: "jf-ep6", Type: "Episode", Path: w.jfPath, IndexNumber: &six, ParentIndexNumber: &one},
 		}})
 	})
+	decy := http.NewServeMux()
+	decy.HandleFunc("/api/torrents", func(rw http.ResponseWriter, _ *http.Request) {
+		reply(rw, map[string]any{"torrents": w.decy, "total": len(w.decy)})
+	})
 	ma := http.NewServeMux()
 	ma.HandleFunc("/probe", func(rw http.ResponseWriter, _ *http.Request) { reply(rw, w.probe) })
 	serve := func(h http.Handler) string {
@@ -145,11 +155,12 @@ func (w *swapWorld) dispatcher(t *testing.T) *agent.Dispatcher {
 		Sonarr:     client.NewArr(serve(sonarr), "k"),
 		Jellyfin:   client.NewJellyfin(serve(jf), "k"),
 		MediaAgent: client.NewMediaAgent(serve(ma), ""),
+		Decypharr:  client.NewDecypharr(serve(decy), ""),
 	}
 }
 
 func swapArgs(over map[string]any) map[string]any {
-	a := map[string]any{"title": "Show", "season": 1, "episode": 6, "release": swapRelease, "language": "en"}
+	a := map[string]any{"title": "Show", "season": 1, "episode": 6, "download_id": "BBBB", "language": "en"}
 	for k, v := range over {
 		if v == nil {
 			delete(a, k)
@@ -180,7 +191,7 @@ func TestD4_PlanSwap(t *testing.T) {
 			name:  "folder empty",
 			args:  swapArgs(nil),
 			http:  true,
-			want:  "not cached under " + swapRoot + "/" + swapRelease,
+			want:  "not cached under " + swapRoot + "/" + swapFolder,
 			setup: func(w *swapWorld) { w.folder = nil },
 		},
 		{name: "guard refusal shows the parse", args: swapArgs(nil), http: true, want: "S01E07",
@@ -196,11 +207,23 @@ func TestD4_PlanSwap(t *testing.T) {
 		{name: "jellyfin base name differs", args: swapArgs(nil), http: true, want: "disagree",
 			setup: func(w *swapWorld) { w.jfPath = "/jf/tv/Show/other.mkv" }},
 		{name: "stuck_read refused", what: agent.WhatStuckRead, args: swapArgs(nil), want: "stuck_read"},
-		{name: "release with slash", args: swapArgs(map[string]any{"release": "a/b"}), want: "release"},
-		{name: "release dotdot", args: swapArgs(map[string]any{"release": ".."}), want: "release"},
-		{name: "release traversal", args: swapArgs(map[string]any{"release": "x..y"}), want: "release"},
-		{name: "release NUL", args: swapArgs(map[string]any{"release": "a\x00b"}), want: "release"},
-		{name: "release empty", args: swapArgs(map[string]any{"release": ""}), want: "release"},
+		{name: "download id empty", args: swapArgs(map[string]any{"download_id": ""}), want: "download_id"},
+		{name: "download id missing", args: swapArgs(map[string]any{"download_id": nil}), want: "download_id"},
+		{name: "not in decypharr", args: swapArgs(map[string]any{"download_id": "DDDD"}), http: true,
+			want: "not cached in decypharr"},
+		{name: "content path empty", args: swapArgs(nil), http: true, want: "no download folder",
+			setup: func(w *swapWorld) { w.decy[1]["content_path"] = "" }},
+		{name: "content path outside the root", args: swapArgs(nil), http: true, want: "not directly under",
+			setup: func(w *swapWorld) { w.decy[1]["content_path"] = "/data/downloads/radarr/" + swapFolder }},
+		{name: "content path nested", args: swapArgs(nil), http: true, want: "not directly under",
+			setup: func(w *swapWorld) { w.decy[1]["content_path"] = swapRoot + "/a/" + swapFolder }},
+		{name: "content path dotdot", args: swapArgs(nil), http: true, want: "not directly under",
+			setup: func(w *swapWorld) { w.decy[1]["content_path"] = swapRoot + "/.." }},
+		{name: "content path is the root", args: swapArgs(nil), http: true, want: "not directly under",
+			setup: func(w *swapWorld) { w.decy[1]["content_path"] = swapRoot }},
+		{name: "grab matched by title only", args: swapArgs(map[string]any{"download_id": "CCCC"}), http: true,
+			want:  "no Sonarr grab of this episode has download id CCCC",
+			setup: func(w *swapWorld) { w.decy[0]["content_path"] = swapRoot + "/" + swapFolder }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,7 +327,7 @@ func assertSwapFiles(t *testing.T, p *client.SwapPlan) {
 		t.Errorf("current = %+v", p.Current)
 	}
 	c := p.Candidate
-	if c.Folder != swapRoot+"/"+swapRelease || c.Path != swapNewPath || c.Size != 2000 || c.ReleaseGroup != "AnoZu" ||
+	if c.Folder != swapRoot+"/"+swapFolder || c.Path != swapNewPath || c.Size != 2000 || c.ReleaseGroup != "AnoZu" ||
 		c.Quality != "WEBDL-1080p" || c.CustomFormatScore != 120 || c.GraceHours != 168 || c.DownloadID != "BBBB" ||
 		c.GrabAgeHours < 99 || c.GrabAgeHours > 101 || len(c.Rejections) != 1 ||
 		c.Rejections[0] != "Not a quality revision upgrade for existing episode file(s)" {
@@ -338,18 +361,13 @@ func assertSwapRest(t *testing.T, p *client.SwapPlan) {
 	}
 }
 
-func TestD4_PlanSwapUnknownGrabSkipsBlocklist(t *testing.T) {
+func TestD4_PlanSwapUnknownGrabRefused(t *testing.T) {
 	t.Parallel()
 	w := newSwapWorld()
 	w.history = w.history[:2]
-	res, err := w.dispatcher(t).CallScoped(
+	_, err := w.dispatcher(t).CallScoped(
 		t.Context(), agent.Scope{What: agent.WhatSubtitles}, "sonarr_swap_plan", swapArgs(nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, _ := res.(*client.SwapPlan)
-	if p == nil || !p.Blocklist.Skip || p.Blocklist.Note != "the candidate's grab is unknown; blocklist skipped" ||
-		len(p.Steps) != 2 {
-		t.Fatalf("plan = %+v", p)
+	if err == nil || !strings.Contains(err.Error(), "no Sonarr grab of this episode has download id BBBB") {
+		t.Fatalf("err = %v", err)
 	}
 }

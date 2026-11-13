@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +44,8 @@ type TorrentEntry struct {
 	Progress float64   `json:"progress"`
 	AddedOn  time.Time `json:"added_on"`
 	Bad      bool      `json:"bad"`
+
+	ContentPath string `json:"content_path,omitempty"`
 
 	// ActiveProvider is which debrid backend currently holds the torrent
 	// ("torbox", "usenet", ...). Named `debrid` in an earlier decypharr
@@ -248,23 +251,33 @@ func (c *DecypharrClient) setAuth(req *http.Request) {
 	}
 }
 
+var ErrNoDecypharrEntry = errors.New("no decypharr entry with that id")
+
 func (c *DecypharrClient) TorrentByHash(ctx context.Context, hash string) (bool, error) {
-	if hash == "" {
+	_, err := c.EntryByID(ctx, hash)
+	if errors.Is(err, ErrNoDecypharrEntry) {
 		return false, nil
 	}
+	return err == nil, err
+}
+
+func (c *DecypharrClient) EntryByID(ctx context.Context, id string) (*TorrentEntry, error) {
+	if id == "" {
+		return nil, ErrNoDecypharrEntry
+	}
 	for page, seen := 1, 0; ; page++ {
-		resp, err := c.listTorrentsPage(ctx, strings.ToLower(hash), "", page)
+		resp, err := c.listTorrentsPage(ctx, strings.ToLower(id), "", page)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		for _, t := range resp.Torrents {
-			if strings.EqualFold(t.InfoHash, hash) {
-				return true, nil
+			if strings.EqualFold(t.InfoHash, id) {
+				return t, nil
 			}
 		}
 		seen += len(resp.Torrents)
 		if len(resp.Torrents) == 0 || seen >= resp.Total {
-			return false, nil
+			return nil, ErrNoDecypharrEntry
 		}
 	}
 }

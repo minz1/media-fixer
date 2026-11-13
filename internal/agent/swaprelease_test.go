@@ -13,7 +13,7 @@ import (
 
 func swapParams() map[string]any {
 	return map[string]any{
-		"title": "Show", "season": float64(1), "episode": float64(6), "release": "Show.S01E06.1080p", "language": "en",
+		"title": "Show", "season": float64(1), "episode": float64(6), "download_id": "BBBB", "language": "en",
 	}
 }
 

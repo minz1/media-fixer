@@ -20,7 +20,7 @@ import (
 
 const (
 	toolSonarrSwapPlan = "sonarr_swap_plan"
-	paramRelease       = "release"
+	paramDownloadID    = "download_id"
 	appSonarr          = "sonarr"
 	appJellyfin        = "jellyfin"
 	swapGraceHours     = 168
@@ -30,14 +30,26 @@ const (
 // shortcut: one host's downloads root, add a config key when a second host differs.
 const swapDownloadsRoot = "/data/downloads/sonarr"
 
-var errSwapRelease = errors.New("release must be one folder name under the downloads root")
-
-func swapFolder(release string) (string, error) {
-	if release == "" || strings.ContainsAny(release, "/\x00") || strings.Contains(release, "..") ||
-		!strings.HasPrefix(filepath.Clean(swapDownloadsRoot+"/"+release), swapDownloadsRoot+"/") {
-		return "", errSwapRelease
+func (d *Dispatcher) swapFolder(ctx context.Context, downloadID string) (string, error) {
+	e, err := d.Decypharr.EntryByID(ctx, downloadID)
+	if errors.Is(err, client.ErrNoDecypharrEntry) {
+		return "", fmt.Errorf("download id %s is not cached in decypharr", downloadID)
 	}
-	return swapDownloadsRoot + "/" + release, nil
+	if err != nil {
+		return "", err
+	}
+	if e.ContentPath == "" {
+		return "", fmt.Errorf("decypharr has no download folder for download id %s", downloadID)
+	}
+	folder := filepath.Clean(e.ContentPath)
+	base := filepath.Base(folder)
+	if filepath.Dir(folder) != swapDownloadsRoot || base == ".." || strings.ContainsRune(base, 0) {
+		return "", fmt.Errorf(
+			"decypharr's folder %q for download id %s is not directly under %s", e.ContentPath, downloadID,
+			swapDownloadsRoot,
+		)
+	}
+	return folder, nil
 }
 
 func swapSpecs() []toolSpec {
@@ -46,17 +58,17 @@ func swapSpecs() []toolSpec {
 		Def: &openai.FunctionDefinition{
 			Name: toolSonarrSwapPlan,
 			Description: "Read-only plan to swap an episode's broken file for a release Sonarr already grabbed " +
-				"and decypharr still has under the downloads folder (a release from list_alternatives). Checks " +
+				"and decypharr still has cached (a download_id from list_alternatives). Checks " +
 				"the candidate maps to exactly this episode, has the wanted subtitle language with no " +
 				"unknown-codec track, and agrees with Jellyfin. Returns the plan the owner approves; it changes " +
 				"nothing.",
 			Parameters: jsonSchema(map[string]any{
-				paramTitle:    param("string", "Series title"),
-				paramSeason:   param("integer", "Season number"),
-				paramEpisode:  param("integer", "Episode number"),
-				paramRelease:  param("string", "Release folder name, as listed in list_alternatives"),
-				paramLanguage: param("string", "Wanted subtitle language (en, eng or english)"),
-			}, []string{paramTitle, paramSeason, paramEpisode, paramRelease, paramLanguage}),
+				paramTitle:      param("string", "Series title"),
+				paramSeason:     param("integer", "Season number"),
+				paramEpisode:    param("integer", "Episode number"),
+				paramDownloadID: param("string", "The release's download_id, as listed in list_alternatives"),
+				paramLanguage:   param("string", "Wanted subtitle language (en, eng or english)"),
+			}, []string{paramTitle, paramSeason, paramEpisode, paramDownloadID, paramLanguage}),
 		},
 		Risk:    riskRead,
 		Handler: (*Dispatcher).readSwapPlan,
@@ -131,7 +143,7 @@ func (d *Dispatcher) readSwapPlan(ctx context.Context, c *toolCall, args map[str
 		)
 	}
 	title, _ := args[paramTitle].(string)
-	release, _ := args[paramRelease].(string)
+	downloadID, _ := args[paramDownloadID].(string)
 	language, _ := args[paramLanguage].(string)
 	season, err := intArg(args, paramSeason)
 	if err != nil {
@@ -141,9 +153,8 @@ func (d *Dispatcher) readSwapPlan(ctx context.Context, c *toolCall, args map[str
 	if err != nil {
 		return nil, err
 	}
-	folder, err := swapFolder(release)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(downloadID) == "" {
+		return nil, fmt.Errorf("%s is required", paramDownloadID)
 	}
 	_, want, ok := langCodes(language)
 	if !ok {
@@ -160,7 +171,11 @@ func (d *Dispatcher) readSwapPlan(ctx context.Context, c *toolCall, args map[str
 		What: WhatSubtitles, Language: want, Title: tgt.series.Title, SeriesID: tgt.series.ID,
 		Season: season, Episode: episode, EpisodeID: tgt.episode.ID, EpisodeTitle: tgt.episode.Title,
 	}
-	if err = d.swapCandidate(ctx, plan, tgt, eps, folder); err != nil {
+	folder, err := d.swapFolder(ctx, downloadID)
+	if err != nil {
+		return nil, err
+	}
+	if err = d.swapCandidate(ctx, plan, tgt, eps, folder, downloadID); err != nil {
 		return nil, err
 	}
 	if err = d.swapProbe(ctx, plan, want); err != nil {
@@ -182,7 +197,7 @@ func (d *Dispatcher) readSwapPlan(ctx context.Context, c *toolCall, args map[str
 }
 
 func (d *Dispatcher) swapCandidate(
-	ctx context.Context, plan *client.SwapPlan, tgt *swapTarget, eps []client.Episode, folder string,
+	ctx context.Context, plan *client.SwapPlan, tgt *swapTarget, eps []client.Episode, folder, downloadID string,
 ) error {
 	grab, err := d.Sonarr.GrabBehindFile(ctx, tgt.series.ID, tgt.episode.ID, tgt.file.Path)
 	if err != nil {
@@ -224,11 +239,11 @@ func (d *Dispatcher) swapCandidate(
 	if err != nil {
 		return err
 	}
-	candGrab := candidateGrab(events, tgt.episode.ID, cand.DownloadID, path.Base(folder))
-	downloadID := cand.DownloadID
-	if downloadID == "" {
-		downloadID = candGrab.DownloadID
+	candGrab := candidateGrab(events, tgt.episode.ID, downloadID)
+	if candGrab.DownloadID == "" {
+		return fmt.Errorf("no Sonarr grab of this episode has download id %s", downloadID)
 	}
+	downloadID = candGrab.DownloadID
 	grab = grab.WithCandidate(downloadID)
 	plan.Current = client.SwapCurrent{
 		FileID: tgt.file.ID, SourceTitle: grab.SourceTitle, GrabbedAt: grab.GrabbedAt, DownloadID: grab.DownloadID,
@@ -248,28 +263,22 @@ func (d *Dispatcher) swapCandidate(
 	if plan.Candidate.Rejections == nil {
 		plan.Candidate.Rejections = []string{}
 	}
-	if !candGrab.Date.IsZero() {
-		plan.Candidate.GrabAgeHours = int(time.Since(candGrab.Date).Hours())
-	}
+	plan.Candidate.GrabAgeHours = int(time.Since(candGrab.Date).Hours())
 	plan.Mapping, plan.GuardVerdict = cand.Episodes, swapGuardOK
 	plan.Blocklist = client.SwapBlocklist{
 		Skip: grab.SkipBlocklist, Note: grab.Note, HistoryID: grab.HistoryID, DownloadID: grab.DownloadID,
 		SourceTitle: grab.SourceTitle, GrabbedAt: grab.GrabbedAt,
 	}
-	if downloadID == "" {
-		plan.Blocklist.Skip, plan.Blocklist.Note = true, "the candidate's grab is unknown; blocklist skipped"
-	}
 	return nil
 }
 
-func candidateGrab(events []client.SeriesEvent, episodeID int, downloadID, release string) client.SeriesEvent {
+func candidateGrab(events []client.SeriesEvent, episodeID int, downloadID string) client.SeriesEvent {
 	var best client.SeriesEvent
 	for _, e := range events {
 		if e.EventType != "grabbed" || e.EpisodeID != episodeID {
 			continue
 		}
-		byID := downloadID != "" && strings.EqualFold(e.DownloadID, downloadID)
-		if (byID || e.SourceTitle == release) && e.Date.After(best.Date) {
+		if strings.EqualFold(e.DownloadID, downloadID) && e.Date.After(best.Date) {
 			best = e
 		}
 	}

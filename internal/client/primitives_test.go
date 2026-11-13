@@ -217,6 +217,30 @@ func TestDecypharr_TorrentByHash_SearchesByHashNotName(t *testing.T) {
 	}
 }
 
+func TestDecypharr_EntryByID_ReturnsContentPath(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"total":2,"torrents":[` +
+			`{"name":"Debrid Name 1080p.mkv","info_hash":"abcdef","content_path":"/data/downloads/sonarr/Debrid Name 1080p"},` +
+			`{"name":"Show.S01E06.nzb","info_hash":"SABnzbd_nzo_x1","content_path":"/data/downloads/sonarr/Show.S01E06"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := client.NewDecypharr(srv.URL, "")
+	cases := map[string]string{
+		"ABCDEF":         "/data/downloads/sonarr/Debrid Name 1080p",
+		"sabnzbd_nzo_x1": "/data/downloads/sonarr/Show.S01E06",
+	}
+	for id, want := range cases {
+		e, err := c.EntryByID(t.Context(), id)
+		if err != nil || e == nil || e.ContentPath != want {
+			t.Errorf("EntryByID(%s) = %+v, %v; want content_path %s", id, e, err, want)
+		}
+	}
+	if e, err := c.EntryByID(t.Context(), "abc"); !errors.Is(err, client.ErrNoDecypharrEntry) || e != nil {
+		t.Errorf("EntryByID(abc) = %+v, %v; want ErrNoDecypharrEntry", e, err)
+	}
+}
+
 func hashPage(page, n int) []*client.TorrentEntry {
 	out := make([]*client.TorrentEntry, n)
 	for i := range out {
