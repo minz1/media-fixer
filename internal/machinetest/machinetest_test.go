@@ -373,3 +373,45 @@ func TestIdempotence_DeliversOnceAndComparesExact(t *testing.T) {
 		t.Fatalf("errors = %v, want the delivered inc flagged by Exact", r.errs)
 	}
 }
+
+func TestIdempotence_FlagsUnexercisedKind(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	machinetest.Idempotence(r, cellMachine(cellStep), []string{"never"})
+	if !r.has("never") || !r.has("nothing was checked") {
+		t.Fatalf("errors = %v, want the kind that never applies flagged", r.errs)
+	}
+	refuseTwice := cellMachine(func(c cell, kind string) (cell, error) {
+		if kind == "once" && c.V == 0 {
+			return cell{V: 1}, nil
+		}
+		return c, errors.New("refused")
+	})
+	r = &recorder{}
+	machinetest.Idempotence(r, refuseTwice, []string{"once"})
+	if len(r.errs) != 0 {
+		t.Fatalf("a refused second delivery flagged: %v", r.errs)
+	}
+}
+
+func TestCommutes_FlagsVacuousPair(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	machinetest.Commutes(r, cellMachine(cellStep), [][2]string{{"set1", "never"}})
+	if !r.has("set1") || !r.has("nothing was checked") {
+		t.Fatalf("errors = %v, want the pair that never applies in both orders flagged", r.errs)
+	}
+}
+
+func TestCommutes_DeliversBothEventsAtTheStart(t *testing.T) {
+	t.Parallel()
+	m := cellMachine(cellStep)
+	m.Deliver = func(_ cell, ev cellEv) cellEv {
+		return cellEv{Kind: map[string]string{"a": "set1", "b": "set2"}[ev.Kind]}
+	}
+	r := &recorder{}
+	machinetest.Commutes(r, m, [][2]string{{"a", "b"}})
+	if !r.has("do not commute") {
+		t.Fatalf("errors = %v, want the delivered set1/set2 flagged", r.errs)
+	}
+}

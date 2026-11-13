@@ -273,3 +273,8 @@ func TestMachineDiagram_Call(t *testing.T) {
 	t.Parallel()
 	machinetest.GoldenMermaid(t, callMachine(), "testdata/call.md")
 }
+
+func TestCallMachine_Idempotence(t *testing.T) {
+	t.Parallel()
+	machinetest.Idempotence(t, callMachine(), agent.CallKinds())
+}

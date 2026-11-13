@@ -29,7 +29,7 @@ func TestIncidentMachine_IdempotenceVerifyObserved(t *testing.T) {
 func TestIncidentMachine_Commutes(t *testing.T) {
 	t.Parallel()
 	machinetest.Commutes(t, incidentMachine(), [][2]lifecycle.EventKind{
-		{lifecycle.OwnerResolve, lifecycle.Tick},
-		{lifecycle.DownloadObserved, lifecycle.Tick},
+		{lifecycle.OwnerUnlock, lifecycle.AttemptFinished},
+		{lifecycle.DownloadObserved, lifecycle.OwnerUnlock},
 	})
 }

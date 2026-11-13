@@ -108,16 +108,16 @@ func Idempotence[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev],
 	if !complete {
 		t.Errorf("more than %d snapshots reachable; the search stopped", maxSnapshots)
 	}
-	for _, key := range g.order {
-		for _, k := range kinds {
+	for _, k := range kinds {
+		checked := 0
+		for _, key := range g.order {
 			for _, ev := range m.Events(k) {
-				if m.Deliver != nil {
-					ev = m.Deliver(g.nodes[key], ev)
-				}
+				ev = deliver(m, g.nodes[key], ev)
 				once, err := m.Next(g.nodes[key], ev)
 				if err != nil {
 					continue
 				}
+				checked++
 				twice, err := m.Next(once, ev)
 				if err == nil && exact(m, twice) != exact(m, once) {
 					t.Errorf("kind %v, event %+v from %s is not idempotent: %s then %s",
@@ -125,7 +125,17 @@ func Idempotence[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev],
 				}
 			}
 		}
+		if checked == 0 {
+			t.Errorf("kind %v never applies from a reachable snapshot; nothing was checked", k)
+		}
 	}
+}
+
+func deliver[S, K comparable, Snap, Ev any](m Machine[S, K, Snap, Ev], s Snap, ev Ev) Ev {
+	if m.Deliver != nil {
+		return m.Deliver(s, ev)
+	}
+	return ev
 }
 
 func exact[S, K comparable, Snap, Ev any](m Machine[S, K, Snap, Ev], s Snap) string {
@@ -141,20 +151,37 @@ func Commutes[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev], pa
 	if !complete {
 		t.Errorf("more than %d snapshots reachable; the search stopped", maxSnapshots)
 	}
-	for _, key := range g.order {
-		for _, p := range pairs {
-			for _, a := range m.Events(p[0]) {
-				for _, b := range m.Events(p[1]) {
-					ab, okAB := apply(m, g.nodes[key], a, b)
-					ba, okBA := apply(m, g.nodes[key], b, a)
-					if okAB && okBA && ab != ba {
-						t.Errorf("kinds %v and %v, events %+v and %+v from %s do not commute: %s vs %s",
-							p[0], p[1], a, b, key, ab, ba)
-					}
-				}
+	for _, p := range pairs {
+		checked := 0
+		for _, key := range g.order {
+			checked += commuteFrom(t, m, p, key, g.nodes[key])
+		}
+		if checked == 0 {
+			t.Errorf("kinds %v and %v never apply in both orders from a reachable snapshot; nothing was checked",
+				p[0], p[1])
+		}
+	}
+}
+
+func commuteFrom[S, K comparable, Snap, Ev any](t TB, m Machine[S, K, Snap, Ev], p [2]K, key string, snap Snap) int {
+	t.Helper()
+	checked := 0
+	for _, first := range m.Events(p[0]) {
+		for _, second := range m.Events(p[1]) {
+			a, b := deliver(m, snap, first), deliver(m, snap, second)
+			ab, okAB := apply(m, snap, a, b)
+			ba, okBA := apply(m, snap, b, a)
+			if !okAB || !okBA {
+				continue
+			}
+			checked++
+			if ab != ba {
+				t.Errorf("kinds %v and %v, events %+v and %+v from %s do not commute: %s vs %s",
+					p[0], p[1], a, b, key, ab, ba)
 			}
 		}
 	}
+	return checked
 }
 
 func apply[S, K comparable, Snap, Ev any](m Machine[S, K, Snap, Ev], snap Snap, first, second Ev) (string, bool) {
