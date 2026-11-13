@@ -46,6 +46,7 @@ const (
 	fieldCandidates     = "Subtitle candidates"
 	fieldDownloaded     = "Subtitles downloaded"
 	fieldDesync         = "Subtitles out of sync"
+	fieldResync         = "Subtitle resync"
 	candidatePick       = "Pick one in Bazarr, then Rerun"
 	maxCandidates       = 5
 	fieldValueLimit     = 1024
@@ -83,7 +84,11 @@ func withSubtitleSearch(inc *db.Incident, result *agent.DiagnosticResult, fields
 		fields = append(fields, desyncField(result.SubtitleStreams))
 	}
 	if f, ok := subtitleSearchField(result.SubtitleSearch); ok {
-		return append(fields, f)
+		fields = append(fields, f)
+	}
+	if r := result.SubtitleResync; r != nil && r.Summary != "" {
+		v := []rune(r.Summary)
+		fields = append(fields, card.Field{Name: fieldResync, Value: string(v[:min(len(v), fieldValueLimit)])})
 	}
 	return fields
 }

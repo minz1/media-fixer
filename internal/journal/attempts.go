@@ -19,6 +19,7 @@ type ownerRerunPayload struct {
 }
 
 type Attempt struct {
+	IncidentID string
 	Generation int64
 	Tool       string
 	Params     map[string]any
@@ -66,7 +67,7 @@ func (j *Journal) ActionAttempts(ctx context.Context, incidentID string) (Attemp
 			var p actionAttemptedPayload
 			if json.Unmarshal(e.Payload, &p) == nil {
 				out.Attempts = append(out.Attempts, Attempt{
-					Generation: p.Generation, Tool: p.Tool, Params: p.Params, At: e.At,
+					IncidentID: e.IncidentID, Generation: p.Generation, Tool: p.Tool, Params: p.Params, At: e.At,
 				})
 			}
 		case string(KindActionApplied):
@@ -102,7 +103,9 @@ func (j *Journal) AttemptsSince(ctx context.Context, tool string, since time.Tim
 		if json.Unmarshal(e.Payload, &p) != nil || p.Tool != tool {
 			continue
 		}
-		out = append(out, Attempt{Generation: p.Generation, Tool: p.Tool, Params: p.Params, At: e.At})
+		out = append(out, Attempt{
+			IncidentID: e.IncidentID, Generation: p.Generation, Tool: p.Tool, Params: p.Params, At: e.At,
+		})
 	}
 	return out, nil
 }

@@ -358,6 +358,7 @@ func alignedItems(messages []openai.ChatCompletionMessage) []string {
 
 func (a *Agent) resolveSubtitleItem(
 	ctx context.Context, inc *db.Incident, verifyItem string, aligned []string, search *BazarrSearchResult,
+	resync *BazarrResyncResult,
 ) string {
 	if a.disp == nil || a.disp.Jellyfin == nil {
 		return ""
@@ -384,9 +385,9 @@ func (a *Agent) resolveSubtitleItem(
 	vouched := slices.Contains(aligned, verifyItem)
 	switch {
 	case info.Type == itemEpisode && (inc.JellyfinItemID == "" || info.SeriesID == inc.JellyfinItemID):
-		vouched = vouched || search.coversEpisode(info)
+		vouched = vouched || search.coversEpisode(info) || resync.coversEpisode(info)
 	case info.Type == itemMovie && inc.JellyfinItemID == "":
-		vouched = vouched || search.coversMovie(info)
+		vouched = vouched || search.coversMovie(info) || resync.coversMovie(info)
 	default:
 		vouched = false
 	}

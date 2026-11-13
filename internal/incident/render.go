@@ -122,8 +122,17 @@ func (s *Service) reporterNote(inc *db.Incident, e lifecycle.Effect, t Timers) (
 	case lifecycle.NoteFixed:
 		body := fmt.Sprintf("✅ Your report for **%s** has been fixed automatically. Give it a try!", inc.Title)
 		if result, ok := agent.ParseDiagnosticResult(inc.Finding); ok && inc.What == "subtitles" {
+			rung := false
 			if f, has := subtitleSearchField(result.SubtitleSearch); has && f.Name == fieldDownloaded {
 				body += "\n" + f.Name + ": " + f.Value
+				rung = true
+			}
+			if r := result.SubtitleResync; r != nil && r.Synced {
+				body += "\n" + r.Summary
+				rung = true
+			}
+			if rung && agent.IsDesyncReport(inc.Details) {
+				body += "\nIf they are still out of sync, report it again."
 			}
 		}
 		return reporterCard(card.Success, body), 0, true

@@ -40,6 +40,15 @@ type BazarrResyncResult struct {
 	Episode  int    `json:"episode,omitempty"`
 }
 
+func (r *BazarrResyncResult) coversEpisode(info *client.ItemInfo) bool {
+	return r != nil && !r.Movie && strings.EqualFold(r.Title, info.SeriesName) &&
+		r.Season == info.Season && r.Episode == info.Episode
+}
+
+func (r *BazarrResyncResult) coversMovie(info *client.ItemInfo) bool {
+	return r != nil && r.Movie && strings.EqualFold(r.Title, info.Name)
+}
+
 func resyncToolSpec() toolSpec {
 	return toolSpec{
 		Name: toolBazarrResync,

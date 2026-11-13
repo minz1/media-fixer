@@ -1,13 +1,18 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
+	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/minz1/mediafixer/internal/client"
 )
 
-const desyncReason = "Subtitles reported out of sync; resync is the owner's call. "
+const desyncReason = "Subtitles reported out of sync; not fixed by Bazarr. "
 
 var desyncPattern = regexp.MustCompile(
 	`(?i)(out[ -]of[ -]sync|not in sync|desync|\b(subs?|subtitles?)\b.{0,40}\b(late|early|ahead|behind|delay(ed)?|lag(s|ging)?|timing)\b)`,
@@ -46,4 +51,55 @@ func escalateDesync(result *DiagnosticResult, streams *Alignment) {
 	result.VerifyAfterSeconds = 0
 	result.PrimaryReason = desyncReason + result.PrimaryReason
 	result.Outcome = DiagnosisOutcome{Kind: DiagnosisManual, Reason: result.PrimaryReason}
+}
+
+func (a *Agent) ladderSucceeded(
+	ctx context.Context, incidentID string, result *DiagnosticResult, search *BazarrSearchResult,
+	resync *BazarrResyncResult,
+) bool {
+	want, _, ok := langCodes(result.VerifySubtitleLanguage)
+	if !ok || result.SubtitleItemID == "" || a.disp == nil || a.disp.Jellyfin == nil {
+		return false
+	}
+	info, err := a.disp.Jellyfin.ItemInfo(ctx, result.SubtitleItemID)
+	if err != nil {
+		return false
+	}
+	movie := info.Type == itemMovie
+	if resync != nil && resync.Synced && sameLanguage(resync.Language, want) &&
+		(movie && resync.coversMovie(info) || !movie && resync.coversEpisode(info)) {
+		return true
+	}
+	return search != nil && search.Found && sameLanguage(search.Language, want) &&
+		(movie && search.coversMovie(info) || !movie && search.coversEpisode(info)) &&
+		!a.searchedElsewhere(ctx, incidentID, search)
+}
+
+func sameLanguage(lang, iso1 string) bool {
+	got, _, ok := langCodes(lang)
+	return ok && got == iso1
+}
+
+func (a *Agent) searchedElsewhere(ctx context.Context, incidentID string, s *BazarrSearchResult) bool {
+	if a.disp.Attempts == nil {
+		return true
+	}
+	attempts, err := a.disp.Attempts.AttemptsSince(ctx, toolBazarrSearch, time.Now().Add(-resyncGuardWindow))
+	if err != nil {
+		return true
+	}
+	for _, at := range attempts {
+		title, _ := at.Params[paramTitle].(string)
+		lang, _ := at.Params[paramLanguage].(string)
+		mediaType, _ := at.Params[paramMediaType].(string)
+		if at.IncidentID == incidentID || !strings.EqualFold(title, s.Title) || !sameLanguage(lang, s.Language) ||
+			(mediaType == client.ReplaceMediaMovie) != s.Movie {
+			continue
+		}
+		if s.Movie || intArgOrSentinel(at.Params, paramSeason) == s.Season &&
+			intArgOrSentinel(at.Params, paramEpisode) == s.Episode {
+			return true
+		}
+	}
+	return false
 }

@@ -247,9 +247,7 @@ func (s *Service) HandleReport(ctx context.Context, r *Report) (*db.Incident, bo
 // runDiagnosis executes one agent.Run call under the process-wide diagnostic
 // lock (runManager.globalSlot), so a concurrent incident's restart/scan/cleanup
 // can never be observed mid-disruption by this run's evidence gathering — see
-// runManager's doc comment. Deliberately does NOT wrap runVerification or
-// escalation's durable outcome tracking; only the ~10s tool-calling loop itself
-// is serialized.
+// runManager's doc comment.
 func (s *Service) runDiagnosis(
 	ctx context.Context, inc *db.Incident, seed []openai.ChatCompletionMessage, gate *runGate,
 ) agent.RunExit {

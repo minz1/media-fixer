@@ -205,3 +205,51 @@ func TestF40_DesyncCardShowsStreams(t *testing.T) {
 		t.Error("non-desync card has the desync field")
 	}
 }
+
+func TestRS5_CardShowsResync(t *testing.T) {
+	t.Parallel()
+	subs := &db.Incident{ID: "abc", What: "subtitles", Title: "Show", Details: "subs out of sync"}
+	timeout := "Bazarr did not report a finished sync of Show.S01E02.en.srt in 20 minutes (a forced subtitle or a " +
+		"low-quality alignment is skipped); Bazarr may still finish later and rewrite the file"
+	res := subsResult(notFound())
+	res.SubtitleDesync = true
+	res.SubtitleResync = &agent.BazarrResyncResult{Summary: timeout, Language: "en"}
+	fields := incident.SurfaceCardForTest(subs, res, "").Fields
+	if _, ok := fieldNamed(fields, "Subtitles out of sync"); !ok {
+		t.Error("no desync field")
+	}
+	if f, ok := fieldNamed(fields, "Subtitle resync"); !ok || f.Value != timeout {
+		t.Errorf("resync field = %+v, %v", f, ok)
+	}
+	res.SubtitleResync = nil
+	if _, has := fieldNamed(incident.SurfaceCardForTest(subs, res, "").Fields, "Subtitle resync"); has {
+		t.Error("card without a resync has the resync field")
+	}
+}
+
+func TestRS5_ReporterNoteResync(t *testing.T) {
+	t.Parallel()
+	svc, _, _ := newTestService(t)
+	const confirm = "If they are still out of sync, report it again."
+	resynced := subsResult(nil)
+	resynced.SubtitleResync = &agent.BazarrResyncResult{
+		Synced: true, Summary: "Resynced en subtitles to the audio (offset +2.3 s)", Language: "en",
+	}
+	got := svc.FixedNoteForTest(&db.Incident{
+		What: "subtitles", Title: "Show", Details: "subs are out of sync", Finding: resynced,
+	})
+	if !strings.Contains(got, "Resynced en subtitles to the audio (offset +2.3 s)") || !strings.Contains(got, confirm) {
+		t.Errorf("resync note = %q", got)
+	}
+	found := subsResult(&agent.BazarrSearchResult{Found: true, Path: "/tv/Show/Show.S01E01.en.srt"})
+	got = svc.FixedNoteForTest(&db.Incident{
+		What: "subtitles", Title: "Show", Details: "subs are out of sync", Finding: found,
+	})
+	if !strings.Contains(got, "Subtitles downloaded: Show.S01E01.en.srt") || !strings.Contains(got, confirm) {
+		t.Errorf("found-search desync note = %q", got)
+	}
+	got = svc.FixedNoteForTest(&db.Incident{What: "subtitles", Title: "Show", Details: "no subs", Finding: found})
+	if strings.Contains(got, confirm) {
+		t.Errorf("non-desync note = %q", got)
+	}
+}

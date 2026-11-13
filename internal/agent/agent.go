@@ -196,11 +196,14 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      you ran stream_alignment on.
   6. A desync report (the reporter says the subtitles are out of sync, late, early or behind):
      resolve the Episode item and run stream_alignment on it so the card carries the stream
-     table. Then run bazarr_search_subtitles for the reported language; found=true → fix-now
-     with verify_subtitle_language and verify_after_seconds 60. Otherwise run
-     bazarr_resync_subtitle for that language; synced=true → fix-now with
-     verify_subtitle_language. Only when both fail, escalate
-     escalate_action=manual_investigation.
+     table. Run bazarr_search_subtitles for the reported language (else the language
+     stream_alignment shows the viewer uses, else en); found=true → fix-now with
+     verify_subtitle_language and verify_after_seconds 60. Not found, or refused as already
+     applied → run bazarr_resync_subtitle with that language; synced=true → fix-now with
+     verify_subtitle_language and verify_item_id, no verify_after_seconds. Only when both fail,
+     complete with escalate_action=manual_investigation quoting both summaries. The system
+     escalates a desync report unless one of the two tools reported success in this run for
+     this episode and language.
   The autonomous actions: bazarr_search_subtitles when the language is missing, its embedded
   track is broken or the subtitles are out of sync; bazarr_resync_subtitle only on a desync
   report after that search; clear_jellyfin_cache on the Episode only when the evidence is
@@ -410,6 +413,7 @@ type DiagnosticResult struct {
 	SubtitleItemID         string `json:"subtitle_item_id,omitempty"`
 
 	SubtitleSearch *BazarrSearchResult `json:"subtitle_search,omitempty"`
+	SubtitleResync *BazarrResyncResult `json:"subtitle_resync,omitempty"`
 
 	SubtitleDesync  bool       `json:"subtitle_desync,omitempty"`
 	SubtitleStreams *Alignment `json:"subtitle_streams,omitempty"`
@@ -680,6 +684,7 @@ func (a *Agent) handleCompleteDiagnosis(
 	gate Gate,
 	aligned []string,
 	search *BazarrSearchResult,
+	resync *BazarrResyncResult,
 	streams *Alignment,
 ) (*DiagnosticResult, error) {
 	result, err := parseDiagnosis(argsJSON, gate.Calls())
@@ -695,14 +700,15 @@ func (a *Agent) handleCompleteDiagnosis(
 	// no pre_fix parameter — but assign it unconditionally regardless, so a
 	// same-named key it happened to send is never trusted over the real capture.
 	result.PreFix = preFix
-	result.SubtitleSearch = search
+	result.SubtitleSearch, result.SubtitleResync = search, resync
 	result.SubtitleDesync, result.SubtitleStreams = false, nil
-	if inc.What == WhatSubtitles && IsDesyncReport(inc.Details) {
-		escalateDesync(&result, streams)
-	}
 	result.SubtitleItemID = ""
 	if _, _, known := langCodes(result.VerifySubtitleLanguage); inc.What == WhatSubtitles && known {
-		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned, search)
+		result.SubtitleItemID = a.resolveSubtitleItem(ctx, inc, result.VerifyItemID, aligned, search, resync)
+	}
+	if inc.What == WhatSubtitles && IsDesyncReport(inc.Details) &&
+		(result.RequiresApproval || !a.ladderSucceeded(ctx, inc.ID, &result, search, resync)) {
+		escalateDesync(&result, streams)
 	}
 
 	// Deliberately ignores result.VerifyItemID when it names a different item

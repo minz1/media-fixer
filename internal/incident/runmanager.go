@@ -39,11 +39,8 @@ type runManager struct {
 	// Deliberately NOT held across the whole run: a deferred fix's verification
 	// wait and Phase 4's durable outcome tracking can run for
 	// minutes to hours and must never block the queue — those poll read-only
-	// state and don't need exclusivity. Diagnostic rounds are ~10s each and this
-	// app sees roughly a handful of incidents a day, so full serialization of
-	// just that part costs nothing observable while eliminating the whole
-	// interference class. A single-buffered channel holding one token acts as a
-	// context-cancellable mutex (sync.Mutex has no cancellable Lock).
+	// state and don't need exclusivity. A single-buffered channel holding one token
+	// acts as a context-cancellable mutex (sync.Mutex has no cancellable Lock).
 	globalSlot chan struct{}
 
 	wake func()

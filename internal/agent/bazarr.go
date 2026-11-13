@@ -27,6 +27,7 @@ var ErrUnknownLanguage = errors.New("bazarr_search_subtitles: unknown subtitle l
 
 type BazarrSearchResult struct {
 	Found      bool                     `json:"found"`
+	Language   string                   `json:"language"`
 	Summary    string                   `json:"summary"`
 	Path       string                   `json:"path,omitempty"`
 	Candidates []client.BazarrCandidate `json:"candidates,omitempty"`
@@ -131,7 +132,7 @@ func (d *Dispatcher) dispatchBazarrSearch(ctx context.Context, c *toolCall, args
 	if !known {
 		return nil, refuseCause(ErrUnknownLanguage)
 	}
-	res := &BazarrSearchResult{}
+	res := &BazarrSearchResult{Language: iso1}
 	target, key, err := d.bazarrTarget(ctx, args, res)
 	if err != nil {
 		return nil, err

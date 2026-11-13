@@ -79,6 +79,7 @@ func (a *Agent) conclude(
 		gate,
 		alignedItems(*messages),
 		lastBazarrSearch(*messages),
+		lastBazarrResync(*messages),
 		lastAlignment(*messages),
 	)
 	var rejected *diagnosisRejectedError
