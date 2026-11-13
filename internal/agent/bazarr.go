@@ -161,7 +161,6 @@ func (d *Dispatcher) dispatchBazarrSearch(ctx context.Context, c *toolCall, args
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	var readErr error
-	// shortcut: bounded poll because Bazarr sends no push when a search finds nothing; remove when a Bazarr release documents a failed-search notification
 poll:
 	for {
 		subs, subsErr := d.Bazarr.Subtitles(ctx, target)

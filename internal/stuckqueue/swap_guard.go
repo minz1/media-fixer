@@ -15,7 +15,6 @@ func SwapGuard(
 	queue []client.QueueEntry,
 ) error {
 	name := filepath.Base(cand.Path)
-	// shortcut: one episode only, a file covering several is refused; upgrade when the broken file covers all of them.
 	switch {
 	case cand.SeriesID != series:
 		return refuse("%s belongs to another series", name)

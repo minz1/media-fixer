@@ -44,7 +44,6 @@ type Service struct {
 	seedTimeout time.Duration
 	unit        atomic.Int64
 	timersWarn  atomic.Bool
-	// shortcut: in memory, so a restart during a lock sends one more alert; persist it if that turns out noisy.
 	lockAlertAt atomic.Int64
 	paused      atomic.Bool
 	pauseMu     sync.Mutex

@@ -27,7 +27,6 @@ const (
 	swapGuardOK        = "ok"
 )
 
-// shortcut: one host's downloads root, add a config key when a second host differs.
 const swapDownloadsRoot = "/data/downloads/sonarr"
 
 func (d *Dispatcher) swapFolder(ctx context.Context, downloadID string) (string, error) {

@@ -34,7 +34,6 @@ const (
 	itemSeries         = "Series"
 )
 
-// shortcut: a fixed table of the languages seen here, add a row when an incident needs one
 func langCodes(s string) (string, string, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "en", "eng", "english":
@@ -159,7 +158,6 @@ func isStopword(w string) bool {
 	return false
 }
 
-// shortcut: English only, add languages when an incident needs one
 func detectLanguage(text string) string {
 	lines := cueLines(text, cueScanLines)
 	if len(lines) < minDetectLines {
@@ -190,7 +188,6 @@ type ExtractTest struct {
 	StreamLanguage   string   `json:"stream_language"`
 }
 
-// shortcut: 20 GB keeps an extraction under the 90 s cap; raise it if Jellyfin extracts faster or the cap changes
 const subtitleExtractMaxBytes = 20 << 30
 
 var ErrSubtitleFileTooLarge = errors.New(
