@@ -303,9 +303,9 @@ func writeSnapshot(ctx context.Context, tx *sql.Tx, cur, next lifecycle.Snapshot
 	_, err = tx.ExecContext(ctx, `UPDATE incidents SET status = ?, version = ?, generation = ?,
 		autonomous_locked = ?, action_count = ?, parked = ?, reason = ?, pending_outcome = ?,
 		pending_outcome_next_check = NULL, escalation_plan = ?, escalation_plan_at = ?, verify_next_check = ?,
-		verify_checks_left = ?, verify_spec = ?, stuck_read_reran = ?, updated_at = ? WHERE id = ?`,
+		verify_checks_left = ?, verify_spec = ?, stuck_read_reran = ?, jellyfin_item_id = ?, updated_at = ? WHERE id = ?`,
 		next.Status, next.Version, next.Generation, c.locked, next.ActionCount, c.parked, c.reason, c.po,
-		c.plan, c.planAt, c.next, c.checksLeft, c.spec, c.reran, now, next.ID)
+		c.plan, c.planAt, c.next, c.checksLeft, c.spec, c.reran, nullStr(next.ItemID), now, next.ID)
 	if err != nil {
 		return err
 	}

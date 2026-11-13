@@ -15,6 +15,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/operation"
 )
 
@@ -852,6 +853,10 @@ func (a *scriptedPendingOutcomeAgent) OperationFor(
 	_ operation.Subject, _ *agent.DiagnosticResult, _ []byte,
 ) (operation.Spec, error) {
 	return operation.Spec{}, nil
+}
+
+func (a *scriptedPendingOutcomeAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
 }
 
 func (a *scriptedPendingOutcomeAgent) VerifySubtitle(context.Context, string, string) bool {

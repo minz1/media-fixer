@@ -12,6 +12,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 )
 
 type fakeStuckChecker struct {
@@ -248,6 +249,10 @@ func TestCantPlayStillImmediate(t *testing.T) {
 	if n := chk.calls(); n != 0 {
 		t.Fatalf("Clear calls = %d, want 0", n)
 	}
+}
+
+func (a *stuckReadAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
 }
 
 func (a *stuckReadAgent) VerifySubtitle(context.Context, string, string) bool { return true }

@@ -380,7 +380,15 @@ func TestE2_NoEnteredTimeLeavesTheVerifyTimer(t *testing.T) {
 
 func (a *observingAgent) VerifySubtitle(context.Context, string, string) bool { return true }
 
+func (a *blockingObserver) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
+}
+
 func (a *blockingObserver) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *cancelingObserver) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
+}
 
 func (a *cancelingObserver) VerifySubtitle(context.Context, string, string) bool { return true }
 

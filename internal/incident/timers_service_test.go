@@ -18,6 +18,7 @@ import (
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
 	"github.com/minz1/mediafixer/internal/incident"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/journal"
 )
 
@@ -590,6 +591,14 @@ func TestTimers_CorruptRowWarnsOncePerBadSpell(t *testing.T) {
 	}
 }
 
+func (a *countingVerifyAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
+}
+
 func (a *countingVerifyAgent) VerifySubtitle(context.Context, string, string) bool { return true }
+
+func (a *verifyPingAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
+}
 
 func (a *verifyPingAgent) VerifySubtitle(context.Context, string, string) bool { return true }

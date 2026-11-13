@@ -7,6 +7,7 @@ import (
 
 	"github.com/minz1/mediafixer/internal/agent"
 	"github.com/minz1/mediafixer/internal/db"
+	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/operation"
 )
 
@@ -25,6 +26,7 @@ type AgentRunner interface {
 	// improvement" check).
 	VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool
 	VerifySubtitle(ctx context.Context, itemID, lang string) bool
+	SwapItem(ctx context.Context, target lifecycle.SwapTarget) (itemID string, landed bool, note string)
 	// ScanRunning reports whether a Jellyfin library scan is currently in progress.
 	ScanRunning(ctx context.Context) bool
 	// BuildSummarySeed constructs seed messages for a resumed run from a summary.

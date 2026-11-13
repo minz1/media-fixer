@@ -671,4 +671,8 @@ func (a stubArr) Search(ctx context.Context, _ string, _, _ int, _ []int) error 
 	return nil
 }
 
+func (a *stubEscalationAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
+	return "", false, ""
+}
+
 func (a *stubEscalationAgent) VerifySubtitle(context.Context, string, string) bool { return true }

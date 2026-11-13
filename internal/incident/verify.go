@@ -16,6 +16,7 @@ import (
 type Observer interface {
 	VerifyResolved(ctx context.Context, itemID, title string, pre *agent.FixSignature) bool
 	VerifySubtitle(ctx context.Context, itemID, lang string) bool
+	SwapItem(ctx context.Context, target lifecycle.SwapTarget) (itemID string, landed bool, note string)
 	ScanRunning(ctx context.Context) bool
 	CheckPendingOutcome(ctx context.Context, po *db.PendingOutcome) (*agent.PendingOutcomeObservation, error)
 }
@@ -131,14 +132,28 @@ func (s *Service) verifyCheck(ctx context.Context, id string, gen int64, seq int
 	if !ok || snap.Verify == nil {
 		return
 	}
-	res, scan := s.observeVerify(ctx, inc, snap)
+	var (
+		res         lifecycle.VerifyResult
+		scan        bool
+		newID, note string
+	)
+	if snap.Verify.Spec.Swap != nil {
+		res, scan, newID, note = s.observeSwap(ctx, snap)
+	} else {
+		res, scan = s.observeVerify(ctx, inc, snap)
+	}
+	var extra []card.Field
+	if note != "" {
+		extra = append(extra, card.Field{Name: fieldNote, Value: note})
+	}
 	ev := lifecycle.Event{
-		Kind:   lifecycle.VerifyObserved,
-		Gen:    gen,
-		Seq:    seq,
-		Verify: res,
-		Scan:   scan,
-		Notice: s.notVerified(inc),
+		Kind:      lifecycle.VerifyObserved,
+		Gen:       gen,
+		Seq:       seq,
+		Verify:    res,
+		NewItemID: newID,
+		Scan:      scan,
+		Notice:    s.notVerified(inc, extra...),
 	}
 	if _, err := s.apply(ctx, id, ev, nil); err != nil {
 		s.logCheckErr(ctx, id, err)
@@ -284,8 +299,8 @@ func (s *Service) settleScan(ctx context.Context, ended time.Time) error {
 	return s.journal.SettleDisruption(ctx, *d)
 }
 
-func (s *Service) notVerified(inc *db.Incident) lifecycle.Notice {
-	fields := []card.Field{}
+func (s *Service) notVerified(inc *db.Incident, extra ...card.Field) lifecycle.Notice {
+	fields := extra
 	if result, ok := agent.ParseDiagnosticResult(inc.Finding); ok {
 		fields = withSubtitleSearch(inc, result,
 			card.Field{Name: fieldRootCause, Value: result.RootCause},
@@ -295,4 +310,22 @@ func (s *Service) notVerified(inc *db.Incident) lifecycle.Notice {
 	return noticeOf(ownerCard(inc, card.Warn, fmt.Sprintf(
 		"🔍 Incident **%s** (#%s) needs your attention (autonomous fix applied but could not be verified).",
 		inc.Title, inc.ShortID()), "", fields...))
+}
+
+func (s *Service) observeSwap(ctx context.Context, snap lifecycle.Snapshot) (
+	lifecycle.VerifyResult, bool, string, string,
+) {
+	obs := s.observer()
+	if obs == nil {
+		return lifecycle.VerifyUnknown, false, "", ""
+	}
+	spec := snap.Verify.Spec
+	id, landed, note := obs.SwapItem(ctx, *spec.Swap)
+	switch {
+	case landed && obs.VerifySubtitle(ctx, id, agent.SubtitleLanguage(spec.Language)):
+		return lifecycle.VerifyFixed, false, id, note
+	case snap.Verify.ChecksLeft > 1:
+		return lifecycle.VerifyNotYet, false, "", note
+	}
+	return lifecycle.VerifyNotYet, obs.ScanRunning(ctx), "", note
 }

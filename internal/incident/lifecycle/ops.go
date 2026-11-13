@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -66,11 +67,35 @@ func approveSpec(cur Snapshot, ev Event, now time.Time) (Decision, error) {
 	return d, err
 }
 
+func swapVerifySpec(cur Snapshot, spec *VerifySpec) {
+	var f struct {
+		Language string `json:"verify_subtitle_language"`
+	}
+	_ = json.Unmarshal(cur.Finding.JSON, &f)
+	t := &SwapTarget{}
+	for _, st := range cur.Op.Steps {
+		if st.Kind == operation.StepJellyfinNotify {
+			t.SeriesItemID = st.Name
+		}
+		if st.Kind == operation.StepImport {
+			t.SonarrSeriesID, t.OldFileID, t.CandidateSize, t.Season, t.Episode = st.MediaID, st.FileID, st.Size,
+				st.Season, st.Episode
+			if len(st.EpisodeIDs) > 0 {
+				t.EpisodeID = st.EpisodeIDs[0]
+			}
+		}
+	}
+	spec.Kind, spec.Language, spec.SubtitleItemID, spec.Swap = VerifySubtitles, f.Language, cur.ItemID, t
+}
+
 func approvedVerify(cur Snapshot, now time.Time) (Decision, error) {
 	next := cur
 	next.Op = nil
 	spec := VerifySpec{
 		Kind: VerifyGeneric, ItemID: cur.ItemID, Action: cur.Finding.EscalateAction, ETAMinutes: planETAMinutes,
+	}
+	if cur.Op != nil && cur.Op.Kind == operation.KindSwapRelease {
+		swapVerifySpec(cur, &spec)
 	}
 	delay := next.In.Limits.ApprovedVerify
 	if cur.What == WhatStuckRead {

@@ -66,6 +66,7 @@ type VerifySpec struct {
 	PreFix         json.RawMessage `json:"pre,omitempty"`
 	Language       string          `json:"language,omitempty"`
 	SubtitleItemID string          `json:"subtitle_item_id,omitempty"`
+	Swap           *SwapTarget     `json:"swap,omitempty"`
 	Action         string          `json:"action,omitempty"`
 	ETAMinutes     int             `json:"eta_minutes,omitempty"`
 	Extensions     int             `json:"extensions"`
@@ -73,6 +74,16 @@ type VerifySpec struct {
 	ETANoted       bool            `json:"eta_noted"`
 
 	VerifyEnteredAt time.Time `json:"verify_entered_at,omitzero"`
+}
+
+type SwapTarget struct {
+	SeriesItemID   string `json:"series_item_id"`
+	Season         int    `json:"season"`
+	Episode        int    `json:"episode"`
+	SonarrSeriesID int    `json:"sonarr_series_id"`
+	EpisodeID      int    `json:"episode_id"`
+	OldFileID      int    `json:"old_file_id"`
+	CandidateSize  int64  `json:"candidate_size"`
 }
 
 type Stage string
