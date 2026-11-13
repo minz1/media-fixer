@@ -90,3 +90,19 @@ func (j *Journal) ActionAttempts(ctx context.Context, incidentID string) (Attemp
 	}
 	return out, nil
 }
+
+func (j *Journal) AttemptsSince(ctx context.Context, tool string, since time.Time) ([]Attempt, error) {
+	events, err := j.db.EventsOfKindSince(ctx, string(KindActionAttempted), since)
+	if err != nil {
+		return nil, err
+	}
+	var out []Attempt
+	for _, e := range events {
+		var p actionAttemptedPayload
+		if json.Unmarshal(e.Payload, &p) != nil || p.Tool != tool {
+			continue
+		}
+		out = append(out, Attempt{Generation: p.Generation, Tool: p.Tool, Params: p.Params, At: e.At})
+	}
+	return out, nil
+}

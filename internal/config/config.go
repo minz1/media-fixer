@@ -81,6 +81,17 @@ type BazarrConfig struct {
 	URL           string `toml:"url"`
 	APIKey        string `toml:"api_key"`
 	WebhookSecret string `toml:"webhook_secret"`
+	ResyncMaxGB   int    `toml:"resync_max_gb"`
+}
+
+const defaultResyncMaxGB = 20
+
+func (c BazarrConfig) ResyncMaxBytes() int64 {
+	gb := c.ResyncMaxGB
+	if gb <= 0 {
+		gb = defaultResyncMaxGB
+	}
+	return int64(gb) << 30
 }
 
 type SeerrConfig struct {

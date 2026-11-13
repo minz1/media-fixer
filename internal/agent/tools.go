@@ -887,6 +887,13 @@ type Dispatcher struct {
 	MediaAgent  *client.MediaAgentClient
 	Bazarr      *client.BazarrClient
 	BazarrWaits *BazarrWaits
+
+	Attempts       AttemptHistory
+	ResyncMaxBytes int64
+}
+
+type AttemptHistory interface {
+	AttemptsSince(ctx context.Context, tool string, since time.Time) ([]journal.Attempt, error)
 }
 
 // Call executes a tool by name with already-decoded arguments and returns the

@@ -69,3 +69,21 @@ func TestC9_ConfigBazarr(t *testing.T) {
 		t.Fatalf("bazarr = %+v, want %+v", cfg.Bazarr, want)
 	}
 }
+
+func TestRS2_ResyncMaxGBDefault(t *testing.T) {
+	t.Parallel()
+	if got := (config.BazarrConfig{}).ResyncMaxBytes(); got != 20<<30 {
+		t.Errorf("default = %d", got)
+	}
+	path := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(path, []byte("[bazarr]\nresync_max_gb = 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Bazarr.ResyncMaxBytes(); got != 5<<30 {
+		t.Errorf("configured = %d", got)
+	}
+}

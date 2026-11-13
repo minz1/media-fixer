@@ -1457,6 +1457,18 @@ func (d *DB) EventsByKind(ctx context.Context, kind string, limit int) ([]*Event
 	return scanEvents(rows)
 }
 
+func (d *DB) EventsOfKindSince(ctx context.Context, kind string, since time.Time) ([]*Event, error) {
+	rows, err := d.read.QueryContext(ctx, `
+		SELECT seq, incident_id, at, kind, payload, source
+		FROM incident_events WHERE kind = ? AND at >= ? ORDER BY seq`,
+		kind, since.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
 func scanEvents(rows *sql.Rows) ([]*Event, error) {
 	var out []*Event
 	for rows.Next() {

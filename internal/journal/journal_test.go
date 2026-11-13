@@ -492,3 +492,39 @@ func TestE3_LastDisruptionCarriesGeneration(t *testing.T) {
 		t.Fatalf("generation = %d, want 7", got.Generation)
 	}
 }
+
+func TestRS2_AttemptsSince(t *testing.T) {
+	t.Parallel()
+	j, d := openTestJournal(t)
+	ctx := context.Background()
+	a := mustCreateIncident(t, d, "A")
+	b := mustCreateIncident(t, d, "B")
+	now := time.Now().UTC()
+	event := func(id, tool string, ago time.Duration) *db.Event {
+		e, err := journal.ActionAttemptedEvent(id, 1, tool, map[string]any{"path": "/tv/" + tool + ".srt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.At = now.Add(-ago)
+		return e
+	}
+	applied := &db.Event{
+		IncidentID: b.ID, At: now.Add(-time.Hour), Kind: string(journal.KindActionApplied),
+		Payload: []byte(`{"action":"bazarr_resync_subtitle","params":{"path":"/x"}}`),
+	}
+	if err := d.AppendEvents(ctx,
+		event(a.ID, "bazarr_resync_subtitle", 30*time.Hour),
+		event(b.ID, "bazarr_search_subtitles", time.Hour),
+		applied,
+		event(b.ID, "bazarr_resync_subtitle", 2*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, err := j.AttemptsSince(ctx, "bazarr_resync_subtitle", now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Tool != "bazarr_resync_subtitle" || got[0].Params["path"] != "/tv/bazarr_resync_subtitle.srt" {
+		t.Fatalf("attempts = %+v", got)
+	}
+}

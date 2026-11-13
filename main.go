@@ -64,6 +64,8 @@ func buildAgentComponents(
 		return nil, err
 	}
 	disp := clients.Dispatcher()
+	disp.Attempts = jrnl
+	disp.ResyncMaxBytes = cfg.Bazarr.ResyncMaxBytes()
 
 	llmCfg := openai.DefaultConfig(cfg.LLM.APIKey)
 	if cfg.LLM.BaseURL != "" {
