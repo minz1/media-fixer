@@ -361,6 +361,39 @@ func TestE2_ClearArmsEarlierThanTheVerifyTimer(t *testing.T) {
 	env.waitFixed(t, s.ID)
 }
 
+func TestF35_RefusedEarlyWakeIsLogged(t *testing.T) {
+	t.Parallel()
+	env := newLifecycleEnv(t, newObservingAgent())
+	env.svc.SetStuckRead(&fakeStuckChecker{clear: func(int) bool { return true }})
+	s := env.verifying(t, "Refused show", lifecycle.WhatStuckRead)
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.VerifyEnteredAt = time.Now()
+	})
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Refused show"); err != nil {
+		t.Fatal(err)
+	}
+	soon, ok := env.svc.ArmedAtForTest(s.ID)
+	if !ok {
+		t.Fatal("the first clear did not arm the verify check")
+	}
+	if env.logged("early check wake refused") {
+		t.Fatal("an accepted early wake was logged as refused")
+	}
+	lifecycletest.Force(t, env.db, s.ID, func(n *lifecycle.Snapshot) {
+		n.Verify.Spec.VerifyEnteredAt = time.Now().Add(time.Hour)
+	})
+
+	if err := env.svc.ArmStuckReadClear(t.Context(), "Refused show"); err != nil {
+		t.Fatal(err)
+	}
+	if at, armed := env.svc.ArmedAtForTest(s.ID); !armed || !at.Equal(soon) {
+		t.Fatalf("armed at %v (%v), want the sooner timer kept at %v", at, armed, soon)
+	}
+	if !env.logged("early check wake refused") {
+		t.Fatalf("the refused early wake was not logged:\n%s", env.logs.String())
+	}
+}
+
 func TestE2_NoEnteredTimeLeavesTheVerifyTimer(t *testing.T) {
 	t.Parallel()
 	env := newLifecycleEnv(t, newObservingAgent())

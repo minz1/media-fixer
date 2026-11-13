@@ -145,7 +145,10 @@ func (s *Service) scheduleCheck(id string, e lifecycle.Effect) {
 }
 
 func (s *Service) scheduleCheckEarlier(id string, e lifecycle.Effect) {
-	s.runs.armCheckEarlier(id, e.Gen, e.Seq, e.At, s.checkFire(id, e))
+	if !s.runs.armCheckEarlier(id, e.Gen, e.Seq, e.At, s.checkFire(id, e)) {
+		s.log.Info("early check wake refused, the armed or running check stays",
+			"incident", id, "gen", e.Gen, "seq", e.Seq, "at", e.At, "check", string(e.Check))
+	}
 }
 
 func (s *Service) checkFire(id string, e lifecycle.Effect) func(done func()) {
