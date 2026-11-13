@@ -59,6 +59,7 @@ type runToken struct {
 
 type armedCheck struct {
 	gen   int64
+	seq   int
 	at    time.Time
 	timer *time.Timer
 }
@@ -202,15 +203,15 @@ func (m *runManager) reserve(id string) func() {
 	}
 }
 
-func (m *runManager) armCheck(id string, gen int64, at time.Time, fire func(done func())) bool {
-	return m.arm(id, gen, at, false, fire)
+func (m *runManager) armCheck(id string, gen int64, seq int, at time.Time, fire func(done func())) bool {
+	return m.arm(id, gen, seq, at, false, fire)
 }
 
-func (m *runManager) armCheckEarlier(id string, gen int64, at time.Time, fire func(done func())) bool {
-	return m.arm(id, gen, at, true, fire)
+func (m *runManager) armCheckEarlier(id string, gen int64, seq int, at time.Time, fire func(done func())) bool {
+	return m.arm(id, gen, seq, at, true, fire)
 }
 
-func (m *runManager) arm(id string, gen int64, at time.Time, earlier bool, fire func(done func())) bool {
+func (m *runManager) arm(id string, gen int64, seq int, at time.Time, earlier bool, fire func(done func())) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if gen < m.current[id] {
@@ -221,24 +222,25 @@ func (m *runManager) arm(id string, gen int64, at time.Time, earlier bool, fire 
 	}
 	m.current[id] = gen
 	if c, ok := m.checks[id]; ok {
-		sooner := earlier && c.gen == gen && at.Before(c.at)
-		if c.gen > gen || (c.gen == gen && !sooner) {
+		newer := c.gen < gen || (c.gen == gen && c.seq < seq)
+		sooner := earlier && c.gen == gen && c.seq == seq && at.Before(c.at)
+		if !newer && !sooner {
 			return false
 		}
 		if !c.timer.Stop() && sooner {
 			return false
 		}
 	}
-	m.checks[id] = armedCheck{gen: gen, at: at, timer: time.AfterFunc(max(time.Until(at), 0), func() {
-		fire(m.claimCheck(id, gen))
+	m.checks[id] = armedCheck{gen: gen, seq: seq, at: at, timer: time.AfterFunc(max(time.Until(at), 0), func() {
+		fire(m.claimCheck(id, gen, seq))
 	})}
 	return true
 }
 
-func (m *runManager) claimCheck(id string, gen int64) func() {
+func (m *runManager) claimCheck(id string, gen int64, seq int) func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c, ok := m.checks[id]; ok && c.gen == gen {
+	if c, ok := m.checks[id]; ok && c.gen == gen && c.seq == seq {
 		delete(m.checks, id)
 	}
 	if cur, ok := m.inflight[id]; ok && cur.gen > gen {

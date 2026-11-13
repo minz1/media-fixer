@@ -141,11 +141,11 @@ func (s *Service) launchRun(inc *db.Incident, e lifecycle.Effect) {
 }
 
 func (s *Service) scheduleCheck(id string, e lifecycle.Effect) {
-	s.runs.armCheck(id, e.Gen, e.At, s.checkFire(id, e))
+	s.runs.armCheck(id, e.Gen, e.Seq, e.At, s.checkFire(id, e))
 }
 
 func (s *Service) scheduleCheckEarlier(id string, e lifecycle.Effect) {
-	s.runs.armCheckEarlier(id, e.Gen, e.At, s.checkFire(id, e))
+	s.runs.armCheckEarlier(id, e.Gen, e.Seq, e.At, s.checkFire(id, e))
 }
 
 func (s *Service) checkFire(id string, e lifecycle.Effect) func(done func()) {

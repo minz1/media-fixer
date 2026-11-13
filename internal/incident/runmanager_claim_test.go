@@ -84,3 +84,31 @@ func TestF1_EarlierArmDuringInflightCheckRunsOnce(t *testing.T) {
 		t.Fatalf("checks run = %d, want 1", got)
 	}
 }
+
+func TestF32_StaleEarlyArmKeepsNewerSeqTimer(t *testing.T) {
+	t.Parallel()
+	m := incident.NewRunManagerForTest(t.Context())
+	var fired atomic.Int32
+	later := time.Now().Add(time.Hour)
+	if !m.ArmCheckSeq("inc", 3, 2, later, false, func() { fired.Add(1) }) {
+		t.Fatal("arming seq 2 was refused")
+	}
+	if m.ArmCheckSeq("inc", 3, 1, time.Now(), true, func() { fired.Add(1) }) {
+		t.Fatal("an early arm carrying the older seq 1 displaced the live seq 2 timer")
+	}
+	if at, ok := m.ArmedAt("inc"); !ok || !at.Equal(later) {
+		t.Fatalf("armed at %v (armed %v), want the seq 2 timer at %v", at, ok, later)
+	}
+	if !m.ArmCheckSeq("inc", 3, 2, time.Now().Add(time.Minute), true, func() {}) {
+		t.Fatal("an early arm with the same seq was refused")
+	}
+	if !m.ArmCheckSeq("inc", 3, 3, time.Now().Add(2*time.Hour), false, func() {}) {
+		t.Fatal("an arm with a newer seq was refused")
+	}
+	if m.ArmCheckSeq("inc", 3, 2, time.Now().Add(3*time.Hour), false, func() {}) {
+		t.Fatal("a later arm with an older seq replaced the newer seq timer")
+	}
+	if fired.Load() != 0 {
+		t.Fatalf("a stale arm fired %d times", fired.Load())
+	}
+}

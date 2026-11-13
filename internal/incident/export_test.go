@@ -138,18 +138,27 @@ func (r *RunManagerForTest) Reserve(id string) func() { return r.m.reserve(id) }
 func (r *RunManagerForTest) CancelBelow(id string, gen int64) { r.m.cancelBelow(id, gen) }
 
 func (r *RunManagerForTest) ArmCheck(id string, gen int64, at time.Time, fire func()) bool {
-	return r.m.armCheck(id, gen, at, func(done func()) {
+	return r.m.armCheck(id, gen, 0, at, func(done func()) {
 		defer done()
 		fire()
 	})
 }
 
 func (r *RunManagerForTest) ArmCheckEarlier(id string, gen int64, at time.Time, fire func()) bool {
-	return r.m.armCheckEarlier(id, gen, at, func(done func()) {
+	return r.m.armCheckEarlier(id, gen, 0, at, func(done func()) {
 		defer done()
 		fire()
 	})
 }
+
+func (r *RunManagerForTest) ArmCheckSeq(id string, gen int64, seq int, at time.Time, earlier bool, fire func()) bool {
+	return r.m.arm(id, gen, seq, at, earlier, func(done func()) {
+		defer done()
+		fire()
+	})
+}
+
+func (r *RunManagerForTest) ArmedAt(id string) (time.Time, bool) { return r.m.armedAt(id) }
 
 func (r *RunManagerForTest) Liveness() lifecycle.Liveness {
 	l := r.m.liveness()
@@ -203,7 +212,9 @@ func (s *Service) ArmedForTest(id string) int64 { return s.runs.liveness().armed
 
 func (s *Service) ArmedAtForTest(id string) (time.Time, bool) { return s.runs.armedAt(id) }
 
-func (s *Service) ClaimCheckForTest(id string, gen int64) func() { return s.runs.claimCheck(id, gen) }
+func (s *Service) ClaimCheckForTest(id string, gen int64) func() {
+	return s.runs.claimCheck(id, gen, 0)
+}
 
 func (s *Service) LogForTest() *slog.Logger { return s.log }
 
