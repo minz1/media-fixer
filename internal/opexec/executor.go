@@ -153,6 +153,8 @@ func callArr(ctx context.Context, a Arr, st operation.Step, res operation.Result
 			id = res.QueueID
 		}
 		return a.RemoveQueueItem(ctx, id, false, true, true)
+	case operation.StepImport, operation.StepJellyfinNotify:
+		return fmt.Errorf("step kind %s not supported yet", st.Kind)
 	case operation.StepTorrentDelete, operation.StepTorrentAdd:
 	}
 	return fmt.Errorf("unknown step kind %q", st.Kind)

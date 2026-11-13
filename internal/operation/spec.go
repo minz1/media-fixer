@@ -35,6 +35,8 @@ func shapeOf(kind Kind) []StepKind {
 		return []StepKind{StepTorrentDelete, StepTorrentAdd}
 	case KindRegrab:
 		return []StepKind{StepQueueRemove, StepSearch}
+	case KindSwapRelease:
+		return []StepKind{StepImport, StepJellyfinNotify, StepBlocklist}
 	case KindReplace:
 	}
 	return nil
@@ -54,7 +56,7 @@ func replaceRank(k StepKind) int {
 		return rankDelete
 	case StepSearch:
 		return rankSearch
-	case StepTorrentDelete, StepTorrentAdd, StepQueueRemove:
+	case StepTorrentDelete, StepTorrentAdd, StepQueueRemove, StepImport, StepJellyfinNotify:
 	}
 	return -1
 }
@@ -65,7 +67,11 @@ func checkOrder(kind Kind, steps []Step) error {
 		for i, st := range steps {
 			got[i] = st.Kind
 		}
-		if !slices.Equal(got, shapeOf(kind)) {
+		want := shapeOf(kind)
+		if kind == KindSwapRelease && len(got) == 2 {
+			want = want[:2]
+		}
+		if !slices.Equal(got, want) {
 			return fmt.Errorf("O8: %s steps are %v", kind, got)
 		}
 		return nil
@@ -93,6 +99,11 @@ func checkFields(st Step) error {
 		return need(st.InfoHash != "", "info hash")
 	case StepTorrentAdd:
 		return need(st.InfoHash != "" && strings.TrimSpace(st.Magnet) != "", "info hash and magnet")
+	case StepImport:
+		ok := st.App == "sonarr" && st.Path != "" && st.Size > 0 && st.FileID > 0 && st.MediaID > 0
+		return need(ok && len(st.EpisodeIDs) == 1, "app, path, size, file id, media id and one episode")
+	case StepJellyfinNotify:
+		return need(st.App == "jellyfin" && st.Path != "" && st.Name != "", "app, path and item id")
 	case StepQueueRemove:
 		return need(
 			st.QueueID > 0 && st.DownloadID != "" && st.MediaID > 0 && (st.App == "sonarr" || st.App == "radarr"),

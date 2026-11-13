@@ -1,7 +1,9 @@
 package operation
 
 import (
+	"cmp"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -30,11 +32,17 @@ func Line(op Op) string {
 	if len(op.Results) == 0 {
 		return ""
 	}
+	if f, ok := filelessLine(op); ok {
+		return f
+	}
 	if !Applied(op) {
 		return nothingLine(op)
 	}
 	if op.Kind == KindReplace {
 		return fmt.Sprintf("%s: %s.", header(op), replaceBody(op))
+	}
+	if op.Kind == KindSwapRelease {
+		return swapBody(op) + "."
 	}
 	return smallBody(op) + "."
 }
@@ -149,9 +157,13 @@ func lead(s StepState, done, maybe, none string) string {
 }
 
 type phrase struct {
-	kind  StepKind
-	count int
-	cmd   string
+	kind    StepKind
+	count   int
+	cmd     string
+	base    string
+	episode string
+	grab    string
+	swap    bool
 }
 
 func NextLine(op Op) string {
@@ -165,7 +177,10 @@ func NextLine(op Op) string {
 			ps[n-1].count++
 			continue
 		}
-		ps = append(ps, phrase{kind: st.Kind, count: 1, cmd: st.Command})
+		ps = append(ps, phrase{
+			kind: st.Kind, count: 1, cmd: st.Command, base: path.Base(st.Path), episode: episodeCode(st),
+			grab: cmp.Or(st.Name, st.DownloadID), swap: op.Kind == KindSwapRelease,
+		})
 	}
 	words := make([]string, len(ps))
 	for i, p := range ps {
@@ -184,6 +199,9 @@ func plural(n int, one, many string) string {
 func (p phrase) words() string {
 	switch p.kind {
 	case StepBlocklist:
+		if p.swap {
+			return "mark grab " + p.grab + " failed"
+		}
 		return "blocklist " + plural(p.count, "grab", "grabs")
 	case StepDeleteFile:
 		return "delete " + plural(p.count, "file", "files")
@@ -195,6 +213,33 @@ func (p phrase) words() string {
 		return "re-add it"
 	case StepQueueRemove:
 		return "remove the queue item"
+	case StepImport:
+		return "import " + p.base + " over " + p.episode
+	case StepJellyfinNotify:
+		return "tell Jellyfin about the new file"
 	}
 	return string(p.kind)
+}
+
+func episodeCode(st Step) string { return fmt.Sprintf("S%02dE%02d", st.Season, st.Episode) }
+
+func filelessLine(op Op) (string, bool) {
+	if op.Kind != KindSwapRelease || op.Results[0].State != ResultUnknown ||
+		!strings.HasPrefix(op.Results[0].Note, "fileless:") {
+		return "", false
+	}
+	return fmt.Sprintf("Sonarr ran the import but %s has no file; search from Sonarr.", episodeCode(op.Steps[0])), true
+}
+
+func swapBody(op Op) string {
+	parts := []string{
+		lead(op.Results[0].State, "Imported", "The import may have landed", "Not imported"),
+		lead(op.Results[1].State, "Jellyfin told", "Jellyfin may have been told", "Jellyfin not told"),
+	}
+	if len(op.Steps) == len(shapeOf(KindSwapRelease)) {
+		parts = append(parts, lead(
+			op.Results[2].State, "grab blocklisted", "the grab may be blocklisted", "grab not blocklisted",
+		))
+	}
+	return strings.Join(parts, "; ")
 }

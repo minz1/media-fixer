@@ -39,6 +39,8 @@ func (x *Executor) probeStep(ctx context.Context, op operation.Op, i int) (opera
 	switch st.Kind {
 	case operation.StepTorrentDelete, operation.StepTorrentAdd:
 		p, err = x.probeTorrent(pctx, st)
+	case operation.StepImport, operation.StepJellyfinNotify:
+		err = fmt.Errorf("step kind %s not supported yet", st.Kind)
 	case operation.StepBlocklist, operation.StepDeleteFile, operation.StepSearch, operation.StepQueueRemove:
 		p, err = x.probeArr(pctx, op, st)
 	default:
@@ -62,6 +64,8 @@ func (x *Executor) probeArr(ctx context.Context, op operation.Op, st operation.S
 		return probeSearch(ctx, a, st)
 	case operation.StepQueueRemove:
 		return probeQueue(ctx, a, op, st)
+	case operation.StepImport, operation.StepJellyfinNotify:
+		return operation.Probe{}, fmt.Errorf("step kind %s not supported yet", st.Kind)
 	case operation.StepTorrentDelete, operation.StepTorrentAdd:
 	}
 	return operation.Probe{}, fmt.Errorf("unknown step kind %q", st.Kind)
