@@ -188,3 +188,71 @@ func TestProbe_ReadErrorReturnsError(t *testing.T) {
 		t.Fatal("want an error")
 	}
 }
+
+func swapProbe(t *testing.T, r *rig) []operation.Probe {
+	t.Helper()
+	return probeOf(t, r, interruptedAt(t, mustSwapSpec(t), 0))
+}
+
+func TestProbe_ImportDone(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	setFile(r.arr, 42, swapSize)
+	got := swapProbe(t, r)
+	wantVerdicts(t, got, operation.VerdictDone, operation.VerdictTodo)
+	if got[0].Index != 0 || got[1].Index != 1 {
+		t.Fatalf("indexes = %+v", got)
+	}
+	if r.j.has("call:import") {
+		t.Fatalf("probe posted an import: %v", r.j.all())
+	}
+}
+
+func TestProbe_ImportTodo(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	wantVerdicts(t, swapProbe(t, r), operation.VerdictTodo, operation.VerdictTodo)
+}
+
+func TestProbe_ImportCandidateGone(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	r.arr.cands = nil
+	got := swapProbe(t, r)
+	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
+	if want := "the candidate is no longer under the downloads folder; preview again"; got[0].Note != want {
+		t.Fatalf("note = %q, want %q", got[0].Note, want)
+	}
+}
+
+func TestProbe_ImportThirdFile(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	setFile(r.arr, 50, 777)
+	got := swapProbe(t, r)
+	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
+	if want := "S01E06 has a different file since approval"; got[0].Note != want {
+		t.Fatalf("note = %q, want %q", got[0].Note, want)
+	}
+}
+
+func TestProbe_ImportNoFile(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	r.arr.episodes[0].EpisodeFileID = 0
+	got := swapProbe(t, r)
+	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
+	if want := "Sonarr ran the import but S01E06 has no file; search from Sonarr."; got[0].Note != want {
+		t.Fatalf("note = %q, want %q", got[0].Note, want)
+	}
+}
+
+func TestProbe_NotifyAlwaysTodo(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	op := interruptedAt(t, mustSwapSpec(t), 1)
+	wantVerdicts(t, probeOf(t, r, op), operation.VerdictTodo)
+	if len(r.j.all()) != 0 {
+		t.Fatalf("notify probe touched a service: %v", r.j.all())
+	}
+}
