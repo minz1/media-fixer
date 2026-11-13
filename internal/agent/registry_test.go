@@ -211,6 +211,7 @@ func TestA6_ThreeListsOneRegistry(t *testing.T) {
 		"probe_streams":           agent.LiveTierRead,
 		"stream_alignment":        agent.LiveTierRead,
 		"list_alternatives":       agent.LiveTierRead,
+		"sonarr_swap_plan":        agent.LiveTierRead,
 		"subtitle_extract_test":   agent.LiveTierRead,
 		"get_torrent_state":       agent.LiveTierRead,
 		"loki_query":              agent.LiveTierRead,

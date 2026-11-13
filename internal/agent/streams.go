@@ -21,6 +21,7 @@ import (
 
 const (
 	streamTypeSubtitle = "Subtitle"
+	codecSubtitle      = "subtitle"
 	langEnglish        = "eng"
 	cueScanLines       = 50
 	cueSampleLines     = 3
@@ -86,7 +87,7 @@ func alignStreams(file []mediaagentapi.ProbeStream, jf []client.MediaStream, wan
 	var known []mediaagentapi.ProbeStream
 	for _, s := range file {
 		codecs[s.Index] = s.CodecName
-		if s.CodecType != "subtitle" {
+		if s.CodecType != codecSubtitle {
 			continue
 		}
 		if s.CodecName == "" {

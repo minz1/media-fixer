@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/minz1/mediafixer/internal/agent"
@@ -15,6 +16,7 @@ import (
 // Tool argument keys, matching the param names in internal/agent/tools.go.
 const (
 	argTitle       = "title"
+	argLanguage    = "language"
 	argItemID      = "item_id"
 	argFilePath    = "file_path"
 	argPath        = "path"
@@ -63,6 +65,7 @@ func readCheckSpecs() []checkSpec {
 		{Tool: "probe_streams", Run: checkProbeStreams},
 		{Tool: "stream_alignment", Run: checkStreamAlignment},
 		{Tool: "list_alternatives", Run: checkListAlternatives},
+		{Tool: "sonarr_swap_plan", Run: checkSonarrSwapPlan},
 		{Tool: "subtitle_extract_test", Run: checkSubtitleExtractTest},
 		{Tool: "get_torrent_state", Run: checkGetTorrentState},
 		{Tool: "loki_query", Run: checkLokiQuery},
@@ -156,7 +159,7 @@ func checkStreamAlignment(ctx context.Context, disp *agent.Dispatcher, fx *Fixtu
 		return degraded("no fixture: no playback-safe Jellyfin item discovered")
 	}
 	result, err := disp.Call(ctx, "stream_alignment",
-		map[string]any{argItemID: fx.JellyfinPlaybackItemID, "language": "en"})
+		map[string]any{argItemID: fx.JellyfinPlaybackItemID, argLanguage: "en"})
 	return classify(result, err)
 }
 
@@ -360,7 +363,7 @@ func checkArrSearchMissing(ctx context.Context, disp *agent.Dispatcher, fx *Fixt
 
 func checkBazarrSearch(ctx context.Context, disp *agent.Dispatcher, _ *Fixtures, _ Options) Result {
 	_, err := disp.Call(ctx, "bazarr_search_subtitles", map[string]any{
-		argMediaType: "tv", argTitle: "livecheck", "language": "zz",
+		argMediaType: "tv", argTitle: "livecheck", argLanguage: "zz",
 	})
 	if errors.Is(err, agent.ErrUnknownLanguage) {
 		return Result{Status: StatusOK, Detail: "refused as expected: unknown language, nothing sent"}
@@ -609,5 +612,19 @@ func checkListAlternatives(ctx context.Context, disp *agent.Dispatcher, fx *Fixt
 	}
 	result, err := disp.Call(ctx, "list_alternatives",
 		map[string]any{argTitle: fx.SeriesTitle, "season": float64(1), "episode": float64(1)})
+	return classify(result, err)
+}
+
+func checkSonarrSwapPlan(ctx context.Context, disp *agent.Dispatcher, fx *Fixtures, _ Options) Result {
+	if fx.SeriesTitle == "" {
+		return degraded("no fixture: no series title discovered")
+	}
+	result, err := disp.Call(ctx, "sonarr_swap_plan", map[string]any{
+		argTitle: fx.SeriesTitle, "season": float64(1), "episode": float64(1),
+		"release": "livecheck-not-a-release", argLanguage: "en",
+	})
+	if err != nil && strings.Contains(err.Error(), "not cached") {
+		return Result{Status: StatusOK, Detail: err.Error()}
+	}
 	return classify(result, err)
 }

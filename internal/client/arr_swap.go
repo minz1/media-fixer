@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/minz1/mediafixer/internal/operation"
 )
 
 const (
@@ -87,4 +89,86 @@ func (c *ArrClient) RecycleBin(ctx context.Context) (string, error) {
 	}
 	err := c.do(ctx, c.http, http.MethodGet, "/api/v3/config/mediamanagement", nil, nil, &cfg)
 	return cfg.RecycleBin, err
+}
+
+type SwapFile struct {
+	Path         string `json:"path"`
+	Size         int64  `json:"size"`
+	ReleaseGroup string `json:"release_group,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+}
+
+type SwapCurrent struct {
+	SwapFile
+
+	FileID      int       `json:"file_id"`
+	SourceTitle string    `json:"source_title,omitempty"`
+	GrabbedAt   time.Time `json:"grabbed_at,omitzero"`
+	DownloadID  string    `json:"download_id,omitempty"`
+	PackSize    int       `json:"pack_size"`
+}
+
+type SwapCandidate struct {
+	SwapFile
+
+	Folder            string    `json:"folder"`
+	DownloadID        string    `json:"download_id,omitempty"`
+	CustomFormatScore int       `json:"custom_format_score"`
+	GrabbedAt         time.Time `json:"grabbed_at,omitzero"`
+	GrabAgeHours      int       `json:"grab_age_hours"`
+	GraceHours        int       `json:"grace_hours"`
+	Rejections        []string  `json:"rejections"`
+}
+
+type SwapSubtitle struct {
+	Index    int    `json:"index"`
+	Language string `json:"language,omitempty"`
+	Codec    string `json:"codec"`
+	Title    string `json:"title,omitempty"`
+}
+
+type SwapProbe struct {
+	Subtitles []SwapSubtitle `json:"subtitles"`
+	Wanted    SwapSubtitle   `json:"wanted"`
+}
+
+type SwapJellyfin struct {
+	SeriesID string `json:"series_id"`
+	ItemID   string `json:"item_id"`
+	Path     string `json:"path"`
+}
+
+type SwapBlocklist struct {
+	Skip        bool      `json:"skip"`
+	Note        string    `json:"note,omitempty"`
+	HistoryID   int       `json:"history_id,omitempty"`
+	DownloadID  string    `json:"download_id,omitempty"`
+	SourceTitle string    `json:"source_title,omitempty"`
+	GrabbedAt   time.Time `json:"grabbed_at,omitzero"`
+}
+
+type SwapPlan struct {
+	What     string `json:"what"`
+	Language string `json:"language"`
+	Title    string `json:"title"`
+	SeriesID int    `json:"series_id"`
+	Season   int    `json:"season"`
+	Episode  int    `json:"episode"`
+
+	EpisodeID    int    `json:"episode_id"`
+	EpisodeTitle string `json:"episode_title,omitempty"`
+
+	Current   SwapCurrent   `json:"current"`
+	Candidate SwapCandidate `json:"candidate"`
+
+	Mapping      []CandidateEpisode `json:"mapping"`
+	GuardVerdict string             `json:"guard_verdict"`
+	Probe        SwapProbe          `json:"probe"`
+	Jellyfin     SwapJellyfin       `json:"jellyfin"`
+	Blocklist    SwapBlocklist      `json:"blocklist"`
+
+	RecycleBin       string `json:"recycle_bin"`
+	AutoRedownloadOn bool   `json:"auto_redownload"`
+
+	Steps []operation.Step `json:"steps"`
 }

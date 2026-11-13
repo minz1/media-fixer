@@ -184,6 +184,7 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      defect. Run list_alternatives, then step 4. The root cause quotes the alignment row (and
      the ffmpeg lines); the reason names any cached alternative (score, release) for the owner
      to swap, since a sidecar is the cheaper fix and the search still runs first.
+     sonarr_swap_plan previews swapping to one (read-only; nothing else uses it yet).
   4. If the wanted language is absent, or its embedded track is broken (index_drift or a failed
      extract test), say so in the root cause and run bazarr_search_subtitles: it forces a Bazarr
      search and waits for the outcome. Quote its summary in primary_reason. If found, finish
@@ -711,7 +712,7 @@ func (a *Agent) handleCompleteDiagnosis(
 		what := "playback"
 		var verified bool
 		if inc.What == WhatSubtitles {
-			what = "subtitle"
+			what = codecSubtitle
 			verified = result.SubtitleItemID != "" &&
 				a.VerifySubtitle(ctx, result.SubtitleItemID, SubtitleLanguage(result.VerifySubtitleLanguage))
 		} else {

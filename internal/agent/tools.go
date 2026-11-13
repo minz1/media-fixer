@@ -199,6 +199,7 @@ func toolRegistry() []toolSpec {
 		jellyfinReadToolSpecs(),
 		hostReadToolSpecs(),
 		subtitleReadToolSpecs(),
+		swapSpecs(),
 		arrReadToolSpecs(),
 		repairReadToolSpecs(),
 		decypharrActionToolSpecs(),

@@ -67,6 +67,13 @@ type EpisodeFile struct {
 	SeriesID int    `json:"seriesId"`
 	Path     string `json:"path"`
 	Size     int64  `json:"size"`
+
+	ReleaseGroup string `json:"releaseGroup,omitempty"`
+	Quality      struct {
+		Quality struct {
+			Name string `json:"name"`
+		} `json:"quality"`
+	} `json:"quality"`
 }
 
 // MovieFile is a single on-disk file backing a movie, as tracked by Radarr.
