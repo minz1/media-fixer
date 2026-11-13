@@ -495,3 +495,34 @@ func TestB3_ItemInfo(t *testing.T) {
 		t.Error("404 gave no error")
 	}
 }
+
+func TestD5_MediaUpdatedBody(t *testing.T) {
+	t.Parallel()
+	var method, path, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		method, path, body = r.Method, r.URL.Path, string(b)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := client.NewJellyfin(srv.URL, "key")
+	if err := c.MediaUpdated(context.Background(), []string{"/media/tv/Show/Season 1"}); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"Updates":[{"Path":"/media/tv/Show/Season 1","UpdateType":"Modified"}]}`
+	if method != http.MethodPost || path != "/Library/Media/Updated" || body != want {
+		t.Fatalf("%s %s %s, want POST /Library/Media/Updated %s", method, path, body, want)
+	}
+}
+
+func TestD5_MediaUpdatedStatusError(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "no", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	err := client.NewJellyfin(srv.URL, "key").MediaUpdated(context.Background(), []string{"/x"})
+	if se, ok := errors.AsType[*client.HTTPStatusError](err); !ok || se.Status != http.StatusUnauthorized {
+		t.Fatalf("err = %v, want an HTTPStatusError 401", err)
+	}
+}

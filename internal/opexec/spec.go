@@ -1,6 +1,7 @@
 package opexec
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -80,5 +81,14 @@ func ReaddSpec(subject operation.Subject, plan *client.ReaddPlan, source []byte)
 				Name: plan.Name, Magnet: plan.Magnet, Season: -1,
 			},
 		},
+	}, nil
+}
+
+func SwapSpec(subject operation.Subject, plan *client.SwapPlan, source []byte) (operation.Spec, error) {
+	if len(plan.Steps) == 0 {
+		return operation.Spec{}, errors.New("swap release: the plan has no steps")
+	}
+	return operation.Spec{
+		Subject: subject, Kind: operation.KindSwapRelease, Title: plan.Title, Source: source, Steps: plan.Steps,
 	}, nil
 }

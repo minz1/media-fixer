@@ -26,6 +26,8 @@ var errBoom = &client.HTTPStatusError{Status: http.StatusInternalServerError, Bo
 var errRejected = &client.HTTPStatusError{Status: http.StatusBadRequest, Body: "no"}
 
 type resumeArr struct {
+	opexec.Arr
+
 	mu         sync.Mutex
 	calls      []string
 	files      map[int]client.EpisodeFile
