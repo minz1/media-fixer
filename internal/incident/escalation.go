@@ -322,6 +322,7 @@ func escalationResult(inc *db.Incident) (*agent.DiagnosticResult, error) {
 	if result.EscalateAction == "" || result.EscalateAction == agent.EscalateNone {
 		return nil, fmt.Errorf("incident %s has no escalation action recommended", inc.ID)
 	}
+	result.IncidentItemID = inc.JellyfinItemID
 	return &result, nil
 }
 

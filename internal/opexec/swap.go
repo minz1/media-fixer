@@ -125,7 +125,8 @@ func (x *Executor) awaitCommand(ctx context.Context, a Arr, id int) error {
 		if err != nil {
 			return err
 		}
-		if status == commandCompleted || status == commandFailed {
+		switch status {
+		case commandCompleted, commandFailed, "aborted", "cancelled", "orphaned":
 			return nil
 		}
 		select {

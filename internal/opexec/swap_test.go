@@ -428,3 +428,20 @@ func mustSwapSpec(t *testing.T) operation.Spec {
 	}
 	return spec
 }
+
+func TestD5_ImportAbortedCommandIsFinished(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{"aborted", "cancelled", "orphaned"} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			r := swapRig(t)
+			r.x.StepTimeout = 200 * time.Millisecond
+			r.arr.cmdStatus = state
+			r.arr.afterImport = func(a *fakeArr) { setFile(a, 60, swapSize) }
+			op := runImport(t, r)
+			if got := op.Results[0]; got.State != operation.ResultDone {
+				t.Fatalf("result = %s %q", got.State, got.Note)
+			}
+		})
+	}
+}

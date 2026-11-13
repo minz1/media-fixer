@@ -135,6 +135,13 @@ func probeImport(ctx context.Context, a Arr, st operation.Step) (operation.Probe
 		if _, found := freshCandidate(cands, st); !found {
 			return conflict("the candidate is no longer under the downloads folder; preview again")
 		}
+		pending, pendErr := a.ManualImportPending(ctx, []string{st.Path})
+		if pendErr != nil {
+			return operation.Probe{}, pendErr
+		}
+		if pending {
+			return conflict("an import of this file is still running; resume later")
+		}
 		return operation.Probe{Verdict: operation.VerdictTodo}, nil
 	}
 	files, err := a.GetEpisodeFiles(ctx, st.MediaID)

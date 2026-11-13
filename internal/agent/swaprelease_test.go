@@ -20,6 +20,7 @@ func swapParams() map[string]any {
 func swapPlanFixture(what, language string) client.SwapPlan {
 	return client.SwapPlan{
 		What: what, Language: language, Title: "Show", SeriesID: 5, Season: 1, Episode: 6, EpisodeID: 66,
+		Jellyfin: client.SwapJellyfin{ItemID: "jf-ep6"},
 		Steps: []operation.Step{
 			{
 				Kind: operation.StepImport, App: "sonarr", Path: "/data/downloads/sonarr/R/e.mkv", Size: 100, FileID: 9,
@@ -35,6 +36,11 @@ func swapPlanFixture(what, language string) client.SwapPlan {
 			},
 		},
 	}
+}
+
+func withJellyfinItem(p client.SwapPlan, id string) client.SwapPlan {
+	p.Jellyfin.ItemID = id
+	return p
 }
 
 func TestD7_SwapIsPlanKind(t *testing.T) {
@@ -61,7 +67,9 @@ func TestD7_SwapIsPlanKind(t *testing.T) {
 func TestD7_OperationForSwap(t *testing.T) {
 	t.Parallel()
 	ag := operationAgent(&agent.Dispatcher{})
-	result := &agent.DiagnosticResult{EscalateAction: agent.EscalateSwapRelease}
+	result := &agent.DiagnosticResult{
+		EscalateAction: agent.EscalateSwapRelease, IncidentItemID: "jf-ep6", VerifySubtitleLanguage: "eng",
+	}
 	plan := swapPlanFixture(agent.WhatSubtitles, "eng")
 	b := swapJSON(t, plan)
 	spec, err := ag.OperationFor(operationSubject(), result, b)
@@ -72,6 +80,7 @@ func TestD7_OperationForSwap(t *testing.T) {
 	for name, bad := range map[string]client.SwapPlan{
 		"cant_play":   swapPlanFixture("cant_play", "eng"),
 		"no language": swapPlanFixture(agent.WhatSubtitles, ""),
+		"other item":  withJellyfinItem(swapPlanFixture(agent.WhatSubtitles, "eng"), "jf-ep7"),
 	} {
 		if _, err = ag.OperationFor(operationSubject(), result, swapJSON(t, bad)); err == nil {
 			t.Errorf("%s: want a refusal", name)

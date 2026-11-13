@@ -256,3 +256,14 @@ func TestProbe_NotifyAlwaysTodo(t *testing.T) {
 		t.Fatalf("notify probe touched a service: %v", r.j.all())
 	}
 }
+
+func TestProbe_ImportStillRunning(t *testing.T) {
+	t.Parallel()
+	r := swapRig(t)
+	r.arr.pending = true
+	got := swapProbe(t, r)
+	wantVerdicts(t, got, operation.VerdictConflict, operation.VerdictTodo)
+	if want := "an import of this file is still running; resume later"; got[0].Note != want {
+		t.Fatalf("note = %q, want %q", got[0].Note, want)
+	}
+}

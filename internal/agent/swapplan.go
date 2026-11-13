@@ -256,6 +256,9 @@ func (d *Dispatcher) swapCandidate(
 		Skip: grab.SkipBlocklist, Note: grab.Note, HistoryID: grab.HistoryID, DownloadID: grab.DownloadID,
 		SourceTitle: grab.SourceTitle, GrabbedAt: grab.GrabbedAt,
 	}
+	if downloadID == "" {
+		plan.Blocklist.Skip, plan.Blocklist.Note = true, "the candidate's grab is unknown; blocklist skipped"
+	}
 	return nil
 }
 
@@ -371,14 +374,51 @@ func swapSteps(plan *client.SwapPlan, tgt *swapTarget) []operation.Step {
 	return steps
 }
 
-func (d *Dispatcher) planSwap(ctx context.Context, what string, args map[string]any) (any, error) {
+func (d *Dispatcher) planSwap(ctx context.Context, result *DiagnosticResult, what string) (any, error) {
 	if what != WhatSubtitles {
 		return nil, fmt.Errorf("%s only applies to %s incidents, not %q", EscalateSwapRelease, WhatSubtitles, what)
 	}
-	return d.readSwapPlan(ctx, &toolCall{scope: Scope{What: what}}, args)
+	out, err := d.readSwapPlan(ctx, &toolCall{scope: Scope{What: what}}, result.EscalateParams)
+	if err != nil {
+		return nil, err
+	}
+	if plan, ok := out.(*client.SwapPlan); ok {
+		if err = swapBinding(result, plan); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
-func (d *Dispatcher) swapOperation(subject operation.Subject, planJSON []byte) (operation.Spec, error) {
+func swapBinding(result *DiagnosticResult, plan *client.SwapPlan) error {
+	want := result.SubtitleItemID
+	if want == "" {
+		want = result.IncidentItemID
+	}
+	if want == "" {
+		return errors.New("the incident's episode is unknown")
+	}
+	if plan.Jellyfin.ItemID != want {
+		return fmt.Errorf(
+			"the planned episode (jellyfin item %s) does not match the incident's episode (%s)",
+			plan.Jellyfin.ItemID,
+			want,
+		)
+	}
+	if _, iso3, ok := langCodes(result.VerifySubtitleLanguage); !ok || iso3 != plan.Language {
+		return fmt.Errorf(
+			"the plan's language %s does not match the finding's verify_subtitle_language %q",
+			plan.Language, result.VerifySubtitleLanguage,
+		)
+	}
+	return nil
+}
+
+func (d *Dispatcher) swapOperation(
+	subject operation.Subject,
+	result *DiagnosticResult,
+	planJSON []byte,
+) (operation.Spec, error) {
 	var plan client.SwapPlan
 	if err := json.Unmarshal(planJSON, &plan); err != nil {
 		return operation.Spec{}, fmt.Errorf("decode approved swap plan: %w", err)
@@ -387,6 +427,9 @@ func (d *Dispatcher) swapOperation(subject operation.Subject, planJSON []byte) (
 		return operation.Spec{}, fmt.Errorf(
 			"%s only applies to %s incidents with a wanted language", EscalateSwapRelease, WhatSubtitles,
 		)
+	}
+	if err := swapBinding(result, &plan); err != nil {
+		return operation.Spec{}, err
 	}
 	return opexec.SwapSpec(subject, &plan, planJSON)
 }

@@ -141,7 +141,7 @@ func TestD2_MigrateDown27(t *testing.T) {
 	for _, want := range []string{
 		"running swap dropped: Show S01E06 series 7 S01E06", "swap operations deleted: 2",
 		"migration_cleared events: 1", "incidents with a swap verify or finding: 2 inc-find inc-ver",
-		"schema_version max: 26", "backup: ",
+		"dismiss or re-triage these incidents", "schema_version max: 26", "backup: ",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())

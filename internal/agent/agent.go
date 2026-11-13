@@ -403,6 +403,7 @@ type DiagnosticResult struct {
 	// actually changed, not just that the item currently looks healthy.
 	PreFix *FixSignature `json:"pre_fix,omitempty"`
 
+	IncidentItemID         string `json:"-"`
 	VerifySubtitleLanguage string `json:"verify_subtitle_language,omitempty"`
 	SubtitleItemID         string `json:"subtitle_item_id,omitempty"`
 
@@ -1226,7 +1227,7 @@ func (a *Agent) PlanEscalation(ctx context.Context, result *DiagnosticResult, wh
 	case EscalateDeleteTorrentReadd:
 		return a.disp.readDecypharrReaddPlan(ctx, &toolCall{}, result.EscalateParams)
 	case EscalateSwapRelease:
-		return a.disp.planSwap(ctx, what, result.EscalateParams)
+		return a.disp.planSwap(ctx, result, what)
 	default:
 		return nil, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}
@@ -1241,7 +1242,7 @@ func (a *Agent) OperationFor(
 	case EscalateDeleteTorrentReadd:
 		return a.disp.readdOperation(subject, planJSON)
 	case EscalateSwapRelease:
-		return a.disp.swapOperation(subject, planJSON)
+		return a.disp.swapOperation(subject, result, planJSON)
 	default:
 		return operation.Spec{}, fmt.Errorf("%w: %q", errNoEscalationPlan, result.EscalateAction)
 	}

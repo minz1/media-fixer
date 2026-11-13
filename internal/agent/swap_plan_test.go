@@ -210,6 +210,50 @@ func TestD4_PlanSwap(t *testing.T) {
 	}
 }
 
+func TestD4_PlanSwapBinding(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		res  agent.DiagnosticResult
+		want string
+	}{
+		{
+			name: "incident item matches",
+			res:  agent.DiagnosticResult{IncidentItemID: "jf-ep6", VerifySubtitleLanguage: "eng"},
+		},
+		{name: "finding item wins and matches", res: agent.DiagnosticResult{
+			IncidentItemID: "other", SubtitleItemID: "jf-ep6", VerifySubtitleLanguage: "en"}},
+		{name: "params name another episode", res: agent.DiagnosticResult{
+			IncidentItemID: "jf-ep7", VerifySubtitleLanguage: "eng"}, want: "does not match the incident"},
+		{name: "finding item differs", res: agent.DiagnosticResult{
+			IncidentItemID: "jf-ep6", SubtitleItemID: "jf-ep7", VerifySubtitleLanguage: "eng"},
+			want: "does not match the incident"},
+		{name: "episode unknown", res: agent.DiagnosticResult{VerifySubtitleLanguage: "eng"},
+			want: "the incident's episode is unknown"},
+		{name: "verify language empty", res: agent.DiagnosticResult{IncidentItemID: "jf-ep6"},
+			want: "verify_subtitle_language"},
+		{name: "verify language differs", res: agent.DiagnosticResult{
+			IncidentItemID: "jf-ep6", VerifySubtitleLanguage: "ja"}, want: "verify_subtitle_language"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newSwapWorld()
+			tc.res.EscalateAction, tc.res.EscalateParams = agent.EscalateSwapRelease, swapArgs(nil)
+			_, err := operationAgent(w.dispatcher(t)).PlanEscalation(t.Context(), &tc.res, agent.WhatSubtitles)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func runSwapCase(t *testing.T, what string, args map[string]any, setup func(*swapWorld), want string, http bool) {
 	t.Helper()
 	w := newSwapWorld()
@@ -291,5 +335,21 @@ func assertSwapRest(t *testing.T, p *client.SwapPlan) {
 		p.Steps[1].Kind != operation.StepJellyfinNotify || p.Steps[1].Path != p.Jellyfin.Path ||
 		p.Steps[1].Name != "jf-series" || p.Steps[2].Kind != operation.StepBlocklist || p.Steps[2].HistoryID != 100 {
 		t.Errorf("steps = %+v", p.Steps)
+	}
+}
+
+func TestD4_PlanSwapUnknownGrabSkipsBlocklist(t *testing.T) {
+	t.Parallel()
+	w := newSwapWorld()
+	w.history = w.history[:2]
+	res, err := w.dispatcher(t).CallScoped(
+		t.Context(), agent.Scope{What: agent.WhatSubtitles}, "sonarr_swap_plan", swapArgs(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := res.(*client.SwapPlan)
+	if p == nil || !p.Blocklist.Skip || p.Blocklist.Note != "the candidate's grab is unknown; blocklist skipped" ||
+		len(p.Steps) != 2 {
+		t.Fatalf("plan = %+v", p)
 	}
 }

@@ -89,6 +89,9 @@ func printSwapDown(out io.Writer, swaps []operation.Op, incidents []string, back
 		len(incidents),
 		strings.Join(incidents, " "),
 	)
+	if len(incidents) > 0 {
+		_, _ = fmt.Fprintln(out, "dismiss or re-triage these incidents: their swap operation rows are gone")
+	}
 	_, _ = fmt.Fprintf(out, "schema_version max: 26\nbackup: %s\n", backup)
 }
 
