@@ -289,3 +289,13 @@ func (d *Dispatcher) CallScopedPolledForTest(
 func LastBazarrResyncForTest(m []openai.ChatCompletionMessage) *BazarrResyncResult {
 	return lastBazarrResync(m)
 }
+
+func (d *Dispatcher) CallDesyncSearchForTest(
+	ctx context.Context, incidentID string, every, total time.Duration, args map[string]any,
+) (any, error) {
+	c := &toolCall{
+		scope:     Scope{IncidentID: incidentID, What: WhatSubtitles, Desync: true},
+		pollEvery: every, pollFor: total,
+	}
+	return d.call(ctx, c, toolBazarrSearch, args)
+}

@@ -198,9 +198,10 @@ Subtitles are missing, broken, or out of sync on a title that otherwise plays.
      resolve the Episode item and run stream_alignment on it so the card carries the stream
      table. Run bazarr_search_subtitles for the reported language (else the language
      stream_alignment shows the viewer uses, else en); found=true → fix-now with
-     verify_subtitle_language and verify_after_seconds 60. Not found, or refused as already
-     applied → run bazarr_resync_subtitle with that language; synced=true → fix-now with
-     verify_subtitle_language and verify_item_id, no verify_after_seconds. Only when both fail,
+     verify_subtitle_language and verify_after_seconds 60. Not found, or refused (already
+     applied or already searched on another report) → run bazarr_resync_subtitle with that
+     language; synced=true → fix-now with verify_subtitle_language and verify_item_id, no
+     verify_after_seconds. Only when both fail,
      complete with escalate_action=manual_investigation quoting both summaries. The system
      escalates a desync report unless one of the two tools reported success in this run for
      this episode and language.
@@ -769,7 +770,9 @@ func (a *Agent) journalDiagnosis(ctx context.Context, incidentID string, result 
 }
 
 func (a *Agent) executeRead(ctx context.Context, inc *db.Incident, fn, argsJSON string) string {
-	c := &toolCall{scope: Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt}}
+	c := &toolCall{scope: Scope{
+		IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt, Desync: IsDesyncReport(inc.Details),
+	}}
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
 	result, err := a.disp.call(ctx, c, fn, args)
@@ -796,7 +799,9 @@ func (a *Agent) invoke(
 		fn:   fn,
 		snap: callSnap{State: callProposed, Impact: spec.Impact},
 		c: &toolCall{
-			scope:         Scope{IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt},
+			scope: Scope{
+				IncidentID: inc.ID, What: inc.What, ReportedAt: inc.CreatedAt, Desync: IsDesyncReport(inc.Details),
+			},
 			callID:        uuid.NewString(),
 			gate:          gate,
 			journal:       a.journal,

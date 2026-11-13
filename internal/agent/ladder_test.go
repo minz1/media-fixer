@@ -58,7 +58,7 @@ func resyncReply(id string, res any) (openai.ChatCompletionMessage, openai.ChatC
 func foundSearch() *agent.BazarrSearchResult {
 	return &agent.BazarrSearchResult{
 		Found: true, Summary: "Downloaded en subtitles: Show.S01E02.en.srt", Path: "/tv/Show.S01E02.en.srt",
-		Language: "en", Title: "Show", Season: 1, Episode: 2,
+		Language: "en", Title: "Show", Season: 1, Episode: 2, Target: "ep:42",
 	}
 }
 
@@ -174,18 +174,26 @@ func TestRS5_ReReportSkipsSearch(t *testing.T) {
 		name      string
 		ago       time.Duration
 		incident  string
+		params    map[string]any
 		escalated bool
 	}{
-		{"another incident 3h ago", 3 * time.Hour, "older", true},
-		{"another incident 25h ago", 25 * time.Hour, "older", false},
-		{"this incident 3h ago", 3 * time.Hour, "inc", false},
+		{"another incident 3h ago", 3 * time.Hour, "older", nil, true},
+		{"another incident, same target, other title", 3 * time.Hour, "older",
+			map[string]any{"title": "the show (us)", "target": "ep:42", "language": "en"}, true},
+		{"another incident, other target", 3 * time.Hour, "older",
+			map[string]any{"title": "Show", "target": "ep:43", "language": "en"}, false},
+		{"another incident 25h ago", 25 * time.Hour, "older", nil, false},
+		{"this incident 3h ago", 3 * time.Hour, "inc", nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+			params := c.params
+			if params == nil {
+				params = map[string]any{"media_type": "tv", "title": "show", "season": float64(1),
+					"episode": float64(2), "language": "english"}
+			}
 			hist := &fakeAttempts{list: []journal.Attempt{{
-				IncidentID: c.incident, Tool: "bazarr_search_subtitles", At: time.Now().Add(-c.ago),
-				Params: map[string]any{"media_type": "tv", "title": "show", "season": float64(1), "episode": float64(2),
-					"language": "english"},
+				IncidentID: c.incident, Tool: "bazarr_search_subtitles", At: time.Now().Add(-c.ago), Params: params,
 			}}}
 			ag := newLadderAgent(t, hist)
 			res := concludeLadder(t, ag, desyncIncident(), ladderMessages(foundSearch(), nil), nil)
@@ -243,4 +251,11 @@ func TestRS5_PromptLadder(t *testing.T) {
 	if strings.Contains(prompt, "take no action") {
 		t.Error("prompt still tells the model to take no action on a desync report")
 	}
+}
+
+func TestRS5_UnknownHistoryEscalates(t *testing.T) {
+	t.Parallel()
+	ag := newLadderAgent(t, nil)
+	res := concludeLadder(t, ag, desyncIncident(), ladderMessages(foundSearch(), nil), nil)
+	checkDesync(t, res, true)
 }

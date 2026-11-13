@@ -21,9 +21,12 @@ const (
 	maxBazarrCandidate     = 5
 	defaultBazarrPollEvery = 5 * time.Second
 	defaultBazarrPollFor   = 90 * time.Second
+	paramTarget            = "target"
 )
 
 var ErrUnknownLanguage = errors.New("bazarr_search_subtitles: unknown subtitle language")
+
+var errAttemptsUnavailable = errors.New("attempt history is unavailable")
 
 type BazarrSearchResult struct {
 	Found      bool                     `json:"found"`
@@ -32,6 +35,7 @@ type BazarrSearchResult struct {
 	Path       string                   `json:"path,omitempty"`
 	Candidates []client.BazarrCandidate `json:"candidates,omitempty"`
 	Waited     string                   `json:"waited"`
+	Target     string                   `json:"target,omitempty"`
 	Movie      bool                     `json:"movie,omitempty"`
 	Title      string                   `json:"title,omitempty"`
 	Season     int                      `json:"season,omitempty"`
@@ -137,6 +141,12 @@ func (d *Dispatcher) dispatchBazarrSearch(ctx context.Context, c *toolCall, args
 	if err != nil {
 		return nil, err
 	}
+	res.Target = key
+	if c.scope.Desync {
+		if again, _ := d.searchedElsewhere(ctx, c.scope.IncidentID, res); again {
+			return nil, refuse("already searched for this subtitle on another report in the last 24 hours")
+		}
+	}
 	snapshot, err := d.Bazarr.Subtitles(ctx, target)
 	if err != nil {
 		return nil, err
@@ -147,7 +157,7 @@ func (d *Dispatcher) dispatchBazarrSearch(ctx context.Context, c *toolCall, args
 	title, _ := args[paramTitle].(string)
 	sctx, actErr := c.act(ctx, map[string]any{
 		paramMediaType: args[paramMediaType], paramTitle: title, paramSeason: args[paramSeason],
-		paramEpisode: args[paramEpisode], paramLanguage: language,
+		paramEpisode: args[paramEpisode], paramLanguage: language, paramTarget: key,
 	})
 	if actErr != nil {
 		return nil, actErr

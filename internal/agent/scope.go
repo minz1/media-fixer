@@ -12,6 +12,7 @@ type Scope struct {
 	IncidentID string
 	What       string
 	ReportedAt time.Time
+	Desync     bool
 }
 
 type toolCall struct {

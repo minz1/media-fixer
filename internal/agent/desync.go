@@ -72,7 +72,7 @@ func (a *Agent) ladderSucceeded(
 	}
 	return search != nil && search.Found && sameLanguage(search.Language, want) &&
 		(movie && search.coversMovie(info) || !movie && search.coversEpisode(info)) &&
-		!a.searchedElsewhere(ctx, incidentID, search)
+		!a.searchedElsewhereOrUnknown(ctx, incidentID, search)
 }
 
 func sameLanguage(lang, iso1 string) bool {
@@ -80,26 +80,37 @@ func sameLanguage(lang, iso1 string) bool {
 	return ok && got == iso1
 }
 
-func (a *Agent) searchedElsewhere(ctx context.Context, incidentID string, s *BazarrSearchResult) bool {
-	if a.disp.Attempts == nil {
-		return true
+func (d *Dispatcher) searchedElsewhere(ctx context.Context, incidentID string, s *BazarrSearchResult) (bool, error) {
+	if d.Attempts == nil {
+		return false, errAttemptsUnavailable
 	}
-	attempts, err := a.disp.Attempts.AttemptsSince(ctx, toolBazarrSearch, time.Now().Add(-resyncGuardWindow))
+	attempts, err := d.Attempts.AttemptsSince(ctx, toolBazarrSearch, time.Now().Add(-resyncGuardWindow))
 	if err != nil {
-		return true
+		return false, err
 	}
 	for _, at := range attempts {
-		title, _ := at.Params[paramTitle].(string)
 		lang, _ := at.Params[paramLanguage].(string)
-		mediaType, _ := at.Params[paramMediaType].(string)
-		if at.IncidentID == incidentID || !strings.EqualFold(title, s.Title) || !sameLanguage(lang, s.Language) ||
-			(mediaType == client.ReplaceMediaMovie) != s.Movie {
-			continue
-		}
-		if s.Movie || intArgOrSentinel(at.Params, paramSeason) == s.Season &&
-			intArgOrSentinel(at.Params, paramEpisode) == s.Episode {
-			return true
+		if at.IncidentID != incidentID && sameLanguage(lang, s.Language) && sameSearchTarget(at.Params, s) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+func sameSearchTarget(params map[string]any, s *BazarrSearchResult) bool {
+	if target, _ := params[paramTarget].(string); target != "" {
+		return target == s.Target
+	}
+	title, _ := params[paramTitle].(string)
+	mediaType, _ := params[paramMediaType].(string)
+	if !strings.EqualFold(title, s.Title) || (mediaType == client.ReplaceMediaMovie) != s.Movie {
+		return false
+	}
+	return s.Movie || intArgOrSentinel(params, paramSeason) == s.Season &&
+		intArgOrSentinel(params, paramEpisode) == s.Episode
+}
+
+func (a *Agent) searchedElsewhereOrUnknown(ctx context.Context, incidentID string, s *BazarrSearchResult) bool {
+	found, err := a.disp.searchedElsewhere(ctx, incidentID, s)
+	return found || err != nil
 }
