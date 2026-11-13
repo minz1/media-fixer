@@ -401,8 +401,23 @@ func TestMigrateDown_PrintsCountsChangedRowsAndIdsOnly(t *testing.T) {
 	}
 }
 
+func strip27(t *testing.T, path string) {
+	t.Helper()
+	raw := rawOpen(t, path)
+	v := maxVersion(t, raw)
+	raw.Close()
+	if v != 27 {
+		return
+	}
+	var out bytes.Buffer
+	if err := db.MigrateDown(context.Background(), path, 27, &out); err != nil {
+		t.Fatalf("migrate down 27: %v", err)
+	}
+}
+
 func strip26(t *testing.T, path string) {
 	t.Helper()
+	strip27(t, path)
 	raw := rawOpen(t, path)
 	defer raw.Close()
 	if maxVersion(t, raw) != 26 {

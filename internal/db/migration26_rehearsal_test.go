@@ -54,6 +54,7 @@ func TestMigration26_RehearsalOnSnapshot(t *testing.T) {
 	d.Close()
 	raw.Close()
 
+	strip27(t, path)
 	var out bytes.Buffer
 	if err = db.MigrateDown(ctx, path, 26, &out); err != nil {
 		t.Fatal(err)
@@ -72,7 +73,7 @@ func TestMigration26_RehearsalOnSnapshot(t *testing.T) {
 	raw.Close()
 	openDB(t, path)
 	raw = rawOpen(t, path)
-	if v := maxVersion(t, raw); v != 26 {
+	if v := maxVersion(t, raw); v != 27 {
 		t.Fatalf("version %d after re-up", v)
 	}
 	integrityOK(t, raw)
