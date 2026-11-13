@@ -887,7 +887,7 @@ func (v *invocation) drive(argsJSON string, args map[string]any) {
 			return
 		}
 	}
-	if v.a.actionAlreadyApplied(v.ctx, v.c.scope.IncidentID, v.fn, argsJSON) {
+	if v.a.actionAlreadyApplied(v.ctx, v.c.scope.IncidentID, v.c.gate.Gen(), v.fn, argsJSON) {
 		v.a.log.WarnContext(v.ctx, "duplicate action blocked, already applied on this incident", "tool", v.fn)
 		v.step(evAppliedBefore, stepInfo{reply: errorReply(fmt.Sprintf(
 			"%s (with these parameters) was already applied on this incident and did not "+
@@ -1547,7 +1547,7 @@ func hasAnyIdentityParam(m map[string]any) bool {
 // actionAlreadyApplied reports whether this exact action — same tool name,
 // same identifying target — has already been logged as successfully applied
 // on this incident.
-func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID, action, argsJSON string) bool {
+func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID string, gen int64, action, argsJSON string) bool {
 	actions, err := a.db.ListActions(ctx, incidentID)
 	if err != nil {
 		return false
@@ -1562,7 +1562,7 @@ func (a *Agent) actionAlreadyApplied(ctx context.Context, incidentID, action, ar
 	var log journal.AttemptLog
 	if lifted {
 		log, err = a.journal.ActionAttempts(ctx, incidentID)
-		lifted = err == nil && log.OwnerRerun > 0
+		lifted = err == nil && log.OwnerRerun > 0 && log.OwnerRerun == gen
 	}
 	for _, act := range actions {
 		if act.Action != action || act.Status != db.ActionApplied {

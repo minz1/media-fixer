@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -296,7 +297,7 @@ func (s *Service) evaluateDiagnosis(
 		s.handleAgentError(ctx, inc, gen, err)
 		return diagnosisOutcome{done: true}
 	}
-	riskReason := s.reviewRiskReason(ctx, inc.ID, result)
+	riskReason := s.reviewRiskReason(ctx, inc.ID, gen, result)
 	if !owner && riskReason == "" {
 		s.handleAgentResolved(ctx, inc, gen, result)
 		return diagnosisOutcome{done: true}
@@ -394,11 +395,13 @@ func (s *Service) evaluateDiagnosis(
 // model itself didn't flag requires_approval for) should still be routed
 // through control review, or "" if it shouldn't need one. Checked in addition
 // to the outcome kind in evaluateDiagnosis.
-func (s *Service) reviewRiskReason(ctx context.Context, incidentID string, result *agent.DiagnosticResult) string {
+func (s *Service) reviewRiskReason(
+	ctx context.Context, incidentID string, gen int64, result *agent.DiagnosticResult,
+) string {
 	if strings.EqualFold(result.Confidence, "low") {
 		return "the agent's own confidence in this diagnosis is low"
 	}
-	if s.actionAlreadyTried(ctx, incidentID, result.PrimaryAction) {
+	if s.actionAlreadyTried(ctx, incidentID, gen, result.PrimaryAction) {
 		return fmt.Sprintf("%q was already applied on this incident and did not resolve it", result.PrimaryAction)
 	}
 	// Catches ladder-climbing that actionAlreadyTried can't: each rung is a
@@ -427,9 +430,17 @@ const ladderClimbActionThreshold = 2
 
 // actionAlreadyTried reports whether action has already been logged as
 // successfully applied on this incident.
-func (s *Service) actionAlreadyTried(ctx context.Context, incidentID, action string) bool {
+func (s *Service) actionAlreadyTried(ctx context.Context, incidentID string, gen int64, action string) bool {
 	if action == "" {
 		return false
+	}
+	if action == agent.ToolArrSearchMissing && s.journal != nil {
+		attempts, err := s.journal.ActionAttempts(ctx, incidentID)
+		if err == nil && attempts.OwnerRerun > 0 && attempts.OwnerRerun == gen {
+			return slices.ContainsFunc(attempts.Applied, func(a journal.AppliedAction) bool {
+				return a.Generation >= gen && a.Action == action && a.Status == string(db.ActionApplied)
+			})
+		}
 	}
 	actions, err := s.db.ListActions(ctx, incidentID)
 	if err != nil {

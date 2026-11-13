@@ -15,14 +15,14 @@ import (
 
 // ActionAlreadyTriedForTest exposes Service.actionAlreadyTried for service_test.go.
 func (s *Service) ActionAlreadyTriedForTest(ctx context.Context, incidentID, action string) bool {
-	return s.actionAlreadyTried(ctx, incidentID, action)
+	return s.actionAlreadyTried(ctx, incidentID, 1, action)
 }
 
 // ReviewRiskReasonForTest exposes Service.reviewRiskReason for service_test.go.
 func (s *Service) ReviewRiskReasonForTest(
-	ctx context.Context, incidentID string, result *agent.DiagnosticResult,
+	ctx context.Context, incidentID string, gen int64, result *agent.DiagnosticResult,
 ) string {
-	return s.reviewRiskReason(ctx, incidentID, result)
+	return s.reviewRiskReason(ctx, incidentID, gen, result)
 }
 
 // ControlProposalForTest exposes controlProposal for service_test.go.

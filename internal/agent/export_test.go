@@ -59,7 +59,7 @@ func (a *Agent) AttemptHistoryForTest(ctx context.Context, incidentID string) st
 
 // ActionAlreadyAppliedForTest exposes Agent.actionAlreadyApplied for agent_test.go.
 func (a *Agent) ActionAlreadyAppliedForTest(ctx context.Context, incidentID, action, argsJSON string) bool {
-	return a.actionAlreadyApplied(ctx, incidentID, action, argsJSON)
+	return a.actionAlreadyApplied(ctx, incidentID, 0, action, argsJSON)
 }
 
 // CaptureSignatureForTest exposes Agent.captureSignature for agent_test.go.

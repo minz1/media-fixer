@@ -63,6 +63,36 @@ func closedDB(t *testing.T) *db.DB {
 	return d
 }
 
+func TestF37_LaterRunAfterOwnerRerunKeepsSearchGuard(t *testing.T) {
+	t.Parallel()
+	applied := map[string]any{
+		"media_type": "tv", "title": "Rick and Morty", "season": float64(9), "episode": float64(7),
+	}
+	for _, tc := range []struct {
+		name string
+		gen  int64
+		want int
+	}{
+		{"the owner's rerun run searches again", 4, 1},
+		{"a later relaunch keeps the guard", 5, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, srv := newCallServer(t)
+			ag, database, inc := newRig(t, srv.URL, script("arr_search_missing", searchEpisode7), rigOpts{})
+			seedApplied(t, database, inc.ID, 3, "arr_search_missing", applied)
+			seedOwnerRerun(t, database, inc.ID, 4)
+			lifecycletest.Force(t, database, inc.ID, func(s *lifecycle.Snapshot) { s.Generation = tc.gen })
+			g := newRecGate(database, inc)
+			g.gen = tc.gen
+			ag.Run(context.Background(), inc, nil, g)
+			if got := g.acted(); len(got) != tc.want {
+				t.Errorf("Act ran %v, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestL1_InterruptedDisruptiveAttemptBlocksRepeat(t *testing.T) {
 	t.Parallel()
 	for _, gen := range []int64{4, 5} {

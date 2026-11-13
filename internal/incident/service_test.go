@@ -1146,12 +1146,12 @@ func TestReviewRiskReason(t *testing.T) {
 	}
 
 	fresh := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "clear_jellyfin_cache"}
-	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, fresh); got != "" {
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 1, fresh); got != "" {
 		t.Errorf("expected no risk reason for a fresh, confident diagnosis; got %q", got)
 	}
 
 	low := &agent.DiagnosticResult{Confidence: "low", PrimaryAction: "clear_jellyfin_cache"}
-	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, low); got == "" {
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 1, low); got == "" {
 		t.Error("expected a risk reason for a low-confidence diagnosis")
 	}
 
@@ -1161,8 +1161,51 @@ func TestReviewRiskReason(t *testing.T) {
 		t.Fatal(logErr)
 	}
 	repeat := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "clear_jellyfin_cache"}
-	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, repeat); got == "" {
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 1, repeat); got == "" {
 		t.Error("expected a risk reason for repeating an already-applied action")
+	}
+}
+
+func TestF37_OwnerRerunSearchIsNotAlreadyTried(t *testing.T) {
+	t.Parallel()
+	_, database, _ := newTestService(t)
+	ctx := context.Background()
+	svc := incident.NewService(ctx, database, journal.New(database), nil, nil, nil, &captureNotifier{},
+		slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { stopService(t, svc) })
+	inc, err := svc.Handle(ctx, &incident.Report{Source: "seerr", ReportedBy: "x", What: "cant_play", Title: "T"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]any{"media_type": "tv", "title": "T", "season": float64(1), "episode": float64(2)}
+	if err = journal.New(database).LogActionGen(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: agent.ToolArrSearchMissing, Params: params, TriggeredBy: "agent",
+		Status: db.ActionApplied,
+	}, false, 3, ""); err != nil {
+		t.Fatal(err)
+	}
+	rerun, err := journal.OwnerRerunEvent(inc.ID, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.AppendEvents(ctx, rerun); err != nil {
+		t.Fatal(err)
+	}
+	search := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: agent.ToolArrSearchMissing}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 4, search); got != "" {
+		t.Errorf("owner rerun run: risk reason %q, want none", got)
+	}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 5, search); got == "" {
+		t.Error("later run: want the already-applied risk reason")
+	}
+	restart := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "restart_jellyfin"}
+	if err = database.LogAction(ctx, &db.ActionLog{
+		IncidentID: inc.ID, Action: "restart_jellyfin", TriggeredBy: "agent", Status: db.ActionApplied,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 4, restart); got == "" {
+		t.Error("owner rerun run: a repeated restart still wants review")
 	}
 }
 
@@ -1192,7 +1235,7 @@ func TestReviewRiskReason_LadderClimbing(t *testing.T) {
 		t.Fatal(logErr)
 	}
 	second := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "jellyfin_library_scan"}
-	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, second); got != "" {
+	if got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 1, second); got != "" {
 		t.Errorf("expected no risk reason with only 1 distinct prior action, got %q", got)
 	}
 
@@ -1204,7 +1247,7 @@ func TestReviewRiskReason_LadderClimbing(t *testing.T) {
 		t.Fatal(logErr)
 	}
 	third := &agent.DiagnosticResult{Confidence: "high", PrimaryAction: "restart_jellyfin"}
-	got := svc.ReviewRiskReasonForTest(ctx, inc.ID, third)
+	got := svc.ReviewRiskReasonForTest(ctx, inc.ID, 1, third)
 	if got == "" {
 		t.Error("expected a risk reason once 2+ distinct actions have already been tried")
 	}
