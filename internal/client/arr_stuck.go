@@ -145,6 +145,8 @@ type ImportCandidate struct {
 	Quality      json.RawMessage
 	Languages    json.RawMessage
 	Rejections   []string
+
+	CustomFormatScore int
 }
 
 type candidateJSON struct {
@@ -161,18 +163,22 @@ type candidateJSON struct {
 		ID      int  `json:"id"`
 		HasFile bool `json:"hasFile"`
 	} `json:"movie"`
-	SeasonNumber int                `json:"seasonNumber"`
-	IndexerFlags int                `json:"indexerFlags"`
-	Episodes     []CandidateEpisode `json:"episodes"`
-	Quality      json.RawMessage    `json:"quality"`
-	Languages    json.RawMessage    `json:"languages"`
-	Rejections   []struct {
+	SeasonNumber      int                `json:"seasonNumber"`
+	IndexerFlags      int                `json:"indexerFlags"`
+	Episodes          []CandidateEpisode `json:"episodes"`
+	Quality           json.RawMessage    `json:"quality"`
+	Languages         json.RawMessage    `json:"languages"`
+	CustomFormatScore int                `json:"customFormatScore"`
+	Rejections        []struct {
 		Reason string `json:"reason"`
 	} `json:"rejections"`
 }
 
 func (c *ArrClient) ManualImportCandidates(ctx context.Context, downloadID string) ([]ImportCandidate, error) {
-	q := url.Values{"downloadId": {downloadID}, "filterExistingFiles": {queryFalse}}
+	return c.manualImportPreview(ctx, url.Values{"downloadId": {downloadID}, "filterExistingFiles": {queryFalse}})
+}
+
+func (c *ArrClient) manualImportPreview(ctx context.Context, q url.Values) ([]ImportCandidate, error) {
 	var raw []candidateJSON
 	if err := c.get(ctx, "/api/v3/manualimport", q, &raw); err != nil {
 		return nil, err
@@ -183,7 +189,7 @@ func (c *ArrClient) ManualImportCandidates(ctx context.Context, downloadID strin
 			Path: r.Path, Size: r.Size, DownloadID: r.DownloadID,
 			ReleaseGroup: r.ReleaseGroup, ReleaseType: r.ReleaseType,
 			SeriesID: r.SeriesID, SeasonNumber: r.SeasonNumber, IndexerFlags: r.IndexerFlags,
-			Episodes: r.Episodes, Quality: r.Quality, Languages: r.Languages,
+			Episodes: r.Episodes, Quality: r.Quality, Languages: r.Languages, CustomFormatScore: r.CustomFormatScore,
 		}
 		if r.Series != nil && r.Series.ID != 0 {
 			ic.SeriesID = r.Series.ID

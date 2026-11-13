@@ -375,8 +375,9 @@ func seriesHistoryQuery(seriesID, season int, eventType string) url.Values {
 type SeriesEvent struct {
 	HistoryRecord
 
-	Indexer string
-	Message string
+	Indexer      string
+	Message      string
+	ImportedPath string
 }
 
 var (
@@ -418,8 +419,9 @@ func (c *ArrClient) SeriesHistory(ctx context.Context, seriesID int) ([]SeriesEv
 		HistoryRecord
 
 		Data struct {
-			Indexer string `json:"indexer"`
-			Message string `json:"message"`
+			Indexer      string `json:"indexer"`
+			Message      string `json:"message"`
+			ImportedPath string `json:"importedPath"`
 		} `json:"data"`
 	}
 	if err := c.get(ctx, "/api/v3/history/series", q, &raw); err != nil {
@@ -431,6 +433,7 @@ func (c *ArrClient) SeriesHistory(ctx context.Context, seriesID int) ([]SeriesEv
 			HistoryRecord: r.HistoryRecord,
 			Indexer:       r.Data.Indexer,
 			Message:       RedactCredentials(r.Data.Message),
+			ImportedPath:  r.Data.ImportedPath,
 		}
 	}
 	return events, nil
