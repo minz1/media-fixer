@@ -22,12 +22,6 @@ func (x *Executor) classify(ctx context.Context, op operation.Op, i int, err err
 	if err == nil {
 		return outcome{state: operation.ResultDone}
 	}
-	if sn, ok := errors.AsType[*stepNoteError](err); ok {
-		return outcome{state: sn.state, note: sn.note}
-	}
-	if errors.Is(err, errStepRefused) {
-		return outcome{state: operation.ResultFailed, errText: err.Error()}
-	}
 	st := op.Steps[i]
 	switch st.Kind {
 	case operation.StepTorrentDelete:
@@ -40,8 +34,7 @@ func (x *Executor) classify(ctx context.Context, op operation.Op, i int, err err
 		if errors.Is(err, client.ErrNotFound) {
 			return x.confirmGone(ctx, st, err)
 		}
-	case operation.StepImport, operation.StepJellyfinNotify, operation.StepBlocklist, operation.StepSearch,
-		operation.StepTorrentAdd, operation.StepSubtitleSync:
+	case operation.StepBlocklist, operation.StepSearch, operation.StepTorrentAdd, operation.StepSubtitleSync:
 	}
 	return byError(err)
 }

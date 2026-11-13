@@ -88,3 +88,46 @@ func integrityOK(t *testing.T, raw interface {
 		t.Fatalf("integrity_check %q %v", s, err)
 	}
 }
+
+func TestMigration27_RehearsalOnSnapshot(t *testing.T) {
+	t.Parallel()
+	snap := os.Getenv("MF_SNAPSHOT")
+	if snap == "" {
+		t.Skip("MF_SNAPSHOT is not set")
+	}
+	path := copySnapshot(t, snap)
+	if _, err := db.MigrateTruncatedForTest(path, 25); err != nil {
+		t.Fatal(err)
+	}
+	counts := func(step string, want int) map[string]int {
+		t.Helper()
+		raw := rawOpen(t, path)
+		defer raw.Close()
+		integrityOK(t, raw)
+		if v := maxVersion(t, raw); v != want {
+			t.Fatalf("version %d after %s, want %d", v, step, want)
+		}
+		c := tableCounts(t, raw)
+		delete(c, "schema_version")
+		delete(c, "notify_outbox")
+		t.Logf("counts after %s: %v", step, c)
+		return c
+	}
+	before := counts("truncate", 25)
+	openDB(t, path).Close()
+	if up := counts("up", 27); !reflect.DeepEqual(before, up) {
+		t.Errorf("counts changed on up: %v -> %v", before, up)
+	}
+	var out bytes.Buffer
+	if err := db.MigrateDown(context.Background(), path, 27, &out); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("down: %s", out.String())
+	if down := counts("down 27", 26); !reflect.DeepEqual(before, down) {
+		t.Errorf("counts changed on down: %v -> %v", before, down)
+	}
+	openDB(t, path).Close()
+	if reup := counts("re-up", 27); !reflect.DeepEqual(before, reup) {
+		t.Errorf("counts changed on re-up: %v -> %v", before, reup)
+	}
+}

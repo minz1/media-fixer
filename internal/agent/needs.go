@@ -117,7 +117,6 @@ func toolNeeds() map[string]toolNeed {
 		toolStreamAlignment:      needJellyfinAndMediaAgent,
 		toolSubtitleExtractTest:  needJellyfin,
 		toolListAlternatives:     needArrAndDecypharr,
-		toolSonarrSwapPlan:       needSwapPlan,
 		toolListDirectory:        needMediaAgent,
 		toolGetDiskInfo:          needMediaAgent,
 		toolRestartDecypharr:     needMediaAgent,
@@ -147,13 +146,4 @@ func NeedOf(d *Dispatcher, tool string) (string, NeedState) {
 		return reason, NeedBroken
 	}
 	return reason, NeedUnconfigured
-}
-
-func needSwapPlan(d *Dispatcher) (string, bool) {
-	for _, need := range []func(*Dispatcher) (string, bool){needSonarr, needDecypharr, needJellyfinAndMediaAgent} {
-		if detail, ok := need(d); !ok {
-			return detail, false
-		}
-	}
-	return "", true
 }

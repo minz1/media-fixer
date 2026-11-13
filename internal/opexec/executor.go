@@ -35,11 +35,6 @@ type Arr interface {
 	GetSeries(ctx context.Context, id int) (client.Series, error)
 	ListMovies(ctx context.Context) ([]client.Movie, error)
 	QueueEntries(ctx context.Context) ([]client.QueueEntry, error)
-	ManualImportFolderCandidates(ctx context.Context, folder string) ([]client.ImportCandidate, error)
-	ManualImport(ctx context.Context, cands []client.ImportCandidate) (int, error)
-	ManualImportPending(ctx context.Context, paths []string) (bool, error)
-	Command(ctx context.Context, id int) (string, error)
-	GetEpisodes(ctx context.Context, seriesID, season int) ([]client.Episode, error)
 	FailedForDownload(
 		ctx context.Context,
 		mediaType string,
@@ -58,15 +53,13 @@ type Decypharr interface {
 type Ports struct {
 	Arr       func(app string) Arr
 	Decypharr Decypharr
-	Jellyfin  Jellyfin
 }
 
 type Executor struct {
-	Store        Store
-	Ports        Ports
-	Now          func() time.Time
-	StepTimeout  time.Duration
-	PollInterval time.Duration
+	Store       Store
+	Ports       Ports
+	Now         func() time.Time
+	StepTimeout time.Duration
 }
 
 func (x *Executor) Run(ctx context.Context, op operation.Op) operation.Op {
@@ -136,9 +129,6 @@ func (x *Executor) call(ctx context.Context, op operation.Op, i int) error {
 	if st.Kind == operation.StepTorrentDelete || st.Kind == operation.StepTorrentAdd {
 		return x.callDecypharr(cctx, st)
 	}
-	if st.Kind == operation.StepJellyfinNotify {
-		return x.callJellyfin(cctx, st)
-	}
 	if st.Kind == operation.StepSubtitleSync {
 		return fmt.Errorf("step kind %s not supported yet", st.Kind)
 	}
@@ -146,10 +136,10 @@ func (x *Executor) call(ctx context.Context, op operation.Op, i int) error {
 	if err != nil {
 		return err
 	}
-	return x.callArr(cctx, a, st, op.Results[i])
+	return callArr(cctx, a, st, op.Results[i])
 }
 
-func (x *Executor) callArr(ctx context.Context, a Arr, st operation.Step, res operation.Result) error {
+func callArr(ctx context.Context, a Arr, st operation.Step, res operation.Result) error {
 	switch st.Kind {
 	case operation.StepBlocklist:
 		return a.MarkHistoryFailed(ctx, st.HistoryID)
@@ -166,10 +156,7 @@ func (x *Executor) callArr(ctx context.Context, a Arr, st operation.Step, res op
 			id = res.QueueID
 		}
 		return a.RemoveQueueItem(ctx, id, false, true, true)
-	case operation.StepImport:
-		return x.importStep(ctx, a, st)
-	case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepJellyfinNotify,
-		operation.StepSubtitleSync:
+	case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepSubtitleSync:
 	}
 	return fmt.Errorf("unknown step kind %q", st.Kind)
 }

@@ -345,7 +345,7 @@ func (a *app) serve(ctx context.Context, stop context.CancelFunc) error {
 }
 
 func opPorts(clients *clientset.Set) opexec.Ports {
-	ports := opexec.Ports{
+	return opexec.Ports{
 		Arr: func(app string) opexec.Arr {
 			switch {
 			case app == "sonarr" && clients.Sonarr != nil:
@@ -357,10 +357,6 @@ func opPorts(clients *clientset.Set) opexec.Ports {
 		},
 		Decypharr: clients.Decypharr,
 	}
-	if clients.Jellyfin.Configured() {
-		ports.Jellyfin = clients.Jellyfin
-	}
-	return ports
 }
 
 func crashRunningSweeps(ctx context.Context, database *db.DB, log *slog.Logger) error {

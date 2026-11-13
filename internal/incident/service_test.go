@@ -1729,38 +1729,14 @@ func TestF22_BootReadErrorHealsOnTick(t *testing.T) {
 	}
 }
 
-func (a *blockingAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
-
 func (a *blockingAgent) VerifySubtitle(context.Context, string, string) bool { return true }
-
-func (a *sequencedAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
 
 func (a *sequencedAgent) VerifySubtitle(context.Context, string, string) bool { return true }
 
-func (a *alwaysFixedAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
-
 func (a *alwaysFixedAgent) VerifySubtitle(context.Context, string, string) bool { return true }
-
-func (a *concurrencyTrackingAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
 
 func (a *concurrencyTrackingAgent) VerifySubtitle(context.Context, string, string) bool { return true }
 
-func (a *lowConfidenceOnceAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
-
 func (a *lowConfidenceOnceAgent) VerifySubtitle(context.Context, string, string) bool { return true }
-
-func (a *verifyingAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
 
 func (a *verifyingAgent) VerifySubtitle(context.Context, string, string) bool { return true }

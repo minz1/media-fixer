@@ -362,9 +362,6 @@ func stepVerifyObserved(cur Snapshot, ev Event, now time.Time) (Decision, error)
 	}
 	switch ev.Verify {
 	case VerifyFixed:
-		if ev.NewItemID != "" {
-			next.ItemID = ev.NewItemID
-		}
 		return toFixed(next)
 	case VerifyNotYet:
 		if v.ChecksLeft > 1 {

@@ -11,7 +11,6 @@ import (
 const (
 	EscalateRemoveAndSearch    = "remove_and_search"
 	EscalateDeleteTorrentReadd = "delete_torrent_readd"
-	EscalateSwapRelease        = "swap_release"
 	EscalateResyncSubtitle     = "resync_subtitle"
 	WhatStuckRead              = "stuck_read"
 )
@@ -44,7 +43,7 @@ type Finding struct {
 
 func (f Finding) Escalatable() bool {
 	return slices.Contains(
-		[]string{EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateSwapRelease, EscalateResyncSubtitle},
+		[]string{EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateResyncSubtitle},
 		f.EscalateAction,
 	)
 }
@@ -69,7 +68,6 @@ type VerifySpec struct {
 	PreFix         json.RawMessage `json:"pre,omitempty"`
 	Language       string          `json:"language,omitempty"`
 	SubtitleItemID string          `json:"subtitle_item_id,omitempty"`
-	Swap           *SwapTarget     `json:"swap,omitempty"`
 	Resync         *ResyncTarget   `json:"resync,omitempty"`
 	Action         string          `json:"action,omitempty"`
 	ETAMinutes     int             `json:"eta_minutes,omitempty"`
@@ -78,16 +76,6 @@ type VerifySpec struct {
 	ETANoted       bool            `json:"eta_noted"`
 
 	VerifyEnteredAt time.Time `json:"verify_entered_at,omitzero"`
-}
-
-type SwapTarget struct {
-	SeriesItemID   string `json:"series_item_id"`
-	Season         int    `json:"season"`
-	Episode        int    `json:"episode"`
-	SonarrSeriesID int    `json:"sonarr_series_id"`
-	EpisodeID      int    `json:"episode_id"`
-	OldFileID      int    `json:"old_file_id"`
-	CandidateSize  int64  `json:"candidate_size"`
 }
 
 type ResyncTarget struct {

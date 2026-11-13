@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-const migSwapRelease = 27
+const migResyncSubtitle = 27
 
-func operationsSwapDDL() string {
-	return strings.Replace(operationsTableDDL, `'regrab')),`, `'regrab', 'swap_release', 'resync_subtitle')),`, 1)
+func operationsResyncDDL() string {
+	return strings.Replace(operationsTableDDL, `'regrab')),`, `'regrab', 'resync_subtitle')),`, 1)
 }
 
 func rebuildOperations(ctx context.Context, tx *sql.Tx, ddl string) error {
@@ -33,13 +33,13 @@ func rebuildOperations(ctx context.Context, tx *sql.Tx, ddl string) error {
 	return nil
 }
 
-func swapReleaseMigrations() []migration {
+func resyncSubtitleMigrations() []migration {
 	return []migration{{
-		version: migSwapRelease,
-		name:    "swap_release_operations",
+		version: migResyncSubtitle,
+		name:    "resync_subtitle_operations",
 		rebuild: true,
 		exec: func(ctx context.Context, tx *sql.Tx) error {
-			return rebuildOperations(ctx, tx, operationsSwapDDL())
+			return rebuildOperations(ctx, tx, operationsResyncDDL())
 		},
 	}}
 }

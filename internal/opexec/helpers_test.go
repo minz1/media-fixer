@@ -99,50 +99,6 @@ type fakeArr struct {
 	failedArgs string
 	removedID  int
 	flags      string
-
-	episodes    []client.Episode
-	episodesErr error
-	cands       []client.ImportCandidate
-	candsErr    error
-	pending     bool
-	pendingErr  error
-	posted      []client.ImportCandidate
-	postErr     error
-	cmdStatus   string
-	cmdErr      error
-	afterImport func(a *fakeArr)
-}
-
-func (a *fakeArr) ManualImportFolderCandidates(_ context.Context, folder string) ([]client.ImportCandidate, error) {
-	a.j.add("read:folder:" + folder)
-	return a.cands, a.candsErr
-}
-
-func (a *fakeArr) ManualImport(_ context.Context, cands []client.ImportCandidate) (int, error) {
-	a.j.add("call:import")
-	if a.postErr != nil {
-		return 0, a.postErr
-	}
-	a.posted = cands
-	if a.afterImport != nil {
-		a.afterImport(a)
-	}
-	return 9, nil
-}
-
-func (a *fakeArr) ManualImportPending(context.Context, []string) (bool, error) {
-	a.j.add("read:pending")
-	return a.pending, a.pendingErr
-}
-
-func (a *fakeArr) Command(context.Context, int) (string, error) {
-	a.j.add("read:command")
-	return a.cmdStatus, a.cmdErr
-}
-
-func (a *fakeArr) GetEpisodes(context.Context, int, int) ([]client.Episode, error) {
-	a.j.add("read:episodes")
-	return a.episodes, a.episodesErr
 }
 
 func (a *fakeArr) step(ctx context.Context, label string) error {
@@ -383,5 +339,4 @@ func TestPortsAreSatisfiedByClients(t *testing.T) {
 	t.Parallel()
 	var _ opexec.Arr = (*client.ArrClient)(nil)
 	var _ opexec.Decypharr = (*client.DecypharrClient)(nil)
-	var _ opexec.Jellyfin = (*client.JellyfinClient)(nil)
 }

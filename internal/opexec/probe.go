@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/minz1/mediafixer/internal/client"
@@ -40,12 +39,9 @@ func (x *Executor) probeStep(ctx context.Context, op operation.Op, i int) (opera
 	switch st.Kind {
 	case operation.StepTorrentDelete, operation.StepTorrentAdd:
 		p, err = x.probeTorrent(pctx, st)
-	case operation.StepJellyfinNotify:
-		p = operation.Probe{Verdict: operation.VerdictTodo}
 	case operation.StepSubtitleSync:
 		err = fmt.Errorf("step kind %s not supported yet", st.Kind)
-	case operation.StepImport, operation.StepBlocklist, operation.StepDeleteFile, operation.StepSearch,
-		operation.StepQueueRemove:
+	case operation.StepBlocklist, operation.StepDeleteFile, operation.StepSearch, operation.StepQueueRemove:
 		p, err = x.probeArr(pctx, op, st)
 	default:
 		err = fmt.Errorf("unknown step kind %q", st.Kind)
@@ -68,10 +64,7 @@ func (x *Executor) probeArr(ctx context.Context, op operation.Op, st operation.S
 		return probeSearch(ctx, a, st)
 	case operation.StepQueueRemove:
 		return probeQueue(ctx, a, op, st)
-	case operation.StepImport:
-		return probeImport(ctx, a, st)
-	case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepJellyfinNotify,
-		operation.StepSubtitleSync:
+	case operation.StepTorrentDelete, operation.StepTorrentAdd, operation.StepSubtitleSync:
 	}
 	return operation.Probe{}, fmt.Errorf("unknown step kind %q", st.Kind)
 }
@@ -113,50 +106,6 @@ func probeBlocklist(ctx context.Context, a Arr, st operation.Step) (operation.Pr
 		return operation.Probe{Verdict: operation.VerdictDone, Note: "found in history"}, nil
 	}
 	return operation.Probe{Verdict: operation.VerdictTodo}, nil
-}
-
-func probeImport(ctx context.Context, a Arr, st operation.Step) (operation.Probe, error) {
-	label := fmt.Sprintf("S%02dE%02d", st.Season, st.Episode)
-	conflict := func(note string) (operation.Probe, error) {
-		return operation.Probe{Verdict: operation.VerdictConflict, Note: note}, nil
-	}
-	eps, err := a.GetEpisodes(ctx, st.MediaID, st.Season)
-	if err != nil {
-		return operation.Probe{}, err
-	}
-	ep, ok := episodeOf(eps, st.EpisodeIDs[0])
-	switch {
-	case !ok:
-		return conflict("the media is gone")
-	case ep.EpisodeFileID == 0:
-		return conflict(fmt.Sprintf("Sonarr ran the import but %s has no file; search from Sonarr.", label))
-	case ep.EpisodeFileID == st.FileID:
-		cands, candErr := a.ManualImportFolderCandidates(ctx, filepath.Dir(st.Path))
-		if candErr != nil {
-			return operation.Probe{}, candErr
-		}
-		if _, found := freshCandidate(cands, st); !found {
-			return conflict("the candidate is no longer under the downloads folder; preview again")
-		}
-		pending, pendErr := a.ManualImportPending(ctx, []string{st.Path})
-		if pendErr != nil {
-			return operation.Probe{}, pendErr
-		}
-		if pending {
-			return conflict("an import of this file is still running; resume later")
-		}
-		return operation.Probe{Verdict: operation.VerdictTodo}, nil
-	}
-	files, err := a.GetEpisodeFiles(ctx, st.MediaID)
-	if err != nil {
-		return operation.Probe{}, err
-	}
-	for _, f := range files {
-		if f.ID == ep.EpisodeFileID && f.Size == st.Size {
-			return operation.Probe{Verdict: operation.VerdictDone, Note: "imported as " + st.Path}, nil
-		}
-	}
-	return conflict(label + " has a different file since approval")
 }
 
 func probeDelete(ctx context.Context, a Arr, st operation.Step) (operation.Probe, error) {

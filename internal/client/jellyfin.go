@@ -469,34 +469,3 @@ func (c *JellyfinClient) ItemInfo(ctx context.Context, itemID string) (*ItemInfo
 	}
 	return &result.Items[0], nil
 }
-
-func (c *JellyfinClient) MediaUpdated(ctx context.Context, paths []string) error {
-	type update struct {
-		Path       string
-		UpdateType string
-	}
-	updates := make([]update, 0, len(paths))
-	for _, p := range paths {
-		updates = append(updates, update{Path: p, UpdateType: "Modified"})
-	}
-	body, err := json.Marshal(map[string]any{"Updates": updates})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/Library/Media/Updated", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.authorize(req)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("jellyfin media updated: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, statusScanLimit))
-		return fmt.Errorf("jellyfin media updated: %w", &HTTPStatusError{Status: resp.StatusCode, Body: string(b)})
-	}
-	return nil
-}

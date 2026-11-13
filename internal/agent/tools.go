@@ -25,7 +25,6 @@ const (
 	phraseReload  = "reloading the app"
 	phraseLibrary = "updating the library"
 	phraseNewCopy = "looking for a new copy"
-	phraseSwap    = "swapping to a cached release"
 )
 
 // Tool name constants used in both the registry and the system prompt.
@@ -120,7 +119,6 @@ const (
 	EscalateNone                = "none"
 	EscalateRemoveAndSearch     = "remove_and_search"
 	EscalateDeleteTorrentReadd  = "delete_torrent_readd"
-	EscalateSwapRelease         = "swap_release"
 	EscalateManualInvestigation = "manual_investigation"
 )
 
@@ -131,8 +129,7 @@ const ToolArrSearchMissing = toolArrSearchMissing
 // escalateActionEnum lists every value the escalate_action schema accepts.
 func escalateActionEnum() []string {
 	return []string{
-		EscalateNone, EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateSwapRelease,
-		EscalateManualInvestigation,
+		EscalateNone, EscalateRemoveAndSearch, EscalateDeleteTorrentReadd, EscalateManualInvestigation,
 	}
 }
 
@@ -202,7 +199,6 @@ func toolRegistry() []toolSpec {
 		jellyfinReadToolSpecs(),
 		hostReadToolSpecs(),
 		subtitleReadToolSpecs(),
-		swapSpecs(),
 		arrReadToolSpecs(),
 		repairReadToolSpecs(),
 		decypharrActionToolSpecs(),
@@ -871,8 +867,6 @@ func UserPhrase(tool string) string {
 		tool = toolArrRemoveAndSearch
 	case EscalateDeleteTorrentReadd:
 		tool = toolDecypharrDeleteReadd
-	case EscalateSwapRelease:
-		return phraseSwap
 	}
 	spec, _ := specByName(tool)
 	return spec.UserPhrase

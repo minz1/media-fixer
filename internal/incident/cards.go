@@ -24,7 +24,6 @@ const (
 	fieldRootCause = "Root cause"
 	fieldAction    = "Action needed"
 	fieldReason    = "Reason"
-	fieldNote      = "Note"
 )
 
 func ownerCard(inc *db.Incident, tone card.Tone, title, body string, fields ...card.Field) card.Card {

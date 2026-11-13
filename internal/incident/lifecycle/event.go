@@ -102,7 +102,6 @@ type Event struct {
 	Exit       string
 	Finding    *Finding
 	Verify     VerifyResult
-	NewItemID  string
 	Scan       bool
 	Obs        *Observation
 	Err        string

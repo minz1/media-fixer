@@ -48,7 +48,7 @@ func TestS1_ResyncShape(t *testing.T) {
 	negative.Baseline = -1
 	for name, steps := range map[string][]operation.Step{
 		"two steps":    {good, good},
-		"other kind":   {importStep()},
+		"other kind":   {{Kind: operation.StepBlocklist, App: "sonarr", HistoryID: 1}},
 		"wrong app":    {noApp},
 		"missing path": {noPath},
 		"missing lang": {noName},

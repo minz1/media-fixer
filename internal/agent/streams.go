@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,13 +16,11 @@ import (
 
 	"github.com/minz1/mediafixer/internal/client"
 	"github.com/minz1/mediafixer/internal/db"
-	"github.com/minz1/mediafixer/internal/incident/lifecycle"
 	"github.com/minz1/mediafixer/internal/mediaagentapi"
 )
 
 const (
 	streamTypeSubtitle = "Subtitle"
-	codecSubtitle      = "subtitle"
 	langEnglish        = "eng"
 	cueScanLines       = 50
 	cueSampleLines     = 3
@@ -88,7 +85,7 @@ func alignStreams(file []mediaagentapi.ProbeStream, jf []client.MediaStream, wan
 	var known []mediaagentapi.ProbeStream
 	for _, s := range file {
 		codecs[s.Index] = s.CodecName
-		if s.CodecType != codecSubtitle {
+		if s.CodecType != "subtitle" {
 			continue
 		}
 		if s.CodecName == "" {
@@ -507,53 +504,4 @@ func (d *Dispatcher) readListAlternatives(ctx context.Context, _ *toolCall, args
 		cached[hash] = present
 	}
 	return alternatives(events, season, episode, cached), nil
-}
-
-func (d *Dispatcher) swapJellyfinItem(ctx context.Context, t lifecycle.SwapTarget) (client.JellyfinItem, error) {
-	items, err := d.Jellyfin.ListEpisodes(ctx, t.SeriesItemID)
-	for _, it := range items {
-		if it.IndexNumber != nil && it.ParentIndexNumber != nil && *it.IndexNumber == t.Episode &&
-			*it.ParentIndexNumber == t.Season {
-			return it, nil
-		}
-	}
-	return client.JellyfinItem{}, err
-}
-
-func (d *Dispatcher) swapCurrentFile(ctx context.Context, t lifecycle.SwapTarget) (client.EpisodeFile, error) {
-	eps, err := d.Sonarr.GetEpisodes(ctx, t.SonarrSeriesID, t.Season)
-	if err != nil {
-		return client.EpisodeFile{}, err
-	}
-	files, err := d.Sonarr.GetEpisodeFiles(ctx, t.SonarrSeriesID)
-	for _, e := range eps {
-		for _, f := range files {
-			if e.ID == t.EpisodeID && f.ID == e.EpisodeFileID {
-				return f, nil
-			}
-		}
-	}
-	return client.EpisodeFile{}, err
-}
-
-func (a *Agent) SwapItem(ctx context.Context, t lifecycle.SwapTarget) (string, bool, string) {
-	if a.disp == nil || a.disp.Sonarr == nil || a.disp.Jellyfin == nil {
-		return "", false, ""
-	}
-	item, err := a.disp.swapJellyfinItem(ctx, t)
-	if err != nil {
-		return "", false, "Jellyfin could not list the episodes: " + err.Error()
-	}
-	cur, err := a.disp.swapCurrentFile(ctx, t)
-	switch {
-	case err != nil:
-		return "", false, "Sonarr could not list the episode file: " + err.Error()
-	case item.ID == "":
-		return "", false, "Jellyfin has no item for the episode yet"
-	case cur.ID == 0 || cur.ID == t.OldFileID || path.Base(cur.Path) != path.Base(item.Path):
-		return "", false, "Sonarr's new file is not on the Jellyfin item yet"
-	case cur.Size != t.CandidateSize:
-		return item.ID, true, "Sonarr imported a different file since the swap"
-	}
-	return item.ID, true, ""
 }

@@ -466,8 +466,4 @@ func TestF25_EscalationActionsTakeRegistryFlag(t *testing.T) {
 	}
 }
 
-func (a *escalationAgent) SwapItem(context.Context, lifecycle.SwapTarget) (string, bool, string) {
-	return "", false, ""
-}
-
 func (a *escalationAgent) VerifySubtitle(context.Context, string, string) bool { return true }

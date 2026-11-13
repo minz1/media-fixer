@@ -663,18 +663,12 @@
     plan would delete could not be tested.
   </p>
   {{end}}
-  {{if .Swap}}
-  <dl class="text-xs">
-    {{range .Swap}}<dt class="font-semibold mt-1">{{.Name}}</dt><dd class="break-all">{{.Value}}</dd>{{end}}
-  </dl>
-  {{else}}
   <pre class="text-xs overflow-auto">{{json .Plan}}</pre>
-  {{end}}
   <form
     hx-post="{{.BaseURL}}/incidents/{{.IncidentID}}/approve-escalation"
     hx-swap="outerHTML"
     hx-target="body"
-    hx-confirm="{{if .Swap}}Sonarr replaces the current file with the cached release. Continue?{{else}}This deletes the current file(s), blocklists the release, and starts a fresh search. Continue?{{end}}"
+    hx-confirm="This deletes the current file(s), blocklists the release, and starts a fresh search. Continue?"
     hx-disable="find button"
     class="mt-3"
   >
