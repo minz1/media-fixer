@@ -83,6 +83,8 @@ func (g *recGate) Calls() []agent.CallRecord {
 	return append([]agent.CallRecord(nil), g.calls...)
 }
 
+func (*recGate) HoldStale(int) {}
+
 func (g *recGate) Record(rec agent.CallRecord) {
 	g.mu.Lock()
 	g.calls = append(g.calls, rec)

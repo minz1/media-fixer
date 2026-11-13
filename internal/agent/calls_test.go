@@ -176,6 +176,8 @@ func (g seqGate) Calls() []agent.CallRecord { return nil }
 
 func (g seqGate) Record(agent.CallRecord) {}
 
+func (seqGate) HoldStale(int) {}
+
 type fixedGate struct {
 	verdict agent.Verdict
 	err     error
@@ -198,6 +200,8 @@ func (g *fixedGate) Live(context.Context) agent.Verdict { return agent.GateAllow
 func (g *fixedGate) Calls() []agent.CallRecord { return nil }
 
 func (g *fixedGate) Record(agent.CallRecord) {}
+
+func (*fixedGate) HoldStale(int) {}
 
 func isReadOnlyPOST(method, path string) bool {
 	return method == http.MethodPost && strings.HasPrefix(path, "/Items/") && strings.HasSuffix(path, "/PlaybackInfo")

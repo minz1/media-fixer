@@ -70,6 +70,8 @@ func (g *runGate) Act(ctx context.Context, tool string, params map[string]any) (
 
 func (g *runGate) Gen() int64 { return g.gen }
 
+func (g *runGate) HoldStale(minutes int) { g.s.runs.raiseStaleFloor(g.id, g.gen, minutes+staleMargin) }
+
 func (g *runGate) ActionLogged(context.Context) {
 	short := (&db.Incident{ID: g.id}).ShortID()
 	now := time.Now()

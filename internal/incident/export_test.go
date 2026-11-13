@@ -318,3 +318,9 @@ func (s *Service) FixedNoteForTest(inc *db.Incident) string {
 	c, _, _ := s.reporterNote(inc, lifecycle.Effect{Note: lifecycle.NoteFixed}, Timers{})
 	return c.Body
 }
+
+func (s *Service) StaleFloorForTest(id string) int { return s.runs.liveness().floors[id] }
+
+func (s *Service) RaiseStaleFloorForTest(id string, gen int64, minutes int) {
+	s.runs.raiseStaleFloor(id, gen, minutes)
+}

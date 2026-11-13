@@ -345,6 +345,7 @@ func (*stubGate) ActionLogged(context.Context)       {}
 func (*stubGate) Live(context.Context) agent.Verdict { return agent.GateAllowed }
 func (*stubGate) Calls() []agent.CallRecord          { return nil }
 func (*stubGate) Record(agent.CallRecord)            {}
+func (*stubGate) HoldStale(int)                      {}
 
 func TestB6_FixNowSubtitleVerify(t *testing.T) {
 	t.Parallel()
